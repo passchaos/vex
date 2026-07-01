@@ -1,0 +1,12 @@
+digraph Topos {
+  graph [rankdir=LR];
+  node [shape=box color="#eef2ff"];
+  edge [color="#64748b"];
+
+  parse [label="DOT parser"];
+  model [label="Graph model"];
+  layout [label="Layered layout"];
+  svg [label="SVG renderer"];
+
+  parse -> model -> layout -> svg [label="pipeline"];
+}
