@@ -5,13 +5,13 @@ Topos 的目标是使用 Zig 实现一个面向未来的图可视化工具：先
 ## 核心目标
 
 - **实现语言**：使用 Zig（当前项目锁定 Zig 0.16.0）。
-- **产品定位**：构建一个“超越 Graphviz”的图可视化工具，而不是只做 Graphviz 的克隆。
+- **产品定位**：构建一个“超越 Graphviz”的图可视化工具，而不是只做 Graphviz 的克隆；但 CLI 必须提供 Graphviz 精确兼容模式。
 - **参考资料**：本机 Graphviz 源码位于 `~/Work/graphviz`，可以参考其 DOT 解析、布局引擎、插件划分和渲染管线设计；也参考 Zig 生态中的 zigraph，吸收其图 API/算法组织方式。
 - **版本保存**：每次完成一个功能增量后，进行必要验证，并用 git 保存当前完成的变更。
 
 ## 兼容性要求
 
-Topos 需要兼容 Graphviz 的 DOT 风格 DSL，至少从一个实用子集开始：
+Topos 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Graphviz”的场景，CLI 默认使用 Graphviz `dot` 作为 exact backend；原生 Zig parser/layout 继续作为实验引擎演进。至少从一个实用子集开始：
 
 - 支持 `graph` / `digraph`。
 - 支持有向边 `->` 和无向边 `--`。
@@ -27,7 +27,7 @@ Topos 需要兼容 Graphviz 的 DOT 风格 DSL，至少从一个实用子集开�
 - 允许添加节点、添加边、设置属性。
 - 布局和渲染逻辑应面向这个统一图模型，而不是只绑定 DOT 文本输入。
 - DOT 解析器应该只是把 DSL 转换为同一个图模型。
-- 渲染输出需要后端化，CLI/API 同时面向 terminal、SVG、PNG、PDF 等格式；早期以无外部依赖的 MVP 后端打通全链路，再逐步提升 PNG/PDF 的文字、曲线和分页质量。
+- 渲染输出需要后端化，CLI/API 同时面向 terminal、SVG、PNG、PDF 等格式；CLI 默认 `graphviz` engine 直接输出 Graphviz 字节级结果，`native` engine 用于无外部依赖和后续超越 Graphviz 的探索。
 
 建议 API 方向：
 
