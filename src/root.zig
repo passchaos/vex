@@ -338,6 +338,7 @@ const TokenTag = enum {
     eof,
     id,
     string,
+    html,
     lbrace,
     rbrace,
     lbracket,
@@ -380,7 +381,20 @@ const Lexer = struct {
             ',' => .{ .tag = .comma, .lexeme = self.source[start..self.index], .line = line, .column = column },
             ';' => .{ .tag = .semicolon, .lexeme = self.source[start..self.index], .line = line, .column = column },
             ':' => .{ .tag = .colon, .lexeme = self.source[start..self.index], .line = line, .column = column },
+            '<' => blk: {
+                var depth: usize = 1;
+                while (self.index < self.source.len) {
+                    const ch = self.advance();
+                    if (ch == '<') depth += 1;
+                    if (ch == '>') {
+                        depth -= 1;
+                        if (depth == 0) break;
+                    }
+                } else return error.UnterminatedHtmlString;
+                break :blk .{ .tag = .html, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
+            },
             '-' => blk: {
+                if (self.index >= self.source.len) return error.UnexpectedCharacter;
                 if (self.peek() == '>') {
                     _ = self.advance();
                     break :blk .{ .tag = .arrow, .lexeme = self.source[start..self.index], .line = line, .column = column };
@@ -388,6 +402,10 @@ const Lexer = struct {
                 if (self.peek() == '-') {
                     _ = self.advance();
                     break :blk .{ .tag = .dashdash, .lexeme = self.source[start..self.index], .line = line, .column = column };
+                }
+                if (self.index < self.source.len and (std.ascii.isDigit(self.peek()) or self.peek() == '.')) {
+                    while (self.index < self.source.len and isIdChar(self.peek())) _ = self.advance();
+                    break :blk .{ .tag = .id, .lexeme = self.source[start..self.index], .line = line, .column = column };
                 }
                 return error.UnexpectedCharacter;
             },
@@ -467,11 +485,18 @@ fn isIdChar(c: u8) bool {
 }
 
 const AttrList = std.ArrayList(Attr);
+const NodeSet = std.ArrayList(NodeId);
+
+fn containsNode(nodes: []const NodeId, id: NodeId) bool {
+    for (nodes) |existing| if (existing == id) return true;
+    return false;
+}
 
 const Parser = struct {
     allocator: std.mem.Allocator,
     lexer: Lexer,
     current: Token,
+    collectors: std.ArrayList(*NodeSet) = .empty,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
         var lexer: Lexer = .{ .source = source };
@@ -480,11 +505,12 @@ const Parser = struct {
     }
 
     fn parse(self: *Parser) !Graph {
+        defer self.collectors.deinit(self.allocator);
         var strict = false;
         if (self.matchKeyword("strict")) strict = true;
 
         const directed = if (self.matchKeyword("digraph")) true else if (self.matchKeyword("graph")) false else return error.ExpectedGraph;
-        const name = if (self.current.tag == .id or self.current.tag == .string) blk: {
+        const name = if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .html) blk: {
             const n = self.current.lexeme;
             try self.advance();
             break :blk n;
@@ -500,7 +526,7 @@ const Parser = struct {
         return graph;
     }
 
-    fn parseStmtList(self: *Parser, graph: *Graph) !void {
+    fn parseStmtList(self: *Parser, graph: *Graph) anyerror!void {
         while (self.current.tag != .rbrace and self.current.tag != .eof) {
             if (self.current.tag == .semicolon or self.current.tag == .comma) {
                 try self.advance();
@@ -511,7 +537,7 @@ const Parser = struct {
         }
     }
 
-    fn parseStmt(self: *Parser, graph: *Graph) !void {
+    fn parseStmt(self: *Parser, graph: *Graph) anyerror!void {
         if (self.matchKeyword("graph")) {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
@@ -533,6 +559,14 @@ const Parser = struct {
             for (attrs.items) |attr| try graph.setDefaultEdgeAttr(attr.name, attr.value);
             return;
         }
+        if (self.isSubgraphStart()) {
+            var first = try self.parseSubgraph(graph);
+            defer first.deinit(self.allocator);
+            if (self.current.tag == .arrow or self.current.tag == .dashdash) {
+                try self.parseEdgeTail(graph, &first);
+            }
+            return;
+        }
 
         const first_name = try self.parseNodeIdText();
         defer self.allocator.free(first_name);
@@ -545,35 +579,88 @@ const Parser = struct {
         }
 
         const first_id = try graph.node(first_name);
+        try self.recordNode(first_id);
+        var first = NodeSet.empty;
+        defer first.deinit(self.allocator);
+        try first.append(self.allocator, first_id);
+
         if (self.current.tag == .arrow or self.current.tag == .dashdash) {
-            var chain = std.ArrayList(NodeId).empty;
-            defer chain.deinit(self.allocator);
-            try chain.append(self.allocator, first_id);
-
-            while (self.current.tag == .arrow or self.current.tag == .dashdash) {
-                const op = self.current.tag;
-                try self.advance();
-                if (graph.directed and op != .arrow) return error.EdgeOpMismatch;
-                if (!graph.directed and op != .dashdash) return error.EdgeOpMismatch;
-                const next_name = try self.parseNodeIdText();
-                defer self.allocator.free(next_name);
-                try chain.append(self.allocator, try graph.node(next_name));
-            }
-
-            var attrs = AttrList.empty;
-            defer freeTempAttrs(self.allocator, &attrs);
-            try self.parseAttrLists(&attrs);
-
-            var i: usize = 0;
-            while (i + 1 < chain.items.len) : (i += 1) {
-                const edge_id = try graph.edge(chain.items[i], chain.items[i + 1], .{});
-                for (attrs.items) |attr| try graph.setEdgeAttr(edge_id, attr.name, attr.value);
-            }
+            try self.parseEdgeTail(graph, &first);
         } else {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
             for (attrs.items) |attr| try graph.setNodeAttr(first_id, attr.name, attr.value);
+        }
+    }
+
+    fn parseEdgeTail(self: *Parser, graph: *Graph, first: *NodeSet) anyerror!void {
+        var operands = std.ArrayList(NodeSet).empty;
+        defer {
+            for (operands.items) |*operand| operand.deinit(self.allocator);
+            operands.deinit(self.allocator);
+        }
+        try operands.append(self.allocator, first.*);
+        first.* = .empty;
+
+        while (self.current.tag == .arrow or self.current.tag == .dashdash) {
+            const op = self.current.tag;
+            try self.advance();
+            if (graph.directed and op != .arrow) return error.EdgeOpMismatch;
+            if (!graph.directed and op != .dashdash) return error.EdgeOpMismatch;
+            try operands.append(self.allocator, try self.parseOperand(graph));
+        }
+
+        var attrs = AttrList.empty;
+        defer freeTempAttrs(self.allocator, &attrs);
+        try self.parseAttrLists(&attrs);
+
+        var i: usize = 0;
+        while (i + 1 < operands.items.len) : (i += 1) {
+            for (operands.items[i].items) |from| {
+                for (operands.items[i + 1].items) |to| {
+                    const edge_id = try graph.edge(from, to, .{});
+                    for (attrs.items) |attr| try graph.setEdgeAttr(edge_id, attr.name, attr.value);
+                }
+            }
+        }
+    }
+
+    fn parseOperand(self: *Parser, graph: *Graph) anyerror!NodeSet {
+        if (self.isSubgraphStart()) return self.parseSubgraph(graph);
+        const name = try self.parseNodeIdText();
+        defer self.allocator.free(name);
+        const id = try graph.node(name);
+        try self.recordNode(id);
+        var nodes = NodeSet.empty;
+        errdefer nodes.deinit(self.allocator);
+        try nodes.append(self.allocator, id);
+        return nodes;
+    }
+
+    fn parseSubgraph(self: *Parser, graph: *Graph) anyerror!NodeSet {
+        if (self.matchKeyword("subgraph")) {
+            if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .html) try self.advance();
+        }
+        try self.expect(.lbrace);
+
+        var nodes = NodeSet.empty;
+        errdefer nodes.deinit(self.allocator);
+        try self.collectors.append(self.allocator, &nodes);
+        errdefer self.collectors.items.len -= 1;
+        try self.parseStmtList(graph);
+        self.collectors.items.len -= 1;
+        try self.expect(.rbrace);
+        return nodes;
+    }
+
+    fn isSubgraphStart(self: Parser) bool {
+        return self.current.tag == .lbrace or (self.current.tag == .id and std.ascii.eqlIgnoreCase(self.current.lexeme, "subgraph"));
+    }
+
+    fn recordNode(self: *Parser, id: NodeId) !void {
+        for (self.collectors.items) |collector| {
+            if (!containsNode(collector.items, id)) try collector.append(self.allocator, id);
         }
     }
 
@@ -610,8 +697,11 @@ const Parser = struct {
     }
 
     fn parseIdText(self: *Parser) ![]const u8 {
-        if (self.current.tag != .id and self.current.tag != .string) return error.ExpectedId;
-        const value = try self.allocator.dupe(u8, self.current.lexeme);
+        if (self.current.tag != .id and self.current.tag != .string and self.current.tag != .html) return error.ExpectedId;
+        const value = if (self.current.tag == .string)
+            try dupeDotString(self.allocator, self.current.lexeme)
+        else
+            try self.allocator.dupe(u8, self.current.lexeme);
         try self.advance();
         return value;
     }
@@ -648,6 +738,30 @@ fn freeTempAttrs(allocator: std.mem.Allocator, attrs: *AttrList) void {
         allocator.free(attr.value);
     }
     attrs.deinit(allocator);
+}
+
+fn dupeDotString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    if (std.mem.indexOfScalar(u8, value, '\\') == null) return allocator.dupe(u8, value);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        const c = value[i];
+        if (c != '\\' or i + 1 >= value.len) {
+            try out.append(allocator, c);
+            continue;
+        }
+        i += 1;
+        const escaped = value[i];
+        switch (escaped) {
+            'n' => try out.append(allocator, '\n'),
+            'r' => try out.append(allocator, '\r'),
+            't' => try out.append(allocator, '\t'),
+            '\n' => {},
+            else => try out.append(allocator, escaped),
+        }
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 pub fn parseDot(allocator: std.mem.Allocator, source: []const u8) !Graph {
@@ -865,7 +979,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     );
     try writer.print("<rect width=\"100%\" height=\"100%\" fill=\"{s}\"/>\n", .{options.background});
     if (options.show_title) {
-        try writer.print("<text x=\"16\" y=\"24\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">{s}</text>\n", .{ options.font_family, graph.name });
+        try writer.print("<text x=\"16\" y=\"24\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">", .{options.font_family});
+        try writeXmlEscaped(writer, graph.name);
+        try writer.writeAll("</text>\n");
     }
     if (graph.directed) {
         try writer.writeAll("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#64748b\"/></marker></defs>\n");
@@ -879,7 +995,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (graph.directed) try writer.writeAll(" marker-end=\"url(#arrow)\"");
         try writer.writeAll("/>\n");
         if (edge_item.label) |label| {
-            try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"12\" fill=\"#475569\">{s}</text>\n", .{ (a.x + b.x) / 2.0, (a.y + b.y) / 2.0 - 6.0, options.font_family, label });
+            try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"12\" fill=\"#475569\">", .{ (a.x + b.x) / 2.0, (a.y + b.y) / 2.0 - 6.0, options.font_family });
+            try writeXmlEscaped(writer, label);
+            try writer.writeAll("</text>\n");
         }
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
@@ -891,7 +1009,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             .circle => try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x, l.center.y, @min(l.width, l.height) / 2.0, node_item.color }),
             .ellipse => try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x, l.center.y, l.width / 2.0, l.height / 2.0, node_item.color }),
         }
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"14\" fill=\"#0f172a\">{s}</text>\n", .{ l.center.x, l.center.y, options.font_family, node_item.label });
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"14\" fill=\"#0f172a\">", .{ l.center.x, l.center.y, options.font_family });
+        try writeXmlEscaped(writer, node_item.label);
+        try writer.writeAll("</text>\n");
     }
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -901,6 +1021,17 @@ pub fn renderSvgAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout:
     errdefer aw.deinit();
     try renderSvg(&aw.writer, graph, layout, options);
     return aw.toOwnedSlice();
+}
+
+fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    for (text) |c| switch (c) {
+        '&' => try writer.writeAll("&amp;"),
+        '<' => try writer.writeAll("&lt;"),
+        '>' => try writer.writeAll("&gt;"),
+        '"' => try writer.writeAll("&quot;"),
+        0x27 => try writer.writeAll("&apos;"),
+        else => try writer.writeByte(c),
+    };
 }
 
 pub fn renderPdf(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) (Io.Writer.Error || std.mem.Allocator.Error)!void {
@@ -1250,4 +1381,55 @@ test "SVG renderer emits document" {
     const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "a -- b") != null);
+}
+
+test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\strict digraph Fancy {
+        \\  graph [rankdir=BT label=<Fancy Graph>];
+        \\  node [shape=box color="#fee2e2"];
+        \\  subgraph cluster_left {
+        \\    a:out [label="hello\nworld"];
+        \\    b;
+        \\  }
+        \\  { c d } -> subgraph cluster_left { e f } [label="fanout"];
+        \\  a:out:e -> b:in:w [label="port edge"];
+        \\  -1 [label="<&>"];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(graph.strict);
+    try std.testing.expectEqual(RankDir.BT, graph.rankdir);
+    try std.testing.expectEqual(@as(usize, 7), graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 5), graph.edges.items.len);
+    const a = graph.node_index.get("a").?;
+    try std.testing.expectEqualStrings("hello\nworld", graph.nodes.items[a].label);
+    try std.testing.expect(graph.attrs.items.len >= 2);
+}
+
+test "render dispatch covers terminal and svg formats" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "dispatch", .rankdir = .LR });
+    defer graph.deinit();
+    _ = try graph.edgeByName("left", "right", .{ .label = "go", .color = "#16a34a" });
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const svg = try renderAlloc(allocator, &graph, &layout, .svg, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "go") != null);
+
+    try graph.setNodeAttr(graph.node_index.get("left").?, "label", "<&>");
+    var escaped_layout = try layoutLayered(allocator, &graph, .{});
+    defer escaped_layout.deinit();
+    const escaped_svg = try renderAlloc(allocator, &graph, &escaped_layout, .svg, .{});
+    defer allocator.free(escaped_svg);
+    try std.testing.expect(std.mem.indexOf(u8, escaped_svg, "&lt;&amp;&gt;") != null);
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "left -> right") != null);
 }

@@ -11,7 +11,7 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 
 - Zig 0.16 project.
 - Core graph model with a programmatic builder API.
-- DOT subset parser compatible with common `graph`/`digraph` files.
+- DOT subset parser compatible with common `graph`/`digraph` files, including subgraphs and ports.
 - Basic layered layout with `rankdir=TB|BT|LR|RL`.
 - SVG renderer, terminal renderer, and a simple native PNG raster path.
 - Output format dispatch for `terminal`, `svg`, `png`, and `pdf`.
@@ -22,6 +22,7 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 ```sh
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/simple.dot --format terminal
+zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/simple.dot --output simple.png
 # or
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
@@ -52,7 +53,10 @@ The parser currently supports:
 - `graph` / `digraph` and optional `strict`.
 - Node statements: `A [label="Start", shape=box]`.
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
+- Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph cluster { c d }`.
+- Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `node [...]`, `edge [...]`.
+- Quoted strings with common escapes, HTML-like IDs/labels as text, numeric IDs, and negative numeric IDs.
 - Line comments (`//`, `#`) and block comments (`/* ... */`).
 
 ## Output backends

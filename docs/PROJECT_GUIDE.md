@@ -17,7 +17,7 @@ Topos 需要兼容 Graphviz 的 DOT 风格 DSL，至少从一个实用子集开�
 - 支持有向边 `->` 和无向边 `--`。
 - 支持节点语句、边语句和图/节点/边属性。
 - 支持常见属性：`label`、`color`、`shape`、`rankdir`、`weight` 等。
-- 允许逐步扩展到 subgraph、cluster、HTML-like labels、ports、strict graph 等完整 DOT 语义。
+- 当前应覆盖实用 DOT 子集：`strict`、subgraph/cluster 语法外壳、subgraph 作为边操作数、ports、HTML-like labels/IDs 文本化、常见字符串转义；后续再扩展完整 cluster 布局、HTML label 渲染和完整 DOT 语义。
 
 ## 编码接口要求
 
@@ -51,7 +51,7 @@ try topos.renderSvg(writer, graph, layout, .{});
 3. 实现核心图模型与可编程构建 API。
 4. 实现 DOT 子集解析器。
 5. 实现一个基础层次布局（优先服务 `digraph`）。
-6. 输出 SVG 和 terminal 文本预览，作为最小可用渲染后端。
+6. 输出 SVG 和 terminal 文本预览，作为最小可用渲染后端；SVG 文本必须做 XML 转义。
 7. 添加 CLI：从 DOT 文件或 stdin 读取，按 `--format terminal|svg|png|pdf` 输出到文件或 stdout；PNG/PDF 可先以明确的 UnsupportedFormat 错误占位。
 8. 添加测试和示例。
 
