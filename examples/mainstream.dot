@@ -1,0 +1,10 @@
+graph Mainstream {
+  graph [label="hello" + " world", rankdir=LR];
+  node [shape=box];
+
+  a, b, c [style=filled];
+  a, b -- c, d [label="many" + " edges"];
+  "quoted id" [tooltip];
+  esc [label="left\lright\N quote\" slash\\ keep\x"];
+  3.14 -- -2;
+}

@@ -23,6 +23,7 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/simple.dot --format terminal
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
+zig build run -- --input examples/mainstream.dot --format terminal
 zig build run -- --input examples/simple.dot --output simple.png
 # or
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
@@ -46,17 +47,18 @@ defer layout.deinit();
 try topos.render(writer, &graph, &layout, .svg, .{});
 ```
 
-## DOT subset
+## Mainstream DOT support
 
-The parser currently supports:
+The parser currently supports a practical, mainstream DOT subset:
 
 - `graph` / `digraph` and optional `strict`.
 - Node statements: `A [label="Start", shape=box]`.
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
+- Comma node lists in node statements and edge operands: `a, b -- c, d`.
 - Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph cluster { c d }`.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `node [...]`, `edge [...]`.
-- Quoted strings with common escapes, HTML-like IDs/labels as text, numeric IDs, and negative numeric IDs.
+- Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, HTML-like IDs/labels as text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes.
 - Line comments (`//`, `#`) and block comments (`/* ... */`).
 
 ## Output backends
@@ -68,5 +70,5 @@ The parser currently supports:
 
 The native PNG/PDF paths are intentionally dependency-free MVP backends: PNG currently rasterizes boxes/edges without text; PDF keeps vector edges, boxes, and labels.
 
-Future work should expand toward the full grammar in Graphviz's local source at
+Future work should expand remaining non-MVP DOT details—full cluster layout semantics, complete HTML-label rendering, and all Graphviz edge cases—toward the full grammar in Graphviz's local source at
 `~/Work/graphviz/lib/cgraph/grammar.y` and `~/Work/graphviz/doc/infosrc/grammar`.

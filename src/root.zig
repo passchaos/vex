@@ -93,6 +93,8 @@ pub const Graph = struct {
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
     attrs: std.ArrayList(Attr) = .empty,
+    node_default_attrs: std.ArrayList(Attr) = .empty,
+    edge_default_attrs: std.ArrayList(Attr) = .empty,
     node_index: std.StringHashMap(NodeId),
     node_defaults: NodeDefaults = .{},
     edge_defaults: EdgeDefaults = .{},
@@ -140,6 +142,8 @@ pub const Graph = struct {
             self.allocator.free(attr.name);
             self.allocator.free(attr.value);
         }
+        freeAttrList(self.allocator, &self.node_default_attrs);
+        freeAttrList(self.allocator, &self.edge_default_attrs);
         self.nodes.deinit(self.allocator);
         self.edges.deinit(self.allocator);
         self.attrs.deinit(self.allocator);
@@ -159,7 +163,7 @@ pub const Graph = struct {
         const owned_color = try self.allocator.dupe(u8, self.node_defaults.color);
         errdefer self.allocator.free(owned_color);
 
-        var attrs = std.ArrayList(Attr).empty;
+        var attrs = try copyAttrList(self.allocator, self.node_default_attrs.items);
         errdefer {
             for (attrs.items) |attr| {
                 self.allocator.free(attr.name);
@@ -208,7 +212,7 @@ pub const Graph = struct {
         const owned_color = try self.allocator.dupe(u8, options.color orelse self.edge_defaults.color);
         errdefer self.allocator.free(owned_color);
 
-        var attrs = std.ArrayList(Attr).empty;
+        var attrs = try copyAttrList(self.allocator, self.edge_default_attrs.items);
         errdefer {
             for (attrs.items) |attr| {
                 self.allocator.free(attr.name);
@@ -247,6 +251,7 @@ pub const Graph = struct {
     }
 
     pub fn setDefaultNodeAttr(self: *Graph, name: []const u8, value: []const u8) !void {
+        try setAttrInList(self.allocator, &self.node_default_attrs, name, value);
         if (std.ascii.eqlIgnoreCase(name, "color") or std.ascii.eqlIgnoreCase(name, "fillcolor")) {
             const owned = try self.allocator.dupe(u8, value);
             self.allocator.free(self.node_defaults.color);
@@ -257,6 +262,7 @@ pub const Graph = struct {
     }
 
     pub fn setDefaultEdgeAttr(self: *Graph, name: []const u8, value: []const u8) !void {
+        try setAttrInList(self.allocator, &self.edge_default_attrs, name, value);
         if (std.ascii.eqlIgnoreCase(name, "color")) {
             const owned = try self.allocator.dupe(u8, value);
             self.allocator.free(self.edge_defaults.color);
@@ -285,6 +291,7 @@ pub const Graph = struct {
     pub fn setNodeShape(self: *Graph, id: NodeId, shape: Shape) !void {
         if (id >= self.nodes.items.len) return error.InvalidNodeId;
         self.nodes.items[id].shape = shape;
+        try setAttrInList(self.allocator, &self.nodes.items[id].attrs, "shape", shapeName(shape));
     }
 
     pub fn setEdgeAttr(self: *Graph, id: EdgeId, name: []const u8, value: []const u8) !void {
@@ -303,6 +310,21 @@ pub const Graph = struct {
         try setAttrInList(self.allocator, &e.attrs, name, value);
     }
 };
+
+fn freeAttrList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr)) void {
+    for (list.items) |attr| {
+        allocator.free(attr.name);
+        allocator.free(attr.value);
+    }
+    list.deinit(allocator);
+}
+
+fn copyAttrList(allocator: std.mem.Allocator, source: []const Attr) !std.ArrayList(Attr) {
+    var result = std.ArrayList(Attr).empty;
+    errdefer freeAttrList(allocator, &result);
+    for (source) |attr| try setAttrInList(allocator, &result, attr.name, attr.value);
+    return result;
+}
 
 fn setAttrInList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name: []const u8, value: []const u8) !void {
     for (list.items) |*attr| {
@@ -347,6 +369,7 @@ const TokenTag = enum {
     comma,
     semicolon,
     colon,
+    plus,
     arrow,
     dashdash,
 };
@@ -381,14 +404,14 @@ const Lexer = struct {
             ',' => .{ .tag = .comma, .lexeme = self.source[start..self.index], .line = line, .column = column },
             ';' => .{ .tag = .semicolon, .lexeme = self.source[start..self.index], .line = line, .column = column },
             ':' => .{ .tag = .colon, .lexeme = self.source[start..self.index], .line = line, .column = column },
+            '+' => .{ .tag = .plus, .lexeme = self.source[start..self.index], .line = line, .column = column },
             '<' => blk: {
-                var depth: usize = 1;
                 while (self.index < self.source.len) {
                     const ch = self.advance();
-                    if (ch == '<') depth += 1;
                     if (ch == '>') {
-                        depth -= 1;
-                        if (depth == 0) break;
+                        var lookahead = self.index;
+                        while (lookahead < self.source.len and std.ascii.isWhitespace(self.source[lookahead])) : (lookahead += 1) {}
+                        if (lookahead >= self.source.len or isHtmlIdTerminator(self.source[lookahead])) break;
                     }
                 } else return error.UnterminatedHtmlString;
                 break :blk .{ .tag = .html, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
@@ -481,7 +504,14 @@ const Lexer = struct {
 };
 
 fn isIdChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-';
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-' or c >= 0x80;
+}
+
+fn isHtmlIdTerminator(c: u8) bool {
+    return switch (c) {
+        ']', ',', ';', '{', '}', '-' => true,
+        else => false,
+    };
 }
 
 const AttrList = std.ArrayList(Attr);
@@ -560,10 +590,17 @@ const Parser = struct {
             return;
         }
         if (self.isSubgraphStart()) {
-            var first = try self.parseSubgraph(graph);
+            var first = try self.parseOperand(graph);
             defer first.deinit(self.allocator);
             if (self.current.tag == .arrow or self.current.tag == .dashdash) {
                 try self.parseEdgeTail(graph, &first);
+            } else {
+                var attrs = AttrList.empty;
+                defer freeTempAttrs(self.allocator, &attrs);
+                try self.parseAttrLists(&attrs);
+                for (first.items) |node_id| {
+                    for (attrs.items) |attr| try graph.setNodeAttr(node_id, attr.name, attr.value);
+                }
             }
             return;
         }
@@ -578,11 +615,18 @@ const Parser = struct {
             return;
         }
 
-        const first_id = try graph.node(first_name);
-        try self.recordNode(first_id);
         var first = NodeSet.empty;
         defer first.deinit(self.allocator);
+        const first_id = try graph.node(first_name);
+        try self.recordNode(first_id);
         try first.append(self.allocator, first_id);
+        while (self.match(.comma)) {
+            const name = try self.parseNodeIdText();
+            defer self.allocator.free(name);
+            const id = try graph.node(name);
+            try self.recordNode(id);
+            if (!containsNode(first.items, id)) try first.append(self.allocator, id);
+        }
 
         if (self.current.tag == .arrow or self.current.tag == .dashdash) {
             try self.parseEdgeTail(graph, &first);
@@ -590,7 +634,9 @@ const Parser = struct {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
-            for (attrs.items) |attr| try graph.setNodeAttr(first_id, attr.name, attr.value);
+            for (first.items) |node_id| {
+                for (attrs.items) |attr| try graph.setNodeAttr(node_id, attr.name, attr.value);
+            }
         }
     }
 
@@ -628,13 +674,20 @@ const Parser = struct {
 
     fn parseOperand(self: *Parser, graph: *Graph) anyerror!NodeSet {
         if (self.isSubgraphStart()) return self.parseSubgraph(graph);
-        const name = try self.parseNodeIdText();
-        defer self.allocator.free(name);
-        const id = try graph.node(name);
-        try self.recordNode(id);
+        return self.parseNodeList(graph);
+    }
+
+    fn parseNodeList(self: *Parser, graph: *Graph) !NodeSet {
         var nodes = NodeSet.empty;
         errdefer nodes.deinit(self.allocator);
-        try nodes.append(self.allocator, id);
+        while (true) {
+            const name = try self.parseNodeIdText();
+            defer self.allocator.free(name);
+            const id = try graph.node(name);
+            try self.recordNode(id);
+            if (!containsNode(nodes.items, id)) try nodes.append(self.allocator, id);
+            if (!self.match(.comma)) break;
+        }
         return nodes;
     }
 
@@ -673,8 +726,10 @@ const Parser = struct {
                 }
                 const name = try self.parseIdText();
                 errdefer self.allocator.free(name);
-                try self.expect(.equal);
-                const value = try self.parseIdText();
+                const value = if (self.match(.equal))
+                    try self.parseIdText()
+                else
+                    try self.allocator.dupe(u8, "true");
                 errdefer self.allocator.free(value);
                 try attrs.append(self.allocator, .{ .name = name, .value = value });
                 _ = self.match(.comma) or self.match(.semicolon);
@@ -698,11 +753,22 @@ const Parser = struct {
 
     fn parseIdText(self: *Parser) ![]const u8 {
         if (self.current.tag != .id and self.current.tag != .string and self.current.tag != .html) return error.ExpectedId;
-        const value = if (self.current.tag == .string)
+        var value = if (self.current.tag == .string)
             try dupeDotString(self.allocator, self.current.lexeme)
         else
             try self.allocator.dupe(u8, self.current.lexeme);
+        errdefer self.allocator.free(value);
         try self.advance();
+        while (self.current.tag == .plus) {
+            try self.advance();
+            if (self.current.tag != .string) return error.ExpectedStringAfterConcat;
+            const rhs = try dupeDotString(self.allocator, self.current.lexeme);
+            defer self.allocator.free(rhs);
+            const joined = try std.mem.concat(self.allocator, u8, &.{ value, rhs });
+            self.allocator.free(value);
+            value = joined;
+            try self.advance();
+        }
         return value;
     }
 
@@ -754,11 +820,15 @@ fn dupeDotString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
         i += 1;
         const escaped = value[i];
         switch (escaped) {
-            'n' => try out.append(allocator, '\n'),
-            'r' => try out.append(allocator, '\r'),
+            'n', 'l', 'r' => try out.append(allocator, '\n'),
             't' => try out.append(allocator, '\t'),
+            '"' => try out.append(allocator, '"'),
+            '\\' => try out.append(allocator, '\\'),
             '\n' => {},
-            else => try out.append(allocator, escaped),
+            else => {
+                try out.append(allocator, '\\');
+                try out.append(allocator, escaped);
+            },
         }
     }
     return out.toOwnedSlice(allocator);
@@ -1387,7 +1457,7 @@ test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" 
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\strict digraph Fancy {
-        \\  graph [rankdir=BT label=<Fancy Graph>];
+        \\  graph [rankdir=BT label=< <B>Fancy</B> Graph >];
         \\  node [shape=box color="#fee2e2"];
         \\  subgraph cluster_left {
         \\    a:out [label="hello\nworld"];
@@ -1407,6 +1477,7 @@ test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" 
     const a = graph.node_index.get("a").?;
     try std.testing.expectEqualStrings("hello\nworld", graph.nodes.items[a].label);
     try std.testing.expect(graph.attrs.items.len >= 2);
+    try std.testing.expectEqualStrings(" <B>Fancy</B> Graph ", graph.attrs.items[1].value);
 }
 
 test "render dispatch covers terminal and svg formats" {
@@ -1432,4 +1503,40 @@ test "render dispatch covers terminal and svg formats" {
     const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "left -> right") != null);
+}
+
+test "DOT parser handles mainstream node lists, string concat, and boolean attrs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph Mainstream {
+        \\  graph [label="hello" + " world"];
+        \\  node [shape=box];
+        \\  a, b, c [style=filled];
+        \\  a, b -- c, d [label="many" + " edges"];
+        \\  "quoted id" [tooltip];
+        \\  esc [label="left\lright\N quote\" slash\\ keep\x"];
+        \\  3.14 -- -2;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(!graph.directed);
+    try std.testing.expectEqual(@as(usize, 8), graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 5), graph.edges.items.len);
+    try std.testing.expectEqualStrings("hello world", graph.attrs.items[0].value);
+    try std.testing.expectEqualStrings("many edges", graph.edges.items[0].label.?);
+    const a = graph.node_index.get("a").?;
+    var found_default_shape = false;
+    for (graph.nodes.items[a].attrs.items) |attr| {
+        if (std.mem.eql(u8, attr.name, "shape") and std.mem.eql(u8, attr.value, "box")) found_default_shape = true;
+    }
+    try std.testing.expect(found_default_shape);
+    const quoted = graph.node_index.get("quoted id").?;
+    var found_tooltip = false;
+    for (graph.nodes.items[quoted].attrs.items) |attr| {
+        if (std.mem.eql(u8, attr.name, "tooltip") and std.mem.eql(u8, attr.value, "true")) found_tooltip = true;
+    }
+    try std.testing.expect(found_tooltip);
+    const esc = graph.node_index.get("esc").?;
+    try std.testing.expectEqualStrings("left\nright\\N quote\" slash\\ keep\\x", graph.nodes.items[esc].label);
 }
