@@ -100,6 +100,14 @@ pub const Edge = struct {
     attrs: std.ArrayList(Attr) = .empty,
 };
 
+pub const Cluster = struct {
+    id: usize,
+    name: []const u8,
+    label: []const u8,
+    nodes: []NodeId,
+    attrs: std.ArrayList(Attr) = .empty,
+};
+
 const NodeDefaults = struct {
     color: []const u8 = "#f8fafc",
     shape: Shape = .ellipse,
@@ -120,6 +128,7 @@ pub const Graph = struct {
     rankdir: RankDir,
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
+    clusters: std.ArrayList(Cluster) = .empty,
     rank_constraints: std.ArrayList(RankConstraint) = .empty,
     attrs: std.ArrayList(Attr) = .empty,
     node_default_attrs: std.ArrayList(Attr) = .empty,
@@ -171,6 +180,12 @@ pub const Graph = struct {
             self.allocator.free(attr.name);
             self.allocator.free(attr.value);
         }
+        for (self.clusters.items) |*cluster| {
+            self.allocator.free(cluster.name);
+            if (cluster.label.ptr != cluster.name.ptr) self.allocator.free(cluster.label);
+            self.allocator.free(cluster.nodes);
+            freeAttrList(self.allocator, &cluster.attrs);
+        }
         for (self.rank_constraints.items) |constraint| {
             self.allocator.free(constraint.node_ids);
         }
@@ -178,6 +193,7 @@ pub const Graph = struct {
         freeAttrList(self.allocator, &self.edge_default_attrs);
         self.nodes.deinit(self.allocator);
         self.edges.deinit(self.allocator);
+        self.clusters.deinit(self.allocator);
         self.rank_constraints.deinit(self.allocator);
         self.attrs.deinit(self.allocator);
         self.node_index.deinit();
@@ -283,6 +299,29 @@ pub const Graph = struct {
         const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
         errdefer self.allocator.free(owned_nodes);
         try self.rank_constraints.append(self.allocator, .{ .kind = kind, .node_ids = owned_nodes });
+    }
+
+    pub fn addCluster(self: *Graph, name: []const u8, node_ids: []const NodeId, attrs: []const Attr) !void {
+        if (node_ids.len == 0) return;
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+        const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
+        errdefer self.allocator.free(owned_nodes);
+        var owned_attrs = try copyAttrList(self.allocator, attrs);
+        errdefer freeAttrList(self.allocator, &owned_attrs);
+        const label_value = attrValue(owned_attrs.items, "label") orelse owned_name;
+        const owned_label = if (label_value.ptr == owned_name.ptr)
+            owned_name
+        else
+            try self.allocator.dupe(u8, label_value);
+        errdefer if (owned_label.ptr != owned_name.ptr) self.allocator.free(owned_label);
+        try self.clusters.append(self.allocator, .{
+            .id = self.clusters.items.len,
+            .name = owned_name,
+            .label = owned_label,
+            .nodes = owned_nodes,
+            .attrs = owned_attrs,
+        });
     }
 
     pub fn setGraphAttr(self: *Graph, name: []const u8, value: []const u8) !void {
@@ -578,6 +617,10 @@ fn containsNode(nodes: []const NodeId, id: NodeId) bool {
     return false;
 }
 
+fn isClusterName(name: []const u8) bool {
+    return std.ascii.startsWithIgnoreCase(name, "cluster");
+}
+
 const DefaultScope = struct {
     node_attrs: AttrList,
     edge_attrs: AttrList,
@@ -646,6 +689,7 @@ const Parser = struct {
     current: Token,
     collectors: std.ArrayList(*NodeSet) = .empty,
     rank_scopes: std.ArrayList(*?RankKind) = .empty,
+    cluster_scopes: std.ArrayList(?*AttrList) = .empty,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
         var lexer: Lexer = .{ .source = source };
@@ -656,6 +700,7 @@ const Parser = struct {
     fn parse(self: *Parser) !Graph {
         defer self.collectors.deinit(self.allocator);
         defer self.rank_scopes.deinit(self.allocator);
+        defer self.cluster_scopes.deinit(self.allocator);
         var strict = false;
         if (self.matchKeyword("strict")) strict = true;
 
@@ -694,6 +739,7 @@ const Parser = struct {
             try self.parseAttrLists(&attrs);
             for (attrs.items) |attr| {
                 if (try self.recordRankAttr(attr.name, attr.value)) continue;
+                if (try self.recordClusterAttr(attr.name, attr.value)) continue;
                 try graph.setGraphAttr(attr.name, attr.value);
             }
             return;
@@ -735,6 +781,7 @@ const Parser = struct {
             const value = try self.parseIdText();
             defer self.allocator.free(value);
             if (try self.recordRankAttr(first_name, value)) return;
+            if (try self.recordClusterAttr(first_name, value)) return;
             try graph.setGraphAttr(first_name, value);
             return;
         }
@@ -816,13 +863,21 @@ const Parser = struct {
     }
 
     fn parseSubgraph(self: *Parser, graph: *Graph) anyerror!NodeSet {
+        var subgraph_name: ?[]const u8 = null;
         if (self.matchKeyword("subgraph")) {
-            if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .html) try self.advance();
+            if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .html) {
+                subgraph_name = self.current.lexeme;
+                try self.advance();
+            }
         }
         try self.expect(.lbrace);
 
         var defaults = try DefaultScope.snapshot(self.allocator, graph);
         defer defaults.deinit(self.allocator);
+
+        var cluster_attrs = AttrList.empty;
+        defer freeAttrList(self.allocator, &cluster_attrs);
+        const is_cluster = if (subgraph_name) |name| isClusterName(name) else false;
 
         var nodes = NodeSet.empty;
         errdefer nodes.deinit(self.allocator);
@@ -831,11 +886,15 @@ const Parser = struct {
         errdefer self.collectors.items.len -= 1;
         try self.rank_scopes.append(self.allocator, &rank_kind);
         errdefer self.rank_scopes.items.len -= 1;
+        try self.cluster_scopes.append(self.allocator, if (is_cluster) &cluster_attrs else null);
+        errdefer self.cluster_scopes.items.len -= 1;
         try self.parseStmtList(graph);
         self.collectors.items.len -= 1;
         self.rank_scopes.items.len -= 1;
+        self.cluster_scopes.items.len -= 1;
         try self.expect(.rbrace);
         if (rank_kind) |kind| try graph.addRankConstraint(kind, nodes.items);
+        if (is_cluster) try graph.addCluster(subgraph_name.?, nodes.items, cluster_attrs.items);
         defaults.restore(self.allocator, graph);
         return nodes;
     }
@@ -855,6 +914,13 @@ const Parser = struct {
         const kind = RankKind.fromString(value) orelse return false;
         if (self.rank_scopes.items.len == 0) return false;
         self.rank_scopes.items[self.rank_scopes.items.len - 1].* = kind;
+        return true;
+    }
+
+    fn recordClusterAttr(self: *Parser, name: []const u8, value: []const u8) !bool {
+        if (self.cluster_scopes.items.len == 0) return false;
+        const attrs = self.cluster_scopes.items[self.cluster_scopes.items.len - 1] orelse return false;
+        try setAttrInList(self.allocator, attrs, name, value);
         return true;
     }
 
@@ -991,9 +1057,18 @@ pub const NodeLayout = struct {
     height: f64,
 };
 
+pub const ClusterLayout = struct {
+    id: usize,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     nodes: []NodeLayout,
+    clusters: []ClusterLayout,
     ranks: []usize,
     rank_depths: []f64,
     rank_heights: []f64,
@@ -1003,6 +1078,7 @@ pub const Layout = struct {
 
     pub fn deinit(self: *Layout) void {
         self.allocator.free(self.nodes);
+        self.allocator.free(self.clusters);
         self.allocator.free(self.ranks);
         self.allocator.free(self.rank_depths);
         self.allocator.free(self.rank_heights);
@@ -1028,6 +1104,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     const n = graph.nodes.items.len;
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(ClusterLayout, graph.clusters.items.len);
+    errdefer allocator.free(cluster_layouts);
     const layout_ranks = try allocator.alloc(usize, n);
     errdefer allocator.free(layout_ranks);
 
@@ -1039,6 +1117,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         return .{
             .allocator = allocator,
             .nodes = nodes,
+            .clusters = cluster_layouts,
             .ranks = layout_ranks,
             .rank_depths = empty_rank_depths,
             .rank_heights = empty_rank_heights,
@@ -1158,12 +1237,14 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
     @memcpy(layout_ranks, ranks);
+    computeClusterLayouts(graph, nodes, cluster_layouts);
 
     const base_width = total_along + options.margin * 2.0;
     const base_height = total_depth + options.margin * 2.0;
     return .{
         .allocator = allocator,
         .nodes = nodes,
+        .clusters = cluster_layouts,
         .ranks = layout_ranks,
         .rank_depths = rank_depths,
         .rank_heights = layout_rank_heights,
@@ -1198,6 +1279,49 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
         .TB, .BT => size,
         .LR, .RL => .{ .width = size.height, .height = size.width },
     };
+}
+
+fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
+    const pad_x: f64 = 28;
+    const pad_y: f64 = 32;
+    const label_band: f64 = 22;
+    for (graph.clusters.items, 0..) |cluster, index| {
+        var min_x = std.math.floatMax(f64);
+        var min_y = std.math.floatMax(f64);
+        var max_x: f64 = 0;
+        var max_y: f64 = 0;
+        var has_node = false;
+        for (cluster.nodes) |node_id| {
+            if (node_id >= nodes.len) continue;
+            const n = nodes[node_id];
+            min_x = @min(min_x, n.center.x - n.width / 2.0);
+            min_y = @min(min_y, n.center.y - n.height / 2.0);
+            max_x = @max(max_x, n.center.x + n.width / 2.0);
+            max_y = @max(max_y, n.center.y + n.height / 2.0);
+            has_node = true;
+        }
+        if (!has_node) {
+            clusters[index] = .{ .id = cluster.id, .x = 0, .y = 0, .width = 0, .height = 0 };
+            continue;
+        }
+        const label_min_width = @as(f64, @floatFromInt(labelMaxLineLen(cluster.label))) * 8.0 + pad_x * 2.0;
+        var x = min_x - pad_x;
+        var width = (max_x - min_x) + pad_x * 2.0;
+        const height = (max_y - min_y) + pad_y * 2.0 + label_band;
+        if (width < label_min_width) {
+            const extra = label_min_width - width;
+            x -= extra / 2.0;
+            width = label_min_width;
+        }
+        const y = min_y - pad_y - label_band;
+        clusters[index] = .{
+            .id = cluster.id,
+            .x = @max(0, x),
+            .y = @max(0, y),
+            .width = width,
+            .height = height,
+        };
+    }
 }
 
 fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
@@ -1556,6 +1680,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</defs>\n");
     }
 
+    try renderSvgClusters(writer, graph, layout, options);
+
     try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
     for (graph.edges.items) |edge_item| {
         const visual = resolveEdgeVisual(edge_item);
@@ -1699,6 +1825,51 @@ const EdgeVisual = struct {
     hidden: bool,
 };
 
+const ClusterVisual = struct {
+    fill: []const u8,
+    stroke: []const u8,
+    font_color: []const u8,
+    width: f64,
+    radius: f64,
+    dash: DashStyle,
+    fill_opacity: []const u8,
+    hidden: bool,
+};
+
+fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
+    if (graph.clusters.items.len == 0) return;
+    try writer.writeAll("<g class=\"clusters\">\n");
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (index >= layout.clusters.len) continue;
+        const box = layout.clusters[index];
+        if (box.width <= 0 or box.height <= 0) continue;
+        const visual = resolveClusterVisual(cluster);
+        if (visual.hidden) continue;
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+            visual.radius,
+            visual.fill,
+            visual.fill_opacity,
+            visual.stroke,
+            visual.width,
+        });
+        try writeSvgDash(writer, visual.dash);
+        try writer.writeAll("/>\n");
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
+            box.x + box.width / 2.0,
+            box.y + 18.0,
+            options.font_family,
+            visual.font_color,
+        });
+        try writeXmlEscaped(writer, cluster.label);
+        try writer.writeAll("</text>\n");
+    }
+    try writer.writeAll("</g>\n");
+}
+
 fn resolveNodeVisual(node_item: Node) NodeVisual {
     const style = attrValue(node_item.attrs.items, "style");
     const filled = styleHas(style, "filled");
@@ -1727,6 +1898,24 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", 1.8),
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
         .marker_end = arrowhead == null or !std.ascii.eqlIgnoreCase(arrowhead.?, "none"),
+        .hidden = styleHas(style, "invis"),
+    };
+}
+
+fn resolveClusterVisual(cluster: Cluster) ClusterVisual {
+    const style = attrValue(cluster.attrs.items, "style");
+    const filled = styleHas(style, "filled");
+    const dashed = styleHas(style, "dashed");
+    const dotted = styleHas(style, "dotted");
+    const rounded = styleHas(style, "rounded");
+    return .{
+        .fill = attrValue(cluster.attrs.items, "fillcolor") orelse if (filled) "#f8fafc" else "#ffffff",
+        .stroke = attrValue(cluster.attrs.items, "color") orelse "#94a3b8",
+        .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "#475569",
+        .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.4),
+        .radius = if (rounded) 10 else 0,
+        .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
+        .fill_opacity = if (filled or attrValue(cluster.attrs.items, "fillcolor") != null) "0.32" else "0.08",
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -2706,4 +2895,64 @@ test "layered layout respects edge constraint false and minlen" {
     const c = graph.node_index.get("c").?;
     try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
     try std.testing.expectEqual(layout.ranks[a] + 3, layout.ranks[c]);
+}
+
+test "DOT parser records cluster subgraphs with graph attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_api {
+        \\    graph [label="API", color="#2563eb", fillcolor="#dbeafe", style="filled,rounded"];
+        \\    a; b;
+        \\    a -> b;
+        \\  }
+        \\  c;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.clusters.items.len);
+    const cluster = graph.clusters.items[0];
+    try std.testing.expectEqualStrings("cluster_api", cluster.name);
+    try std.testing.expectEqualStrings("API", cluster.label);
+    try std.testing.expectEqual(@as(usize, 2), cluster.nodes.len);
+    try std.testing.expectEqualStrings("#2563eb", attrValue(cluster.attrs.items, "color").?);
+    try std.testing.expectEqualStrings("#dbeafe", attrValue(cluster.attrs.items, "fillcolor").?);
+}
+
+test "cluster layout boxes contain member nodes and render to SVG" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_api {
+        \\    label="API";
+        \\    color="#2563eb";
+        \\    fillcolor="#dbeafe";
+        \\    style="filled,rounded";
+        \\    a -> b;
+        \\  }
+        \\  b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expectEqual(@as(usize, 1), layout.clusters.len);
+
+    const cluster_box = layout.clusters[0];
+    for (graph.clusters.items[0].nodes) |node_id| {
+        const n = layout.nodes[node_id];
+        try std.testing.expect(cluster_box.x <= n.center.x - n.width / 2.0);
+        try std.testing.expect(cluster_box.y <= n.center.y - n.height / 2.0);
+        try std.testing.expect(cluster_box.x + cluster_box.width >= n.center.x + n.width / 2.0);
+        try std.testing.expect(cluster_box.y + cluster_box.height >= n.center.y + n.height / 2.0);
+    }
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"clusters\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
 }
