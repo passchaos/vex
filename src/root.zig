@@ -2866,17 +2866,59 @@ fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Wri
 }
 
 fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+    const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
+    const label_font_color = attrValue(edge_item.attrs.items, "labelfontcolor") orelse visual.font_color;
+    const label_font_family = attrValue(edge_item.attrs.items, "labelfontname") orelse visual.font_family;
+    const label_distance = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0);
+    const label_angle = parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0);
     if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
-        const pos = lerpPoint(route.start, route.label, 0.28);
-        try renderSvgTextBlock(writer, label, pos.x, pos.y - 10.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+        const pos = endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
+        try renderSvgTextBlock(writer, label, pos.x, pos.y, label_font_size, label_font_color, label_font_family, true, true);
     }
     if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
-        const pos = lerpPoint(route.end, route.label, 0.28);
-        try renderSvgTextBlock(writer, label, pos.x, pos.y - 10.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+        const pos = endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
+        try renderSvgTextBlock(writer, label, pos.x, pos.y, label_font_size, label_font_color, label_font_family, true, true);
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
-        try renderSvgTextBlock(writer, label, route.label.x, route.label.y + 18.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+        try renderSvgTextBlock(writer, label, route.label.x, route.label.y + 18.0, label_font_size, label_font_color, label_font_family, true, true);
     }
+    if (edge_item.label != null and edgeDecorateEnabled(edge_item.attrs.items)) {
+        const anchor = lerpPoint(route.start, route.end, 0.5);
+        try writeSvgLine(writer, route.label.x, route.label.y - 3.0, anchor.x, anchor.y, .{
+            .fill = "none",
+            .stroke = visual.stroke,
+            .font_color = visual.font_color,
+            .font_family = visual.font_family,
+            .font_size = visual.font_size,
+            .width = @max(1.0, visual.width * 0.75),
+            .radius = 0,
+            .dash = visual.dash,
+            .peripheries = 1,
+            .hidden = false,
+        });
+    }
+}
+
+fn endpointLabelPosition(endpoint: Point, toward: Point, distance: f64, angle_degrees: f64, head: bool) Point {
+    const dx = toward.x - endpoint.x;
+    const dy = toward.y - endpoint.y;
+    const base = std.math.atan2(dy, dx);
+    const side: f64 = if (head) -1.0 else 1.0;
+    const angle = base + side * degreesToRadians(angle_degrees);
+    const radius = 28.0 * distance;
+    return .{
+        .x = endpoint.x + std.math.cos(angle) * radius,
+        .y = endpoint.y + std.math.sin(angle) * radius,
+    };
+}
+
+fn edgeDecorateEnabled(attrs: []const Attr) bool {
+    const value = attrValue(attrs, "decorate") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn distanceBetween(a: Point, b: Point) f64 {
+    return std.math.hypot(a.x - b.x, a.y - b.y);
 }
 
 fn lerpPoint(a: Point, b: Point, t: f64) Point {
@@ -5564,6 +5606,46 @@ test "SVG renderer emits headlabel taillabel and xlabel" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">tail</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
+}
+
+test "SVG renderer honors edge label font position and decoration attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a -> b [
+        \\    label="main",
+        \\    taillabel="tail",
+        \\    headlabel="head",
+        \\    xlabel="external",
+        \\    labelfontname="Courier",
+        \\    labelfontsize=18,
+        \\    labelfontcolor="#7c3aed",
+        \\    labeldistance=2.0,
+        \\    labelangle=45,
+        \\    decorate=true,
+        \\    color="#2563eb"
+        \\  ];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const edge_item = graph.edges.items[0];
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, graph.rankdir, 0);
+    const near_tail = endpointLabelPosition(route.start, route.label, 1.0, -45, false);
+    const far_tail = endpointLabelPosition(route.start, route.label, 2.0, -45, false);
+    try std.testing.expect(distanceBetween(route.start, far_tail) > distanceBetween(route.start, near_tail));
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"18.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#7c3aed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">tail</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"#2563eb\"") >= 2);
 }
 
 test "SVG renderer honors DOT fontname and fontsize attributes" {
