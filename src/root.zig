@@ -1404,10 +1404,20 @@ pub const ClusterLayout = struct {
     height: f64,
 };
 
+pub const EdgeWaypoint = struct {
+    rank: usize,
+    point: Point,
+};
+
+pub const EdgeWaypoints = struct {
+    points: []EdgeWaypoint,
+};
+
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     nodes: []NodeLayout,
     clusters: []ClusterLayout,
+    edge_waypoints: []EdgeWaypoints,
     ranks: []usize,
     rank_depths: []f64,
     rank_heights: []f64,
@@ -1416,8 +1426,10 @@ pub const Layout = struct {
     height: f64,
 
     pub fn deinit(self: *Layout) void {
+        for (self.edge_waypoints) |waypoints| self.allocator.free(waypoints.points);
         self.allocator.free(self.nodes);
         self.allocator.free(self.clusters);
+        self.allocator.free(self.edge_waypoints);
         self.allocator.free(self.ranks);
         self.allocator.free(self.rank_depths);
         self.allocator.free(self.rank_heights);
@@ -1470,6 +1482,10 @@ fn parseGraphSpacing(value: []const u8, fallback: f64) f64 {
     return @max(12.0, inches * 72.0);
 }
 
+fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoints) void {
+    for (edge_waypoints) |waypoints| allocator.free(waypoints.points);
+}
+
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
     const effective_options = layoutOptionsWithGraphAttrs(options, graph);
     const n = graph.nodes.items.len;
@@ -1477,6 +1493,10 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     errdefer allocator.free(nodes);
     const cluster_layouts = try allocator.alloc(ClusterLayout, graph.clusters.items.len);
     errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
     const layout_ranks = try allocator.alloc(usize, n);
     errdefer allocator.free(layout_ranks);
 
@@ -1489,6 +1509,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
             .allocator = allocator,
             .nodes = nodes,
             .clusters = cluster_layouts,
+            .edge_waypoints = edge_waypoints,
             .ranks = layout_ranks,
             .rank_depths = empty_rank_depths,
             .rank_heights = empty_rank_heights,
@@ -1623,6 +1644,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, nodes, cluster_layouts);
+    try computeEdgeWaypoints(allocator, graph, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, edge_waypoints);
 
     const base_width = total_along + effective_options.margin * 2.0;
     const base_height = total_depth + effective_options.margin * 2.0;
@@ -1630,6 +1652,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         .allocator = allocator,
         .nodes = nodes,
         .clusters = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
         .ranks = layout_ranks,
         .rank_depths = rank_depths,
         .rank_heights = layout_rank_heights,
@@ -2865,6 +2888,59 @@ fn longEdgeDummyCenter(edge_item: Edge, ranks: []const usize, centers: []const f
     const span = @as(f64, @floatFromInt(to_rank - from_rank));
     const t = @as(f64, @floatFromInt(rank - from_rank)) / span;
     return centers[edge_item.from] + (centers[edge_item.to] - centers[edge_item.from]) * t;
+}
+
+fn computeEdgeWaypoints(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    nodes: []const NodeLayout,
+    ranks: []const usize,
+    rank_depths: []const f64,
+    rank_heights: []const f64,
+    total_depth: f64,
+    margin: f64,
+    edge_waypoints: []EdgeWaypoints,
+) !void {
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.id >= edge_waypoints.len) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        const from_rank = ranks[edge_item.from];
+        const to_rank = ranks[edge_item.to];
+        if (from_rank + 1 >= to_rank) continue;
+
+        const count = to_rank - from_rank - 1;
+        const points = try allocator.alloc(EdgeWaypoint, count);
+        errdefer allocator.free(points);
+
+        var i: usize = 0;
+        var rank = from_rank + 1;
+        while (rank < to_rank) : ({
+            rank += 1;
+            i += 1;
+        }) {
+            const along = longEdgeDummyAlongFromNodes(nodes, ranks, edge_item, graph.rankdir, rank) orelse continue;
+            const depth = rankDepthCenterFrom(rank_depths, rank_heights, rank);
+            points[i] = .{
+                .rank = rank,
+                .point = orientPoint(graph.rankdir, along, depth, total_depth, margin),
+            };
+        }
+        edge_waypoints[edge_item.id] = .{ .points = points };
+    }
+}
+
+fn longEdgeDummyAlongFromNodes(nodes: []const NodeLayout, ranks: []const usize, edge_item: Edge, rankdir: RankDir, rank: usize) ?f64 {
+    if (edge_item.from >= nodes.len or edge_item.to >= nodes.len) return null;
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank + 1 >= to_rank) return null;
+    if (rank <= from_rank or rank >= to_rank) return null;
+    const span = @as(f64, @floatFromInt(to_rank - from_rank));
+    const t = @as(f64, @floatFromInt(rank - from_rank)) / span;
+    const from_along = pointAlongAxis(nodes[edge_item.from].center, rankdir);
+    const to_along = pointAlongAxis(nodes[edge_item.to].center, rankdir);
+    return from_along + (to_along - from_along) * t;
 }
 
 fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, use_parents: bool) void {
@@ -4712,9 +4788,18 @@ fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, of
     const to_rank = layout.ranks[edge_item.to];
     const increasing = to_rank > from_rank;
     const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
+    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| return offsetPoint(point, rankdir, offset);
     const along = longEdgeDummyAlongFromLayout(layout, edge_item, rankdir, rank) orelse interpolatedWaypointAlong(layout, edge_item, rankdir, index, count);
     const depth = rankDepthCenter(layout, rank);
     return offsetPoint(orientWaypoint(rankdir, along, depth, layout), rankdir, offset);
+}
+
+fn storedEdgeWaypoint(layout: *const Layout, edge_id: EdgeId, rank: usize) ?Point {
+    if (edge_id >= layout.edge_waypoints.len) return null;
+    for (layout.edge_waypoints[edge_id].points) |waypoint| {
+        if (waypoint.rank == rank) return waypoint.point;
+    }
+    return null;
 }
 
 fn longEdgeDummyAlongFromLayout(layout: *const Layout, edge_item: Edge, rankdir: RankDir, rank: usize) ?f64 {
@@ -4747,7 +4832,12 @@ fn pointAlongAxis(point: Point, rankdir: RankDir) f64 {
 
 fn rankDepthCenter(layout: *const Layout, rank: usize) f64 {
     if (rank >= layout.rank_depths.len or rank >= layout.rank_heights.len) return 0;
-    return layout.rank_depths[rank] + layout.rank_heights[rank] / 2.0;
+    return rankDepthCenterFrom(layout.rank_depths, layout.rank_heights, rank);
+}
+
+fn rankDepthCenterFrom(rank_depths: []const f64, rank_heights: []const f64, rank: usize) f64 {
+    if (rank >= rank_depths.len or rank >= rank_heights.len) return 0;
+    return rank_depths[rank] + rank_heights[rank] / 2.0;
 }
 
 fn orientWaypoint(rankdir: RankDir, along_screen: f64, depth: f64, layout: *const Layout) Point {
@@ -6654,6 +6744,11 @@ test "layout retains rank metadata for long-edge routing" {
     try std.testing.expectEqual(@as(usize, 3), layout.ranks[d]);
     try std.testing.expectEqual(@as(usize, 4), layout.rank_depths.len);
     try std.testing.expect(longEdgeWaypointCount(&layout, graph.edges.items[3]) == 2);
+    try std.testing.expectEqual(@as(usize, 2), layout.edge_waypoints[3].points.len);
+    try std.testing.expectEqual(@as(usize, 1), layout.edge_waypoints[3].points[0].rank);
+    const waypoint = longEdgeWaypoint(&layout, graph.edges.items[3], graph.rankdir, 0, 0, 2);
+    try std.testing.expectEqual(layout.edge_waypoints[3].points[0].point.x, waypoint.x);
+    try std.testing.expectEqual(layout.edge_waypoints[3].points[0].point.y, waypoint.y);
 }
 
 test "long-edge waypoints use rankdir-aware dummy along axis" {
@@ -6671,8 +6766,8 @@ test "long-edge waypoints use rankdir-aware dummy along axis" {
     defer tb_layout.deinit();
     const tb_edge = tb.edges.items[3];
     const tb_waypoint = longEdgeWaypoint(&tb_layout, tb_edge, tb.rankdir, 0, 0, 2);
-    const tb_dummy = longEdgeDummyAlongFromLayout(&tb_layout, tb_edge, tb.rankdir, tb_layout.ranks[tb_edge.from] + 1).?;
-    try std.testing.expectEqual(tb_dummy, tb_waypoint.x);
+    try std.testing.expectEqual(tb_layout.edge_waypoints[tb_edge.id].points[0].point.x, tb_waypoint.x);
+    try std.testing.expectEqual(tb_layout.edge_waypoints[tb_edge.id].points[0].point.y, tb_waypoint.y);
 
     var lr = try parseDot(allocator,
         \\digraph G {
@@ -6686,8 +6781,8 @@ test "long-edge waypoints use rankdir-aware dummy along axis" {
     defer lr_layout.deinit();
     const lr_edge = lr.edges.items[3];
     const lr_waypoint = longEdgeWaypoint(&lr_layout, lr_edge, lr.rankdir, 0, 0, 2);
-    const lr_dummy = longEdgeDummyAlongFromLayout(&lr_layout, lr_edge, lr.rankdir, lr_layout.ranks[lr_edge.from] + 1).?;
-    try std.testing.expectEqual(lr_dummy, lr_waypoint.y);
+    try std.testing.expectEqual(lr_layout.edge_waypoints[lr_edge.id].points[0].point.x, lr_waypoint.x);
+    try std.testing.expectEqual(lr_layout.edge_waypoints[lr_edge.id].points[0].point.y, lr_waypoint.y);
 }
 
 test "SVG routes skip-rank edges through intermediate waypoints" {
