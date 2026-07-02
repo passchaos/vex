@@ -963,11 +963,18 @@ pub const NodeLayout = struct {
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     nodes: []NodeLayout,
+    ranks: []usize,
+    rank_depths: []f64,
+    rank_heights: []f64,
+    margin: f64,
     width: f64,
     height: f64,
 
     pub fn deinit(self: *Layout) void {
         self.allocator.free(self.nodes);
+        self.allocator.free(self.ranks);
+        self.allocator.free(self.rank_depths);
+        self.allocator.free(self.rank_heights);
         self.* = undefined;
     }
 };
@@ -990,11 +997,21 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     const n = graph.nodes.items.len;
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
+    const layout_ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(layout_ranks);
 
     if (n == 0) {
+        const empty_rank_depths = try allocator.alloc(f64, 0);
+        errdefer allocator.free(empty_rank_depths);
+        const empty_rank_heights = try allocator.alloc(f64, 0);
+        errdefer allocator.free(empty_rank_heights);
         return .{
             .allocator = allocator,
             .nodes = nodes,
+            .ranks = layout_ranks,
+            .rank_depths = empty_rank_depths,
+            .rank_heights = empty_rank_heights,
+            .margin = options.margin,
             .width = options.margin * 2.0,
             .height = options.margin * 2.0,
         };
@@ -1089,7 +1106,9 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
 
     var rank_depths = try allocator.alloc(f64, levels.len);
-    defer allocator.free(rank_depths);
+    errdefer allocator.free(rank_depths);
+    const layout_rank_heights = try allocator.dupe(f64, rank_heights);
+    errdefer allocator.free(layout_rank_heights);
     var total_depth: f64 = 0;
     for (rank_heights, 0..) |rank_height, rank| {
         rank_depths[rank] = total_depth;
@@ -1103,12 +1122,17 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, options.margin);
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
+    @memcpy(layout_ranks, ranks);
 
     const base_width = total_along + options.margin * 2.0;
     const base_height = total_depth + options.margin * 2.0;
     return .{
         .allocator = allocator,
         .nodes = nodes,
+        .ranks = layout_ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = layout_rank_heights,
+        .margin = options.margin,
         .width = if (graph.rankdir == .LR or graph.rankdir == .RL) base_height else base_width,
         .height = if (graph.rankdir == .LR or graph.rankdir == .RL) base_width else base_height,
     };
@@ -1524,19 +1548,11 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             continue;
         }
 
-        const route = edgeRoute(layout.nodes[edge_item.from], layout.nodes[edge_item.to], graph.rankdir, parallelEdgeOffset(graph, edge_item.id));
-        try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-            route.start.x,
-            route.start.y,
-            route.control1.x,
-            route.control1.y,
-            route.control2.x,
-            route.control2.y,
-            route.end.x,
-            route.end.y,
-            visual.stroke,
-            visual.width,
-        });
+        const offset = parallelEdgeOffset(graph, edge_item.id);
+        const route = edgeRoute(layout.nodes[edge_item.from], layout.nodes[edge_item.to], graph.rankdir, offset);
+        try writer.writeAll("<path d=\"");
+        try writeEdgePath(writer, layout, edge_item, graph.rankdir, offset, route);
+        try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
         try writeSvgDash(writer, visual.dash);
         if (graph.directed and visual.marker_end) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
         try writer.writeAll("/>\n");
@@ -1597,6 +1613,17 @@ fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
         0x27 => try writer.writeAll("&apos;"),
         else => try writer.writeByte(c),
     };
+}
+
+fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
+    if (needle.len == 0) return 0;
+    var count: usize = 0;
+    var offset: usize = 0;
+    while (std.mem.indexOf(u8, haystack[offset..], needle)) |found| {
+        count += 1;
+        offset += found + needle.len;
+    }
+    return count;
 }
 
 const EdgeRoute = struct {
@@ -1711,6 +1738,96 @@ fn parallelEdgeOffset(graph: *const Graph, edge_id: EdgeId) f64 {
     }
     if (count <= 1) return 0;
     return (@as(f64, @floatFromInt(index)) - (@as(f64, @floatFromInt(count - 1)) / 2.0)) * 22.0;
+}
+
+fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute) Io.Writer.Error!void {
+    const waypoint_count = longEdgeWaypointCount(layout, edge_item);
+    if (waypoint_count == 0) {
+        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
+            direct_route.start.x,
+            direct_route.start.y,
+            direct_route.control1.x,
+            direct_route.control1.y,
+            direct_route.control2.x,
+            direct_route.control2.y,
+            direct_route.end.x,
+            direct_route.end.y,
+        });
+        return;
+    }
+
+    try writer.print("M {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y });
+    var current = direct_route.start;
+    var i: usize = 0;
+    while (i < waypoint_count) : (i += 1) {
+        const next = longEdgeWaypoint(layout, edge_item, rankdir, offset, i, waypoint_count);
+        try writeSmoothSegment(writer, current, next, rankdir);
+        current = next;
+    }
+    try writeSmoothSegment(writer, current, direct_route.end, rankdir);
+}
+
+fn longEdgeWaypointCount(layout: *const Layout, edge_item: Edge) usize {
+    if (edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) return 0;
+    const from_rank = layout.ranks[edge_item.from];
+    const to_rank = layout.ranks[edge_item.to];
+    const distance = if (from_rank > to_rank) from_rank - to_rank else to_rank - from_rank;
+    return if (distance > 1) distance - 1 else 0;
+}
+
+fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, index: usize, count: usize) Point {
+    const from_rank = layout.ranks[edge_item.from];
+    const to_rank = layout.ranks[edge_item.to];
+    const increasing = to_rank > from_rank;
+    const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
+    const t = @as(f64, @floatFromInt(index + 1)) / @as(f64, @floatFromInt(count + 1));
+    const from_center = layout.nodes[edge_item.from].center;
+    const to_center = layout.nodes[edge_item.to].center;
+    const along = if (rankdir == .TB or rankdir == .BT)
+        from_center.x + (to_center.x - from_center.x) * t
+    else
+        from_center.y + (to_center.y - from_center.y) * t;
+    const depth = rankDepthCenter(layout, rank);
+    return offsetPoint(orientWaypoint(rankdir, along, depth, layout), rankdir, offset);
+}
+
+fn rankDepthCenter(layout: *const Layout, rank: usize) f64 {
+    if (rank >= layout.rank_depths.len or rank >= layout.rank_heights.len) return 0;
+    return layout.rank_depths[rank] + layout.rank_heights[rank] / 2.0;
+}
+
+fn orientWaypoint(rankdir: RankDir, along_screen: f64, depth: f64, layout: *const Layout) Point {
+    return switch (rankdir) {
+        .TB => .{ .x = along_screen, .y = layout.margin + depth },
+        .BT => .{ .x = along_screen, .y = layout.height - (layout.margin + depth) },
+        .LR => .{ .x = layout.margin + depth, .y = along_screen },
+        .RL => .{ .x = layout.width - (layout.margin + depth), .y = along_screen },
+    };
+}
+
+fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankDir) Io.Writer.Error!void {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const curve = @max(18.0, @min(96.0, if (rankdir == .LR or rankdir == .RL) @abs(dx) * 0.5 else @abs(dy) * 0.5));
+    const controls = switch (rankdir) {
+        .TB => EdgeControls{
+            .c1 = .{ .x = from.x, .y = from.y + curve },
+            .c2 = .{ .x = to.x, .y = to.y - curve },
+        },
+        .BT => EdgeControls{
+            .c1 = .{ .x = from.x, .y = from.y - curve },
+            .c2 = .{ .x = to.x, .y = to.y + curve },
+        },
+        .LR => EdgeControls{
+            .c1 = .{ .x = from.x + curve, .y = from.y },
+            .c2 = .{ .x = to.x - curve, .y = to.y },
+        },
+        .RL => EdgeControls{
+            .c1 = .{ .x = from.x - curve, .y = from.y },
+            .c2 = .{ .x = to.x + curve, .y = to.y },
+        },
+    };
+    try writer.print(" C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{ controls.c1.x, controls.c1.y, controls.c2.x, controls.c2.y, to.x, to.y });
 }
 
 fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) EdgeRoute {
@@ -2469,4 +2586,49 @@ test "layered layout applies rank same and boundary constraints" {
     try std.testing.expect(layout.nodes[source].center.y < layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[archive].center.y > layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[source].center.y <= layout.nodes[free].center.y);
+}
+
+test "layout retains rank metadata for long-edge routing" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c -> d;
+        \\  a -> d [label="long"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const d = graph.node_index.get("d").?;
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[a]);
+    try std.testing.expectEqual(@as(usize, 3), layout.ranks[d]);
+    try std.testing.expectEqual(@as(usize, 4), layout.rank_depths.len);
+    try std.testing.expect(longEdgeWaypointCount(&layout, graph.edges.items[3]) == 2);
+}
+
+test "SVG routes skip-rank edges through intermediate waypoints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c -> d;
+        \\  a -> d [label="long"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const marker = "long";
+    const label_pos = std.mem.indexOf(u8, svg, marker) orelse return error.MissingLongLabel;
+    const before_label = svg[0..label_pos];
+    const path_start = std.mem.lastIndexOf(u8, before_label, "<path") orelse return error.MissingLongPath;
+    const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingLongPathEnd;
+    const path = svg[path_start .. path_start + path_end_rel];
+    try std.testing.expect(countSubstrings(path, " C ") >= 3);
 }
