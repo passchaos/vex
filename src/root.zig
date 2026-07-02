@@ -70,6 +70,8 @@ pub const EdgeOptions = struct {
     weight: ?f64 = null,
     constraint: ?bool = null,
     min_len: ?usize = null,
+    tail_record_port: ?[]const u8 = null,
+    head_record_port: ?[]const u8 = null,
 };
 
 pub const NodeOptions = struct {
@@ -103,6 +105,8 @@ pub const Edge = struct {
     weight: f64 = 1.0,
     constraint: bool = true,
     min_len: usize = 1,
+    tail_record_port: ?[]const u8 = null,
+    head_record_port: ?[]const u8 = null,
     attrs: std.ArrayList(Attr) = .empty,
 };
 
@@ -175,6 +179,8 @@ pub const Graph = struct {
         }
         for (self.edges.items) |*e| {
             if (e.label) |label| self.allocator.free(label);
+            if (e.tail_record_port) |port| self.allocator.free(port);
+            if (e.head_record_port) |port| self.allocator.free(port);
             self.allocator.free(e.color);
             for (e.attrs.items) |attr| {
                 self.allocator.free(attr.name);
@@ -266,6 +272,10 @@ pub const Graph = struct {
         errdefer if (owned_label) |label| self.allocator.free(label);
         const owned_color = try self.allocator.dupe(u8, options.color orelse self.edge_defaults.color);
         errdefer self.allocator.free(owned_color);
+        const owned_tail_record_port = if (options.tail_record_port) |port| try self.allocator.dupe(u8, port) else null;
+        errdefer if (owned_tail_record_port) |port| self.allocator.free(port);
+        const owned_head_record_port = if (options.head_record_port) |port| try self.allocator.dupe(u8, port) else null;
+        errdefer if (owned_head_record_port) |port| self.allocator.free(port);
 
         var attrs = try copyAttrList(self.allocator, self.edge_default_attrs.items);
         errdefer {
@@ -288,6 +298,8 @@ pub const Graph = struct {
             .weight = options.weight orelse self.edge_defaults.weight,
             .constraint = options.constraint orelse self.edge_defaults.constraint,
             .min_len = @max(options.min_len orelse self.edge_defaults.min_len, 1),
+            .tail_record_port = owned_tail_record_port,
+            .head_record_port = owned_head_record_port,
             .attrs = attrs,
         };
         try self.edges.append(self.allocator, e);
@@ -469,6 +481,19 @@ fn parseBool(value: []const u8) ?bool {
     return null;
 }
 
+fn isCompassPort(value: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(value, "n") or
+        std.ascii.eqlIgnoreCase(value, "ne") or
+        std.ascii.eqlIgnoreCase(value, "e") or
+        std.ascii.eqlIgnoreCase(value, "se") or
+        std.ascii.eqlIgnoreCase(value, "s") or
+        std.ascii.eqlIgnoreCase(value, "sw") or
+        std.ascii.eqlIgnoreCase(value, "w") or
+        std.ascii.eqlIgnoreCase(value, "nw") or
+        std.ascii.eqlIgnoreCase(value, "c") or
+        std.ascii.eqlIgnoreCase(value, "_");
+}
+
 const TokenTag = enum {
     eof,
     id,
@@ -630,9 +655,23 @@ fn isHtmlIdTerminator(c: u8) bool {
 const AttrList = std.ArrayList(Attr);
 const NodeSet = std.ArrayList(NodeId);
 
+const NodeRef = struct {
+    id: NodeId,
+    record_port: ?[]const u8 = null,
+};
+
+const NodeRefSet = std.ArrayList(NodeRef);
+
 fn containsNode(nodes: []const NodeId, id: NodeId) bool {
     for (nodes) |existing| if (existing == id) return true;
     return false;
+}
+
+fn freeNodeRefSet(allocator: std.mem.Allocator, refs: *NodeRefSet) void {
+    for (refs.items) |ref| {
+        if (ref.record_port) |port| allocator.free(port);
+    }
+    refs.deinit(allocator);
 }
 
 fn isClusterName(name: []const u8) bool {
@@ -792,8 +831,10 @@ const Parser = struct {
             return;
         }
 
-        const first_name = try self.parseNodeIdText();
+        const first_name = try self.parseIdText();
         defer self.allocator.free(first_name);
+        const first_record_port = try self.parseOptionalRecordPort();
+        defer if (first_record_port) |port| self.allocator.free(port);
 
         if (self.match(.equal)) {
             const value = try self.parseIdText();
@@ -818,7 +859,14 @@ const Parser = struct {
         }
 
         if (self.current.tag == .arrow or self.current.tag == .dashdash) {
-            try self.parseEdgeTail(graph, &first);
+            var first_refs = NodeRefSet.empty;
+            defer freeNodeRefSet(self.allocator, &first_refs);
+            try first_refs.append(self.allocator, .{
+                .id = first_id,
+                .record_port = if (first_record_port) |port| try self.allocator.dupe(u8, port) else null,
+            });
+            for (first.items[1..]) |id| try first_refs.append(self.allocator, .{ .id = id });
+            try self.parseEdgeTailRefs(graph, &first_refs);
         } else {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
@@ -830,20 +878,30 @@ const Parser = struct {
     }
 
     fn parseEdgeTail(self: *Parser, graph: *Graph, first: *NodeSet) anyerror!void {
-        var operands = std.ArrayList(NodeSet).empty;
+        var first_refs = NodeRefSet.empty;
+        errdefer freeNodeRefSet(self.allocator, &first_refs);
+        for (first.items) |id| try first_refs.append(self.allocator, .{ .id = id });
+        try self.parseEdgeTailRefs(graph, &first_refs);
+        first.deinit(self.allocator);
+        first.* = .empty;
+    }
+
+    fn parseEdgeTailRefs(self: *Parser, graph: *Graph, first_refs: *NodeRefSet) anyerror!void {
+        var operands = std.ArrayList(NodeRefSet).empty;
         defer {
-            for (operands.items) |*operand| operand.deinit(self.allocator);
+            for (operands.items) |*operand| freeNodeRefSet(self.allocator, operand);
             operands.deinit(self.allocator);
         }
-        try operands.append(self.allocator, first.*);
-        first.* = .empty;
+        errdefer freeNodeRefSet(self.allocator, first_refs);
+        try operands.append(self.allocator, first_refs.*);
+        first_refs.* = .empty;
 
         while (self.current.tag == .arrow or self.current.tag == .dashdash) {
             const op = self.current.tag;
             try self.advance();
             if (graph.directed and op != .arrow) return error.EdgeOpMismatch;
             if (!graph.directed and op != .dashdash) return error.EdgeOpMismatch;
-            try operands.append(self.allocator, try self.parseOperand(graph));
+            try operands.append(self.allocator, try self.parseOperandRefs(graph));
         }
 
         var attrs = AttrList.empty;
@@ -854,16 +912,43 @@ const Parser = struct {
         while (i + 1 < operands.items.len) : (i += 1) {
             for (operands.items[i].items) |from| {
                 for (operands.items[i + 1].items) |to| {
-                    const edge_id = try graph.edge(from, to, .{});
+                    const edge_id = try graph.edge(from.id, to.id, .{
+                        .tail_record_port = from.record_port,
+                        .head_record_port = to.record_port,
+                    });
                     for (attrs.items) |attr| try graph.setEdgeAttr(edge_id, attr.name, attr.value);
                 }
             }
         }
     }
 
+    fn parseOperandRefs(self: *Parser, graph: *Graph) anyerror!NodeRefSet {
+        if (self.isSubgraphStart()) {
+            var nodes = try self.parseSubgraph(graph);
+            defer nodes.deinit(self.allocator);
+            var refs = NodeRefSet.empty;
+            errdefer freeNodeRefSet(self.allocator, &refs);
+            for (nodes.items) |id| try refs.append(self.allocator, .{ .id = id });
+            return refs;
+        }
+        return self.parseNodeRefList(graph);
+    }
+
     fn parseOperand(self: *Parser, graph: *Graph) anyerror!NodeSet {
         if (self.isSubgraphStart()) return self.parseSubgraph(graph);
         return self.parseNodeList(graph);
+    }
+
+    fn parseNodeRefList(self: *Parser, graph: *Graph) !NodeRefSet {
+        var refs = NodeRefSet.empty;
+        errdefer freeNodeRefSet(self.allocator, &refs);
+        while (true) {
+            const parsed = try self.parseNodeRef(graph);
+            try self.recordNode(parsed.id);
+            try refs.append(self.allocator, parsed);
+            if (!self.match(.comma)) break;
+        }
+        return refs;
     }
 
     fn parseNodeList(self: *Parser, graph: *Graph) !NodeSet {
@@ -878,6 +963,33 @@ const Parser = struct {
             if (!self.match(.comma)) break;
         }
         return nodes;
+    }
+
+    fn parseNodeRef(self: *Parser, graph: *Graph) !NodeRef {
+        const name = try self.parseIdText();
+        defer self.allocator.free(name);
+        const id = try graph.node(name);
+        const record_port = try self.parseOptionalRecordPort();
+        return .{ .id = id, .record_port = record_port };
+    }
+
+    fn parseOptionalRecordPort(self: *Parser) !?[]const u8 {
+        if (!self.match(.colon)) return null;
+
+        const port = try self.parseIdText();
+        defer self.allocator.free(port);
+
+        var record_port: ?[]const u8 = null;
+        if (!isCompassPort(port)) {
+            record_port = try self.allocator.dupe(u8, port);
+        }
+
+        if (self.match(.colon)) {
+            const compass = try self.parseIdText();
+            self.allocator.free(compass);
+        }
+
+        return record_port;
     }
 
     fn parseSubgraph(self: *Parser, graph: *Graph) anyerror!NodeSet {
@@ -1784,7 +1896,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         }
 
         const offset = parallelEdgeOffset(graph, edge_item.id);
-        const route = edgeRoute(layout.nodes[edge_item.from], layout.nodes[edge_item.to], graph.rankdir, offset);
+        const route = edgeRouteForEdge(graph, layout, edge_item, graph.rankdir, offset);
         try writer.writeAll("<path d=\"");
         try writeEdgePath(writer, layout, edge_item, graph.rankdir, offset, route);
         try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
@@ -2076,9 +2188,21 @@ const RecordFieldScanner = struct {
     label: []const u8,
     index: usize = 0,
     buffer: [128]u8 = undefined,
+    port_buffer: [64]u8 = undefined,
+
+    const Field = struct {
+        label: []const u8,
+        port: ?[]const u8 = null,
+    };
 
     fn next(self: *RecordFieldScanner) ?[]const u8 {
+        const field = self.nextWithPort() orelse return null;
+        return field.label;
+    }
+
+    fn nextWithPort(self: *RecordFieldScanner) ?Field {
         var out_len: usize = 0;
+        var port_len: usize = 0;
         var in_port = false;
         while (self.index < self.label.len) : (self.index += 1) {
             const c = self.label[self.index];
@@ -2095,7 +2219,10 @@ const RecordFieldScanner = struct {
                     if (!in_port) {
                         self.index += 1;
                         if (out_len == 0) continue;
-                        return self.buffer[0..out_len];
+                        return .{
+                            .label = self.buffer[0..out_len],
+                            .port = if (port_len > 0) self.port_buffer[0..port_len] else null,
+                        };
                     }
                 },
                 '\\' => {
@@ -2108,13 +2235,21 @@ const RecordFieldScanner = struct {
                 },
                 else => {},
             }
-            if (!in_port and out_len < self.buffer.len) {
+            if (in_port) {
+                if (port_len < self.port_buffer.len) {
+                    self.port_buffer[port_len] = c;
+                    port_len += 1;
+                }
+            } else if (out_len < self.buffer.len) {
                 self.buffer[out_len] = c;
                 out_len += 1;
             }
         }
         if (out_len == 0) return null;
-        return self.buffer[0..out_len];
+        return .{
+            .label = self.buffer[0..out_len],
+            .port = if (port_len > 0) self.port_buffer[0..port_len] else null,
+        };
     }
 };
 
@@ -2385,6 +2520,51 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
     };
 }
 
+fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64) EdgeRoute {
+    const from = layout.nodes[edge_item.from];
+    const to = layout.nodes[edge_item.to];
+    const start = recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, rankdir, true) orelse boundaryPoint(from, to.center, rankdir, true);
+    const end = recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, rankdir, false) orelse boundaryPoint(to, from.center, rankdir, false);
+    return edgeRouteFromEndpoints(start, end, rankdir, offset);
+}
+
+fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, offset: f64) EdgeRoute {
+    const start = start_raw;
+    const end = end_raw;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const curve = @max(24.0, @min(160.0, if (rankdir == .LR or rankdir == .RL) @abs(dx) * 0.45 else @abs(dy) * 0.45));
+    const controls: EdgeControls = switch (rankdir) {
+        .TB => .{
+            .c1 = Point{ .x = start.x, .y = start.y + curve },
+            .c2 = Point{ .x = end.x, .y = end.y - curve },
+        },
+        .BT => .{
+            .c1 = Point{ .x = start.x, .y = start.y - curve },
+            .c2 = Point{ .x = end.x, .y = end.y + curve },
+        },
+        .LR => .{
+            .c1 = Point{ .x = start.x + curve, .y = start.y },
+            .c2 = Point{ .x = end.x - curve, .y = end.y },
+        },
+        .RL => .{
+            .c1 = Point{ .x = start.x - curve, .y = start.y },
+            .c2 = Point{ .x = end.x + curve, .y = end.y },
+        },
+    };
+    const shifted_start = offsetPoint(start, rankdir, offset);
+    const shifted_end = offsetPoint(end, rankdir, offset);
+    const c1 = offsetPoint(controls.c1, rankdir, offset);
+    const c2 = offsetPoint(controls.c2, rankdir, offset);
+    return .{
+        .start = shifted_start,
+        .control1 = c1,
+        .control2 = c2,
+        .end = shifted_end,
+        .label = cubicPoint(shifted_start, c1, c2, shifted_end, 0.5),
+    };
+}
+
 fn boundaryPoint(node: NodeLayout, toward: Point, rankdir: RankDir, leaving: bool) Point {
     _ = toward;
     return switch (rankdir) {
@@ -2393,6 +2573,52 @@ fn boundaryPoint(node: NodeLayout, toward: Point, rankdir: RankDir, leaving: boo
         .LR => .{ .x = node.center.x + (if (leaving) node.width / 2.0 else -node.width / 2.0), .y = node.center.y },
         .RL => .{ .x = node.center.x + (if (leaving) -node.width / 2.0 else node.width / 2.0), .y = node.center.y },
     };
+}
+
+const RectF = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+fn recordBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, record_port: ?[]const u8, rankdir: RankDir, leaving: bool) ?Point {
+    _ = rankdir;
+    _ = leaving;
+    if (record_port == null) return null;
+    if (node_item.shape != .record and node_item.shape != .mrecord) return null;
+    const rect = recordFieldRect(node_item.label, layout, record_port.?) orelse return null;
+    const cx = rect.x + rect.width / 2.0;
+    const cy = rect.y + rect.height / 2.0;
+    const dx = toward.x - cx;
+    const dy = toward.y - cy;
+    if (@abs(dx) > @abs(dy)) {
+        return .{ .x = if (dx >= 0) rect.x + rect.width else rect.x, .y = cy };
+    }
+    return .{ .x = cx, .y = if (dy >= 0) rect.y + rect.height else rect.y };
+}
+
+fn recordFieldRect(label: []const u8, layout: NodeLayout, port: []const u8) ?RectF {
+    const metrics = recordMetrics(label);
+    const field_count_f: f64 = @floatFromInt(metrics.field_count);
+    const field_width = layout.width / field_count_f;
+    const x = layout.center.x - layout.width / 2.0;
+    const y = layout.center.y - layout.height / 2.0;
+    var scanner: RecordFieldScanner = .{ .label = label };
+    var index: usize = 0;
+    while (scanner.nextWithPort()) |field| : (index += 1) {
+        if (field.port) |field_port| {
+            if (std.mem.eql(u8, field_port, port)) {
+                return .{
+                    .x = x + field_width * @as(f64, @floatFromInt(index)),
+                    .y = y,
+                    .width = field_width,
+                    .height = layout.height,
+                };
+            }
+        }
+    }
+    return null;
 }
 
 fn offsetPoint(point: Point, rankdir: RankDir, offset: f64) Point {
@@ -3363,4 +3589,37 @@ test "DOT record and Mrecord nodes render field separators" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">port") == null);
     try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10.0\"") != null);
+}
+
+test "DOT record field ports route edge endpoints to fields" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  customer [shape=Mrecord,label="<id> Customer|<orders> orders[]"];
+        \\  order [shape=record,label="<id> Order|total"];
+        \\  customer:orders -> order:id;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.items.len);
+    try std.testing.expectEqualStrings("orders", graph.edges.items[0].tail_record_port.?);
+    try std.testing.expectEqualStrings("id", graph.edges.items[0].head_record_port.?);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const edge_item = graph.edges.items[0];
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, graph.rankdir, 0);
+    const tail_rect = recordFieldRect(graph.nodes.items[edge_item.from].label, layout.nodes[edge_item.from], "orders").?;
+    const head_rect = recordFieldRect(graph.nodes.items[edge_item.to].label, layout.nodes[edge_item.to], "id").?;
+
+    try std.testing.expect(route.start.x >= tail_rect.x);
+    try std.testing.expect(route.start.x <= tail_rect.x + tail_rect.width);
+    try std.testing.expect(route.start.y >= tail_rect.y);
+    try std.testing.expect(route.start.y <= tail_rect.y + tail_rect.height);
+    try std.testing.expect(route.end.x >= head_rect.x);
+    try std.testing.expect(route.end.x <= head_rect.x + head_rect.width);
+    try std.testing.expect(route.end.y >= head_rect.y);
+    try std.testing.expect(route.end.y <= head_rect.y + head_rect.height);
 }
