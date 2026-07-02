@@ -1428,7 +1428,7 @@ pub const Layout = struct {
 pub const LayoutOptions = struct {
     node_width: f64 = 54,
     node_height: f64 = 36,
-    rank_gap: f64 = 72,
+    rank_gap: f64 = 36,
     node_gap: f64 = 36,
     margin: f64 = 40,
     label_char_width: f64 = 8,
@@ -4766,7 +4766,7 @@ const RectF = struct {
 
 fn clusterBoundaryPoint(graph: *const Graph, layout: *const Layout, name: []const u8, from: Point, toward: Point) ?Point {
     const rect = clusterRect(graph, layout, name) orelse return null;
-    return intersectRectBoundary(rect, from, toward);
+    return intersectRectBoundary(rect, from, toward) orelse pointForPort(rect, .auto, toward);
 }
 
 fn clusterRect(graph: *const Graph, layout: *const Layout, name: []const u8) ?RectF {
