@@ -1426,15 +1426,15 @@ pub const Layout = struct {
 };
 
 pub const LayoutOptions = struct {
-    node_width: f64 = 120,
-    node_height: f64 = 56,
-    rank_gap: f64 = 110,
-    node_gap: f64 = 56,
+    node_width: f64 = 54,
+    node_height: f64 = 36,
+    rank_gap: f64 = 72,
+    node_gap: f64 = 36,
     margin: f64 = 40,
     label_char_width: f64 = 8,
     label_line_height: f64 = 18,
-    node_padding_x: f64 = 28,
-    node_padding_y: f64 = 16,
+    node_padding_x: f64 = 14,
+    node_padding_y: f64 = 9,
     crossing_passes: usize = 8,
     coordinate_passes: usize = 4,
     ranksep_equally: bool = false,
@@ -5521,8 +5521,8 @@ test "layered layout uses crossing reduction and variable label sizes" {
     try std.testing.expect(layout.nodes[d].center.x < layout.nodes[c].center.x);
 
     const wide = graph.node_index.get("wide").?;
-    try std.testing.expect(layout.nodes[wide].width > 180);
-    try std.testing.expect(layout.nodes[wide].height > 56);
+    try std.testing.expect(layout.nodes[wide].width > layout.nodes[a].width * 1.5);
+    try std.testing.expect(layout.nodes[wide].height > layout.nodes[a].height);
 }
 
 test "adjacent exchange reduces residual two-layer crossings" {
@@ -6006,6 +6006,7 @@ test "SVG renderer honors DOT fontname and fontsize attributes" {
         \\    fontsize=20;
         \\    a [label="Big"];
         \\  }
+        \\  small [label="Small", fontsize=10];
         \\  a -> b [label="Edge"];
         \\}
     );
@@ -6020,7 +6021,8 @@ test "SVG renderer honors DOT fontname and fontsize attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times\" font-size=\"16.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Georgia\" font-size=\"20.0\"") != null);
     const a = graph.node_index.get("a").?;
-    try std.testing.expect(layout.nodes[a].height > 56);
+    const small = graph.node_index.get("small").?;
+    try std.testing.expect(layout.nodes[a].height > layout.nodes[small].height);
 }
 
 test "SVG renderer honors common Graphviz arrow marker attributes" {
