@@ -31,9 +31,31 @@ pub const RankDir = enum {
     }
 };
 
+pub const RankKind = enum {
+    same,
+    min,
+    max,
+    source,
+    sink,
+
+    pub fn fromString(value: []const u8) ?RankKind {
+        if (std.ascii.eqlIgnoreCase(value, "same")) return .same;
+        if (std.ascii.eqlIgnoreCase(value, "min")) return .min;
+        if (std.ascii.eqlIgnoreCase(value, "max")) return .max;
+        if (std.ascii.eqlIgnoreCase(value, "source")) return .source;
+        if (std.ascii.eqlIgnoreCase(value, "sink")) return .sink;
+        return null;
+    }
+};
+
 pub const Attr = struct {
     name: []const u8,
     value: []const u8,
+};
+
+pub const RankConstraint = struct {
+    kind: RankKind,
+    node_ids: []NodeId,
 };
 
 pub const EdgeOptions = struct {
@@ -92,6 +114,7 @@ pub const Graph = struct {
     rankdir: RankDir,
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
+    rank_constraints: std.ArrayList(RankConstraint) = .empty,
     attrs: std.ArrayList(Attr) = .empty,
     node_default_attrs: std.ArrayList(Attr) = .empty,
     edge_default_attrs: std.ArrayList(Attr) = .empty,
@@ -142,10 +165,14 @@ pub const Graph = struct {
             self.allocator.free(attr.name);
             self.allocator.free(attr.value);
         }
+        for (self.rank_constraints.items) |constraint| {
+            self.allocator.free(constraint.node_ids);
+        }
         freeAttrList(self.allocator, &self.node_default_attrs);
         freeAttrList(self.allocator, &self.edge_default_attrs);
         self.nodes.deinit(self.allocator);
         self.edges.deinit(self.allocator);
+        self.rank_constraints.deinit(self.allocator);
         self.attrs.deinit(self.allocator);
         self.node_index.deinit();
         self.allocator.free(self.node_defaults.color);
@@ -241,6 +268,13 @@ pub const Graph = struct {
         const from = try self.node(from_name);
         const to = try self.node(to_name);
         return self.edge(from, to, options);
+    }
+
+    pub fn addRankConstraint(self: *Graph, kind: RankKind, node_ids: []const NodeId) !void {
+        if (node_ids.len == 0) return;
+        const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
+        errdefer self.allocator.free(owned_nodes);
+        try self.rank_constraints.append(self.allocator, .{ .kind = kind, .node_ids = owned_nodes });
     }
 
     pub fn setGraphAttr(self: *Graph, name: []const u8, value: []const u8) !void {
@@ -580,6 +614,7 @@ const Parser = struct {
     lexer: Lexer,
     current: Token,
     collectors: std.ArrayList(*NodeSet) = .empty,
+    rank_scopes: std.ArrayList(*?RankKind) = .empty,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
         var lexer: Lexer = .{ .source = source };
@@ -589,6 +624,7 @@ const Parser = struct {
 
     fn parse(self: *Parser) !Graph {
         defer self.collectors.deinit(self.allocator);
+        defer self.rank_scopes.deinit(self.allocator);
         var strict = false;
         if (self.matchKeyword("strict")) strict = true;
 
@@ -625,7 +661,10 @@ const Parser = struct {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
-            for (attrs.items) |attr| try graph.setGraphAttr(attr.name, attr.value);
+            for (attrs.items) |attr| {
+                if (try self.recordRankAttr(attr.name, attr.value)) continue;
+                try graph.setGraphAttr(attr.name, attr.value);
+            }
             return;
         }
         if (self.matchKeyword("node")) {
@@ -664,6 +703,7 @@ const Parser = struct {
         if (self.match(.equal)) {
             const value = try self.parseIdText();
             defer self.allocator.free(value);
+            if (try self.recordRankAttr(first_name, value)) return;
             try graph.setGraphAttr(first_name, value);
             return;
         }
@@ -755,11 +795,16 @@ const Parser = struct {
 
         var nodes = NodeSet.empty;
         errdefer nodes.deinit(self.allocator);
+        var rank_kind: ?RankKind = null;
         try self.collectors.append(self.allocator, &nodes);
         errdefer self.collectors.items.len -= 1;
+        try self.rank_scopes.append(self.allocator, &rank_kind);
+        errdefer self.rank_scopes.items.len -= 1;
         try self.parseStmtList(graph);
         self.collectors.items.len -= 1;
+        self.rank_scopes.items.len -= 1;
         try self.expect(.rbrace);
+        if (rank_kind) |kind| try graph.addRankConstraint(kind, nodes.items);
         defaults.restore(self.allocator, graph);
         return nodes;
     }
@@ -772,6 +817,14 @@ const Parser = struct {
         for (self.collectors.items) |collector| {
             if (!containsNode(collector.items, id)) try collector.append(self.allocator, id);
         }
+    }
+
+    fn recordRankAttr(self: *Parser, name: []const u8, value: []const u8) !bool {
+        if (!std.ascii.eqlIgnoreCase(name, "rank")) return false;
+        const kind = RankKind.fromString(value) orelse return false;
+        if (self.rank_scopes.items.len == 0) return false;
+        self.rank_scopes.items[self.rank_scopes.items.len - 1].* = kind;
+        return true;
     }
 
     fn parseAttrLists(self: *Parser, attrs: *AttrList) !void {
@@ -984,6 +1037,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         }
     }
 
+    applyRankConstraints(graph, ranks);
+
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
 
@@ -1084,6 +1139,44 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
         .TB, .BT => size,
         .LR, .RL => .{ .width = size.height, .height = size.width },
     };
+}
+
+fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
+    for (graph.rank_constraints.items) |constraint| {
+        if (constraint.kind != .same or constraint.node_ids.len == 0) continue;
+        var target_rank: usize = 0;
+        for (constraint.node_ids) |id| {
+            if (id < ranks.len) target_rank = @max(target_rank, ranks[id]);
+        }
+        for (constraint.node_ids) |id| {
+            if (id < ranks.len) ranks[id] = target_rank;
+        }
+    }
+
+    for (graph.rank_constraints.items) |constraint| {
+        switch (constraint.kind) {
+            .min, .source => {
+                for (constraint.node_ids) |id| {
+                    if (id < ranks.len) ranks[id] = 0;
+                }
+            },
+            else => {},
+        }
+    }
+
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+
+    for (graph.rank_constraints.items) |constraint| {
+        switch (constraint.kind) {
+            .max, .sink => {
+                for (constraint.node_ids) |id| {
+                    if (id < ranks.len) ranks[id] = max_rank;
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 fn labelLineCount(text: []const u8) usize {
@@ -2323,4 +2416,57 @@ test "DOT subgraphs scope default node and edge attributes" {
     try std.testing.expectEqual(@as(f64, 1.0), graph.edges.items[1].weight);
     try std.testing.expectEqualStrings("4", attrValue(graph.edges.items[0].attrs.items, "penwidth").?);
     try std.testing.expect(attrValue(graph.edges.items[1].attrs.items, "penwidth") == null);
+}
+
+test "DOT parser records Graphviz rank subgraph constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; b; c; }
+        \\  subgraph sources { graph [rank=min]; a; }
+        \\  subgraph sinks { rank=sink; z; }
+        \\  a -> b -> z;
+        \\  a -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), graph.rank_constraints.items.len);
+    try std.testing.expectEqual(RankKind.same, graph.rank_constraints.items[0].kind);
+    try std.testing.expectEqual(RankKind.min, graph.rank_constraints.items[1].kind);
+    try std.testing.expectEqual(RankKind.sink, graph.rank_constraints.items[2].kind);
+
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    try std.testing.expect(containsNode(graph.rank_constraints.items[0].node_ids, b));
+    try std.testing.expect(containsNode(graph.rank_constraints.items[0].node_ids, c));
+}
+
+test "layered layout applies rank same and boundary constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=min; source; }
+        \\  { rank=same; review; approve; }
+        \\  { rank=sink; archive; }
+        \\  source -> review -> archive;
+        \\  source -> approve -> archive;
+        \\  source -> free;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const source = graph.node_index.get("source").?;
+    const review = graph.node_index.get("review").?;
+    const approve = graph.node_index.get("approve").?;
+    const archive = graph.node_index.get("archive").?;
+    const free = graph.node_index.get("free").?;
+
+    try std.testing.expectEqual(layout.nodes[review].center.y, layout.nodes[approve].center.y);
+    try std.testing.expect(layout.nodes[source].center.y < layout.nodes[review].center.y);
+    try std.testing.expect(layout.nodes[archive].center.y > layout.nodes[review].center.y);
+    try std.testing.expect(layout.nodes[source].center.y <= layout.nodes[free].center.y);
 }
