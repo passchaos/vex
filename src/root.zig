@@ -1298,7 +1298,29 @@ pub const LayoutOptions = struct {
     coordinate_passes: usize = 4,
 };
 
+fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
+    var result = options;
+    if (attrValue(graph.attrs.items, "ranksep")) |value| {
+        result.rank_gap = parseGraphSpacing(value, result.rank_gap);
+    }
+    if (attrValue(graph.attrs.items, "nodesep")) |value| {
+        result.node_gap = parseGraphSpacing(value, result.node_gap);
+    }
+    return result;
+}
+
+fn parseGraphSpacing(value: []const u8, fallback: f64) f64 {
+    var parts = std.mem.tokenizeAny(u8, value, " \t,");
+    const first = parts.next() orelse return fallback;
+    const inches = std.fmt.parseFloat(f64, first) catch return fallback;
+    if (inches <= 0) return fallback;
+    // Graphviz ranksep/nodesep are in inches. Use a conservative 72 px/in
+    // scale and keep the existing defaults as a lower bound for unset attrs.
+    return @max(12.0, inches * 72.0);
+}
+
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
+    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
     const n = graph.nodes.items.len;
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
@@ -1319,9 +1341,9 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
             .ranks = layout_ranks,
             .rank_depths = empty_rank_depths,
             .rank_heights = empty_rank_heights,
-            .margin = options.margin,
-            .width = options.margin * 2.0,
-            .height = options.margin * 2.0,
+            .margin = effective_options.margin,
+            .width = effective_options.margin * 2.0,
+            .height = effective_options.margin * 2.0,
         };
     }
 
@@ -1377,11 +1399,11 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     defer for (levels) |*level| level.deinit(allocator);
 
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
-    try reduceLayerCrossings(allocator, graph, levels, ranks, options.crossing_passes);
+    try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, options);
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, effective_options);
 
     const axis_sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(axis_sizes);
@@ -1395,7 +1417,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     defer allocator.free(rank_widths);
     var max_width: f64 = 0;
     for (levels, 0..) |level, rank| {
-        rank_widths[rank] = packLevelFromLeft(level.items, axis_sizes, options.node_gap, centers);
+        rank_widths[rank] = packLevelFromLeft(level.items, axis_sizes, effective_options.node_gap, centers);
         max_width = @max(max_width, rank_widths[rank]);
     }
 
@@ -1404,7 +1426,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         for (level.items) |id| centers[id] += shift;
     }
 
-    refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, options);
+    refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, effective_options);
     normalizeCenters(centers, axis_sizes);
 
     var total_along: f64 = 0;
@@ -1412,7 +1434,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 
     var rank_heights = try allocator.alloc(f64, levels.len);
     defer allocator.free(rank_heights);
-    @memset(rank_heights, options.node_height);
+    @memset(rank_heights, effective_options.node_height);
     for (levels, 0..) |level, rank| {
         for (level.items) |id| rank_heights[rank] = @max(rank_heights[rank], axis_sizes[id].height);
     }
@@ -1425,20 +1447,20 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     for (rank_heights, 0..) |rank_height, rank| {
         rank_depths[rank] = total_depth;
         total_depth += rank_height;
-        if (rank + 1 < rank_heights.len) total_depth += options.rank_gap;
+        if (rank + 1 < rank_heights.len) total_depth += effective_options.rank_gap;
     }
 
     for (graph.nodes.items, 0..) |_, id| {
         const rank = ranks[id];
         const depth = rank_depths[rank] + rank_heights[rank] / 2.0;
-        const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, options.margin);
+        const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, effective_options.margin);
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, nodes, cluster_layouts);
 
-    const base_width = total_along + options.margin * 2.0;
-    const base_height = total_depth + options.margin * 2.0;
+    const base_width = total_along + effective_options.margin * 2.0;
+    const base_height = total_depth + effective_options.margin * 2.0;
     return .{
         .allocator = allocator,
         .nodes = nodes,
@@ -1446,7 +1468,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         .ranks = layout_ranks,
         .rank_depths = rank_depths,
         .rank_heights = layout_rank_heights,
-        .margin = options.margin,
+        .margin = effective_options.margin,
         .width = if (graph.rankdir == .LR or graph.rankdir == .RL) base_height else base_width,
         .height = if (graph.rankdir == .LR or graph.rankdir == .RL) base_width else base_height,
     };
@@ -4093,4 +4115,43 @@ test "DOT compound edges clip to cluster boundaries" {
     const right = clusterRect(&graph, &layout, "cluster_right").?;
     try std.testing.expect(pointOnRectBoundary(left, route.start));
     try std.testing.expect(pointOnRectBoundary(right, route.end));
+}
+
+test "layout honors DOT ranksep and nodesep graph spacing attributes" {
+    const allocator = std.testing.allocator;
+    var default_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  a -> c;
+        \\}
+    );
+    defer default_graph.deinit();
+    var spaced_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [ranksep=3.0, nodesep=2.0];
+        \\  a -> b;
+        \\  a -> c;
+        \\}
+    );
+    defer spaced_graph.deinit();
+
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+    var spaced_layout = try layoutLayered(allocator, &spaced_graph, .{});
+    defer spaced_layout.deinit();
+
+    const default_a = default_graph.node_index.get("a").?;
+    const default_b = default_graph.node_index.get("b").?;
+    const default_c = default_graph.node_index.get("c").?;
+    const spaced_a = spaced_graph.node_index.get("a").?;
+    const spaced_b = spaced_graph.node_index.get("b").?;
+    const spaced_c = spaced_graph.node_index.get("c").?;
+
+    const default_rank_delta = @abs(default_layout.nodes[default_b].center.y - default_layout.nodes[default_a].center.y);
+    const spaced_rank_delta = @abs(spaced_layout.nodes[spaced_b].center.y - spaced_layout.nodes[spaced_a].center.y);
+    const default_node_delta = @abs(default_layout.nodes[default_c].center.x - default_layout.nodes[default_b].center.x);
+    const spaced_node_delta = @abs(spaced_layout.nodes[spaced_c].center.x - spaced_layout.nodes[spaced_b].center.x);
+
+    try std.testing.expect(spaced_rank_delta > default_rank_delta);
+    try std.testing.expect(spaced_node_delta > default_node_delta);
 }
