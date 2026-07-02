@@ -4101,6 +4101,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{d:.0}\" height=\"{d:.0}\" viewBox=\"0 0 {d:.0} {d:.0}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
     );
+    try writer.writeAll("<g id=\"graph0\" class=\"graph\">\n");
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
@@ -4215,7 +4216,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgInteractiveClose(writer, node_wrap);
         try writer.writeAll("</g>\n");
     }
-    try writer.writeAll("</g>\n</svg>\n");
+    try writer.writeAll("</g>\n</g>\n</svg>\n");
 }
 
 pub fn renderSvgAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout: *const Layout, options: SvgOptions) ![]u8 {
@@ -8213,6 +8214,7 @@ test "SVG renderer keeps graph name as metadata unless graph label is explicit" 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
 }
