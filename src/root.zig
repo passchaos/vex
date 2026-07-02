@@ -2401,6 +2401,7 @@ const NodeVisual = struct {
     width: f64,
     radius: f64,
     dash: DashStyle,
+    peripheries: usize,
     hidden: bool,
 };
 
@@ -2468,32 +2469,59 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     switch (node_item.shape) {
         .box => {
-            try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                layout.center.x - layout.width / 2.0,
-                layout.center.y - layout.height / 2.0,
-                layout.width,
-                layout.height,
-                visual.radius,
-                visual.fill,
-                visual.stroke,
-                visual.width,
-            });
-            try writeSvgDash(writer, visual.dash);
-            try writer.writeAll("/>\n");
+            var ring: usize = 0;
+            while (ring < visual.peripheries) : (ring += 1) {
+                const inset = @as(f64, @floatFromInt(ring)) * 5.0;
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                    layout.center.x - layout.width / 2.0 + inset,
+                    layout.center.y - layout.height / 2.0 + inset,
+                    @max(1, layout.width - inset * 2.0),
+                    @max(1, layout.height - inset * 2.0),
+                    @max(0, visual.radius - inset / 2.0),
+                    if (ring == 0) visual.fill else "none",
+                    visual.stroke,
+                    visual.width,
+                });
+                try writeSvgDash(writer, visual.dash);
+                try writer.writeAll("/>\n");
+            }
         },
         .circle => {
-            try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ layout.center.x, layout.center.y, @min(layout.width, layout.height) / 2.0, visual.fill, visual.stroke, visual.width });
-            try writeSvgDash(writer, visual.dash);
-            try writer.writeAll("/>\n");
+            var ring: usize = 0;
+            while (ring < visual.peripheries) : (ring += 1) {
+                const inset = @as(f64, @floatFromInt(ring)) * 5.0;
+                try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                    layout.center.x,
+                    layout.center.y,
+                    @max(1, @min(layout.width, layout.height) / 2.0 - inset),
+                    if (ring == 0) visual.fill else "none",
+                    visual.stroke,
+                    visual.width,
+                });
+                try writeSvgDash(writer, visual.dash);
+                try writer.writeAll("/>\n");
+            }
         },
         .ellipse => {
-            try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ layout.center.x, layout.center.y, layout.width / 2.0, layout.height / 2.0, visual.fill, visual.stroke, visual.width });
-            try writeSvgDash(writer, visual.dash);
-            try writer.writeAll("/>\n");
+            var ring: usize = 0;
+            while (ring < visual.peripheries) : (ring += 1) {
+                const inset = @as(f64, @floatFromInt(ring)) * 5.0;
+                try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                    layout.center.x,
+                    layout.center.y,
+                    @max(1, layout.width / 2.0 - inset),
+                    @max(1, layout.height / 2.0 - inset),
+                    if (ring == 0) visual.fill else "none",
+                    visual.stroke,
+                    visual.width,
+                });
+                try writeSvgDash(writer, visual.dash);
+                try writer.writeAll("/>\n");
+            }
         },
-        .diamond => try renderSvgPolygon(writer, diamondPoints(layout), visual),
-        .parallelogram => try renderSvgPolygon(writer, parallelogramPoints(layout), visual),
-        .hexagon => try renderSvgPolygon(writer, hexagonPoints(layout), visual),
+        .diamond => try renderSvgPolygonRings(writer, layout, visual, diamondPoints),
+        .parallelogram => try renderSvgPolygonRings(writer, layout, visual, parallelogramPoints),
+        .hexagon => try renderSvgPolygonRings(writer, layout, visual, hexagonPoints),
         .plaintext => {},
         .record => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, false),
         .mrecord => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, true),
@@ -2512,6 +2540,21 @@ fn renderSvgPolygon(writer: *Io.Writer, points: [6]Point, visual: NodeVisual) Io
     try writer.print("\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.fill, visual.stroke, visual.width });
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
+}
+
+fn renderSvgPolygonRings(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual, pointsFn: fn (NodeLayout) [6]Point) Io.Writer.Error!void {
+    var ring: usize = 0;
+    while (ring < visual.peripheries) : (ring += 1) {
+        const inset = @as(f64, @floatFromInt(ring)) * 5.0;
+        const ring_layout = NodeLayout{
+            .center = layout.center,
+            .width = @max(1, layout.width - inset * 2.0),
+            .height = @max(1, layout.height - inset * 2.0),
+        };
+        var ring_visual = visual;
+        if (ring > 0) ring_visual.fill = "none";
+        try renderSvgPolygon(writer, pointsFn(ring_layout), ring_visual);
+    }
 }
 
 fn diamondPoints(layout: NodeLayout) [6]Point {
@@ -2646,6 +2689,7 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     const rounded = styleHas(style, "rounded");
     const dashed = styleHas(style, "dashed");
     const dotted = styleHas(style, "dotted");
+    const bold = styleHas(style, "bold");
     const color = attrValue(node_item.attrs.items, "color") orelse node_item.color;
     const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) color else "#f8fafc";
     const stroke = if (std.mem.eql(u8, color, "#f8fafc")) "#334155" else color;
@@ -2653,15 +2697,17 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
         .fill = fill,
         .stroke = stroke,
         .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
-        .width = parseAttrFloat(node_item.attrs.items, "penwidth", 1.5),
+        .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.5),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
+        .peripheries = @max(parseAttrUsize(node_item.attrs.items, "peripheries", 1), 1),
         .hidden = invisible,
     };
 }
 
 fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     const style = attrValue(edge_item.attrs.items, "style");
+    const bold = styleHas(style, "bold");
     const arrowhead = attrValue(edge_item.attrs.items, "arrowhead");
     const arrowtail = attrValue(edge_item.attrs.items, "arrowtail");
     const dir = attrValue(edge_item.attrs.items, "dir");
@@ -2670,7 +2716,7 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     return .{
         .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "#475569",
-        .width = parseAttrFloat(edge_item.attrs.items, "penwidth", 1.8),
+        .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.8),
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
         .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
         .marker_end = if (head_enabled) parseMarkerShape(arrowhead, .normal) else .none,
@@ -2706,6 +2752,11 @@ fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
 fn parseAttrFloat(attrs: []const Attr, name: []const u8, fallback: f64) f64 {
     const value = attrValue(attrs, name) orelse return fallback;
     return std.fmt.parseFloat(f64, value) catch fallback;
+}
+
+fn parseAttrUsize(attrs: []const Attr, name: []const u8, fallback: usize) usize {
+    const value = attrValue(attrs, name) orelse return fallback;
+    return std.fmt.parseInt(usize, value, 10) catch fallback;
 }
 
 fn styleHas(style: ?[]const u8, needle: []const u8) bool {
@@ -3769,6 +3820,29 @@ test "SVG renderer honors common Graphviz visual attributes" {
     const second_offset = parallelEdgeOffset(&graph, 1);
     try std.testing.expect(first_offset < 0);
     try std.testing.expect(second_offset > 0);
+}
+
+test "SVG renderer honors bold style and node peripheries" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a [shape=circle, peripheries=2, style=bold, color="#1d4ed8"];
+        \\  b [shape=box, peripheries=3];
+        \\  a -> b [style=bold, label="bold edge"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "<circle") >= 2);
+    try std.testing.expect(countSubstrings(svg, "<rect") >= 3);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.6\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
 }
 
 test "SVG node rendering separates Graphviz color and fillcolor semantics" {
