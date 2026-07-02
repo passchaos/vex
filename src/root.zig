@@ -1341,15 +1341,41 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (graph.directed) {
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
-            try writer.print("<marker id=\"arrow-{d}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{s}\"/></marker>\n", .{ edge_item.id, edge_item.color });
+            const visual = resolveEdgeVisual(edge_item);
+            try writer.print("<marker id=\"arrow-{d}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{s}\"/></marker>\n", .{ edge_item.id, visual.stroke });
         }
         try writer.writeAll("</defs>\n");
     }
 
     try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
     for (graph.edges.items) |edge_item| {
-        const route = edgeRoute(layout.nodes[edge_item.from], layout.nodes[edge_item.to], graph.rankdir);
-        try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"1.8\"", .{
+        const visual = resolveEdgeVisual(edge_item);
+        if (visual.hidden) continue;
+        if (edge_item.from == edge_item.to) {
+            const route = selfLoopRoute(layout.nodes[edge_item.from]);
+            try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                route.start.x,
+                route.start.y,
+                route.control1.x,
+                route.control1.y,
+                route.control2.x,
+                route.control2.y,
+                route.end.x,
+                route.end.y,
+                visual.stroke,
+                visual.width,
+            });
+            try writeSvgDash(writer, visual.dash);
+            if (graph.directed and visual.marker_end) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
+            try writer.writeAll("/>\n");
+            if (edge_item.label) |label| {
+                try renderSvgTextBlock(writer, label, route.label.x, route.label.y, 12, visual.font_color, options.font_family, true, true);
+            }
+            continue;
+        }
+
+        const route = edgeRoute(layout.nodes[edge_item.from], layout.nodes[edge_item.to], graph.rankdir, parallelEdgeOffset(graph, edge_item.id));
+        try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
             route.start.x,
             route.start.y,
             route.control1.x,
@@ -1358,24 +1384,49 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             route.control2.y,
             route.end.x,
             route.end.y,
-            edge_item.color,
+            visual.stroke,
+            visual.width,
         });
-        if (graph.directed) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
+        try writeSvgDash(writer, visual.dash);
+        if (graph.directed and visual.marker_end) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
         try writer.writeAll("/>\n");
         if (edge_item.label) |label| {
-            try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, 12, "#475569", options.font_family, true, true);
+            try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, 12, visual.font_color, options.font_family, true, true);
         }
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
 
     for (graph.nodes.items) |node_item| {
+        const visual = resolveNodeVisual(node_item);
+        if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
         switch (node_item.shape) {
-            .box => try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"10\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x - l.width / 2.0, l.center.y - l.height / 2.0, l.width, l.height, node_item.color }),
-            .circle => try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x, l.center.y, @min(l.width, l.height) / 2.0, node_item.color }),
-            .ellipse => try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x, l.center.y, l.width / 2.0, l.height / 2.0, node_item.color }),
+            .box => {
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                    l.center.x - l.width / 2.0,
+                    l.center.y - l.height / 2.0,
+                    l.width,
+                    l.height,
+                    visual.radius,
+                    visual.fill,
+                    visual.stroke,
+                    visual.width,
+                });
+                try writeSvgDash(writer, visual.dash);
+                try writer.writeAll("/>\n");
+            },
+            .circle => {
+                try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ l.center.x, l.center.y, @min(l.width, l.height) / 2.0, visual.fill, visual.stroke, visual.width });
+                try writeSvgDash(writer, visual.dash);
+                try writer.writeAll("/>\n");
+            },
+            .ellipse => {
+                try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ l.center.x, l.center.y, l.width / 2.0, l.height / 2.0, visual.fill, visual.stroke, visual.width });
+                try writeSvgDash(writer, visual.dash);
+                try writer.writeAll("/>\n");
+            },
         }
-        try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, "#0f172a", options.font_family, false, false);
+        try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, visual.font_color, options.font_family, false, false);
     }
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -1411,7 +1462,108 @@ const EdgeControls = struct {
     c2: Point,
 };
 
-fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir) EdgeRoute {
+const DashStyle = enum {
+    none,
+    dashed,
+    dotted,
+};
+
+const NodeVisual = struct {
+    fill: []const u8,
+    stroke: []const u8,
+    font_color: []const u8,
+    width: f64,
+    radius: f64,
+    dash: DashStyle,
+    hidden: bool,
+};
+
+const EdgeVisual = struct {
+    stroke: []const u8,
+    font_color: []const u8,
+    width: f64,
+    dash: DashStyle,
+    marker_end: bool,
+    hidden: bool,
+};
+
+fn resolveNodeVisual(node_item: Node) NodeVisual {
+    const style = attrValue(node_item.attrs.items, "style");
+    const filled = styleHas(style, "filled");
+    const invisible = styleHas(style, "invis");
+    const rounded = styleHas(style, "rounded");
+    const dashed = styleHas(style, "dashed");
+    const dotted = styleHas(style, "dotted");
+    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) node_item.color else "#f8fafc";
+    return .{
+        .fill = fill,
+        .stroke = attrValue(node_item.attrs.items, "color") orelse "#334155",
+        .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
+        .width = parseAttrFloat(node_item.attrs.items, "penwidth", 1.5),
+        .radius = if (rounded) 10 else 0,
+        .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
+        .hidden = invisible,
+    };
+}
+
+fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
+    const style = attrValue(edge_item.attrs.items, "style");
+    const arrowhead = attrValue(edge_item.attrs.items, "arrowhead");
+    return .{
+        .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
+        .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "#475569",
+        .width = parseAttrFloat(edge_item.attrs.items, "penwidth", 1.8),
+        .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
+        .marker_end = arrowhead == null or !std.ascii.eqlIgnoreCase(arrowhead.?, "none"),
+        .hidden = styleHas(style, "invis"),
+    };
+}
+
+fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
+    for (attrs) |attr| {
+        if (std.ascii.eqlIgnoreCase(attr.name, name)) return attr.value;
+    }
+    return null;
+}
+
+fn parseAttrFloat(attrs: []const Attr, name: []const u8, fallback: f64) f64 {
+    const value = attrValue(attrs, name) orelse return fallback;
+    return std.fmt.parseFloat(f64, value) catch fallback;
+}
+
+fn styleHas(style: ?[]const u8, needle: []const u8) bool {
+    const value = style orelse return false;
+    var parts = std.mem.tokenizeAny(u8, value, ", ");
+    while (parts.next()) |part| {
+        if (std.ascii.eqlIgnoreCase(part, needle)) return true;
+    }
+    return false;
+}
+
+fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
+    switch (dash) {
+        .none => {},
+        .dashed => try writer.writeAll(" stroke-dasharray=\"8,5\""),
+        .dotted => try writer.writeAll(" stroke-dasharray=\"2,5\""),
+    }
+}
+
+fn parallelEdgeOffset(graph: *const Graph, edge_id: EdgeId) f64 {
+    const edge_item = graph.edges.items[edge_id];
+    var index: usize = 0;
+    var count: usize = 0;
+    for (graph.edges.items) |candidate| {
+        const same_directed = candidate.from == edge_item.from and candidate.to == edge_item.to;
+        const same_undirected = !graph.directed and candidate.from == edge_item.to and candidate.to == edge_item.from;
+        if (!same_directed and !same_undirected) continue;
+        if (candidate.id == edge_id) index = count;
+        count += 1;
+    }
+    if (count <= 1) return 0;
+    return (@as(f64, @floatFromInt(index)) - (@as(f64, @floatFromInt(count - 1)) / 2.0)) * 22.0;
+}
+
+fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) EdgeRoute {
     const start = boundaryPoint(from, to.center, rankdir, true);
     const end = boundaryPoint(to, from.center, rankdir, false);
     const dx = end.x - start.x;
@@ -1435,12 +1587,16 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir) EdgeRoute {
             .c2 = Point{ .x = end.x + curve, .y = end.y },
         },
     };
+    const shifted_start = offsetPoint(start, rankdir, offset);
+    const shifted_end = offsetPoint(end, rankdir, offset);
+    const c1 = offsetPoint(controls.c1, rankdir, offset);
+    const c2 = offsetPoint(controls.c2, rankdir, offset);
     return .{
-        .start = start,
-        .control1 = controls.c1,
-        .control2 = controls.c2,
-        .end = end,
-        .label = cubicPoint(start, controls.c1, controls.c2, end, 0.5),
+        .start = shifted_start,
+        .control1 = c1,
+        .control2 = c2,
+        .end = shifted_end,
+        .label = cubicPoint(shifted_start, c1, c2, shifted_end, 0.5),
     };
 }
 
@@ -1451,6 +1607,29 @@ fn boundaryPoint(node: NodeLayout, toward: Point, rankdir: RankDir, leaving: boo
         .BT => .{ .x = node.center.x, .y = node.center.y + (if (leaving) -node.height / 2.0 else node.height / 2.0) },
         .LR => .{ .x = node.center.x + (if (leaving) node.width / 2.0 else -node.width / 2.0), .y = node.center.y },
         .RL => .{ .x = node.center.x + (if (leaving) -node.width / 2.0 else node.width / 2.0), .y = node.center.y },
+    };
+}
+
+fn offsetPoint(point: Point, rankdir: RankDir, offset: f64) Point {
+    return switch (rankdir) {
+        .TB, .BT => .{ .x = point.x + offset, .y = point.y },
+        .LR, .RL => .{ .x = point.x, .y = point.y + offset },
+    };
+}
+
+fn selfLoopRoute(node: NodeLayout) EdgeRoute {
+    const radius_x = @max(32.0, node.width * 0.35);
+    const radius_y = @max(28.0, node.height * 0.55);
+    const start = Point{ .x = node.center.x + node.width * 0.28, .y = node.center.y - node.height / 2.0 };
+    const end = Point{ .x = node.center.x + node.width / 2.0, .y = node.center.y - node.height * 0.18 };
+    const c1 = Point{ .x = start.x + radius_x, .y = start.y - radius_y };
+    const c2 = Point{ .x = end.x + radius_x, .y = end.y - radius_y };
+    return .{
+        .start = start,
+        .control1 = c1,
+        .control2 = c2,
+        .end = end,
+        .label = .{ .x = node.center.x + node.width / 2.0 + radius_x * 0.55, .y = node.center.y - node.height / 2.0 - radius_y * 0.6 },
     };
 }
 
@@ -2012,7 +2191,42 @@ test "SVG renderer emits curved clipped edges and multiline text spans" {
 
     const a = graph.node_index.get("a").?;
     const b = graph.node_index.get("b").?;
-    const route = edgeRoute(layout.nodes[a], layout.nodes[b], graph.rankdir);
+    const route = edgeRoute(layout.nodes[a], layout.nodes[b], graph.rankdir, 0);
     try std.testing.expect(route.start.x > layout.nodes[a].center.x);
     try std.testing.expect(route.end.x < layout.nodes[b].center.x);
+}
+
+test "SVG renderer honors common Graphviz visual attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=box];
+        \\  a [style="filled,rounded,dashed", color="#1d4ed8", fillcolor="#dbeafe", fontcolor="#1e3a8a", penwidth=3];
+        \\  b [style=dotted];
+        \\  a -> b [style=dashed, color="#dc2626", fontcolor="#991b1b", penwidth=4, arrowhead=none, label="no arrow"];
+        \\  a -> b [style=dotted, label="parallel"];
+        \\  a -> a [label="loop"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#1d4ed8\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#1e3a8a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"4.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0)\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "loop") != null);
+
+    const first_offset = parallelEdgeOffset(&graph, 0);
+    const second_offset = parallelEdgeOffset(&graph, 1);
+    try std.testing.expect(first_offset < 0);
+    try std.testing.expect(second_offset > 0);
 }
