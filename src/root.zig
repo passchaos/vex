@@ -1472,6 +1472,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
     try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
+    refineAdjacentExchanges(graph, levels, ranks, 2);
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
@@ -2339,6 +2340,64 @@ fn medianOfPositions(positions: []usize, fallback: usize) f64 {
     if (positions.len % 2 == 1) return @floatFromInt(positions[positions.len / 2]);
     const mid = positions.len / 2;
     return (@as(f64, @floatFromInt(positions[mid - 1])) + @as(f64, @floatFromInt(positions[mid]))) / 2.0;
+}
+
+fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) void {
+    if (levels.len < 2 or passes == 0) return;
+    for (0..passes) |_| {
+        var changed = false;
+        for (0..levels.len) |rank| {
+            if (levels[rank].items.len < 2 or levels[rank].items.len > 24) continue;
+            var i: usize = 0;
+            while (i + 1 < levels[rank].items.len) : (i += 1) {
+                const before = crossingScoreAroundLevel(graph, levels, ranks, rank);
+                std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
+                const after = crossingScoreAroundLevel(graph, levels, ranks, rank);
+                if (after < before) {
+                    changed = true;
+                } else {
+                    std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn crossingScoreAroundLevel(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, rank: usize) usize {
+    var score: usize = 0;
+    if (rank > 0) score += countLayerCrossings(graph, levels[rank - 1].items, levels[rank].items, ranks);
+    if (rank + 1 < levels.len) score += countLayerCrossings(graph, levels[rank].items, levels[rank + 1].items, ranks);
+    return score;
+}
+
+fn countLayerCrossings(graph: *const Graph, upper: []const NodeId, lower: []const NodeId, ranks: []const usize) usize {
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |a, ai| {
+        if (!edgeConnectsLayers(a, upper, lower, ranks)) continue;
+        const a_up = positionInLayer(upper, a.from) orelse continue;
+        const a_down = positionInLayer(lower, a.to) orelse continue;
+        for (graph.edges.items[ai + 1 ..]) |b| {
+            if (!edgeConnectsLayers(b, upper, lower, ranks)) continue;
+            const b_up = positionInLayer(upper, b.from) orelse continue;
+            const b_down = positionInLayer(lower, b.to) orelse continue;
+            if ((a_up < b_up and a_down > b_down) or (a_up > b_up and a_down < b_down)) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn edgeConnectsLayers(edge_item: Edge, upper: []const NodeId, lower: []const NodeId, ranks: []const usize) bool {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return false;
+    if (ranks[edge_item.from] >= ranks[edge_item.to]) return false;
+    return containsNode(upper, edge_item.from) and containsNode(lower, edge_item.to);
+}
+
+fn positionInLayer(layer: []const NodeId, id: NodeId) ?usize {
+    for (layer, 0..) |node_id, index| {
+        if (node_id == id) return index;
+    }
+    return null;
 }
 
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
@@ -4303,6 +4362,45 @@ test "layered layout uses crossing reduction and variable label sizes" {
     const wide = graph.node_index.get("wide").?;
     try std.testing.expect(layout.nodes[wide].width > 180);
     try std.testing.expect(layout.nodes[wide].height > 56);
+}
+
+test "adjacent exchange reduces residual two-layer crossings" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  A; B; C; D;
+        \\  A -> D;
+        \\  B -> C;
+        \\}
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("A").?;
+    const b = graph.node_index.get("B").?;
+    const c = graph.node_index.get("C").?;
+    const d = graph.node_index.get("D").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    @memset(ranks, 0);
+    ranks[c] = 1;
+    ranks[d] = 1;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 2);
+    defer allocator.free(levels);
+    levels[0] = .empty;
+    levels[1] = .empty;
+    defer {
+        levels[0].deinit(allocator);
+        levels[1].deinit(allocator);
+    }
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+    try levels[1].append(allocator, c);
+    try levels[1].append(allocator, d);
+
+    try std.testing.expectEqual(@as(usize, 1), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
+    refineAdjacentExchanges(&graph, levels, ranks, 2);
+    try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
 }
 
 test "LR layout accounts for oriented long-label extents" {
