@@ -1615,8 +1615,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
 
     assignRanksForCyclicComponents(graph, ranks, acyclic_edge);
+    applyRankConstraints(graph, ranks);
     tightenRanksTowardSinks(graph, ranks, acyclic_edge);
-
     applyRankConstraints(graph, ranks);
 
     var max_rank: usize = 0;
@@ -2527,6 +2527,7 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
     while (true) {
         for (ranks, 0..) |node_rank, node_id| {
             if (node_rank != rank) continue;
+            if (rankTighteningPinned(graph, node_id)) continue;
             const upper_bound = tightRankUpperBoundFromChildren(graph, ranks, acyclic_edge, node_id) orelse continue;
             if (upper_bound > ranks[node_id]) ranks[node_id] = upper_bound;
         }
@@ -2547,6 +2548,17 @@ fn tightRankUpperBoundFromChildren(graph: *const Graph, ranks: []const usize, ac
         bound = if (bound) |current| @min(current, candidate) else candidate;
     }
     return bound;
+}
+
+fn rankTighteningPinned(graph: *const Graph, node_id: NodeId) bool {
+    for (graph.rank_constraints.items) |constraint| {
+        switch (constraint.kind) {
+            .same, .min, .source, .max, .sink => {
+                if (containsNode(constraint.node_ids, node_id)) return true;
+            },
+        }
+    }
+    return false;
 }
 
 fn labelLineCount(text: []const u8) usize {
@@ -8020,6 +8032,28 @@ test "layered layout tightens avoidable rank slack" {
     const x = graph.node_index.get("x").?;
     try std.testing.expectEqual(layout.ranks[c], layout.ranks[x]);
     try std.testing.expectEqual(layout.ranks[x] + 1, layout.ranks[d]);
+}
+
+test "rank slack tightening preserves explicit boundary ranks" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=min; source; }
+        \\  source -> mid -> sink;
+        \\  source -> sink;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const source = graph.node_index.get("source").?;
+    const mid = graph.node_index.get("mid").?;
+    const sink = graph.node_index.get("sink").?;
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[source]);
+    try std.testing.expect(layout.ranks[source] < layout.ranks[mid]);
+    try std.testing.expect(layout.ranks[mid] < layout.ranks[sink]);
 }
 
 test "SVG auto endpoints use side anchors for same-rank edges" {
