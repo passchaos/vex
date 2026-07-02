@@ -1568,7 +1568,10 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     defer for (levels) |*level| level.deinit(allocator);
 
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
-    try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
+    var virtual_levels = try buildVirtualLevels(allocator, graph, ranks);
+    defer virtual_levels.deinit();
+    try reduceVirtualLevelCrossings(allocator, graph, &virtual_levels, ranks, effective_options.crossing_passes);
+    replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
     refineAdjacentExchanges(graph, levels, ranks, 2);
     applyOrderingHints(graph, levels, ranks);
     enforceClusterContiguity(graph, levels);
@@ -1683,6 +1686,13 @@ const VirtualLevels = struct {
     }
 };
 
+fn virtualNodeKey(node: VirtualNode) usize {
+    return switch (node) {
+        .real => |id| id,
+        .dummy => |edge_id| std.math.maxInt(usize) / 2 + edge_id,
+    };
+}
+
 fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize) !VirtualLevels {
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -1709,6 +1719,104 @@ fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: 
     return .{ .allocator = allocator, .levels = levels };
 }
 
+fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, passes: usize) !void {
+    if (virtual_levels.levels.len <= 1 or passes == 0) return;
+    const max_nodes = graph.nodes.items.len + graph.edges.items.len;
+    const median_positions = try allocator.alloc(usize, @max(max_nodes, 1));
+    defer allocator.free(median_positions);
+
+    for (0..passes) |_| {
+        var rank: usize = 1;
+        while (rank < virtual_levels.levels.len) : (rank += 1) {
+            orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, true, median_positions);
+        }
+        rank = virtual_levels.levels.len - 1;
+        while (rank > 0) : (rank -= 1) {
+            orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank - 1, false, median_positions);
+        }
+    }
+}
+
+const VirtualMedianOrder = struct {
+    node: VirtualNode,
+    median: f64,
+    original: usize,
+};
+
+fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, median_positions: []usize) void {
+    if (rank >= virtual_levels.levels.len) return;
+    if (use_parents and rank == 0) return;
+    if (!use_parents and rank + 1 >= virtual_levels.levels.len) return;
+    var level = &virtual_levels.levels[rank];
+    if (level.items.len <= 1) return;
+
+    var orders_buf: [128]VirtualMedianOrder = undefined;
+    if (level.items.len > orders_buf.len) return;
+    const orders = orders_buf[0..level.items.len];
+
+    for (level.items, 0..) |node, original| {
+        var count: usize = 0;
+        for (graph.edges.items) |edge_item| {
+            const neighbor = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse continue;
+            const adjacent_rank = if (use_parents) rank - 1 else rank + 1;
+            const pos = positionInVirtualLevel(virtual_levels.levels[adjacent_rank].items, neighbor) orelse continue;
+            if (count < median_positions.len) {
+                median_positions[count] = pos;
+                count += 1;
+            }
+        }
+        orders[original] = .{
+            .node = node,
+            .median = medianOfPositions(median_positions[0..count], original),
+            .original = original,
+        };
+    }
+
+    std.mem.sort(VirtualMedianOrder, orders, {}, lessThanVirtualMedianOrder);
+    for (orders, 0..) |order, i| level.items[i] = order.node;
+}
+
+fn lessThanVirtualMedianOrder(_: void, a: VirtualMedianOrder, b: VirtualMedianOrder) bool {
+    if (a.median == b.median) return a.original < b.original;
+    return a.median < b.median;
+}
+
+fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usize {
+    for (level, 0..) |node, index| {
+        if (std.meta.eql(node, needle)) return index;
+    }
+    return null;
+}
+
+fn virtualAdjacentNode(edge_item: Edge, node: VirtualNode, ranks: []const usize, rank: usize, use_parents: bool) ?VirtualNode {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank >= to_rank) return null;
+    switch (node) {
+        .real => |node_id| {
+            if (use_parents) {
+                if (node_id == edge_item.to and rank == to_rank) {
+                    return if (from_rank + 1 == to_rank) .{ .real = edge_item.from } else .{ .dummy = edge_item.id };
+                }
+            } else {
+                if (node_id == edge_item.from and rank == from_rank) {
+                    return if (from_rank + 1 == to_rank) .{ .real = edge_item.to } else .{ .dummy = edge_item.id };
+                }
+            }
+        },
+        .dummy => |edge_id| {
+            if (edge_id != edge_item.id) return null;
+            if (rank <= from_rank or rank >= to_rank) return null;
+            if (use_parents) {
+                return if (rank == from_rank + 1) .{ .real = edge_item.from } else .{ .dummy = edge_id };
+            }
+            return if (rank + 1 == to_rank) .{ .real = edge_item.to } else .{ .dummy = edge_id };
+        },
+    }
+    return null;
+}
+
 fn extractRealLevelsFromVirtual(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels) ![]std.ArrayList(NodeId) {
     const levels = try allocator.alloc(std.ArrayList(NodeId), virtual_levels.levels.len);
     errdefer allocator.free(levels);
@@ -1724,6 +1832,20 @@ fn extractRealLevelsFromVirtual(allocator: std.mem.Allocator, virtual_levels: *c
         }
     }
     return levels;
+}
+
+fn replaceLevelsFromVirtual(allocator: std.mem.Allocator, levels: []std.ArrayList(NodeId), virtual_levels: *const VirtualLevels) !void {
+    const real_levels = try extractRealLevelsFromVirtual(allocator, virtual_levels);
+    defer allocator.free(real_levels);
+    errdefer for (real_levels) |*level| level.deinit(allocator);
+    if (real_levels.len != levels.len) {
+        for (real_levels) |*level| level.deinit(allocator);
+        return error.LevelCountMismatch;
+    }
+    for (levels, 0..) |*level, index| {
+        level.deinit(allocator);
+        level.* = real_levels[index];
+    }
 }
 
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
@@ -6124,6 +6246,35 @@ test "virtual levels can extract real node levels" {
     try std.testing.expectEqual(c, real_levels[1].items[0]);
     try std.testing.expectEqual(@as(usize, 0), real_levels[2].items.len);
     try std.testing.expectEqual(d, real_levels[3].items[0]);
+}
+
+test "virtual level median orders dummy nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 2;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[1].items, .{ .dummy = 0 }));
+
+    try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2);
+    const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
+    const c_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = c }).?;
+    try std.testing.expect(dummy_pos < c_pos);
 }
 
 fn virtualLevelContains(level: []const VirtualNode, needle: VirtualNode) bool {
