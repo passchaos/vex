@@ -1596,8 +1596,8 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         else => {},
     }
     if (htmlTableMetrics(node_item.label)) |table| {
-        width = @max(width, @as(f64, @floatFromInt(table.cols * @max(table.max_cell_len, 1))) * options.label_char_width * font_scale + options.node_padding_x * 2.0);
-        height = @max(height, @as(f64, @floatFromInt(table.rows)) * options.label_line_height * 1.6 * font_scale + options.node_padding_y * 2.0);
+        width = @max(width, @as(f64, @floatFromInt(table.cols * @max(table.max_cell_len, 1))) * options.label_char_width * font_scale + table.cell_padding * 2.0 * @as(f64, @floatFromInt(table.cols)) + table.cell_spacing * @as(f64, @floatFromInt(table.cols + 1)));
+        height = @max(height, @as(f64, @floatFromInt(table.rows)) * options.label_line_height * 1.6 * font_scale + table.cell_padding * 2.0 * @as(f64, @floatFromInt(table.rows)) + table.cell_spacing * @as(f64, @floatFromInt(table.rows + 1)));
     }
     applyNodeSizeAttrs(node_item, &width, &height);
     return .{ .width = width, .height = height };
@@ -1895,10 +1895,18 @@ const HtmlTableMetrics = struct {
     rows: usize,
     cols: usize,
     max_cell_len: usize,
+    border: f64 = 1.5,
+    cell_border: f64 = 1.0,
+    cell_padding: f64 = 6.0,
+    cell_spacing: f64 = 0.0,
+    bg_color: ?[]const u8 = null,
 };
 
 fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
-    if (!isHtmlLikeLabel(label) or findHtmlTag(label, "table", 0) == null) return null;
+    if (!isHtmlLikeLabel(label)) return null;
+    const table_start = findHtmlTag(label, "table", 0) orelse return null;
+    const table_open_end = std.mem.indexOfScalar(u8, label[table_start..], '>') orelse return null;
+    const table_tag = label[table_start + 1 .. table_start + table_open_end];
     var pos: usize = 0;
     var rows: usize = 0;
     var max_cols: usize = 0;
@@ -1926,7 +1934,55 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
         pos = tr_close + 1;
     }
     if (rows == 0 or max_cols == 0) return null;
-    return .{ .rows = rows, .cols = max_cols, .max_cell_len = max_cell_len };
+    return .{
+        .rows = rows,
+        .cols = max_cols,
+        .max_cell_len = max_cell_len,
+        .border = @floatFromInt(htmlIntAttr(table_tag, "border", 1)),
+        .cell_border = @floatFromInt(htmlIntAttr(table_tag, "cellborder", 1)),
+        .cell_padding = @floatFromInt(htmlIntAttr(table_tag, "cellpadding", 6)),
+        .cell_spacing = @floatFromInt(htmlIntAttr(table_tag, "cellspacing", 0)),
+        .bg_color = htmlAttrValue(table_tag, "bgcolor"),
+    };
+}
+
+fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
+    const value = htmlAttrValue(tag, name) orelse return fallback;
+    return std.fmt.parseInt(usize, value, 10) catch fallback;
+}
+
+fn htmlAttrValue(tag: []const u8, name: []const u8) ?[]const u8 {
+    var index: usize = 0;
+    while (index < tag.len) {
+        while (index < tag.len and (std.ascii.isWhitespace(tag[index]) or tag[index] == '/')) : (index += 1) {}
+        const key_start = index;
+        while (index < tag.len and (std.ascii.isAlphanumeric(tag[index]) or tag[index] == '_' or tag[index] == '-')) : (index += 1) {}
+        if (index == key_start) {
+            index += 1;
+            continue;
+        }
+        const key = tag[key_start..index];
+        while (index < tag.len and std.ascii.isWhitespace(tag[index])) : (index += 1) {}
+        if (index >= tag.len or tag[index] != '=') continue;
+        index += 1;
+        while (index < tag.len and std.ascii.isWhitespace(tag[index])) : (index += 1) {}
+        if (index >= tag.len) break;
+        const value = if (tag[index] == '"' or tag[index] == '\'') blk: {
+            const quote = tag[index];
+            index += 1;
+            const value_start = index;
+            while (index < tag.len and tag[index] != quote) : (index += 1) {}
+            const result = tag[value_start..index];
+            if (index < tag.len) index += 1;
+            break :blk result;
+        } else blk: {
+            const value_start = index;
+            while (index < tag.len and !std.ascii.isWhitespace(tag[index]) and tag[index] != '>') : (index += 1) {}
+            break :blk tag[value_start..index];
+        };
+        if (std.ascii.eqlIgnoreCase(key, name)) return value;
+    }
+    return null;
 }
 
 fn findHtmlTag(text: []const u8, tag: []const u8, start: usize) ?usize {
@@ -2648,8 +2704,11 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
     const metrics = htmlTableMetrics(label) orelse return;
     const x = layout.center.x - layout.width / 2.0;
     const y = layout.center.y - layout.height / 2.0;
-    const cell_w = layout.width / @as(f64, @floatFromInt(metrics.cols));
-    const cell_h = layout.height / @as(f64, @floatFromInt(metrics.rows));
+    const total_spacing_x = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1));
+    const total_spacing_y = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1));
+    const cell_w = @max(1, (layout.width - total_spacing_x) / @as(f64, @floatFromInt(metrics.cols)));
+    const cell_h = @max(1, (layout.height - total_spacing_y) / @as(f64, @floatFromInt(metrics.rows)));
+    const fill = metrics.bg_color orelse visual.fill;
 
     try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
         x,
@@ -2657,9 +2716,9 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
         layout.width,
         layout.height,
         visual.radius,
-        visual.fill,
-        visual.stroke,
-        visual.width,
+        fill,
+        if (metrics.border > 0) visual.stroke else "none",
+        metrics.border,
     });
 
     var row_pos: usize = 0;
@@ -2668,10 +2727,6 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
         const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
         const content_start = tr_start + tr_open_end + 1;
         const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
-        if (row_index > 0) {
-            const line_y = y + cell_h * @as(f64, @floatFromInt(row_index));
-            try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ x, line_y, x + layout.width, line_y, visual.stroke, visual.width });
-        }
         const row = label[content_start..tr_close];
         var cell_pos: usize = 0;
         var col_index: usize = 0;
@@ -2679,16 +2734,17 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
             const cell_start = td_start + td_open_end + 1;
             const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
-            if (col_index > 0) {
-                const line_x = x + cell_w * @as(f64, @floatFromInt(col_index));
-                try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ line_x, y + cell_h * @as(f64, @floatFromInt(row_index)), line_x, y + cell_h * @as(f64, @floatFromInt(row_index + 1)), visual.stroke, visual.width });
+            const cell_x = x + metrics.cell_spacing + @as(f64, @floatFromInt(col_index)) * (cell_w + metrics.cell_spacing);
+            const cell_y = y + metrics.cell_spacing + @as(f64, @floatFromInt(row_index)) * (cell_h + metrics.cell_spacing);
+            if (metrics.cell_border > 0) {
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, cell_w, cell_h, visual.stroke, metrics.cell_border });
             }
             const cell = row[cell_start..td_close];
             try renderSvgTextBlock(
                 writer,
                 cell,
-                x + cell_w * (@as(f64, @floatFromInt(col_index)) + 0.5),
-                y + cell_h * (@as(f64, @floatFromInt(row_index)) + 0.5),
+                cell_x + cell_w / 2.0,
+                cell_y + cell_h / 2.0,
                 visual.font_size,
                 visual.font_color,
                 visual.font_family,
@@ -4285,8 +4341,32 @@ test "SVG renderer lays out simple HTML table labels as grids" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">D</tspan>") != null);
-    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 2);
+    try std.testing.expect(countSubstrings(svg, "<rect") >= 5);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<TABLE>") == null);
+}
+
+test "SVG renderer honors simple HTML table visual attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=plain,label=<
+        \\    <TABLE BORDER="0" CELLBORDER="2" CELLSPACING="4" CELLPADDING="9" BGCOLOR="lightgrey">
+        \\      <TR><TD>A</TD><TD>B</TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"none\" stroke-width=\"0.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">B</tspan>") != null);
 }
 
 test "SVG renderer honors graph label and bgcolor attributes" {
