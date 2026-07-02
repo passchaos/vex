@@ -5883,10 +5883,17 @@ fn orientWaypoint(rankdir: RankDir, along_screen: f64, depth: f64, layout: *cons
     };
 }
 
+fn splineCurveAmount(rankdir: RankDir, dx: f64, dy: f64, min_curve: f64, max_curve: f64) f64 {
+    const axis_delta = if (rankdir == .LR or rankdir == .RL) @abs(dx) else @abs(dy);
+    if (axis_delta <= 0.001) return 0;
+    const preferred = @min(max_curve, axis_delta * 0.45);
+    return @min(axis_delta * 0.5, @max(min_curve, preferred));
+}
+
 fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankDir) Io.Writer.Error!void {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
-    const curve = @max(18.0, @min(96.0, if (rankdir == .LR or rankdir == .RL) @abs(dx) * 0.5 else @abs(dy) * 0.5));
+    const curve = splineCurveAmount(rankdir, dx, dy, 18.0, 96.0);
     const controls = switch (rankdir) {
         .TB => EdgeControls{
             .c1 = .{ .x = from.x, .y = from.y + curve },
@@ -5913,7 +5920,7 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
     const end = boundaryPoint(to, from.center, rankdir, false);
     const dx = end.x - start.x;
     const dy = end.y - start.y;
-    const curve = @max(24.0, @min(160.0, if (rankdir == .LR or rankdir == .RL) @abs(dx) * 0.45 else @abs(dy) * 0.45));
+    const curve = splineCurveAmount(rankdir, dx, dy, 24.0, 160.0);
     const controls: EdgeControls = switch (rankdir) {
         .TB => .{
             .c1 = Point{ .x = start.x, .y = start.y + curve },
@@ -6014,7 +6021,7 @@ fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, of
     const end = end_raw;
     const dx = end.x - start.x;
     const dy = end.y - start.y;
-    const curve = @max(24.0, @min(160.0, if (rankdir == .LR or rankdir == .RL) @abs(dx) * 0.45 else @abs(dy) * 0.45));
+    const curve = splineCurveAmount(rankdir, dx, dy, 24.0, 160.0);
     const controls: EdgeControls = switch (rankdir) {
         .TB => .{
             .c1 = Point{ .x = start.x, .y = start.y + curve },
@@ -8968,6 +8975,22 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer allocator.free(line_svg);
     try std.testing.expect(std.mem.indexOf(u8, line_svg, " C ") == null);
     try std.testing.expect(countSubstrings(line_svg, " L ") >= 1);
+}
+
+test "spline controls stay monotonic for short adjacent edges" {
+    const from = NodeLayout{ .center = .{ .x = 40, .y = 40 }, .width = 30, .height = 20 };
+    const to = NodeLayout{ .center = .{ .x = 40, .y = 90 }, .width = 30, .height = 20 };
+    const route = edgeRoute(from, to, .TB, 0);
+    try std.testing.expect(route.control1.y <= route.control2.y);
+    try std.testing.expect(route.control1.y <= route.end.y);
+    try std.testing.expect(route.control2.y >= route.start.y);
+
+    const lr_from = NodeLayout{ .center = .{ .x = 40, .y = 40 }, .width = 30, .height = 20 };
+    const lr_to = NodeLayout{ .center = .{ .x = 90, .y = 40 }, .width = 30, .height = 20 };
+    const lr_route = edgeRoute(lr_from, lr_to, .LR, 0);
+    try std.testing.expect(lr_route.control1.x <= lr_route.control2.x);
+    try std.testing.expect(lr_route.control1.x <= lr_route.end.x);
+    try std.testing.expect(lr_route.control2.x >= lr_route.start.x);
 }
 
 test "DOT parser propagates edge constraint and minlen controls" {
