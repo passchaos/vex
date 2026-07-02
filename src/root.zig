@@ -133,6 +133,7 @@ pub const Edge = struct {
 
 pub const Cluster = struct {
     id: usize,
+    parent_name: ?[]const u8 = null,
     name: []const u8,
     label: []const u8,
     nodes: []NodeId,
@@ -217,6 +218,7 @@ pub const Graph = struct {
         }
         for (self.clusters.items) |*cluster| {
             self.allocator.free(cluster.name);
+            if (cluster.parent_name) |parent_name| self.allocator.free(parent_name);
             if (cluster.label.ptr != cluster.name.ptr) self.allocator.free(cluster.label);
             self.allocator.free(cluster.nodes);
             freeAttrList(self.allocator, &cluster.attrs);
@@ -350,10 +352,11 @@ pub const Graph = struct {
         try self.rank_constraints.append(self.allocator, .{ .kind = kind, .node_ids = owned_nodes });
     }
 
-    pub fn addCluster(self: *Graph, name: []const u8, node_ids: []const NodeId, attrs: []const Attr) !void {
-        if (node_ids.len == 0) return;
+    pub fn addCluster(self: *Graph, name: []const u8, parent_name: ?[]const u8, node_ids: []const NodeId, attrs: []const Attr) !usize {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
+        const owned_parent_name = if (parent_name) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (owned_parent_name) |value| self.allocator.free(value);
         const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
         errdefer self.allocator.free(owned_nodes);
         var owned_attrs = try copyAttrList(self.allocator, attrs);
@@ -364,13 +367,16 @@ pub const Graph = struct {
         else
             try self.allocator.dupe(u8, label_value);
         errdefer if (owned_label.ptr != owned_name.ptr) self.allocator.free(owned_label);
+        const id = self.clusters.items.len;
         try self.clusters.append(self.allocator, .{
-            .id = self.clusters.items.len,
+            .id = id,
+            .parent_name = owned_parent_name,
             .name = owned_name,
             .label = owned_label,
             .nodes = owned_nodes,
             .attrs = owned_attrs,
         });
+        return id;
     }
 
     pub fn setGraphAttr(self: *Graph, name: []const u8, value: []const u8) !void {
@@ -795,6 +801,7 @@ const Parser = struct {
     collectors: std.ArrayList(*NodeSet) = .empty,
     rank_scopes: std.ArrayList(*?RankKind) = .empty,
     cluster_scopes: std.ArrayList(?*AttrList) = .empty,
+    cluster_stack: std.ArrayList([]const u8) = .empty,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
         var lexer: Lexer = .{ .source = source };
@@ -806,6 +813,7 @@ const Parser = struct {
         defer self.collectors.deinit(self.allocator);
         defer self.rank_scopes.deinit(self.allocator);
         defer self.cluster_scopes.deinit(self.allocator);
+        defer self.cluster_stack.deinit(self.allocator);
         var strict = false;
         if (self.matchKeyword("strict")) strict = true;
 
@@ -1062,6 +1070,7 @@ const Parser = struct {
         var cluster_attrs = AttrList.empty;
         defer freeAttrList(self.allocator, &cluster_attrs);
         const is_cluster = if (subgraph_name) |name| isClusterName(name) else false;
+        const parent_cluster = if (is_cluster and self.cluster_stack.items.len > 0) self.cluster_stack.items[self.cluster_stack.items.len - 1] else null;
 
         var nodes = NodeSet.empty;
         errdefer nodes.deinit(self.allocator);
@@ -1072,13 +1081,18 @@ const Parser = struct {
         errdefer self.rank_scopes.items.len -= 1;
         try self.cluster_scopes.append(self.allocator, if (is_cluster) &cluster_attrs else null);
         errdefer self.cluster_scopes.items.len -= 1;
+        if (is_cluster) try self.cluster_stack.append(self.allocator, subgraph_name.?);
+        errdefer {
+            if (is_cluster) self.cluster_stack.items.len -= 1;
+        }
         try self.parseStmtList(graph);
         self.collectors.items.len -= 1;
         self.rank_scopes.items.len -= 1;
         self.cluster_scopes.items.len -= 1;
+        if (is_cluster) self.cluster_stack.items.len -= 1;
         try self.expect(.rbrace);
         if (rank_kind) |kind| try graph.addRankConstraint(kind, nodes.items);
-        if (is_cluster) try graph.addCluster(subgraph_name.?, nodes.items, cluster_attrs.items);
+        if (is_cluster) _ = try graph.addCluster(subgraph_name.?, parent_cluster, nodes.items, cluster_attrs.items);
         defaults.restore(self.allocator, graph);
         return nodes;
     }
@@ -1488,6 +1502,7 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
     const pad_x: f64 = 28;
     const pad_y: f64 = 32;
     const label_band: f64 = 22;
+    const child_gap: f64 = 12;
     for (graph.clusters.items, 0..) |cluster, index| {
         var min_x = std.math.floatMax(f64);
         var min_y = std.math.floatMax(f64);
@@ -1525,6 +1540,40 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
             .height = height,
         };
     }
+
+    for (graph.clusters.items, 0..) |cluster, index| {
+        const parent_name = cluster.parent_name orelse continue;
+        const parent_index = clusterIndexByName(graph, parent_name) orelse continue;
+        if (parent_index >= clusters.len or index >= clusters.len) continue;
+        const child = clusters[index];
+        if (child.width <= 0 or child.height <= 0) continue;
+        var parent = &clusters[parent_index];
+        if (parent.width <= 0 or parent.height <= 0) {
+            parent.* = .{
+                .id = graph.clusters.items[parent_index].id,
+                .x = @max(0, child.x - child_gap),
+                .y = @max(0, child.y - child_gap - label_band),
+                .width = child.width + child_gap * 2.0,
+                .height = child.height + child_gap * 2.0 + label_band,
+            };
+            continue;
+        }
+        const min_x = @min(parent.x, @max(0, child.x - child_gap));
+        const min_y = @min(parent.y, @max(0, child.y - child_gap - label_band));
+        const max_x = @max(parent.x + parent.width, child.x + child.width + child_gap);
+        const max_y = @max(parent.y + parent.height, child.y + child.height + child_gap);
+        parent.x = min_x;
+        parent.y = min_y;
+        parent.width = max_x - min_x;
+        parent.height = max_y - min_y;
+    }
+}
+
+fn clusterIndexByName(graph: *const Graph, name: []const u8) ?usize {
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (std.mem.eql(u8, cluster.name, name)) return index;
+    }
+    return null;
 }
 
 fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
@@ -2213,35 +2262,41 @@ const ClusterVisual = struct {
 fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
     if (graph.clusters.items.len == 0) return;
     try writer.writeAll("<g class=\"clusters\">\n");
-    for (graph.clusters.items, 0..) |cluster, index| {
-        if (index >= layout.clusters.len) continue;
-        const box = layout.clusters[index];
-        if (box.width <= 0 or box.height <= 0) continue;
-        const visual = resolveClusterVisual(cluster);
-        if (visual.hidden) continue;
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-            box.x,
-            box.y,
-            box.width,
-            box.height,
-            visual.radius,
-            visual.fill,
-            visual.fill_opacity,
-            visual.stroke,
-            visual.width,
-        });
-        try writeSvgDash(writer, visual.dash);
-        try writer.writeAll("/>\n");
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
-            box.x + box.width / 2.0,
-            box.y + 18.0,
-            options.font_family,
-            visual.font_color,
-        });
-        try writeXmlEscaped(writer, cluster.label);
-        try writer.writeAll("</text>\n");
+    var index = graph.clusters.items.len;
+    while (index > 0) {
+        index -= 1;
+        try renderSvgClusterBox(writer, graph.clusters.items[index], layout, index, options);
     }
     try writer.writeAll("</g>\n");
+}
+
+fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layout, index: usize, options: SvgOptions) Io.Writer.Error!void {
+    if (index >= layout.clusters.len) return;
+    const box = layout.clusters[index];
+    if (box.width <= 0 or box.height <= 0) return;
+    const visual = resolveClusterVisual(cluster);
+    if (visual.hidden) return;
+    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        box.x,
+        box.y,
+        box.width,
+        box.height,
+        visual.radius,
+        visual.fill,
+        visual.fill_opacity,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
+        box.x + box.width / 2.0,
+        box.y + 18.0,
+        options.font_family,
+        visual.font_color,
+    });
+    try writeXmlEscaped(writer, cluster.label);
+    try writer.writeAll("</text>\n");
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
@@ -3809,6 +3864,45 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
+}
+
+test "nested cluster layout expands parent around child cluster" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    label="Outer";
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a -> b;
+        \\    }
+        \\    c;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.clusters.items.len);
+    const inner = graph.clusters.items[0];
+    const outer = graph.clusters.items[1];
+    try std.testing.expectEqualStrings("cluster_outer", inner.parent_name.?);
+    try std.testing.expectEqualStrings("cluster_inner", inner.name);
+    try std.testing.expectEqualStrings("cluster_outer", outer.name);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const inner_box = layout.clusters[0];
+    const outer_box = layout.clusters[1];
+    try std.testing.expect(outer_box.x <= inner_box.x);
+    try std.testing.expect(outer_box.y <= inner_box.y);
+    try std.testing.expect(outer_box.x + outer_box.width >= inner_box.x + inner_box.width);
+    try std.testing.expect(outer_box.y + outer_box.height >= inner_box.y + inner_box.height);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const outer_pos = std.mem.indexOf(u8, svg, "Outer") orelse return error.MissingOuterCluster;
+    const inner_pos = std.mem.indexOf(u8, svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(outer_pos < inner_pos);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {
