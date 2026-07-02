@@ -2884,9 +2884,26 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     });
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
-    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
-        box.x + box.width / 2.0,
-        box.y + 18.0,
+    const label_just = attrValue(cluster.attrs.items, "labeljust");
+    const label_loc = attrValue(cluster.attrs.items, "labelloc");
+    const text_anchor: []const u8 = if (label_just) |value|
+        if (std.ascii.eqlIgnoreCase(value, "l")) "start" else if (std.ascii.eqlIgnoreCase(value, "r")) "end" else "middle"
+    else
+        "middle";
+    const label_x = if (std.mem.eql(u8, text_anchor, "start"))
+        box.x + 12.0
+    else if (std.mem.eql(u8, text_anchor, "end"))
+        box.x + box.width - 12.0
+    else
+        box.x + box.width / 2.0;
+    const label_y = if (label_loc) |value|
+        if (std.ascii.eqlIgnoreCase(value, "b")) box.y + box.height - 10.0 else box.y + 18.0
+    else
+        box.y + 18.0;
+    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
+        label_x,
+        label_y,
+        text_anchor,
         visual.font_family,
         visual.font_size,
         visual.font_color,
@@ -5170,6 +5187,33 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
+}
+
+test "cluster labels honor labelloc and labeljust" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_bottom_left {
+        \\    label="Bottom Left";
+        \\    labelloc=b;
+        \\    labeljust=l;
+        \\    a -> b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Bottom Left") != null);
+    const box = layout.clusters[0];
+    var expected_buf: [64]u8 = undefined;
+    const expected_y = try std.fmt.bufPrint(&expected_buf, "y=\"{d:.1}\"", .{box.y + box.height - 10.0});
+    try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
 }
 
 test "nested cluster layout expands parent around child cluster" {
