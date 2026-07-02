@@ -2415,17 +2415,31 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = 12;
             height = 12;
         },
-        .square, .msquare => {
+        .msquare => {
+            const side = @max(@max(36.0, text_width + options.node_padding_x * 2.0 + margin.x * 2.0), text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
+            width = side;
+            height = side;
+        },
+        .square => {
             const side = @max(width, height);
             width = side;
             height = side;
         },
-        .circle, .doublecircle, .mcircle => {
+        .mcircle => {
+            const diameter = @max(@max(36.0, text_width + options.node_padding_x * 2.0 + margin.x * 2.0), text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
+            width = diameter;
+            height = diameter;
+        },
+        .circle, .doublecircle => {
             const diameter = @max(width, height);
             width = diameter;
             height = diameter;
         },
-        .diamond, .mdiamond => {
+        .mdiamond => {
+            width = @max(36.0, text_width + options.node_padding_x * 2.4 + margin.x * 2.0);
+            height = @max(36.0, text_height + options.node_padding_y * 2.2 + margin.y * 2.0);
+        },
+        .diamond => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
             height = @max(height, text_height + options.node_padding_y * 2.6);
         },
@@ -9280,6 +9294,28 @@ test "DOT parser and SVG renderer support Graphviz M shapes star and egg" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon") != null);
     try std.testing.expect(countSubstrings(svg, "fill=\"none\" stroke=") >= 8);
     try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+}
+
+test "Graphviz M shapes use compact default sizing" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  start [shape=Mdiamond];
+        \\  end [shape=Msquare];
+        \\  mc [shape=Mcircle];
+        \\  long [shape=Msquare, label="long label"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const end = graph.node_index.get("end").?;
+    const badge = graph.node_index.get("mc").?;
+    const long = graph.node_index.get("long").?;
+    try std.testing.expect(layout.nodes[end].width < 54);
+    try std.testing.expect(layout.nodes[badge].width < 54);
+    try std.testing.expect(layout.nodes[long].width > layout.nodes[end].width);
 }
 
 test "DOT parser and SVG renderer support parameterized Graphviz polygon shape" {
