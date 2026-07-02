@@ -1622,6 +1622,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
+    total_along = @max(total_along, virtualPositionsExtent(&virtual_levels, &final_virtual_positions, axis_sizes, graph));
 
     var rank_heights = try allocator.alloc(f64, levels.len);
     defer allocator.free(rank_heights);
@@ -2032,6 +2033,19 @@ fn virtualLevelWidth(level: []const VirtualNode, sizes: []const NodeSize, graph:
     for (level) |vnode| width += virtualNodeWidth(vnode, sizes, graph);
     width += gap * @as(f64, @floatFromInt(level.len - 1));
     return width;
+}
+
+fn virtualPositionsExtent(virtual_levels: *const VirtualLevels, virtual_positions: *const VirtualPositions, sizes: []const NodeSize, graph: *const Graph) f64 {
+    var max_right: f64 = 0;
+    for (virtual_levels.levels, 0..) |level, rank| {
+        if (rank >= virtual_positions.positions.len) continue;
+        for (level.items, 0..) |vnode, index| {
+            if (index >= virtual_positions.positions[rank].items.len) continue;
+            const width = virtualNodeWidth(vnode, sizes, graph);
+            max_right = @max(max_right, virtual_positions.positions[rank].items[index] + width / 2.0);
+        }
+    }
+    return max_right;
 }
 
 fn extractRealLevelsFromVirtual(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels) ![]std.ArrayList(NodeId) {
@@ -6739,6 +6753,7 @@ test "virtual positions compact overlaps while preserving order" {
     defer positions.deinit();
     try std.testing.expectEqual(@as(f64, 10), positions.positions[0].items[0]);
     try std.testing.expectEqual(@as(f64, 40), positions.positions[0].items[1]);
+    try std.testing.expect(virtualPositionsExtent(&virtual_levels, &positions, sizes, &graph) >= 50);
 }
 
 test "virtual positions can update real node centers" {
