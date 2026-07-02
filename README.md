@@ -1,6 +1,6 @@
-# Topos
+# Vex
 
-Topos is a Zig graph visualization prototype: DOT-compatible at the boundary,
+Vex is a Zig graph visualization prototype: DOT-compatible at the boundary,
 with a native graph-building API inside. The goal is to reimplement Graphviz
 semantics in Zig while keeping Graphviz as a compatibility oracle for tests,
 not as a runtime rendering dependency. The long-term goal is to keep the
@@ -34,27 +34,27 @@ cat examples/simple.dot | zig build run -- --format svg > simple.svg
 
 ```zig
 const std = @import("std");
-const topos = @import("topos");
+const vex = @import("vex");
 
-var graph = try topos.Graph.init(allocator, .{ .directed = true, .name = "G" });
+var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "G" });
 defer graph.deinit();
 
 const a = try graph.nodeWith("A", .{ .shape = .box, .label = "Start" });
 const b = try graph.node("B");
 _ = try graph.edge(a, b, .{ .label = "next" });
 
-var layout = try topos.layoutLayered(allocator, &graph, .{});
+var layout = try vex.layoutLayered(allocator, &graph, .{});
 defer layout.deinit();
-try topos.render(writer, &graph, &layout, .svg, .{});
+try vex.render(writer, &graph, &layout, .svg, .{});
 ```
 
 ## Graphviz compatibility target
 
-Topos is intended to reimplement Graphviz behavior rather than shell out to
+Vex is intended to reimplement Graphviz behavior rather than shell out to
 `dot`. During development, Graphviz should be used as an oracle in tests and
 fixtures: compare parsed semantics, layout coordinates, and rendered output for
 representative graphs, then close gaps in the native implementation. Runtime CLI
-rendering should stay on Topos' native parser/layout/renderers.
+rendering should stay on Vex's native parser/layout/renderers.
 
 ## Mainstream DOT support
 

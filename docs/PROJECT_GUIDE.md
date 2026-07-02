@@ -1,6 +1,6 @@
-# Topos 项目指南
+# Vex 项目指南
 
-Topos 的目标是使用 Zig 实现一个面向未来的图可视化工具：先兼容 Graphviz/DOT 生态，再在布局、渲染、交互和可编程性上逐步超越 Graphviz。
+Vex 的目标是使用 Zig 实现一个面向未来的图可视化工具：先兼容 Graphviz/DOT 生态，再在布局、渲染、交互和可编程性上逐步超越 Graphviz。
 
 ## 核心目标
 
@@ -11,7 +11,7 @@ Topos 的目标是使用 Zig 实现一个面向未来的图可视化工具：先
 
 ## 兼容性要求
 
-Topos 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Graphviz”的目标，应通过原生 Zig parser/layout/renderer 逐步重实现 Graphviz 行为，并用本机 Graphviz `dot` 做测试 oracle；不要在正常 CLI 渲染路径中调用 `dot`。至少从一个实用子集开始：
+Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Graphviz”的目标，应通过原生 Zig parser/layout/renderer 逐步重实现 Graphviz 行为，并用本机 Graphviz `dot` 做测试 oracle；不要在正常 CLI 渲染路径中调用 `dot`。至少从一个实用子集开始：
 
 - 支持 `graph` / `digraph`。
 - 支持有向边 `->` 和无向边 `--`。
@@ -21,27 +21,27 @@ Topos 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 
 
 ## 编码接口要求
 
-除了 DOT DSL，Topos 必须提供 Zig 代码里的图构建 API：
+除了 DOT DSL，Vex 必须提供 Zig 代码里的图构建 API：
 
 - 允许直接创建图对象。
 - 允许添加节点、添加边、设置属性。
 - 布局和渲染逻辑应面向这个统一图模型，而不是只绑定 DOT 文本输入。
 - DOT 解析器应该只是把 DSL 转换为同一个图模型。
-- 渲染输出需要后端化，CLI/API 同时面向 terminal、SVG、PNG、PDF 等格式；默认路径必须是 Topos 原生实现，Graphviz `dot` 只用于测试对照。
+- 渲染输出需要后端化，CLI/API 同时面向 terminal、SVG、PNG、PDF 等格式；默认路径必须是 Vex 原生实现，Graphviz `dot` 只用于测试对照。
 
 建议 API 方向：
 
 ```zig
-var graph = try topos.Graph.init(allocator, .{ .directed = true, .name = "G" });
+var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "G" });
 defer graph.deinit();
 
 const a = try graph.node("A");
 const b = try graph.node("B");
 try graph.edge(a, b, .{ .label = "A to B" });
 
-var layout = try topos.layoutSugiyama(allocator, graph);
+var layout = try vex.layoutSugiyama(allocator, graph);
 defer layout.deinit();
-try topos.renderSvg(writer, graph, layout, .{});
+try vex.renderSvg(writer, graph, layout, .{});
 ```
 
 ## 初期实现路线

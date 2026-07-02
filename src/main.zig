@@ -1,14 +1,14 @@
 const std = @import("std");
 const Io = std.Io;
-const topos = @import("topos");
+const vex = @import("vex");
 
 const usage =
-    \\topos - DOT-compatible graph visualization prototype
+    \\vex - DOT-compatible graph visualization prototype
     \\
     \\Usage:
-    \\  topos [--input file.dot|-i file.dot] [--output file|-o file]
+    \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--format terminal|svg|png|pdf]
-    \\  topos --help
+    \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
     \\output is written to stdout.
@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
 
     var input_path: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
-    var format_arg: ?topos.OutputFormat = null;
+    var format_arg: ?vex.OutputFormat = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
             i += 1;
             if (i >= args.len) return error.MissingFormat;
-            format_arg = topos.OutputFormat.fromString(args[i]) orelse return error.UnknownFormat;
+            format_arg = vex.OutputFormat.fromString(args[i]) orelse return error.UnknownFormat;
         } else if (input_path == null) {
             input_path = arg;
         } else if (output_path == null) {
@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const format = format_arg orelse if (output_path) |path|
-        (topos.OutputFormat.fromPath(path) orelse .svg)
+        (vex.OutputFormat.fromPath(path) orelse .svg)
     else
         .svg;
 
@@ -73,10 +73,10 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(dot);
 
-    var graph = try topos.parseDot(allocator, dot);
+    var graph = try vex.parseDot(allocator, dot);
     defer graph.deinit();
 
-    var layout = try topos.layoutLayered(allocator, &graph, .{});
+    var layout = try vex.layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
 
     if (output_path) |path| {
@@ -84,12 +84,12 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try topos.render(&file_writer.interface, &graph, &layout, format, .{});
+        try vex.render(&file_writer.interface, &graph, &layout, format, .{});
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try topos.render(&stdout_file_writer.interface, &graph, &layout, format, .{});
+        try vex.render(&stdout_file_writer.interface, &graph, &layout, format, .{});
         try stdout_file_writer.interface.flush();
     }
 }

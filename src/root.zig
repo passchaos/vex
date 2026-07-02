@@ -1,4 +1,4 @@
-//! Topos core library.
+//! Vex core library.
 //!
 //! The public API is intentionally split around a single graph model:
 //! code can build graphs directly and parsers such as DOT lower into the

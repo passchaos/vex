@@ -1,4 +1,4 @@
-digraph Topos {
+digraph Vex {
   graph [rankdir=LR];
   node [shape=box color="#eef2ff"];
   edge [color="#64748b"];
