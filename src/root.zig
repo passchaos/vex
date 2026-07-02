@@ -2438,8 +2438,12 @@ fn fillMedianOrders(
 
             const pos = adjacent_positions[neighbor];
             if (pos != std.math.maxInt(usize)) {
-                median_positions[count] = pos;
-                count += 1;
+                const repeat = edgeWeightRepeat(edge_item.weight);
+                var i: usize = 0;
+                while (i < repeat and count < median_positions.len) : (i += 1) {
+                    median_positions[count] = pos;
+                    count += 1;
+                }
             }
         }
 
@@ -2466,6 +2470,11 @@ fn medianOfPositions(positions: []usize, fallback: usize) f64 {
     if (positions.len % 2 == 1) return @floatFromInt(positions[positions.len / 2]);
     const mid = positions.len / 2;
     return (@as(f64, @floatFromInt(positions[mid - 1])) + @as(f64, @floatFromInt(positions[mid]))) / 2.0;
+}
+
+fn edgeWeightRepeat(weight: f64) usize {
+    if (weight <= 1.0) return 1;
+    return @min(12, @max(1, @as(usize, @intFromFloat(@round(weight)))));
 }
 
 fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) void {
@@ -2690,8 +2699,8 @@ fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(Nod
 fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, use_parents: bool) void {
     const blend = 0.65;
     for (level) |node_id| {
-        var sum: f64 = 0;
-        var count: usize = 0;
+        var weighted_sum: f64 = 0;
+        var total_weight: f64 = 0;
         for (graph.edges.items) |edge_item| {
             const neighbor = if (use_parents and edge_item.to == node_id and ranks[edge_item.from] < ranks[node_id])
                 edge_item.from
@@ -2699,11 +2708,12 @@ fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: [
                 edge_item.to
             else
                 continue;
-            sum += centers[neighbor];
-            count += 1;
+            const weight = @max(edge_item.weight, 0.1);
+            weighted_sum += centers[neighbor] * weight;
+            total_weight += weight;
         }
-        if (count > 0) {
-            const target = sum / @as(f64, @floatFromInt(count));
+        if (total_weight > 0) {
+            const target = weighted_sum / total_weight;
             centers[node_id] = centers[node_id] + (target - centers[node_id]) * blend;
         }
     }
@@ -6366,6 +6376,39 @@ test "layered layout honors DOT node group alignment hints" {
         @abs(layout.nodes[m1].center.x - layout.nodes[t1].center.x),
     );
     try std.testing.expect(max_delta <= 1.0);
+}
+
+test "layered layout uses DOT edge weight as a coordinate hint" {
+    const allocator = std.testing.allocator;
+    var weighted = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB];
+        \\  left -> child [weight=1];
+        \\  right -> child [weight=8];
+        \\}
+    );
+    defer weighted.deinit();
+    var balanced = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB];
+        \\  left -> child [weight=1];
+        \\  right -> child [weight=1];
+        \\}
+    );
+    defer balanced.deinit();
+
+    var weighted_layout = try layoutLayered(allocator, &weighted, .{});
+    defer weighted_layout.deinit();
+    var balanced_layout = try layoutLayered(allocator, &balanced, .{});
+    defer balanced_layout.deinit();
+
+    const weighted_child = weighted.node_index.get("child").?;
+    const weighted_right = weighted.node_index.get("right").?;
+    const balanced_child = balanced.node_index.get("child").?;
+    const balanced_right = balanced.node_index.get("right").?;
+    const weighted_distance = @abs(weighted_layout.nodes[weighted_child].center.x - weighted_layout.nodes[weighted_right].center.x);
+    const balanced_distance = @abs(balanced_layout.nodes[balanced_child].center.x - balanced_layout.nodes[balanced_right].center.x);
+    try std.testing.expect(weighted_distance < balanced_distance);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {
