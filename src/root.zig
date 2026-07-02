@@ -4070,6 +4070,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const visual = resolveEdgeVisual(edge_item);
         if (visual.hidden) continue;
         const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
+        if (edge_wrap == .none) try writeSvgEdgeTitle(writer, graph, edge_item);
         if (edge_item.from == edge_item.to) {
             const route = selfLoopRoute(layout.nodes[edge_item.from]);
             try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
@@ -4116,6 +4117,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
         const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
+        if (node_wrap == .none) try writeSvgTitle(writer, node_item.name);
         if (htmlTableMetrics(node_item.label) != null) {
             try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
             try writeSvgInteractiveClose(writer, node_wrap);
@@ -4176,6 +4178,15 @@ fn writeSvgInteractiveOpen(writer: *Io.Writer, attrs: []const Attr) Io.Writer.Er
 fn writeSvgTitle(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, text);
+    try writer.writeAll("</title>");
+}
+
+fn writeSvgEdgeTitle(writer: *Io.Writer, graph: *const Graph, edge_item: Edge) Io.Writer.Error!void {
+    if (edge_item.from >= graph.nodes.items.len or edge_item.to >= graph.nodes.items.len) return;
+    try writer.writeAll("<title>");
+    try writeXmlEscaped(writer, graph.nodes.items[edge_item.from].name);
+    try writer.writeAll(if (graph.directed) "-&gt;" else "--");
+    try writeXmlEscaped(writer, graph.nodes.items[edge_item.to].name);
     try writer.writeAll("</title>");
 }
 
@@ -8143,6 +8154,25 @@ test "SVG renderer emits URL href and tooltip metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Node A</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
+}
+
+test "SVG renderer emits default Graphviz-like node and edge titles" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>b</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a-&gt;b</title>") != null);
 }
 
 test "SVG renderer emits headlabel taillabel and xlabel" {
