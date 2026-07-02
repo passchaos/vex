@@ -2544,6 +2544,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             if (edge_item.label) |label| {
                 try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
             }
+            try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
             try writeSvgInteractiveClose(writer, edge_wrap);
             continue;
         }
@@ -2559,6 +2560,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (edge_item.label) |label| {
             try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
         }
+        try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
         try writeSvgInteractiveClose(writer, edge_wrap);
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
@@ -2636,6 +2638,27 @@ fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Wri
         .anchor => try writer.writeAll("</a>\n"),
         .group => try writer.writeAll("</g>\n"),
     }
+}
+
+fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+    if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
+        const pos = lerpPoint(route.start, route.label, 0.28);
+        try renderSvgTextBlock(writer, label, pos.x, pos.y - 10.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+    }
+    if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
+        const pos = lerpPoint(route.end, route.label, 0.28);
+        try renderSvgTextBlock(writer, label, pos.x, pos.y - 10.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+    }
+    if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
+        try renderSvgTextBlock(writer, label, route.label.x, route.label.y + 18.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+    }
+}
+
+fn lerpPoint(a: Point, b: Point, t: f64) Point {
+    return .{
+        .x = a.x + (b.x - a.x) * t,
+        .y = a.y + (b.y - a.y) * t,
+    };
 }
 
 fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
@@ -4596,6 +4619,25 @@ test "SVG renderer emits URL href and tooltip metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Node A</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
+}
+
+test "SVG renderer emits headlabel taillabel and xlabel" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [taillabel="tail", headlabel="head", xlabel="external"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">tail</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
 }
 
 test "SVG renderer honors DOT fontname and fontsize attributes" {
