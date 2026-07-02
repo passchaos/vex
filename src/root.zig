@@ -1577,34 +1577,182 @@ const RecordMetrics = struct {
 };
 
 fn recordMetrics(label: []const u8) RecordMetrics {
-    var field_count: usize = 0;
-    var current_len: usize = 0;
-    var max_len: usize = 0;
-    var in_port = false;
-    for (label) |c| {
-        switch (c) {
-            '<' => in_port = true,
-            '>' => in_port = false,
-            '|', '{', '}' => {
-                if (!in_port) {
-                    if (current_len > 0) {
-                        field_count += 1;
-                        max_len = @max(max_len, current_len);
-                        current_len = 0;
-                    }
-                    continue;
-                }
-            },
-            else => {
-                if (!in_port and (c & 0xc0) != 0x80) current_len += 1;
-            },
+    var arena = RecordArena{};
+    var parser = RecordParser{ .label = label, .arena = &arena };
+    const root = parser.parseRecord(.horizontal) orelse return .{ .field_count = 1, .max_field_len = labelMaxLineLen(label) };
+    return .{ .field_count = recordLeafCount(root), .max_field_len = recordMaxFieldLen(root) };
+}
+
+const RecordOrientation = enum {
+    horizontal,
+    vertical,
+
+    fn flipped(self: RecordOrientation) RecordOrientation {
+        return switch (self) {
+            .horizontal => .vertical,
+            .vertical => .horizontal,
+        };
+    }
+};
+
+const RecordAst = struct {
+    label: []const u8 = "",
+    port: ?[]const u8 = null,
+    children: []const RecordAst = &.{},
+    orientation: RecordOrientation = .horizontal,
+    width_units: f64 = 1,
+    height_units: f64 = 1,
+
+    fn isLeaf(self: RecordAst) bool {
+        return self.children.len == 0;
+    }
+};
+
+const RecordArena = struct {
+    nodes: [96]RecordAst = undefined,
+    node_len: usize = 0,
+    child_storage: [96]RecordAst = undefined,
+    child_len: usize = 0,
+
+    fn createNode(self: *RecordArena, node: RecordAst) ?*RecordAst {
+        if (self.node_len >= self.nodes.len) return null;
+        self.nodes[self.node_len] = node;
+        const ptr = &self.nodes[self.node_len];
+        self.node_len += 1;
+        return ptr;
+    }
+
+    fn copyChildren(self: *RecordArena, children: []const RecordAst) ?[]const RecordAst {
+        if (children.len == 0) return &.{};
+        if (self.child_len + children.len > self.child_storage.len) return null;
+        const start = self.child_len;
+        for (children) |child| {
+            self.child_storage[self.child_len] = child;
+            self.child_len += 1;
         }
+        return self.child_storage[start..self.child_len];
     }
-    if (current_len > 0 or field_count == 0) {
-        field_count += 1;
-        max_len = @max(max_len, current_len);
+};
+
+const RecordParser = struct {
+    label: []const u8,
+    index: usize = 0,
+    arena: *RecordArena,
+
+    fn current(self: *const RecordParser) ?u8 {
+        if (self.index >= self.label.len) return null;
+        return self.label[self.index];
     }
-    return .{ .field_count = field_count, .max_field_len = @max(max_len, 1) };
+
+    fn skipSpaces(self: *RecordParser) void {
+        while (self.index < self.label.len and (self.label[self.index] == ' ' or self.label[self.index] == '\t')) self.index += 1;
+    }
+
+    fn parseRecord(self: *RecordParser, orientation: RecordOrientation) ?RecordAst {
+        var tmp: [32]RecordAst = undefined;
+        var count: usize = 0;
+        while (self.index < self.label.len) {
+            self.skipSpaces();
+            if (self.current() == '}') break;
+            if (count >= tmp.len) return null;
+            tmp[count] = self.parseField(orientation.flipped()) orelse return null;
+            count += 1;
+            self.skipSpaces();
+            if (self.current() == '|') {
+                self.index += 1;
+                continue;
+            }
+            break;
+        }
+        if (count == 0) return .{ .label = "" };
+        const children = self.arena.copyChildren(tmp[0..count]) orelse return null;
+        var node = RecordAst{ .children = children, .orientation = orientation };
+        computeRecordUnits(&node);
+        return node;
+    }
+
+    fn parseField(self: *RecordParser, nested_orientation: RecordOrientation) ?RecordAst {
+        self.skipSpaces();
+        if (self.current() == '{') {
+            self.index += 1;
+            var nested = self.parseRecord(nested_orientation) orelse return null;
+            self.skipSpaces();
+            if (self.current() == '}') self.index += 1;
+            nested.orientation = nested_orientation;
+            computeRecordUnits(&nested);
+            return nested;
+        }
+
+        const start = self.index;
+        while (self.index < self.label.len) {
+            const c = self.label[self.index];
+            if (c == '\\' and self.index + 1 < self.label.len) {
+                self.index += 2;
+                continue;
+            }
+            if (c == '|' or c == '}') break;
+            self.index += 1;
+        }
+        const raw = std.mem.trim(u8, self.label[start..self.index], " \t\r\n");
+        const parts = splitRecordPort(raw);
+        var node = RecordAst{ .label = parts.label, .port = parts.port };
+        computeRecordUnits(&node);
+        return node;
+    }
+};
+
+fn computeRecordUnits(node: *RecordAst) void {
+    if (node.children.len == 0) {
+        node.width_units = @max(1, @as(f64, @floatFromInt(labelMaxLineLen(node.label))));
+        node.height_units = @max(1, @as(f64, @floatFromInt(labelLineCount(node.label))));
+        return;
+    }
+
+    var width: f64 = 0;
+    var height: f64 = 0;
+    switch (node.orientation) {
+        .horizontal => {
+            for (node.children) |child| {
+                width += child.width_units;
+                height = @max(height, child.height_units);
+            }
+        },
+        .vertical => {
+            for (node.children) |child| {
+                width = @max(width, child.width_units);
+                height += child.height_units;
+            }
+        },
+    }
+    node.width_units = @max(width, 1);
+    node.height_units = @max(height, 1);
+}
+
+const RecordLabelParts = struct {
+    label: []const u8,
+    port: ?[]const u8,
+};
+
+fn splitRecordPort(raw: []const u8) RecordLabelParts {
+    if (raw.len == 0 or raw[0] != '<') return .{ .label = raw, .port = null };
+    const close = std.mem.indexOfScalar(u8, raw, '>') orelse return .{ .label = raw, .port = null };
+    const port = raw[1..close];
+    const label = std.mem.trim(u8, raw[close + 1 ..], " \t\r\n");
+    return .{ .label = label, .port = if (port.len > 0) port else null };
+}
+
+fn recordLeafCount(node: RecordAst) usize {
+    if (node.children.len == 0) return 1;
+    var count: usize = 0;
+    for (node.children) |child| count += recordLeafCount(child);
+    return count;
+}
+
+fn recordMaxFieldLen(node: RecordAst) usize {
+    if (node.children.len == 0) return @max(labelMaxLineLen(node.label), 1);
+    var max_len: usize = 1;
+    for (node.children) |child| max_len = @max(max_len, recordMaxFieldLen(child));
+    return max_len;
 }
 
 fn reduceLayerCrossings(allocator: std.mem.Allocator, graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) !void {
@@ -2191,103 +2339,66 @@ fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 
-    const metrics = recordMetrics(label);
-    const count_f: f64 = @floatFromInt(metrics.field_count);
-    const field_width = layout.width / count_f;
-    var field_index: usize = 0;
-    var scanner: RecordFieldScanner = .{ .label = label };
-    while (scanner.next()) |field| : (field_index += 1) {
-        const field_label = std.mem.trim(u8, field, " \t\r\n");
-        const field_x = x + field_width * @as(f64, @floatFromInt(field_index));
-        if (field_index > 0) {
-            try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-                field_x,
-                y,
-                field_x,
-                y + layout.height,
-                visual.stroke,
-                visual.width,
-            });
-        }
+    var arena = RecordArena{};
+    var parser = RecordParser{ .label = label, .arena = &arena };
+    const root = parser.parseRecord(.horizontal) orelse return;
+    try renderRecordFields(writer, root, .{ .x = x, .y = y, .width = layout.width, .height = layout.height }, visual, options);
+}
+
+fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
+    if (node.children.len == 0) {
         try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
-            field_x + field_width / 2.0,
-            layout.center.y,
+            rect.x + rect.width / 2.0,
+            rect.y + rect.height / 2.0,
             options.font_family,
             visual.font_color,
         });
-        try writeXmlEscaped(writer, field_label);
+        try writeXmlEscaped(writer, node.label);
         try writer.writeAll("</text>\n");
-    }
-}
-
-const RecordFieldScanner = struct {
-    label: []const u8,
-    index: usize = 0,
-    buffer: [128]u8 = undefined,
-    port_buffer: [64]u8 = undefined,
-
-    const Field = struct {
-        label: []const u8,
-        port: ?[]const u8 = null,
-    };
-
-    fn next(self: *RecordFieldScanner) ?[]const u8 {
-        const field = self.nextWithPort() orelse return null;
-        return field.label;
+        return;
     }
 
-    fn nextWithPort(self: *RecordFieldScanner) ?Field {
-        var out_len: usize = 0;
-        var port_len: usize = 0;
-        var in_port = false;
-        while (self.index < self.label.len) : (self.index += 1) {
-            const c = self.label[self.index];
-            switch (c) {
-                '<' => {
-                    in_port = true;
-                    continue;
-                },
-                '>' => {
-                    in_port = false;
-                    continue;
-                },
-                '|', '{', '}' => {
-                    if (!in_port) {
-                        self.index += 1;
-                        if (out_len == 0) continue;
-                        return .{
-                            .label = self.buffer[0..out_len],
-                            .port = if (port_len > 0) self.port_buffer[0..port_len] else null,
-                        };
-                    }
-                },
-                '\\' => {
-                    if (self.index + 1 < self.label.len and out_len < self.buffer.len) {
-                        self.index += 1;
-                        self.buffer[out_len] = self.label[self.index];
-                        out_len += 1;
-                    }
-                    continue;
-                },
-                else => {},
-            }
-            if (in_port) {
-                if (port_len < self.port_buffer.len) {
-                    self.port_buffer[port_len] = c;
-                    port_len += 1;
-                }
-            } else if (out_len < self.buffer.len) {
-                self.buffer[out_len] = c;
-                out_len += 1;
+    var cursor: f64 = 0;
+    for (node.children, 0..) |child, index| {
+        const last = index + 1 == node.children.len;
+        const child_rect = switch (node.orientation) {
+            .horizontal => blk: {
+                const child_w = if (last) rect.width - cursor else rect.width * child.width_units / node.width_units;
+                break :blk RectF{ .x = rect.x + cursor, .y = rect.y, .width = child_w, .height = rect.height };
+            },
+            .vertical => blk: {
+                const child_h = if (last) rect.height - cursor else rect.height * child.height_units / node.height_units;
+                break :blk RectF{ .x = rect.x, .y = rect.y + cursor, .width = rect.width, .height = child_h };
+            },
+        };
+
+        if (index > 0) {
+            switch (node.orientation) {
+                .horizontal => try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+                    child_rect.x,
+                    rect.y,
+                    child_rect.x,
+                    rect.y + rect.height,
+                    visual.stroke,
+                    visual.width,
+                }),
+                .vertical => try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+                    rect.x,
+                    child_rect.y,
+                    rect.x + rect.width,
+                    child_rect.y,
+                    visual.stroke,
+                    visual.width,
+                }),
             }
         }
-        if (out_len == 0) return null;
-        return .{
-            .label = self.buffer[0..out_len],
-            .port = if (port_len > 0) self.port_buffer[0..port_len] else null,
+        try renderRecordFields(writer, child, child_rect, visual, options);
+        cursor += switch (node.orientation) {
+            .horizontal => child_rect.width,
+            .vertical => child_rect.height,
         };
     }
-};
+}
 
 fn resolveNodeVisual(node_item: Node) NodeVisual {
     const style = attrValue(node_item.attrs.items, "style");
@@ -2660,24 +2771,43 @@ fn pointForPort(rect: RectF, port: CompassPort, toward: Point) Point {
 }
 
 fn recordFieldRect(label: []const u8, layout: NodeLayout, port: []const u8) ?RectF {
-    const metrics = recordMetrics(label);
-    const field_count_f: f64 = @floatFromInt(metrics.field_count);
-    const field_width = layout.width / field_count_f;
-    const x = layout.center.x - layout.width / 2.0;
-    const y = layout.center.y - layout.height / 2.0;
-    var scanner: RecordFieldScanner = .{ .label = label };
-    var index: usize = 0;
-    while (scanner.nextWithPort()) |field| : (index += 1) {
-        if (field.port) |field_port| {
-            if (std.mem.eql(u8, field_port, port)) {
-                return .{
-                    .x = x + field_width * @as(f64, @floatFromInt(index)),
-                    .y = y,
-                    .width = field_width,
-                    .height = layout.height,
-                };
-            }
+    var arena = RecordArena{};
+    var parser = RecordParser{ .label = label, .arena = &arena };
+    const root = parser.parseRecord(.horizontal) orelse return null;
+    return findRecordPortRect(root, port, .{
+        .x = layout.center.x - layout.width / 2.0,
+        .y = layout.center.y - layout.height / 2.0,
+        .width = layout.width,
+        .height = layout.height,
+    });
+}
+
+fn findRecordPortRect(node: RecordAst, port: []const u8, rect: RectF) ?RectF {
+    if (node.children.len == 0) {
+        if (node.port) |field_port| {
+            if (std.mem.eql(u8, field_port, port)) return rect;
         }
+        return null;
+    }
+
+    var cursor: f64 = 0;
+    for (node.children, 0..) |child, index| {
+        const last = index + 1 == node.children.len;
+        const child_rect = switch (node.orientation) {
+            .horizontal => blk: {
+                const child_w = if (last) rect.width - cursor else rect.width * child.width_units / node.width_units;
+                break :blk RectF{ .x = rect.x + cursor, .y = rect.y, .width = child_w, .height = rect.height };
+            },
+            .vertical => blk: {
+                const child_h = if (last) rect.height - cursor else rect.height * child.height_units / node.height_units;
+                break :blk RectF{ .x = rect.x, .y = rect.y + cursor, .width = rect.width, .height = child_h };
+            },
+        };
+        if (findRecordPortRect(child, port, child_rect)) |found| return found;
+        cursor += switch (node.orientation) {
+            .horizontal => child_rect.width,
+            .vertical => child_rect.height,
+        };
     }
     return null;
 }
@@ -3719,4 +3849,31 @@ test "DOT compass ports route edge endpoints to requested sides" {
     const head_rect = recordFieldRect(graph.nodes.items[record_edge.to].label, layout.nodes[record_edge.to], "id").?;
     try std.testing.expectEqual(tail_rect.x + tail_rect.width, record_route.start.x);
     try std.testing.expectEqual(head_rect.x, record_route.end.x);
+}
+
+test "DOT nested record groups alternate field orientation" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  customer [shape=Mrecord,label="<id> Customer|{<name> name|<email> email|<status> status}|<orders> orders[]"];
+        \\  order [shape=record,label="<id> Order|total"];
+        \\  customer:email:e -> order:id:w;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const customer = graph.node_index.get("customer").?;
+    const email_rect = recordFieldRect(graph.nodes.items[customer].label, layout.nodes[customer], "email").?;
+    const status_rect = recordFieldRect(graph.nodes.items[customer].label, layout.nodes[customer], "status").?;
+    try std.testing.expectEqual(email_rect.x, status_rect.x);
+    try std.testing.expect(email_rect.y < status_rect.y);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">email</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">status</text>") != null);
+    try std.testing.expect(countSubstrings(svg, " L ") >= 4);
 }
