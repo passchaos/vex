@@ -5422,7 +5422,7 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
         .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
         .font_family = attrValue(node_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
-        .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.5),
+        .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
         .peripheries = @max(parseAttrUsize(node_item.attrs.items, "peripheries", 1), 1),
@@ -5443,7 +5443,7 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "#475569",
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 12.0),
-        .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.8),
+        .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
         .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
         .marker_end = if (head_enabled) parseMarkerShape(arrowhead, .normal) else .none,
@@ -5465,7 +5465,7 @@ fn resolveClusterVisual(cluster: Cluster) ClusterVisual {
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "#475569",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 13.0),
-        .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.4),
+        .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
         .fill_opacity = if (filled or attrValue(cluster.attrs.items, "fillcolor") != null) "1.0" else "1.0",
@@ -7914,6 +7914,25 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"black\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+}
+
+test "SVG renderer uses Graphviz default pen widths" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  subgraph cluster_c { c; }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "stroke-width=\"1.0\"") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.8\"") == null);
 }
 
 test "SVG renderer normalizes simple HTML-like labels without affecting plain angle text" {
