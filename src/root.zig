@@ -1442,7 +1442,7 @@ pub const LayoutOptions = struct {
     node_height: f64 = 36,
     rank_gap: f64 = 36,
     node_gap: f64 = 36,
-    margin: f64 = 40,
+    margin: f64 = 16,
     label_char_width: f64 = 8,
     label_line_height: f64 = 18,
     node_padding_x: f64 = 14,
@@ -6706,6 +6706,22 @@ test "layoutGraph default keeps Sugiyama rankdir as layout input" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
     try expectRankDirection(&graph, &layout, .LR);
+}
+
+test "layered layout default margin is compact and overrideable" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "digraph G { a -> b; }");
+    defer graph.deinit();
+
+    var compact = try layoutLayered(allocator, &graph, .{});
+    defer compact.deinit();
+    var roomy = try layoutLayered(allocator, &graph, .{ .margin = 40 });
+    defer roomy.deinit();
+
+    try std.testing.expectEqual(@as(f64, 16), compact.margin);
+    try std.testing.expectEqual(@as(f64, 40), roomy.margin);
+    try std.testing.expect(roomy.width > compact.width);
+    try std.testing.expect(roomy.height > compact.height);
 }
 
 test "DOT parser handles graphviz-like edge chain and attrs" {
