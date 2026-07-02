@@ -2774,11 +2774,13 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             while (span_i < colspan and col_index + span_i < occupied.len) : (span_i += 1) {
                 occupied[col_index + span_i] = @max(occupied[col_index + span_i], rowspan);
             }
+            const cell_border: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellborder", @intFromFloat(metrics.cell_border)));
+            const cell_padding: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellpadding", @intFromFloat(metrics.cell_padding)));
             if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
                 try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, cell_bg });
             }
-            if (metrics.cell_border > 0) {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, visual.stroke, metrics.cell_border });
+            if (cell_border > 0) {
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, visual.stroke, cell_border });
             }
             const cell = row[cell_start..td_close];
             const align_attr = htmlAttrValue(td_tag, "align");
@@ -2787,16 +2789,26 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             else
                 "middle";
             const text_x = if (std.mem.eql(u8, text_anchor, "start"))
-                cell_x + metrics.cell_padding
+                cell_x + cell_padding
             else if (std.mem.eql(u8, text_anchor, "end"))
-                cell_x + spanned_w - metrics.cell_padding
+                cell_x + spanned_w - cell_padding
             else
                 cell_x + spanned_w / 2.0;
+            const valign_attr = htmlAttrValue(td_tag, "valign");
+            const text_y = if (valign_attr) |value|
+                if (std.ascii.eqlIgnoreCase(value, "top"))
+                    cell_y + cell_padding + visual.font_size * 0.5
+                else if (std.ascii.eqlIgnoreCase(value, "bottom"))
+                    cell_y + spanned_h - cell_padding - visual.font_size * 0.5
+                else
+                    cell_y + spanned_h / 2.0
+            else
+                cell_y + spanned_h / 2.0;
             try renderSvgTextBlockWithAnchor(
                 writer,
                 cell,
                 text_x,
-                cell_y + spanned_h / 2.0,
+                text_y,
                 visual.font_size,
                 visual.font_color,
                 visual.font_family,
@@ -4473,6 +4485,29 @@ test "SVG renderer honors HTML table rowspan cells" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
+}
+
+test "SVG renderer honors per-cell HTML table padding border and valign" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=plain,label=<
+        \\    <TABLE CELLBORDER="1" CELLPADDING="4">
+        \\      <TR><TD CELLBORDER="0" CELLPADDING="12" VALIGN="TOP">Top</TD><TD VALIGN="BOTTOM">Bottom</TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"0.0\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
 }
