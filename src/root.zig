@@ -1654,11 +1654,13 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 
     refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, effective_options);
     refineLongEdgeDummyCoordinates(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
+    straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 2);
     alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
     var virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
     defer virtual_positions.deinit();
     applyVirtualRealPositions(&virtual_levels, &virtual_positions, centers);
+    straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 1);
     alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
@@ -3471,6 +3473,74 @@ fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.Array
         }
         compactLevelCenters(level.items, centers, sizes, gap);
     }
+}
+
+fn straightenSimpleAdjacentEdges(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64, passes: usize) void {
+    if (levels.len <= 1 or passes == 0) return;
+    for (0..passes) |_| {
+        var rank: usize = 1;
+        while (rank < levels.len) : (rank += 1) {
+            straightenLevelTowardSimpleNeighbors(graph, ranks, levels[rank].items, centers, true);
+            compactLevelCenters(levels[rank].items, centers, sizes, gap);
+        }
+
+        rank = levels.len - 1;
+        while (rank > 0) : (rank -= 1) {
+            straightenLevelTowardSimpleNeighbors(graph, ranks, levels[rank - 1].items, centers, false);
+            compactLevelCenters(levels[rank - 1].items, centers, sizes, gap);
+        }
+    }
+}
+
+fn straightenLevelTowardSimpleNeighbors(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, use_parents: bool) void {
+    for (level) |node_id| {
+        const target = simpleAdjacentEdgeTarget(graph, ranks, centers, node_id, use_parents) orelse continue;
+        centers[node_id] = centers[node_id] + (target - centers[node_id]) * 0.85;
+    }
+}
+
+fn simpleAdjacentEdgeTarget(graph: *const Graph, ranks: []const usize, centers: []const f64, node_id: NodeId, use_parents: bool) ?f64 {
+    if (node_id >= ranks.len or node_id >= centers.len) return null;
+    var target: ?f64 = null;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        const neighbor = if (use_parents and edge_item.to == node_id)
+            edge_item.from
+        else if (!use_parents and edge_item.from == node_id)
+            edge_item.to
+        else
+            continue;
+        if (neighbor >= ranks.len or neighbor >= centers.len) continue;
+        const node_rank = ranks[node_id];
+        const neighbor_rank = ranks[neighbor];
+        const adjacent = if (use_parents)
+            neighbor_rank + 1 == node_rank
+        else
+            node_rank + 1 == neighbor_rank;
+        if (!adjacent) continue;
+        if (!nodeHasSingleAdjacentNeighbor(graph, ranks, node_id, use_parents)) continue;
+        if (!nodeHasSingleAdjacentNeighbor(graph, ranks, neighbor, !use_parents)) continue;
+        if (target != null) return null;
+        target = centers[neighbor];
+    }
+    return target;
+}
+
+fn nodeHasSingleAdjacentNeighbor(graph: *const Graph, ranks: []const usize, node_id: NodeId, use_parents: bool) bool {
+    if (node_id >= ranks.len) return false;
+    var count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        if (use_parents) {
+            if (edge_item.to != node_id or edge_item.from >= ranks.len) continue;
+            if (ranks[edge_item.from] + 1 == ranks[node_id]) count += 1;
+        } else {
+            if (edge_item.from != node_id or edge_item.to >= ranks.len) continue;
+            if (ranks[node_id] + 1 == ranks[edge_item.to]) count += 1;
+        }
+        if (count > 1) return false;
+    }
+    return count == 1;
 }
 
 fn longEdgeDummyCenter(edge_item: Edge, ranks: []const usize, centers: []const f64, rank: usize) ?f64 {
@@ -6681,6 +6751,52 @@ test "long-edge dummy positions influence coordinate refinement" {
     const before = centers[b];
     refineLongEdgeDummyCoordinates(&graph, levels, ranks, centers, sizes, 10);
     try std.testing.expect(centers[b] < before);
+}
+
+test "simple adjacent edge straightening reduces chain wobble" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const side = try graph.node("side");
+    _ = try graph.edge(a, b, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 2;
+    ranks[side] = 1;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[1].append(allocator, b);
+    try levels[1].append(allocator, side);
+    try levels[2].append(allocator, c);
+
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[a] = 10;
+    centers[b] = 80;
+    centers[side] = 120;
+    centers[c] = 10;
+
+    const before = @abs(centers[b] - centers[a]) + @abs(centers[b] - centers[c]);
+    straightenSimpleAdjacentEdges(&graph, levels, ranks, centers, sizes, 10, 2);
+    const after = @abs(centers[b] - centers[a]) + @abs(centers[b] - centers[c]);
+    try std.testing.expect(after < before);
+    try std.testing.expect(centers[side] >= centers[b] + sizes[b].width / 2.0 + 10 + sizes[side].width / 2.0);
 }
 
 test "virtual levels include dummy nodes for skip-rank edges" {
