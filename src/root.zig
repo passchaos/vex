@@ -13,6 +13,7 @@ pub const EdgeId = usize;
 pub const Shape = enum {
     ellipse,
     box,
+    square,
     circle,
     doublecircle,
     point,
@@ -22,8 +23,14 @@ pub const Shape = enum {
     parallelogram,
     trapezium,
     invtrapezium,
+    house,
+    invhouse,
+    pentagon,
     hexagon,
+    septagon,
     octagon,
+    doubleoctagon,
+    tripleoctagon,
     plaintext,
     record,
     mrecord,
@@ -503,6 +510,8 @@ fn setAttrInList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name:
 
 fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "box") or std.ascii.eqlIgnoreCase(value, "rect") or std.ascii.eqlIgnoreCase(value, "rectangle")) return .box;
+    if (std.ascii.eqlIgnoreCase(value, "square")) return .square;
+    if (std.ascii.eqlIgnoreCase(value, "ellipse") or std.ascii.eqlIgnoreCase(value, "oval")) return .ellipse;
     if (std.ascii.eqlIgnoreCase(value, "circle")) return .circle;
     if (std.ascii.eqlIgnoreCase(value, "doublecircle")) return .doublecircle;
     if (std.ascii.eqlIgnoreCase(value, "point")) return .point;
@@ -512,8 +521,14 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "parallelogram")) return .parallelogram;
     if (std.ascii.eqlIgnoreCase(value, "trapezium") or std.ascii.eqlIgnoreCase(value, "trapezoid")) return .trapezium;
     if (std.ascii.eqlIgnoreCase(value, "invtrapezium") or std.ascii.eqlIgnoreCase(value, "invtrapezoid")) return .invtrapezium;
+    if (std.ascii.eqlIgnoreCase(value, "house")) return .house;
+    if (std.ascii.eqlIgnoreCase(value, "invhouse")) return .invhouse;
+    if (std.ascii.eqlIgnoreCase(value, "pentagon")) return .pentagon;
     if (std.ascii.eqlIgnoreCase(value, "hexagon")) return .hexagon;
+    if (std.ascii.eqlIgnoreCase(value, "septagon")) return .septagon;
     if (std.ascii.eqlIgnoreCase(value, "octagon")) return .octagon;
+    if (std.ascii.eqlIgnoreCase(value, "doubleoctagon")) return .doubleoctagon;
+    if (std.ascii.eqlIgnoreCase(value, "tripleoctagon")) return .tripleoctagon;
     if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "plain") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
     if (std.ascii.eqlIgnoreCase(value, "record")) return .record;
     if (std.ascii.eqlIgnoreCase(value, "mrecord")) return .mrecord;
@@ -524,6 +539,7 @@ fn shapeName(shape: Shape) []const u8 {
     return switch (shape) {
         .ellipse => "ellipse",
         .box => "box",
+        .square => "square",
         .circle => "circle",
         .doublecircle => "doublecircle",
         .point => "point",
@@ -533,8 +549,14 @@ fn shapeName(shape: Shape) []const u8 {
         .parallelogram => "parallelogram",
         .trapezium => "trapezium",
         .invtrapezium => "invtrapezium",
+        .house => "house",
+        .invhouse => "invhouse",
+        .pentagon => "pentagon",
         .hexagon => "hexagon",
+        .septagon => "septagon",
         .octagon => "octagon",
+        .doubleoctagon => "doubleoctagon",
+        .tripleoctagon => "tripleoctagon",
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
@@ -1596,6 +1618,11 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = 12;
             height = 12;
         },
+        .square => {
+            const side = @max(width, height);
+            width = side;
+            height = side;
+        },
         .circle, .doublecircle => {
             const diameter = @max(width, height);
             width = diameter;
@@ -1609,7 +1636,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = @max(width, text_width + options.node_padding_x * 3.0);
             height = @max(height, text_height + options.node_padding_y * 2.4);
         },
-        .parallelogram, .trapezium, .invtrapezium, .hexagon, .octagon => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .plaintext => {
@@ -3062,7 +3089,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 visual.width,
             });
         },
-        .box => {
+        .box, .square => {
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
@@ -3120,8 +3147,18 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .parallelogram => try renderSvgPolygonRings(6, writer, layout, visual, parallelogramPoints),
         .trapezium => try renderSvgPolygonRings(6, writer, layout, visual, trapeziumPoints),
         .invtrapezium => try renderSvgPolygonRings(6, writer, layout, visual, invTrapeziumPoints),
+        .house => try renderSvgPolygonRings(6, writer, layout, visual, housePoints),
+        .invhouse => try renderSvgPolygonRings(6, writer, layout, visual, invHousePoints),
+        .pentagon => try renderSvgPolygonRings(5, writer, layout, visual, pentagonPoints),
         .hexagon => try renderSvgPolygonRings(6, writer, layout, visual, hexagonPoints),
+        .septagon => try renderSvgPolygonRings(7, writer, layout, visual, septagonPoints),
         .octagon => try renderSvgPolygonRings(8, writer, layout, visual, octagonPoints),
+        .doubleoctagon, .tripleoctagon => {
+            var ring_visual = visual;
+            const default_peripheries: usize = if (node_item.shape == .tripleoctagon) 3 else 2;
+            ring_visual.peripheries = @max(visual.peripheries, default_peripheries);
+            try renderSvgPolygonRings(8, writer, layout, ring_visual, octagonPoints);
+        },
         .plaintext => {},
         .record => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, false),
         .mrecord => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, true),
@@ -3253,6 +3290,44 @@ fn invTrapeziumPoints(layout: NodeLayout) [6]Point {
     };
 }
 
+fn housePoints(layout: NodeLayout) [6]Point {
+    const cx = layout.center.x;
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const shoulder = top + layout.height * 0.36;
+    return .{
+        .{ .x = cx, .y = top },
+        .{ .x = right, .y = shoulder },
+        .{ .x = right, .y = bottom },
+        .{ .x = left, .y = bottom },
+        .{ .x = left, .y = shoulder },
+        .{ .x = -1, .y = -1 },
+    };
+}
+
+fn invHousePoints(layout: NodeLayout) [6]Point {
+    const cx = layout.center.x;
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const shoulder = bottom - layout.height * 0.36;
+    return .{
+        .{ .x = left, .y = top },
+        .{ .x = right, .y = top },
+        .{ .x = right, .y = shoulder },
+        .{ .x = cx, .y = bottom },
+        .{ .x = left, .y = shoulder },
+        .{ .x = -1, .y = -1 },
+    };
+}
+
+fn pentagonPoints(layout: NodeLayout) [5]Point {
+    return regularPolygonPoints(5, layout, -std.math.pi / 2.0);
+}
+
 fn hexagonPoints(layout: NodeLayout) [6]Point {
     const left = layout.center.x - layout.width / 2.0;
     const right = layout.center.x + layout.width / 2.0;
@@ -3268,6 +3343,10 @@ fn hexagonPoints(layout: NodeLayout) [6]Point {
         .{ .x = left + inset, .y = bottom },
         .{ .x = left, .y = cy },
     };
+}
+
+fn septagonPoints(layout: NodeLayout) [7]Point {
+    return regularPolygonPoints(7, layout, -std.math.pi / 2.0);
 }
 
 fn octagonPoints(layout: NodeLayout) [8]Point {
@@ -3286,6 +3365,20 @@ fn octagonPoints(layout: NodeLayout) [8]Point {
         .{ .x = left, .y = bottom - inset },
         .{ .x = left, .y = top + inset },
     };
+}
+
+fn regularPolygonPoints(comptime N: usize, layout: NodeLayout, rotation: f64) [N]Point {
+    const rx = layout.width / 2.0;
+    const ry = layout.height / 2.0;
+    var points: [N]Point = undefined;
+    inline for (0..N) |i| {
+        const angle = rotation + @as(f64, @floatFromInt(i)) * 2.0 * std.math.pi / @as(f64, @floatFromInt(N));
+        points[i] = .{
+            .x = layout.center.x + std.math.cos(angle) * rx,
+            .y = layout.center.y + std.math.sin(angle) * ry,
+        };
+    }
+    return points;
 }
 
 fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual, options: SvgOptions, rounded: bool) Io.Writer.Error!void {
@@ -5476,6 +5569,47 @@ test "DOT parser and SVG renderer support common Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "Valid?") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "InvTrap") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "No box") != null);
+}
+
+test "DOT parser and SVG renderer support additional Graphviz polygon node shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  sq [label="Square", shape=square];
+        \\  oval [label="Oval", shape=oval];
+        \\  house [label="House", shape=house];
+        \\  invhouse [label="InvHouse", shape=invhouse];
+        \\  pent [label="Pent", shape=pentagon];
+        \\  sept [label="Sept", shape=septagon];
+        \\  two [label="Two", shape=doubleoctagon];
+        \\  three [label="Three", shape=tripleoctagon];
+        \\  sq -> oval -> house -> invhouse -> pent -> sept -> two -> three;
+        \\}
+    );
+    defer graph.deinit();
+
+    const sq = graph.node_index.get("sq").?;
+    const oval = graph.node_index.get("oval").?;
+    try std.testing.expectEqual(Shape.square, graph.nodes.items[sq].shape);
+    try std.testing.expectEqual(Shape.ellipse, graph.nodes.items[oval].shape);
+    try std.testing.expectEqual(Shape.house, graph.nodes.items[graph.node_index.get("house").?].shape);
+    try std.testing.expectEqual(Shape.invhouse, graph.nodes.items[graph.node_index.get("invhouse").?].shape);
+    try std.testing.expectEqual(Shape.pentagon, graph.nodes.items[graph.node_index.get("pent").?].shape);
+    try std.testing.expectEqual(Shape.septagon, graph.nodes.items[graph.node_index.get("sept").?].shape);
+    try std.testing.expectEqual(Shape.doubleoctagon, graph.nodes.items[graph.node_index.get("two").?].shape);
+    try std.testing.expectEqual(Shape.tripleoctagon, graph.nodes.items[graph.node_index.get("three").?].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expect(@abs(layout.nodes[sq].width - layout.nodes[sq].height) < 0.01);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(countSubstrings(svg, "<polygon") >= 9);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<ellipse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "InvHouse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Three") != null);
 }
 
 test "DOT doublecircle shape renders as two circle peripheries" {
