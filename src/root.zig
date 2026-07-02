@@ -4598,11 +4598,11 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     const tail_clip = edgeClipEnabled(edge_item.attrs.items, "tailclip");
     const head_clip = edgeClipEnabled(edge_item.attrs.items, "headclip");
     const raw_start = if (tail_clip)
-        recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true)
+        samePortBoundaryPoint(graph, layout, edge_item, false) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true)
     else
         from.center;
     const raw_end = if (head_clip)
-        recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
+        samePortBoundaryPoint(graph, layout, edge_item, true) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
     else
         to.center;
     const start = if (edge_item.ltail) |cluster_name|
@@ -4619,6 +4619,41 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
 fn edgeClipEnabled(attrs: []const Attr, name: []const u8) bool {
     const value = attrValue(attrs, name) orelse return true;
     return parseBool(value) orelse true;
+}
+
+fn samePortBoundaryPoint(graph: *const Graph, layout: *const Layout, edge_item: Edge, head: bool) ?Point {
+    const attr_name = if (head) "samehead" else "sametail";
+    const group_name = attrValue(edge_item.attrs.items, attr_name) orelse return null;
+    if (group_name.len == 0) return null;
+    const anchor_id = if (head) edge_item.to else edge_item.from;
+    if (anchor_id >= layout.nodes.len) return null;
+    const anchor = layout.nodes[anchor_id];
+
+    var sum = Point{ .x = 0, .y = 0 };
+    var count: usize = 0;
+    for (graph.edges.items) |candidate| {
+        if (candidate.from == candidate.to) continue;
+        const candidate_anchor = if (head) candidate.to else candidate.from;
+        if (candidate_anchor != anchor_id) continue;
+        const candidate_group = attrValue(candidate.attrs.items, attr_name) orelse continue;
+        if (!std.mem.eql(u8, candidate_group, group_name)) continue;
+        const other_id = if (head) candidate.from else candidate.to;
+        if (other_id >= layout.nodes.len) continue;
+        const other = layout.nodes[other_id].center;
+        const dx = other.x - anchor.center.x;
+        const dy = other.y - anchor.center.y;
+        const length = std.math.hypot(dx, dy);
+        if (length <= 0.001) continue;
+        sum.x += dx / length;
+        sum.y += dy / length;
+        count += 1;
+    }
+    if (count < 2) return null;
+    const toward = Point{
+        .x = anchor.center.x + sum.x,
+        .y = anchor.center.y + sum.y,
+    };
+    return boundaryPoint(anchor, toward, graph.rankdir, !head);
 }
 
 fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, offset: f64) EdgeRoute {
@@ -6918,6 +6953,31 @@ test "DOT compound edges clip to cluster boundaries" {
     const right = clusterRect(&graph, &layout, "cluster_right").?;
     try std.testing.expect(pointOnRectBoundary(left, route.start));
     try std.testing.expect(pointOnRectBoundary(right, route.end));
+}
+
+test "DOT samehead and sametail route edges through shared ports" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a -> hub [samehead=h];
+        \\  b -> hub [samehead=h];
+        \\  hub -> x [sametail=t];
+        \\  hub -> y [sametail=t];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const head_a = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], graph.rankdir, 0);
+    const head_b = edgeRouteForEdge(&graph, &layout, graph.edges.items[1], graph.rankdir, 0);
+    try std.testing.expect(distanceBetween(head_a.end, head_b.end) <= 0.01);
+
+    const tail_x = edgeRouteForEdge(&graph, &layout, graph.edges.items[2], graph.rankdir, 0);
+    const tail_y = edgeRouteForEdge(&graph, &layout, graph.edges.items[3], graph.rankdir, 0);
+    try std.testing.expect(distanceBetween(tail_x.start, tail_y.start) <= 0.01);
 }
 
 test "layout honors DOT ranksep and nodesep graph spacing attributes" {
