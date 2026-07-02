@@ -14,6 +14,7 @@ pub const Shape = enum {
     ellipse,
     box,
     circle,
+    doublecircle,
     diamond,
     parallelogram,
     hexagon,
@@ -495,6 +496,7 @@ fn setAttrInList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name:
 fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "box") or std.ascii.eqlIgnoreCase(value, "rect") or std.ascii.eqlIgnoreCase(value, "rectangle")) return .box;
     if (std.ascii.eqlIgnoreCase(value, "circle")) return .circle;
+    if (std.ascii.eqlIgnoreCase(value, "doublecircle")) return .doublecircle;
     if (std.ascii.eqlIgnoreCase(value, "diamond")) return .diamond;
     if (std.ascii.eqlIgnoreCase(value, "parallelogram")) return .parallelogram;
     if (std.ascii.eqlIgnoreCase(value, "hexagon")) return .hexagon;
@@ -509,6 +511,7 @@ fn shapeName(shape: Shape) []const u8 {
         .ellipse => "ellipse",
         .box => "box",
         .circle => "circle",
+        .doublecircle => "doublecircle",
         .diamond => "diamond",
         .parallelogram => "parallelogram",
         .hexagon => "hexagon",
@@ -1510,7 +1513,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0);
     switch (node_item.shape) {
-        .circle => {
+        .circle, .doublecircle => {
             const diameter = @max(width, height);
             width = diameter;
             height = diameter;
@@ -2519,9 +2522,10 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writer.writeAll("/>\n");
             }
         },
-        .circle => {
+        .circle, .doublecircle => {
             var ring: usize = 0;
-            while (ring < visual.peripheries) : (ring += 1) {
+            const ring_count = if (node_item.shape == .doublecircle) @max(visual.peripheries, 2) else visual.peripheries;
+            while (ring < ring_count) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
                 try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
                     layout.center.x,
@@ -4466,6 +4470,26 @@ test "DOT parser and SVG renderer support common Graphviz node shapes" {
     try std.testing.expect(countSubstrings(svg, "<polygon") >= 3);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Valid?") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "No box") != null);
+}
+
+test "DOT doublecircle shape renders as two circle peripheries" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  accept [shape=doublecircle, label="accept"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const accept = graph.node_index.get("accept").?;
+    try std.testing.expectEqual(Shape.doublecircle, graph.nodes.items[accept].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(countSubstrings(svg, "<circle") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
 }
 
 test "DOT record and Mrecord nodes render field separators" {
