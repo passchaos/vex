@@ -1579,6 +1579,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
 
     refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, effective_options);
+    refineLongEdgeDummyCoordinates(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
 
@@ -2830,6 +2831,40 @@ fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(Nod
             compactLevelCenters(levels[rank - 1].items, centers, sizes, options.node_gap);
         }
     }
+}
+
+fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (levels.len <= 2) return;
+    for (levels, 0..) |level, rank| {
+        if (rank == 0 or rank + 1 >= levels.len or level.items.len == 0) continue;
+        for (level.items) |node_id| {
+            var weighted_sum: f64 = 0;
+            var total_weight: f64 = 0;
+            for (graph.edges.items) |edge_item| {
+                const dummy = longEdgeDummyCenter(edge_item, ranks, centers, rank) orelse continue;
+                const influence = 1.0 / (1.0 + @abs(centers[node_id] - dummy));
+                const weight = @max(edge_item.weight, 1.0) * influence;
+                weighted_sum += dummy * weight;
+                total_weight += weight;
+            }
+            if (total_weight > 0) {
+                const target = weighted_sum / total_weight;
+                centers[node_id] = centers[node_id] + (target - centers[node_id]) * 0.20;
+            }
+        }
+        compactLevelCenters(level.items, centers, sizes, gap);
+    }
+}
+
+fn longEdgeDummyCenter(edge_item: Edge, ranks: []const usize, centers: []const f64, rank: usize) ?f64 {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank + 1 >= to_rank) return null;
+    if (rank <= from_rank or rank >= to_rank) return null;
+    const span = @as(f64, @floatFromInt(to_rank - from_rank));
+    const t = @as(f64, @floatFromInt(rank - from_rank)) / span;
+    return centers[edge_item.from] + (centers[edge_item.to] - centers[edge_item.from]) * t;
 }
 
 fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, use_parents: bool) void {
@@ -5808,6 +5843,48 @@ test "adjacent exchange uses virtual long-edge crossings" {
     try std.testing.expectEqual(@as(usize, 1), crossingScoreAroundLevel(&graph, levels, ranks, 1));
     refineAdjacentExchanges(&graph, levels, ranks, 2);
     try std.testing.expectEqual(@as(usize, 0), crossingScoreAroundLevel(&graph, levels, ranks, 1));
+}
+
+test "long-edge dummy positions influence coordinate refinement" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{ .weight = 4 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 1;
+    ranks[d] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[1].append(allocator, b);
+    try levels[1].append(allocator, c);
+    try levels[2].append(allocator, d);
+
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[a] = 0;
+    centers[b] = 120;
+    centers[c] = 180;
+    centers[d] = 0;
+    const before = centers[b];
+    refineLongEdgeDummyCoordinates(&graph, levels, ranks, centers, sizes, 10);
+    try std.testing.expect(centers[b] < before);
 }
 
 test "LR layout accounts for oriented long-label extents" {
