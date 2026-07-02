@@ -5770,6 +5770,46 @@ test "long edges contribute virtual segments to crossing score" {
     try std.testing.expectEqual(@as(usize, 1), countLayerCrossingsWithDummies(&graph, levels, ranks, 0));
 }
 
+test "adjacent exchange uses virtual long-edge crossings" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    const e = try graph.node("e");
+    const f = try graph.node("f");
+    _ = try graph.edge(a, f, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 1;
+    ranks[e] = 2;
+    ranks[f] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+    try levels[1].append(allocator, c);
+    try levels[1].append(allocator, d);
+    try levels[2].append(allocator, e);
+    try levels[2].append(allocator, f);
+
+    try std.testing.expectEqual(@as(usize, 1), crossingScoreAroundLevel(&graph, levels, ranks, 1));
+    refineAdjacentExchanges(&graph, levels, ranks, 2);
+    try std.testing.expectEqual(@as(usize, 0), crossingScoreAroundLevel(&graph, levels, ranks, 1));
+}
+
 test "LR layout accounts for oriented long-label extents" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
