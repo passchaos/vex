@@ -3054,13 +3054,14 @@ fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, of
 }
 
 fn boundaryPoint(node: NodeLayout, toward: Point, rankdir: RankDir, leaving: bool) Point {
-    _ = toward;
-    return switch (rankdir) {
-        .TB => .{ .x = node.center.x, .y = node.center.y + (if (leaving) node.height / 2.0 else -node.height / 2.0) },
-        .BT => .{ .x = node.center.x, .y = node.center.y + (if (leaving) -node.height / 2.0 else node.height / 2.0) },
-        .LR => .{ .x = node.center.x + (if (leaving) node.width / 2.0 else -node.width / 2.0), .y = node.center.y },
-        .RL => .{ .x = node.center.x + (if (leaving) -node.width / 2.0 else node.width / 2.0), .y = node.center.y },
-    };
+    _ = rankdir;
+    _ = leaving;
+    return pointForPort(.{
+        .x = node.center.x - node.width / 2.0,
+        .y = node.center.y - node.height / 2.0,
+        .width = node.width,
+        .height = node.height,
+    }, .auto, toward);
 }
 
 const RectF = struct {
@@ -4079,6 +4080,27 @@ test "layered layout applies rank same and boundary constraints" {
     try std.testing.expect(layout.nodes[source].center.y < layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[archive].center.y > layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[source].center.y <= layout.nodes[free].center.y);
+}
+
+test "SVG auto endpoints use side anchors for same-rank edges" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; }
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    try std.testing.expectEqual(layout.nodes[a].center.y, layout.nodes[b].center.y);
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], graph.rankdir, 0);
+    try std.testing.expectEqual(layout.nodes[a].center.x + layout.nodes[a].width / 2.0, route.start.x);
+    try std.testing.expectEqual(layout.nodes[b].center.x - layout.nodes[b].width / 2.0, route.end.x);
 }
 
 test "layout retains rank metadata for long-edge routing" {
