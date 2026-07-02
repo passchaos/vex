@@ -1452,6 +1452,65 @@ pub const LayoutOptions = struct {
     ranksep_equally: bool = false,
 };
 
+pub const ForceLayoutOptions = struct {
+    width: f64 = 640,
+    height: f64 = 420,
+    margin: f64 = 40,
+    iterations: usize = 120,
+    area_scale: f64 = 1.0,
+};
+
+pub const LayoutAlgorithm = enum {
+    auto,
+    sugiyama,
+    fruchterman_reingold,
+
+    pub fn fromString(value: []const u8) ?LayoutAlgorithm {
+        if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
+        if (std.ascii.eqlIgnoreCase(value, "dot") or
+            std.ascii.eqlIgnoreCase(value, "sugiyama") or
+            std.ascii.eqlIgnoreCase(value, "layered"))
+        {
+            return .sugiyama;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "fr") or
+            std.ascii.eqlIgnoreCase(value, "force") or
+            std.ascii.eqlIgnoreCase(value, "fdp") or
+            std.ascii.eqlIgnoreCase(value, "neato") or
+            std.ascii.eqlIgnoreCase(value, "sfdp") or
+            std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
+            std.ascii.eqlIgnoreCase(value, "fruchterman_reingold"))
+        {
+            return .fruchterman_reingold;
+        }
+        return null;
+    }
+};
+
+pub const LayoutConfig = struct {
+    algorithm: LayoutAlgorithm = .auto,
+    layered: LayoutOptions = .{},
+    force: ForceLayoutOptions = .{},
+};
+
+pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: LayoutConfig) !Layout {
+    return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
+        .auto => unreachable,
+        .sugiyama => layoutLayered(allocator, graph, config.layered),
+        .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, config.force),
+    };
+}
+
+fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) LayoutAlgorithm {
+    if (requested != .auto) return requested;
+    if (attrValue(graph.attrs.items, "layout")) |value| {
+        if (LayoutAlgorithm.fromString(value)) |algorithm| {
+            if (algorithm != .auto) return algorithm;
+        }
+    }
+    return .sugiyama;
+}
+
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
     var result = options;
     if (attrValue(graph.attrs.items, "ranksep")) |value| {
@@ -1663,6 +1722,124 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         .margin = effective_options.margin,
         .width = if (graph.rankdir == .LR or graph.rankdir == .RL) base_height else base_width,
         .height = if (graph.rankdir == .LR or graph.rankdir == .RL) base_width else base_height,
+    };
+}
+
+pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    const n = graph.nodes.items.len;
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(ClusterLayout, graph.clusters.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    if (n == 0) {
+        return .{
+            .allocator = allocator,
+            .nodes = nodes,
+            .clusters = cluster_layouts,
+            .edge_waypoints = edge_waypoints,
+            .ranks = ranks,
+            .rank_depths = rank_depths,
+            .rank_heights = rank_heights,
+            .margin = options.margin,
+            .width = options.width,
+            .height = options.height,
+        };
+    }
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    const default_layout_options = LayoutOptions{};
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+
+    const positions = try allocator.alloc(Point, n);
+    defer allocator.free(positions);
+    var disp = try allocator.alloc(Point, n);
+    defer allocator.free(disp);
+
+    const cx = options.width / 2.0;
+    const cy = options.height / 2.0;
+    const radius = @max(1.0, @min(options.width, options.height) * 0.35);
+    for (positions, 0..) |*pos, id| {
+        const angle = 2.0 * std.math.pi * @as(f64, @floatFromInt(id)) / @as(f64, @floatFromInt(@max(n, 1)));
+        pos.* = .{
+            .x = cx + std.math.cos(angle) * radius,
+            .y = cy + std.math.sin(angle) * radius,
+        };
+    }
+
+    const area = @max(1.0, (options.width - options.margin * 2.0) * (options.height - options.margin * 2.0) * options.area_scale);
+    const k = std.math.sqrt(area / @as(f64, @floatFromInt(@max(n, 1))));
+    var temperature = @min(options.width, options.height) / 8.0;
+    var iter: usize = 0;
+    while (iter < options.iterations) : (iter += 1) {
+        @memset(disp, .{ .x = 0, .y = 0 });
+        for (0..n) |v| {
+            var u = v + 1;
+            while (u < n) : (u += 1) {
+                const delta = Point{ .x = positions[v].x - positions[u].x, .y = positions[v].y - positions[u].y };
+                const distance = @max(0.01, std.math.hypot(delta.x, delta.y));
+                const force = (k * k) / distance;
+                const fx = (delta.x / distance) * force;
+                const fy = (delta.y / distance) * force;
+                disp[v].x += fx;
+                disp[v].y += fy;
+                disp[u].x -= fx;
+                disp[u].y -= fy;
+            }
+        }
+        for (graph.edges.items) |edge_item| {
+            if (edge_item.from >= n or edge_item.to >= n or edge_item.from == edge_item.to) continue;
+            const delta = Point{ .x = positions[edge_item.from].x - positions[edge_item.to].x, .y = positions[edge_item.from].y - positions[edge_item.to].y };
+            const distance = @max(0.01, std.math.hypot(delta.x, delta.y));
+            const force = (distance * distance) / k;
+            const fx = (delta.x / distance) * force;
+            const fy = (delta.y / distance) * force;
+            disp[edge_item.from].x -= fx;
+            disp[edge_item.from].y -= fy;
+            disp[edge_item.to].x += fx;
+            disp[edge_item.to].y += fy;
+        }
+        for (positions, 0..) |*pos, id| {
+            const d = @max(0.01, std.math.hypot(disp[id].x, disp[id].y));
+            pos.x += (disp[id].x / d) * @min(d, temperature);
+            pos.y += (disp[id].y / d) * @min(d, temperature);
+            pos.x = std.math.clamp(pos.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
+            pos.y = std.math.clamp(pos.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
+        }
+        temperature *= 0.94;
+    }
+
+    for (nodes, 0..) |*node, id| {
+        node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
+    }
+    computeClusterLayouts(graph, nodes, cluster_layouts);
+    return .{
+        .allocator = allocator,
+        .nodes = nodes,
+        .clusters = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .width = options.width,
+        .height = options.height,
     };
 }
 
@@ -6059,6 +6236,78 @@ test "code API builds graph and layered layout" {
     defer layout.deinit();
     try std.testing.expectEqual(@as(usize, 2), layout.nodes.len);
     try std.testing.expect(layout.height > 0);
+}
+
+test "Fruchterman-Reingold layout places nodes within bounds" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false, .name = "force" });
+    defer graph.deinit();
+    _ = try graph.edgeByName("a", "b", .{});
+    _ = try graph.edgeByName("b", "c", .{});
+
+    var layout = try layoutFruchtermanReingold(allocator, &graph, .{ .width = 320, .height = 240, .margin = 24, .iterations = 80 });
+    defer layout.deinit();
+    try std.testing.expectEqual(@as(usize, 3), layout.nodes.len);
+    for (layout.nodes) |node| {
+        try std.testing.expect(node.center.x >= 24);
+        try std.testing.expect(node.center.x <= 296);
+        try std.testing.expect(node.center.y >= 24);
+        try std.testing.expect(node.center.y <= 216);
+    }
+}
+
+test "Fruchterman-Reingold layout pulls adjacent nodes closer" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false, .name = "force" });
+    defer graph.deinit();
+    _ = try graph.edgeByName("a", "b", .{});
+    _ = try graph.node("c");
+
+    var layout = try layoutFruchtermanReingold(allocator, &graph, .{ .width = 360, .height = 260, .margin = 30, .iterations = 100 });
+    defer layout.deinit();
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const ab = distanceBetween(layout.nodes[a].center, layout.nodes[b].center);
+    const ac = distanceBetween(layout.nodes[a].center, layout.nodes[c].center);
+    const bc = distanceBetween(layout.nodes[b].center, layout.nodes[c].center);
+    try std.testing.expect(ab < @max(ac, bc));
+}
+
+test "layout algorithm parser accepts Graphviz engine names" {
+    try std.testing.expectEqual(LayoutAlgorithm.sugiyama, LayoutAlgorithm.fromString("dot").?);
+    try std.testing.expectEqual(LayoutAlgorithm.sugiyama, LayoutAlgorithm.fromString("sugiyama").?);
+    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("neato").?);
+    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fdp").?);
+    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
+}
+
+test "layoutGraph selects Fruchterman-Reingold from graph layout attr" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato];
+        \\  a -- b -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    const defaults = ForceLayoutOptions{};
+    try std.testing.expectEqual(@as(usize, 1), layout.rank_depths.len);
+    try std.testing.expectEqual(defaults.width, layout.width);
+    try std.testing.expectEqual(defaults.height, layout.height);
+}
+
+test "layoutGraph default keeps Sugiyama rankdir as layout input" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "digraph G { graph [rankdir=LR]; a -> b -> c; }");
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    try expectRankDirection(&graph, &layout, .LR);
 }
 
 test "DOT parser handles graphviz-like edge chain and attrs" {

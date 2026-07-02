@@ -27,8 +27,14 @@ zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/simple.dot --format terminal
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format terminal
+zig build run -- --input examples/simple.dot --layout neato --output force.svg
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
+
+Layout selection defaults to `dot`/Sugiyama, which honors
+`rankdir=TB|BT|LR|RL` during layout. `--layout fr`, `--layout neato`, `--layout
+fdp`, and Graphviz-style `-Kneato` select the deterministic
+Fruchterman-Reingold force-directed layout.
 
 ## Zig API sketch
 
@@ -43,7 +49,7 @@ const a = try graph.nodeWith("A", .{ .shape = .box, .label = "Start" });
 const b = try graph.node("B");
 _ = try graph.edge(a, b, .{ .label = "next" });
 
-var layout = try vex.layoutLayered(allocator, &graph, .{});
+var layout = try vex.layoutGraph(allocator, &graph, .{});
 defer layout.deinit();
 try vex.render(writer, &graph, &layout, .svg, .{});
 ```
@@ -66,7 +72,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Comma node lists in node statements and edge operands: `a, b -- c, d`.
 - Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph cluster { c d }`.
 - Port syntax in node ids: `a:out:e`.
-- Attribute statements: `graph [rankdir=LR]`, `node [...]`, `edge [...]`.
+- Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, HTML-like IDs/labels as text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes.
 - Line comments (`//`, `#`) and block comments (`/* ... */`).
 

@@ -7,11 +7,12 @@ const usage =
     \\
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
-    \\        [--format terminal|svg|png|pdf]
+    \\        [--format terminal|svg|png|pdf] [--layout dot|sugiyama|fr|neato|fdp]
     \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
     \\output is written to stdout.
+    \\Default layout is DOT/Sugiyama and honors rankdir=TB|BT|LR|RL.
     \\
 ;
 
@@ -27,6 +28,7 @@ pub fn main(init: std.process.Init) !void {
     var input_path: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
     var format_arg: ?vex.OutputFormat = null;
+    var layout_arg: vex.LayoutAlgorithm = .auto;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -49,6 +51,12 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingFormat;
             format_arg = vex.OutputFormat.fromString(args[i]) orelse return error.UnknownFormat;
+        } else if (std.mem.eql(u8, arg, "--layout") or std.mem.eql(u8, arg, "-K")) {
+            i += 1;
+            if (i >= args.len) return error.MissingLayout;
+            layout_arg = vex.LayoutAlgorithm.fromString(args[i]) orelse return error.UnknownLayout;
+        } else if (std.mem.startsWith(u8, arg, "-K") and arg.len > 2) {
+            layout_arg = vex.LayoutAlgorithm.fromString(arg[2..]) orelse return error.UnknownLayout;
         } else if (input_path == null) {
             input_path = arg;
         } else if (output_path == null) {
@@ -76,7 +84,7 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.parseDot(allocator, dot);
     defer graph.deinit();
 
-    var layout = try vex.layoutLayered(allocator, &graph, .{});
+    var layout = try vex.layoutGraph(allocator, &graph, .{ .algorithm = layout_arg });
     defer layout.deinit();
 
     if (output_path) |path| {
