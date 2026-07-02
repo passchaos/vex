@@ -2755,11 +2755,13 @@ fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: 
             if (rankTighteningPinned(graph, node_id)) continue;
             const target_rank = bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id) orelse continue;
             if (target_rank == current_rank) continue;
-            const before = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, current_rank);
-            const after = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, target_rank);
-            if (after < before) {
-                ranks[node_id] = target_rank;
+            const before = rankAssignmentCost(graph, ranks, acyclic_edge);
+            ranks[node_id] = target_rank;
+            const after = rankAssignmentCost(graph, ranks, acyclic_edge);
+            if (after < before and rankAssignmentFeasible(graph, ranks, acyclic_edge)) {
                 changed = true;
+            } else {
+                ranks[node_id] = current_rank;
             }
         }
         if (!changed) break;
@@ -8797,6 +8799,39 @@ test "bounded rank local search can move nodes upward when it lowers cost" {
     const after = rankAssignmentCost(&graph, ranks, acyclic_edge);
     try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
     try std.testing.expect(after < before);
+    try std.testing.expectEqual(@as(usize, 1), ranks[x]);
+}
+
+test "bounded rank local search rejects equal-cost moves" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  source -> x;
+        \\  x -> sink;
+        \\  source -> a -> b -> sink;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const source = graph.node_index.get("source").?;
+    const x = graph.node_index.get("x").?;
+    const sink = graph.node_index.get("sink").?;
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[source] = 0;
+    ranks[x] = 1;
+    ranks[a] = 1;
+    ranks[b] = 2;
+    ranks[sink] = 3;
+
+    try std.testing.expectEqual(@as(usize, 2), bestFeasibleRankForNode(&graph, ranks, acyclic_edge, x).?);
+    improveRanksByLocalSearch(&graph, ranks, acyclic_edge, 4);
     try std.testing.expectEqual(@as(usize, 1), ranks[x]);
 }
 
