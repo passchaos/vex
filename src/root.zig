@@ -1553,6 +1553,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
     refineAdjacentExchanges(graph, levels, ranks, 2);
     enforceClusterContiguity(graph, levels);
+    alignGroupedNodes(graph, levels);
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
@@ -1580,6 +1581,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
 
     refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, effective_options);
+    alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
 
     var total_along: f64 = 0;
@@ -2563,6 +2565,99 @@ fn firstClusterMemberIndex(cluster: Cluster, nodes: []const NodeId) ?usize {
         if (containsNode(cluster.nodes, node_id)) return index;
     }
     return null;
+}
+
+const GroupOrder = struct {
+    name: []const u8,
+    rank_sum: f64 = 0,
+    count: usize = 0,
+};
+
+fn alignGroupedNodes(graph: *const Graph, levels: []std.ArrayList(NodeId)) void {
+    var groups: [64]GroupOrder = undefined;
+    var group_count: usize = 0;
+    for (levels) |level| {
+        for (level.items, 0..) |node_id, index| {
+            const group_name = nodeGroupName(graph.nodes.items[node_id]) orelse continue;
+            const group_index = groupOrderIndex(groups[0..group_count], group_name) orelse blk: {
+                if (group_count >= groups.len) continue;
+                groups[group_count] = .{ .name = group_name };
+                group_count += 1;
+                break :blk group_count - 1;
+            };
+            groups[group_index].rank_sum += @floatFromInt(index);
+            groups[group_index].count += 1;
+        }
+    }
+
+    for (groups[0..group_count]) |group| {
+        if (group.count < 2) continue;
+        const target_float = group.rank_sum / @as(f64, @floatFromInt(group.count));
+        for (levels) |*level| {
+            const current = groupedNodeIndex(graph, level.items, group.name) orelse continue;
+            const target = @min(level.items.len - 1, @as(usize, @intFromFloat(@round(target_float))));
+            moveLevelItem(level.items, current, target);
+        }
+    }
+}
+
+fn nodeGroupName(node_item: Node) ?[]const u8 {
+    const value = attrValue(node_item.attrs.items, "group") orelse return null;
+    return if (value.len == 0) null else value;
+}
+
+fn groupOrderIndex(groups: []const GroupOrder, name: []const u8) ?usize {
+    for (groups, 0..) |group, index| {
+        if (std.mem.eql(u8, group.name, name)) return index;
+    }
+    return null;
+}
+
+fn groupedNodeIndex(graph: *const Graph, nodes: []const NodeId, group_name: []const u8) ?usize {
+    for (nodes, 0..) |node_id, index| {
+        const name = nodeGroupName(graph.nodes.items[node_id]) orelse continue;
+        if (std.mem.eql(u8, name, group_name)) return index;
+    }
+    return null;
+}
+
+fn moveLevelItem(nodes: []NodeId, from: usize, to: usize) void {
+    if (from == to or nodes.len <= 1) return;
+    const id = nodes[from];
+    if (from < to) {
+        var i = from;
+        while (i < to) : (i += 1) nodes[i] = nodes[i + 1];
+    } else {
+        var i = from;
+        while (i > to) : (i -= 1) nodes[i] = nodes[i - 1];
+    }
+    nodes[to] = id;
+}
+
+fn alignGroupedCenters(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    var groups: [64]GroupOrder = undefined;
+    var group_count: usize = 0;
+    for (graph.nodes.items, 0..) |node_item, id| {
+        const group_name = nodeGroupName(node_item) orelse continue;
+        const group_index = groupOrderIndex(groups[0..group_count], group_name) orelse blk: {
+            if (group_count >= groups.len) continue;
+            groups[group_count] = .{ .name = group_name };
+            group_count += 1;
+            break :blk group_count - 1;
+        };
+        groups[group_index].rank_sum += centers[id];
+        groups[group_index].count += 1;
+    }
+
+    for (groups[0..group_count]) |group| {
+        if (group.count < 2) continue;
+        const target = group.rank_sum / @as(f64, @floatFromInt(group.count));
+        for (graph.nodes.items, 0..) |node_item, id| {
+            const group_name = nodeGroupName(node_item) orelse continue;
+            if (std.mem.eql(u8, group_name, group.name)) centers[id] = target;
+        }
+    }
+    for (levels) |level| compactLevelCenters(level.items, centers, sizes, gap);
 }
 
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
@@ -6238,6 +6333,39 @@ test "cluster members are kept contiguous within a rank" {
     enforceClusterContiguity(&graph, levels);
     try std.testing.expectEqual(a, levels[0].items[0]);
     try std.testing.expectEqual(c, levels[0].items[1]);
+}
+
+test "layered layout honors DOT node group alignment hints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB];
+        \\  s1 [group=main];
+        \\  s2;
+        \\  m1 [group=main];
+        \\  m2;
+        \\  t1 [group=main];
+        \\  t2;
+        \\  s2 -> m1;
+        \\  s1 -> m2;
+        \\  m2 -> t1;
+        \\  m1 -> t2;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const s1 = graph.node_index.get("s1").?;
+    const m1 = graph.node_index.get("m1").?;
+    const t1 = graph.node_index.get("t1").?;
+    try std.testing.expectEqualStrings("main", attrValue(graph.nodes.items[s1].attrs.items, "group").?);
+    const max_delta = @max(
+        @abs(layout.nodes[s1].center.x - layout.nodes[m1].center.x),
+        @abs(layout.nodes[m1].center.x - layout.nodes[t1].center.x),
+    );
+    try std.testing.expect(max_delta <= 1.0);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {
