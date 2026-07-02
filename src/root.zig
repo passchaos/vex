@@ -5498,6 +5498,58 @@ test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" 
     try std.testing.expectEqualStrings(" <B>Fancy</B> Graph ", graph.attrs.items[1].value);
 }
 
+test "layered layout orients rank progression for every rankdir" {
+    const allocator = std.testing.allocator;
+
+    var tb = try parseDot(allocator, "digraph G { graph [rankdir=TB]; a -> b -> c; }");
+    defer tb.deinit();
+    var tb_layout = try layoutLayered(allocator, &tb, .{});
+    defer tb_layout.deinit();
+    try expectRankDirection(&tb, &tb_layout, .TB);
+
+    var bt = try parseDot(allocator, "digraph G { graph [rankdir=BT]; a -> b -> c; }");
+    defer bt.deinit();
+    var bt_layout = try layoutLayered(allocator, &bt, .{});
+    defer bt_layout.deinit();
+    try expectRankDirection(&bt, &bt_layout, .BT);
+
+    var lr = try parseDot(allocator, "digraph G { graph [rankdir=LR]; a -> b -> c; }");
+    defer lr.deinit();
+    var lr_layout = try layoutLayered(allocator, &lr, .{});
+    defer lr_layout.deinit();
+    try expectRankDirection(&lr, &lr_layout, .LR);
+
+    var rl = try parseDot(allocator, "digraph G { graph [rankdir=RL]; a -> b -> c; }");
+    defer rl.deinit();
+    var rl_layout = try layoutLayered(allocator, &rl, .{});
+    defer rl_layout.deinit();
+    try expectRankDirection(&rl, &rl_layout, .RL);
+}
+
+fn expectRankDirection(graph: *const Graph, layout: *const Layout, rankdir: RankDir) !void {
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    switch (rankdir) {
+        .TB => {
+            try std.testing.expect(layout.nodes[a].center.y < layout.nodes[b].center.y);
+            try std.testing.expect(layout.nodes[b].center.y < layout.nodes[c].center.y);
+        },
+        .BT => {
+            try std.testing.expect(layout.nodes[a].center.y > layout.nodes[b].center.y);
+            try std.testing.expect(layout.nodes[b].center.y > layout.nodes[c].center.y);
+        },
+        .LR => {
+            try std.testing.expect(layout.nodes[a].center.x < layout.nodes[b].center.x);
+            try std.testing.expect(layout.nodes[b].center.x < layout.nodes[c].center.x);
+        },
+        .RL => {
+            try std.testing.expect(layout.nodes[a].center.x > layout.nodes[b].center.x);
+            try std.testing.expect(layout.nodes[b].center.x > layout.nodes[c].center.x);
+        },
+    }
+}
+
 test "render dispatch covers terminal and svg formats" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "dispatch", .rankdir = .LR });
@@ -6435,6 +6487,54 @@ test "SVG routes multi-rank back edges around the side" {
     try std.testing.expect(countSubstrings(path, " L ") == 1);
     try std.testing.expect(std.mem.indexOf(u8, path, " C ") != null);
     try std.testing.expect(route.start.y > route.end.y);
+}
+
+test "SVG routes rankdir LR and RL back edges around the side" {
+    const allocator = std.testing.allocator;
+
+    var lr = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a0 -> a1 -> a2 -> a3;
+        \\  a3 -> a0 [label="back"];
+        \\}
+    );
+    defer lr.deinit();
+    var lr_layout = try layoutLayered(allocator, &lr, .{});
+    defer lr_layout.deinit();
+    const lr_route = edgeRouteForEdge(&lr, &lr_layout, lr.edges.items[3], lr.rankdir, 0);
+    try std.testing.expect(isBackEdge(&lr_layout, lr.edges.items[3]));
+    try std.testing.expect(lr_route.start.x > lr_route.end.x);
+    const lr_svg = try renderSvgAlloc(allocator, &lr, &lr_layout, .{});
+    defer allocator.free(lr_svg);
+    try expectBackEdgeSidePath(lr_svg);
+
+    var rl = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=RL];
+        \\  a0 -> a1 -> a2 -> a3;
+        \\  a3 -> a0 [label="back"];
+        \\}
+    );
+    defer rl.deinit();
+    var rl_layout = try layoutLayered(allocator, &rl, .{});
+    defer rl_layout.deinit();
+    const rl_route = edgeRouteForEdge(&rl, &rl_layout, rl.edges.items[3], rl.rankdir, 0);
+    try std.testing.expect(isBackEdge(&rl_layout, rl.edges.items[3]));
+    try std.testing.expect(rl_route.start.x < rl_route.end.x);
+    const rl_svg = try renderSvgAlloc(allocator, &rl, &rl_layout, .{});
+    defer allocator.free(rl_svg);
+    try expectBackEdgeSidePath(rl_svg);
+}
+
+fn expectBackEdgeSidePath(svg: []const u8) !void {
+    const label_pos = std.mem.indexOf(u8, svg, ">back</tspan>") orelse return error.MissingBackLabel;
+    const before_label = svg[0..label_pos];
+    const path_start = std.mem.lastIndexOf(u8, before_label, "<path") orelse return error.MissingBackPath;
+    const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingBackPathEnd;
+    const path = svg[path_start .. path_start + path_end_rel];
+    try std.testing.expect(countSubstrings(path, " C ") == 2);
+    try std.testing.expect(countSubstrings(path, " L ") == 1);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
