@@ -4195,11 +4195,13 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
+        try writer.writeAll("<g class=\"node\">\n");
         const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
         if (node_wrap == .none) try writeSvgTitle(writer, node_item.name);
         if (htmlTableMetrics(node_item.label) != null) {
             try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
             try writeSvgInteractiveClose(writer, node_wrap);
+            try writer.writeAll("</g>\n");
             continue;
         }
         try renderSvgNodeShape(writer, node_item, l, visual, options);
@@ -4208,6 +4210,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         }
         try renderSvgNodeXLabel(writer, node_item, l, visual);
         try writeSvgInteractiveClose(writer, node_wrap);
+        try writer.writeAll("</g>\n");
     }
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -8305,6 +8308,24 @@ test "SVG renderer emits default Graphviz-like node and edge titles" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>b</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a-&gt;b</title>") != null);
+}
+
+test "SVG renderer wraps nodes in Graphviz-like groups" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "<g class=\"node\">") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"node\">\n<title>a</title>") != null);
 }
 
 test "SVG renderer uses Graphviz default font family" {
