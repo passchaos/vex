@@ -31,6 +31,13 @@ pub const Shape = enum {
     octagon,
     doubleoctagon,
     tripleoctagon,
+    note,
+    tab,
+    folder,
+    box3d,
+    component,
+    underline,
+    cylinder,
     plaintext,
     record,
     mrecord,
@@ -529,6 +536,13 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "octagon")) return .octagon;
     if (std.ascii.eqlIgnoreCase(value, "doubleoctagon")) return .doubleoctagon;
     if (std.ascii.eqlIgnoreCase(value, "tripleoctagon")) return .tripleoctagon;
+    if (std.ascii.eqlIgnoreCase(value, "note")) return .note;
+    if (std.ascii.eqlIgnoreCase(value, "tab")) return .tab;
+    if (std.ascii.eqlIgnoreCase(value, "folder")) return .folder;
+    if (std.ascii.eqlIgnoreCase(value, "box3d")) return .box3d;
+    if (std.ascii.eqlIgnoreCase(value, "component")) return .component;
+    if (std.ascii.eqlIgnoreCase(value, "underline")) return .underline;
+    if (std.ascii.eqlIgnoreCase(value, "cylinder")) return .cylinder;
     if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "plain") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
     if (std.ascii.eqlIgnoreCase(value, "record")) return .record;
     if (std.ascii.eqlIgnoreCase(value, "mrecord")) return .mrecord;
@@ -557,6 +571,13 @@ fn shapeName(shape: Shape) []const u8 {
         .octagon => "octagon",
         .doubleoctagon => "doubleoctagon",
         .tripleoctagon => "tripleoctagon",
+        .note => "note",
+        .tab => "tab",
+        .folder => "folder",
+        .box3d => "box3d",
+        .component => "component",
+        .underline => "underline",
+        .cylinder => "cylinder",
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
@@ -1636,8 +1657,12 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = @max(width, text_width + options.node_padding_x * 3.0);
             height = @max(height, text_height + options.node_padding_y * 2.4);
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .note, .tab, .folder, .box3d, .component => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
+        },
+        .cylinder => {
+            width = @max(width, text_width + options.node_padding_x * 3.0);
+            height = @max(height, text_height + options.node_padding_y * 3.0);
         },
         .plaintext => {
             width = @max(24, text_width + 8);
@@ -3159,6 +3184,13 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             ring_visual.peripheries = @max(visual.peripheries, default_peripheries);
             try renderSvgPolygonRings(8, writer, layout, ring_visual, octagonPoints);
         },
+        .note => try renderSvgNoteShape(writer, layout, visual),
+        .tab => try renderSvgTabShape(writer, layout, visual),
+        .folder => try renderSvgFolderShape(writer, layout, visual),
+        .box3d => try renderSvgBox3dShape(writer, layout, visual),
+        .component => try renderSvgComponentShape(writer, layout, visual),
+        .underline => try renderSvgUnderlineShape(writer, layout, visual),
+        .cylinder => try renderSvgCylinderShape(writer, layout, visual),
         .plaintext => {},
         .record => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, false),
         .mrecord => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, true),
@@ -3379,6 +3411,253 @@ fn regularPolygonPoints(comptime N: usize, layout: NodeLayout, rotation: f64) [N
         };
     }
     return points;
+}
+
+fn renderSvgNoteShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    const fold = @min(@min(rect.width, rect.height) * 0.24, 22);
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x,
+        rect.y,
+        rect.x + rect.width - fold,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + fold,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x + rect.width - fold,
+        rect.y,
+        rect.x + rect.width - fold,
+        rect.y + fold,
+        rect.x + rect.width,
+        rect.y + fold,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgTabShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    const tab_w = @min(rect.width * 0.42, 52);
+    const tab_h = @min(rect.height * 0.28, 18);
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x,
+        rect.y + tab_h,
+        rect.x + tab_w * 0.18,
+        rect.y + tab_h,
+        rect.x + tab_w * 0.18,
+        rect.y,
+        rect.x + tab_w,
+        rect.y,
+        rect.x + tab_w,
+        rect.y + tab_h,
+        rect.x + rect.width,
+        rect.y + tab_h,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x + tab_w,
+        rect.y + tab_h,
+        rect.x + tab_w * 0.18,
+        rect.y + tab_h,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgFolderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    const tab_w = @min(rect.width * 0.46, 64);
+    const tab_h = @min(rect.height * 0.28, 18);
+    const slope = @min(tab_h * 0.7, 10);
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x,
+        rect.y + tab_h,
+        rect.x + tab_w * 0.28,
+        rect.y + tab_h,
+        rect.x + tab_w * 0.42,
+        rect.y,
+        rect.x + tab_w,
+        rect.y,
+        rect.x + tab_w + slope,
+        rect.y + tab_h,
+        rect.x + rect.width,
+        rect.y + tab_h,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgBox3dShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    const depth = @min(@min(rect.width, rect.height) * 0.18, 18);
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x,
+        rect.y + depth,
+        rect.x + depth,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height - depth,
+        rect.x + rect.width - depth,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+    try writeSvgLine(writer, rect.x + depth, rect.y, rect.x + depth, rect.y + rect.height - depth, visual);
+    try writeSvgLine(writer, rect.x + depth, rect.y + rect.height - depth, rect.x, rect.y + rect.height, visual);
+    try writeSvgLine(writer, rect.x + depth, rect.y + rect.height - depth, rect.x + rect.width, rect.y + rect.height - depth, visual);
+}
+
+fn renderSvgComponentShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    try renderSvgBoxShape(writer, rect, visual, 0);
+    const tab_w = @min(rect.width * 0.22, 24);
+    const tab_h = @min(rect.height * 0.18, 14);
+    const x = rect.x - tab_w * 0.35;
+    const y1 = rect.y + rect.height * 0.25;
+    const y2 = rect.y + rect.height * 0.62;
+    try renderSvgComponentTab(writer, x, y1, tab_w, tab_h, visual);
+    try renderSvgComponentTab(writer, x, y2, tab_w, tab_h, visual);
+}
+
+fn renderSvgUnderlineShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    try writeSvgLine(writer, rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height, visual);
+}
+
+fn renderSvgCylinderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    const ry = @min(rect.height * 0.22, 18);
+    const left = rect.x;
+    const right = rect.x + rect.width;
+    const top = rect.y;
+    const bottom = rect.y + rect.height;
+    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        left,
+        top + ry,
+        left,
+        top,
+        right,
+        top,
+        right,
+        top + ry,
+        right,
+        bottom - ry,
+        right,
+        bottom,
+        left,
+        bottom,
+        left,
+        bottom - ry,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        left,
+        top + ry,
+        left,
+        top + ry * 2.0,
+        right,
+        top + ry * 2.0,
+        right,
+        top + ry,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius: f64) Io.Writer.Error!void {
+    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        radius,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height: f64, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        x + width,
+        y,
+        x,
+        y,
+        x,
+        y + height,
+        x + width,
+        y + height,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        x1,
+        y1,
+        x2,
+        y2,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn nodeRect(layout: NodeLayout) RectF {
+    return .{
+        .x = layout.center.x - layout.width / 2.0,
+        .y = layout.center.y - layout.height / 2.0,
+        .width = layout.width,
+        .height = layout.height,
+    };
 }
 
 fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual, options: SvgOptions, rounded: bool) Io.Writer.Error!void {
@@ -5610,6 +5889,44 @@ test "DOT parser and SVG renderer support additional Graphviz polygon node shape
     try std.testing.expect(std.mem.indexOf(u8, svg, "<ellipse") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "InvHouse") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Three") != null);
+}
+
+test "DOT parser and SVG renderer support special Graphviz node shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  note [label="Note", shape=note, style="filled,dashed"];
+        \\  tab [label="Tab", shape=tab];
+        \\  folder [label="Folder", shape=folder];
+        \\  box3d [label="Box3D", shape=box3d];
+        \\  component [label="Component", shape=component];
+        \\  underline [label="Underline", shape=underline];
+        \\  cylinder [label="Cylinder", shape=cylinder];
+        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(Shape.note, graph.nodes.items[graph.node_index.get("note").?].shape);
+    try std.testing.expectEqual(Shape.tab, graph.nodes.items[graph.node_index.get("tab").?].shape);
+    try std.testing.expectEqual(Shape.folder, graph.nodes.items[graph.node_index.get("folder").?].shape);
+    try std.testing.expectEqual(Shape.box3d, graph.nodes.items[graph.node_index.get("box3d").?].shape);
+    try std.testing.expectEqual(Shape.component, graph.nodes.items[graph.node_index.get("component").?].shape);
+    try std.testing.expectEqual(Shape.underline, graph.nodes.items[graph.node_index.get("underline").?].shape);
+    try std.testing.expectEqual(Shape.cylinder, graph.nodes.items[graph.node_index.get("cylinder").?].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(countSubstrings(svg, "<path") >= 12);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Component") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Underline") != null);
 }
 
 test "DOT doublecircle shape renders as two circle peripheries" {
