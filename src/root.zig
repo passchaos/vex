@@ -2611,7 +2611,23 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     );
     try writer.print("<rect width=\"100%\" height=\"100%\" fill=\"{s}\"/>\n", .{background});
     if (options.show_title) {
-        try writer.print("<text x=\"16\" y=\"24\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">", .{options.font_family});
+        const label_just = attrValue(graph.attrs.items, "labeljust");
+        const label_loc = attrValue(graph.attrs.items, "labelloc");
+        const text_anchor: []const u8 = if (label_just) |value|
+            if (std.ascii.eqlIgnoreCase(value, "r")) "end" else if (std.ascii.eqlIgnoreCase(value, "c")) "middle" else "start"
+        else
+            "start";
+        const title_x = if (std.mem.eql(u8, text_anchor, "end"))
+            layout.width - 16.0
+        else if (std.mem.eql(u8, text_anchor, "middle"))
+            layout.width / 2.0
+        else
+            16.0;
+        const title_y = if (label_loc) |value|
+            if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
+        else
+            24.0;
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">", .{ title_x, title_y, text_anchor, options.font_family });
         try writeXmlEscaped(writer, title);
         try writer.writeAll("</text>\n");
     }
@@ -4771,6 +4787,31 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
+}
+
+test "SVG renderer honors graph labelloc and labeljust attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="Bottom Right", labelloc=b, labeljust=r];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Bottom Right") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\"") != null);
+    var expected_x_buf: [64]u8 = undefined;
+    const expected_x = try std.fmt.bufPrint(&expected_x_buf, "x=\"{d:.1}\"", .{layout.width - 16.0});
+    var expected_y_buf: [64]u8 = undefined;
+    const expected_y = try std.fmt.bufPrint(&expected_y_buf, "y=\"{d:.1}\"", .{layout.height - 16.0});
+    try std.testing.expect(std.mem.indexOf(u8, svg, expected_x) != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
 }
 
 test "SVG renderer emits URL href and tooltip metadata" {
