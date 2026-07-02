@@ -1296,17 +1296,27 @@ pub const LayoutOptions = struct {
     node_padding_y: f64 = 16,
     crossing_passes: usize = 8,
     coordinate_passes: usize = 4,
+    ranksep_equally: bool = false,
 };
 
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
     var result = options;
     if (attrValue(graph.attrs.items, "ranksep")) |value| {
         result.rank_gap = parseGraphSpacing(value, result.rank_gap);
+        result.ranksep_equally = spacingHasWord(value, "equally");
     }
     if (attrValue(graph.attrs.items, "nodesep")) |value| {
         result.node_gap = parseGraphSpacing(value, result.node_gap);
     }
     return result;
+}
+
+fn spacingHasWord(value: []const u8, word: []const u8) bool {
+    var parts = std.mem.tokenizeAny(u8, value, " \t,");
+    while (parts.next()) |part| {
+        if (std.ascii.eqlIgnoreCase(part, word)) return true;
+    }
+    return false;
 }
 
 fn parseGraphSpacing(value: []const u8, fallback: f64) f64 {
@@ -1444,10 +1454,21 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     const layout_rank_heights = try allocator.dupe(f64, rank_heights);
     errdefer allocator.free(layout_rank_heights);
     var total_depth: f64 = 0;
-    for (rank_heights, 0..) |rank_height, rank| {
-        rank_depths[rank] = total_depth;
-        total_depth += rank_height;
-        if (rank + 1 < rank_heights.len) total_depth += effective_options.rank_gap;
+    if (effective_options.ranksep_equally) {
+        var max_rank_height: f64 = 0;
+        for (rank_heights) |rank_height| max_rank_height = @max(max_rank_height, rank_height);
+        const rank_step = max_rank_height + effective_options.rank_gap;
+        for (rank_heights, 0..) |rank_height, rank| {
+            const center_depth = @as(f64, @floatFromInt(rank)) * rank_step + max_rank_height / 2.0;
+            rank_depths[rank] = center_depth - rank_height / 2.0;
+        }
+        total_depth = if (rank_heights.len == 0) 0 else (@as(f64, @floatFromInt(rank_heights.len - 1)) * rank_step + max_rank_height);
+    } else {
+        for (rank_heights, 0..) |rank_height, rank| {
+            rank_depths[rank] = total_depth;
+            total_depth += rank_height;
+            if (rank + 1 < rank_heights.len) total_depth += effective_options.rank_gap;
+        }
     }
 
     for (graph.nodes.items, 0..) |_, id| {
@@ -4154,4 +4175,28 @@ test "layout honors DOT ranksep and nodesep graph spacing attributes" {
 
     try std.testing.expect(spaced_rank_delta > default_rank_delta);
     try std.testing.expect(spaced_node_delta > default_node_delta);
+}
+
+test "layout honors DOT ranksep equally center spacing" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [ranksep="1.0 equally"];
+        \\  a [label="short"];
+        \\  b [label="tall\nnode\nlabel"];
+        \\  c [label="short"];
+        \\  a -> b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const ab = @abs(layout.nodes[b].center.y - layout.nodes[a].center.y);
+    const bc = @abs(layout.nodes[c].center.y - layout.nodes[b].center.y);
+    try std.testing.expect(@abs(ab - bc) < 0.01);
 }
