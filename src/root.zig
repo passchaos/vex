@@ -2721,8 +2721,7 @@ fn feasibleRankBoundsForNode(graph: *const Graph, ranks: []const usize, acyclic_
     var min_rank: usize = 0;
     var max_rank: usize = std.math.maxInt(usize);
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
-        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
         const min_len = @max(edge_item.min_len, 1);
         if (edge_item.to == node_id and edge_item.from < ranks.len) {
             min_rank = @max(min_rank, ranks[edge_item.from] + min_len);
@@ -2775,8 +2774,7 @@ fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: 
 fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
     var cost: f64 = 0;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
-        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
         if (edge_item.from == node_id and edge_item.to < ranks.len) {
             cost += rankSpanCost(candidate_rank, ranks[edge_item.to], edge_item.weight);
         } else if (edge_item.to == node_id and edge_item.from < ranks.len) {
@@ -2789,8 +2787,7 @@ fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge:
 fn rankAssignmentCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool) f64 {
     var cost: f64 = 0;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
-        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
         if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
         cost += rankSpanCost(ranks[edge_item.from], ranks[edge_item.to], edge_item.weight);
     }
@@ -2799,13 +2796,16 @@ fn rankAssignmentCost(graph: *const Graph, ranks: []const usize, acyclic_edge: [
 
 fn rankAssignmentFeasible(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool) bool {
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
-        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
         if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
         const min_len = @max(edge_item.min_len, 1);
         if (ranks[edge_item.to] < ranks[edge_item.from] + min_len) return false;
     }
     return true;
+}
+
+fn rankEdgeActive(edge_item: Edge, acyclic_edge: []const bool) bool {
+    return edge_item.constraint and edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id];
 }
 
 fn rankSpanCost(from_rank: usize, to_rank: usize, weight: f64) f64 {
@@ -8863,6 +8863,34 @@ test "rank assignment helpers measure feasibility and weighted span cost" {
     try std.testing.expect(rankAssignmentFeasible(&graph, loose, acyclic_edge));
     try std.testing.expect(rankAssignmentFeasible(&graph, tight, acyclic_edge));
     try std.testing.expect(rankAssignmentCost(&graph, tight, acyclic_edge) < rankAssignmentCost(&graph, loose, acyclic_edge));
+}
+
+test "rank assignment helpers ignore inactive rank edges" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [constraint=false, weight=10];
+        \\  b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+
+    try std.testing.expect(!rankEdgeActive(graph.edges.items[0], acyclic_edge));
+    try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
+    try std.testing.expectEqual(@as(f64, 1.0), rankAssignmentCost(&graph, ranks, acyclic_edge));
 }
 
 test "rank local search finds best feasible node rank" {
