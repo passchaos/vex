@@ -4712,15 +4712,37 @@ fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, of
     const to_rank = layout.ranks[edge_item.to];
     const increasing = to_rank > from_rank;
     const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
+    const along = longEdgeDummyAlongFromLayout(layout, edge_item, rankdir, rank) orelse interpolatedWaypointAlong(layout, edge_item, rankdir, index, count);
+    const depth = rankDepthCenter(layout, rank);
+    return offsetPoint(orientWaypoint(rankdir, along, depth, layout), rankdir, offset);
+}
+
+fn longEdgeDummyAlongFromLayout(layout: *const Layout, edge_item: Edge, rankdir: RankDir, rank: usize) ?f64 {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return null;
+    if (edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) return null;
+    const from_rank = layout.ranks[edge_item.from];
+    const to_rank = layout.ranks[edge_item.to];
+    if (from_rank + 1 >= to_rank) return null;
+    if (rank <= from_rank or rank >= to_rank) return null;
+    const span = @as(f64, @floatFromInt(to_rank - from_rank));
+    const t = @as(f64, @floatFromInt(rank - from_rank)) / span;
+    const from_along = pointAlongAxis(layout.nodes[edge_item.from].center, rankdir);
+    const to_along = pointAlongAxis(layout.nodes[edge_item.to].center, rankdir);
+    return from_along + (to_along - from_along) * t;
+}
+
+fn interpolatedWaypointAlong(layout: *const Layout, edge_item: Edge, rankdir: RankDir, index: usize, count: usize) f64 {
     const t = @as(f64, @floatFromInt(index + 1)) / @as(f64, @floatFromInt(count + 1));
     const from_center = layout.nodes[edge_item.from].center;
     const to_center = layout.nodes[edge_item.to].center;
-    const along = if (rankdir == .TB or rankdir == .BT)
-        from_center.x + (to_center.x - from_center.x) * t
-    else
-        from_center.y + (to_center.y - from_center.y) * t;
-    const depth = rankDepthCenter(layout, rank);
-    return offsetPoint(orientWaypoint(rankdir, along, depth, layout), rankdir, offset);
+    return pointAlongAxis(from_center, rankdir) + (pointAlongAxis(to_center, rankdir) - pointAlongAxis(from_center, rankdir)) * t;
+}
+
+fn pointAlongAxis(point: Point, rankdir: RankDir) f64 {
+    return switch (rankdir) {
+        .TB, .BT => point.x,
+        .LR, .RL => point.y,
+    };
 }
 
 fn rankDepthCenter(layout: *const Layout, rank: usize) f64 {
@@ -6632,6 +6654,40 @@ test "layout retains rank metadata for long-edge routing" {
     try std.testing.expectEqual(@as(usize, 3), layout.ranks[d]);
     try std.testing.expectEqual(@as(usize, 4), layout.rank_depths.len);
     try std.testing.expect(longEdgeWaypointCount(&layout, graph.edges.items[3]) == 2);
+}
+
+test "long-edge waypoints use rankdir-aware dummy along axis" {
+    const allocator = std.testing.allocator;
+
+    var tb = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB];
+        \\  a -> b -> c -> d;
+        \\  a -> d;
+        \\}
+    );
+    defer tb.deinit();
+    var tb_layout = try layoutLayered(allocator, &tb, .{});
+    defer tb_layout.deinit();
+    const tb_edge = tb.edges.items[3];
+    const tb_waypoint = longEdgeWaypoint(&tb_layout, tb_edge, tb.rankdir, 0, 0, 2);
+    const tb_dummy = longEdgeDummyAlongFromLayout(&tb_layout, tb_edge, tb.rankdir, tb_layout.ranks[tb_edge.from] + 1).?;
+    try std.testing.expectEqual(tb_dummy, tb_waypoint.x);
+
+    var lr = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a -> b -> c -> d;
+        \\  a -> d;
+        \\}
+    );
+    defer lr.deinit();
+    var lr_layout = try layoutLayered(allocator, &lr, .{});
+    defer lr_layout.deinit();
+    const lr_edge = lr.edges.items[3];
+    const lr_waypoint = longEdgeWaypoint(&lr_layout, lr_edge, lr.rankdir, 0, 0, 2);
+    const lr_dummy = longEdgeDummyAlongFromLayout(&lr_layout, lr_edge, lr.rankdir, lr_layout.ranks[lr_edge.from] + 1).?;
+    try std.testing.expectEqual(lr_dummy, lr_waypoint.y);
 }
 
 test "SVG routes skip-rank edges through intermediate waypoints" {
