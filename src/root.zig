@@ -5515,7 +5515,7 @@ fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
 
 fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, color: []const u8, scale: f64) Io.Writer.Error!void {
     if (scale <= 0) return;
-    const marker_size = 7.0 * scale;
+    const marker_size = 10.0 * scale;
     try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, marker_size, marker_size });
     if (std.mem.eql(u8, suffix, "tail")) try writer.writeAll("-start-reverse");
     try writer.writeAll("\">");
@@ -8398,7 +8398,7 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "markerWidth=\"14.00\" markerHeight=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "markerWidth=\"20.00\" markerHeight=\"20.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "arrow-1-head") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-1-head)\"") == null);
 
