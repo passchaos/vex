@@ -5395,7 +5395,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
     const side_gap = @max(28.0, layout.margin * 0.55) + @abs(offset);
 
     if (rankdir == .TB or rankdir == .BT) {
-        const prefer_left = from.center.x <= to.center.x;
+        const prefer_left = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
         const side_x = if (prefer_left)
             @max(8.0, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
         else
@@ -5426,7 +5426,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         return;
     }
 
-    const prefer_top = from.center.y <= to.center.y;
+    const prefer_top = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
     const side_y = if (prefer_top)
         @max(8.0, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
     else
@@ -5454,6 +5454,24 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             route.end.x,   route.end.y,
         });
     }
+}
+
+fn backEdgeUsesNegativeSide(layout: *const Layout, edge_item: Edge, rankdir: RankDir) bool {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return true;
+    const from = layout.nodes[edge_item.from];
+    const to = layout.nodes[edge_item.to];
+    const from_along = pointAlongAxis(from.center, rankdir);
+    const to_along = pointAlongAxis(to.center, rankdir);
+    const overlap_width = nodeAlongHalfSize(from, rankdir) + nodeAlongHalfSize(to, rankdir);
+    if (@abs(from_along - to_along) <= overlap_width + 2.0) return true;
+    return from_along <= to_along;
+}
+
+fn nodeAlongHalfSize(node: NodeLayout, rankdir: RankDir) f64 {
+    return switch (rankdir) {
+        .TB, .BT => node.width / 2.0,
+        .LR, .RL => node.height / 2.0,
+    };
 }
 
 fn longEdgeWaypointCount(layout: *const Layout, edge_item: Edge) usize {
@@ -8120,6 +8138,32 @@ test "SVG routes multi-rank back edges around the side" {
     try std.testing.expect(countSubstrings(path, " L ") == 1);
     try std.testing.expect(std.mem.indexOf(u8, path, " C ") != null);
     try std.testing.expect(route.start.y > route.end.y);
+}
+
+test "back-edge side channel prefers stable negative side for same column" {
+    const allocator = std.testing.allocator;
+    var layout = Layout{
+        .allocator = allocator,
+        .nodes = try allocator.alloc(NodeLayout, 2),
+        .clusters = try allocator.alloc(ClusterLayout, 0),
+        .edge_waypoints = try allocator.alloc(EdgeWaypoints, 0),
+        .ranks = try allocator.alloc(usize, 2),
+        .rank_depths = try allocator.alloc(f64, 0),
+        .rank_heights = try allocator.alloc(f64, 0),
+        .margin = 40,
+        .width = 220,
+        .height = 260,
+    };
+    defer layout.deinit();
+    layout.nodes[0] = .{ .center = .{ .x = 70, .y = 180 }, .width = 54, .height = 36 };
+    layout.nodes[1] = .{ .center = .{ .x = 68, .y = 60 }, .width = 54, .height = 36 };
+    layout.ranks[0] = 3;
+    layout.ranks[1] = 0;
+
+    const edge_item = Edge{ .id = 0, .from = 0, .to = 1 };
+    try std.testing.expect(backEdgeUsesNegativeSide(&layout, edge_item, .TB));
+    layout.nodes[0].center.x = 150;
+    try std.testing.expect(!backEdgeUsesNegativeSide(&layout, edge_item, .TB));
 }
 
 test "SVG routes rankdir LR and RL back edges around the side" {
