@@ -1501,10 +1501,12 @@ const NodeSize = struct {
 };
 
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
+    const font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
+    const font_scale = font_size / 14.0;
     const line_count = displayLabelLineCount(node_item.label);
     const max_line_len = displayLabelMaxLineLen(node_item.label);
-    const text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width;
-    const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height;
+    const text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
+    const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0);
     switch (node_item.shape) {
@@ -1526,8 +1528,8 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         },
         .record, .mrecord => {
             const metrics = recordMetrics(node_item.label);
-            width = @max(options.node_width, @as(f64, @floatFromInt(metrics.max_field_len)) * options.label_char_width + options.node_padding_x * 2.0);
-            height = @max(options.node_height, @as(f64, @floatFromInt(metrics.field_count)) * options.label_line_height + options.node_padding_y * 2.0);
+            width = @max(options.node_width, @as(f64, @floatFromInt(metrics.max_field_len)) * options.label_char_width * font_scale + options.node_padding_x * 2.0);
+            height = @max(options.node_height, @as(f64, @floatFromInt(metrics.field_count)) * options.label_line_height * font_scale + options.node_padding_y * 2.0);
         },
         else => {},
     }
@@ -2277,7 +2279,7 @@ pub fn renderTerminal(writer: *Io.Writer, graph: *const Graph, layout: *const La
 
 pub const SvgOptions = struct {
     background: []const u8 = "#ffffff",
-    font_family: []const u8 = "Inter, ui-sans-serif, system-ui, sans-serif",
+    font_family: []const u8 = default_svg_font_family,
     show_title: bool = true,
 };
 
@@ -2302,7 +2304,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</defs>\n");
     }
 
-    try renderSvgClusters(writer, graph, layout, options);
+    try renderSvgClusters(writer, graph, layout);
 
     try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
     for (graph.edges.items) |edge_item| {
@@ -2326,7 +2328,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
             try writer.writeAll("/>\n");
             if (edge_item.label) |label| {
-                try renderSvgTextBlock(writer, label, route.label.x, route.label.y, 12, visual.font_color, options.font_family, true, true);
+                try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
             }
             continue;
         }
@@ -2340,7 +2342,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
         try writer.writeAll("/>\n");
         if (edge_item.label) |label| {
-            try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, 12, visual.font_color, options.font_family, true, true);
+            try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
         }
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
@@ -2351,7 +2353,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const l = layout.nodes[node_item.id];
         try renderSvgNodeShape(writer, node_item, l, visual, options);
         if (node_item.shape != .record and node_item.shape != .mrecord) {
-            try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, visual.font_color, options.font_family, false, false);
+            try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, visual.font_size, visual.font_color, visual.font_family, false, false);
         }
     }
     try writer.writeAll("</g>\n</svg>\n");
@@ -2413,10 +2415,14 @@ const MarkerShape = enum {
     odot,
 };
 
+const default_svg_font_family = "Inter, ui-sans-serif, system-ui, sans-serif";
+
 const NodeVisual = struct {
     fill: []const u8,
     stroke: []const u8,
     font_color: []const u8,
+    font_family: []const u8,
+    font_size: f64,
     width: f64,
     radius: f64,
     dash: DashStyle,
@@ -2427,6 +2433,8 @@ const NodeVisual = struct {
 const EdgeVisual = struct {
     stroke: []const u8,
     font_color: []const u8,
+    font_family: []const u8,
+    font_size: f64,
     width: f64,
     dash: DashStyle,
     marker_start: MarkerShape,
@@ -2438,6 +2446,8 @@ const ClusterVisual = struct {
     fill: []const u8,
     stroke: []const u8,
     font_color: []const u8,
+    font_family: []const u8,
+    font_size: f64,
     width: f64,
     radius: f64,
     dash: DashStyle,
@@ -2445,18 +2455,18 @@ const ClusterVisual = struct {
     hidden: bool,
 };
 
-fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
+fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) Io.Writer.Error!void {
     if (graph.clusters.items.len == 0) return;
     try writer.writeAll("<g class=\"clusters\">\n");
     var index = graph.clusters.items.len;
     while (index > 0) {
         index -= 1;
-        try renderSvgClusterBox(writer, graph.clusters.items[index], layout, index, options);
+        try renderSvgClusterBox(writer, graph.clusters.items[index], layout, index);
     }
     try writer.writeAll("</g>\n");
 }
 
-fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layout, index: usize, options: SvgOptions) Io.Writer.Error!void {
+fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layout, index: usize) Io.Writer.Error!void {
     if (index >= layout.clusters.len) return;
     const box = layout.clusters[index];
     if (box.width <= 0 or box.height <= 0) return;
@@ -2475,10 +2485,11 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     });
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
-    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
+    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
         box.x + box.width / 2.0,
         box.y + 18.0,
-        options.font_family,
+        visual.font_family,
+        visual.font_size,
         visual.font_color,
     });
     try writeXmlEscaped(writer, cluster.label);
@@ -2648,10 +2659,11 @@ fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout
 
 fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     if (node.children.len == 0) {
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
             rect.x + rect.width / 2.0,
             rect.y + rect.height / 2.0,
-            options.font_family,
+            visual.font_family,
+            visual.font_size,
             visual.font_color,
         });
         try writeXmlEscaped(writer, node.label);
@@ -2716,6 +2728,8 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
         .fill = fill,
         .stroke = stroke,
         .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
+        .font_family = attrValue(node_item.attrs.items, "fontname") orelse default_svg_font_family,
+        .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.5),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
@@ -2735,6 +2749,8 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     return .{
         .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "#475569",
+        .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
+        .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 12.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.8),
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
         .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
@@ -2753,6 +2769,8 @@ fn resolveClusterVisual(cluster: Cluster) ClusterVisual {
         .fill = attrValue(cluster.attrs.items, "fillcolor") orelse if (filled) "#f8fafc" else "#ffffff",
         .stroke = attrValue(cluster.attrs.items, "color") orelse "#94a3b8",
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "#475569",
+        .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
+        .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 13.0),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.4),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
@@ -2771,6 +2789,12 @@ fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
 fn parseAttrFloat(attrs: []const Attr, name: []const u8, fallback: f64) f64 {
     const value = attrValue(attrs, name) orelse return fallback;
     return std.fmt.parseFloat(f64, value) catch fallback;
+}
+
+fn parsePositiveAttrFloat(attrs: []const Attr, name: []const u8, fallback: f64) f64 {
+    const value = attrValue(attrs, name) orelse return fallback;
+    const parsed = std.fmt.parseFloat(f64, value) catch return fallback;
+    return if (parsed > 0) parsed else fallback;
 }
 
 fn parseAttrUsize(attrs: []const Attr, name: []const u8, fallback: usize) usize {
@@ -3229,15 +3253,15 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
     };
 }
 
-fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: usize, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
+fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
     const line_count = displayLabelLineCount(text);
-    const line_height = @as(f64, @floatFromInt(font_size)) * 1.25;
+    const line_height = font_size * 1.25;
     const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
     const first_y = center_y - block_height / 2.0 + line_height * 0.72;
 
     if (label_background) {
         const max_len = displayLabelMaxLineLen(text);
-        const width = @as(f64, @floatFromInt(max_len * font_size)) * 0.62 + 12.0;
+        const width = @as(f64, @floatFromInt(max_len)) * font_size * 0.62 + 12.0;
         const height = block_height + 8.0;
         try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"4\" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n", .{
             x - width / 2.0,
@@ -3247,7 +3271,7 @@ fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f6
         });
     }
 
-    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d}\" fill=\"{s}\"", .{ x, first_y, font_family, font_size, fill });
+    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\"", .{ x, first_y, font_family, font_size, fill });
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
     try writeDisplayLabelTspans(writer, text, x, line_height);
@@ -3906,6 +3930,36 @@ test "SVG renderer normalizes simple HTML-like labels without affecting plain an
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A &amp; B</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;B&gt;") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;&amp;&gt;") != null);
+}
+
+test "SVG renderer honors DOT fontname and fontsize attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [fontname="Courier", fontsize=18];
+        \\  node [fontname="Courier", fontsize=22];
+        \\  edge [fontname="Times", fontsize=16];
+        \\  subgraph cluster_fonts {
+        \\    label="Fonts";
+        \\    fontname="Georgia";
+        \\    fontsize=20;
+        \\    a [label="Big"];
+        \\  }
+        \\  a -> b [label="Edge"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"22.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times\" font-size=\"16.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Georgia\" font-size=\"20.0\"") != null);
+    const a = graph.node_index.get("a").?;
+    try std.testing.expect(layout.nodes[a].height > 56);
 }
 
 test "SVG renderer honors common Graphviz arrow marker attributes" {
