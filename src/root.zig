@@ -1921,10 +1921,12 @@ fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph
         var rank: usize = 1;
         while (rank < virtual_levels.levels.len) : (rank += 1) {
             orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, true, median_positions);
+            orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank, true);
         }
         rank = virtual_levels.levels.len - 1;
         while (rank > 0) : (rank -= 1) {
             orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank - 1, false, median_positions);
+            orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank - 1, false);
         }
         refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
     }
@@ -1940,7 +1942,7 @@ fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels
     if (rank >= virtual_levels.levels.len) return;
     if (use_parents and rank == 0) return;
     if (!use_parents and rank + 1 >= virtual_levels.levels.len) return;
-    var level = &virtual_levels.levels[rank];
+    const level = &virtual_levels.levels[rank];
     if (level.items.len <= 1) return;
 
     var orders_buf: [128]VirtualMedianOrder = undefined;
@@ -1972,6 +1974,99 @@ fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels
 fn lessThanVirtualMedianOrder(_: void, a: VirtualMedianOrder, b: VirtualMedianOrder) bool {
     if (a.median == b.median) return a.original < b.original;
     return a.median < b.median;
+}
+
+const VirtualBlockOrder = struct {
+    key: usize,
+    median_sum: f64,
+    count: usize,
+    first: usize,
+};
+
+fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) void {
+    if (rank >= virtual_levels.levels.len) return;
+    if (use_parents and rank == 0) return;
+    if (!use_parents and rank + 1 >= virtual_levels.levels.len) return;
+    const level = &virtual_levels.levels[rank];
+    if (level.items.len <= 2 or level.items.len > 128) return;
+
+    var blocks: [128]VirtualBlockOrder = undefined;
+    var block_count: usize = 0;
+    for (level.items, 0..) |node, index| {
+        const key = virtualBlockKey(graph, node);
+        const median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, index);
+        const block_index = virtualBlockIndex(blocks[0..block_count], key) orelse blk: {
+            blocks[block_count] = .{ .key = key, .median_sum = 0, .count = 0, .first = index };
+            block_count += 1;
+            break :blk block_count - 1;
+        };
+        blocks[block_index].median_sum += median;
+        blocks[block_index].count += 1;
+    }
+    if (block_count <= 1) return;
+
+    std.mem.sort(VirtualBlockOrder, blocks[0..block_count], {}, lessThanVirtualBlockOrder);
+
+    var scratch: [128]VirtualNode = undefined;
+    var out: usize = 0;
+    for (blocks[0..block_count]) |block| {
+        for (level.items) |node| {
+            if (virtualBlockKey(graph, node) != block.key) continue;
+            scratch[out] = node;
+            out += 1;
+        }
+    }
+    @memcpy(level.items, scratch[0..level.items.len]);
+}
+
+fn virtualBlockIndex(blocks: []const VirtualBlockOrder, key: usize) ?usize {
+    for (blocks, 0..) |block, index| {
+        if (block.key == key) return index;
+    }
+    return null;
+}
+
+fn lessThanVirtualBlockOrder(_: void, a: VirtualBlockOrder, b: VirtualBlockOrder) bool {
+    const a_median = a.median_sum / @as(f64, @floatFromInt(a.count));
+    const b_median = b.median_sum / @as(f64, @floatFromInt(b.count));
+    if (a_median == b_median) return a.first < b.first;
+    return a_median < b_median;
+}
+
+fn virtualBlockKey(graph: *const Graph, node: VirtualNode) usize {
+    return switch (node) {
+        .real => |node_id| (clusterIndexContainingNode(graph, node_id) orelse std.math.maxInt(usize)),
+        .dummy => |edge_id| blk: {
+            if (edge_id >= graph.edges.items.len) break :blk std.math.maxInt(usize);
+            const edge_item = graph.edges.items[edge_id];
+            const from_cluster = clusterIndexContainingNode(graph, edge_item.from);
+            const to_cluster = clusterIndexContainingNode(graph, edge_item.to);
+            if (from_cluster != null and to_cluster != null and from_cluster.? == to_cluster.?) break :blk from_cluster.?;
+            break :blk std.math.maxInt(usize);
+        },
+    };
+}
+
+fn virtualNodeNeighborMedian(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, node: VirtualNode, rank: usize, use_parents: bool, fallback: usize) f64 {
+    var positions: [64]usize = undefined;
+    var count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        const neighbor = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse continue;
+        const adjacent_rank = if (use_parents) rank - 1 else rank + 1;
+        const pos = positionInVirtualLevel(virtual_levels.levels[adjacent_rank].items, neighbor) orelse continue;
+        if (count < positions.len) {
+            positions[count] = pos;
+            count += 1;
+        }
+    }
+    return medianOfPositions(positions[0..count], fallback);
+}
+
+fn clusterIndexContainingNode(graph: *const Graph, node_id: NodeId) ?usize {
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (containsNode(cluster.nodes, node_id)) return index;
+    }
+    return null;
 }
 
 fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usize {
@@ -7103,6 +7198,40 @@ test "virtual level median orders dummy nodes" {
     const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
     const c_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = c }).?;
     try std.testing.expect(dummy_pos < c_pos);
+}
+
+test "virtual level block ordering keeps cluster members adjacent" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const top_a = try graph.node("top_a");
+    const top_b = try graph.node("top_b");
+    const a = try graph.node("a");
+    const outside = try graph.node("outside");
+    const b = try graph.node("b");
+    _ = try graph.edge(top_a, a, .{});
+    _ = try graph.edge(top_b, b, .{});
+    _ = try graph.addCluster("cluster_pair", null, &.{ a, b }, &.{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[top_a] = 0;
+    ranks[top_b] = 0;
+    ranks[a] = 1;
+    ranks[outside] = 1;
+    ranks[b] = 1;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    virtual_levels.levels[1].items[0] = .{ .real = a };
+    virtual_levels.levels[1].items[1] = .{ .real = outside };
+    virtual_levels.levels[1].items[2] = .{ .real = b };
+
+    orderVirtualLevelBlocksByMedian(&graph, &virtual_levels, ranks, 1, true);
+    const a_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = a }).?;
+    const b_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = b }).?;
+    try std.testing.expect(a_pos + 1 == b_pos or b_pos + 1 == a_pos);
 }
 
 test "virtual adjacent exchange reduces dummy crossings" {
