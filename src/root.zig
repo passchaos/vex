@@ -4126,7 +4126,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const title_font = attrValue(graph.attrs.items, "fontname") orelse options.font_family;
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = attrValue(graph.attrs.items, "fontcolor") orelse "black";
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{ title_x, title_y, text_anchor, title_font, title_size, title_color });
+        try writer.print("<text xml:space=\"preserve\" x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{ title_x, title_y, text_anchor, title_font, title_size, title_color });
         try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
@@ -4536,7 +4536,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
         if (std.ascii.eqlIgnoreCase(value, "b")) box.y + box.height - 10.0 else box.y + 18.0
     else
         box.y + 18.0;
-    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
+    try writer.print("<text xml:space=\"preserve\" x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
         label_x,
         label_y,
         text_anchor,
@@ -5417,7 +5417,7 @@ fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout
 
 fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     if (node.children.len == 0) {
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
+        try writer.print("<text xml:space=\"preserve\" x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
             rect.x + rect.width / 2.0,
             rect.y + rect.height / 2.0,
             visual.font_family,
@@ -6343,7 +6343,7 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
         });
     }
 
-    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\"", .{ x, first_y, text_anchor, font_family, font_size, fill });
+    try writer.print("<text xml:space=\"preserve\" x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\"", .{ x, first_y, text_anchor, font_family, font_size, fill });
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
     try writeDisplayLabelTspans(writer, text, x, line_height);
@@ -8323,6 +8323,25 @@ test "SVG renderer uses Graphviz default font family" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "ui-sans-serif") == null);
+}
+
+test "SVG renderer preserves text spacing like Graphviz" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="Graph"];
+        \\  subgraph cluster_c { label="Cluster"; c; }
+        \\  a -> b [label="edge"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "xml:space=\"preserve\"") >= 4);
 }
 
 test "SVG renderer uses Graphviz default text color" {
