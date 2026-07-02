@@ -4148,7 +4148,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
         const visual = resolveEdgeVisual(edge_item);
         if (visual.hidden) continue;
-        try writer.writeAll("<g class=\"edge\">\n");
+        try writer.print("<g id=\"edge{d}\" class=\"edge\">\n", .{edge_item.id + 1});
         const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
         if (edge_wrap == .none) try writeSvgEdgeTitle(writer, graph, edge_item);
         if (edge_item.from == edge_item.to) {
@@ -4198,7 +4198,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
-        try writer.writeAll("<g class=\"node\">\n");
+        try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
         const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
         if (node_wrap == .none) try writeSvgTitle(writer, node_item.name);
         if (htmlTableMetrics(node_item.label) != null) {
@@ -4512,7 +4512,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     if (box.width <= 0 or box.height <= 0) return;
     const visual = resolveClusterVisual(cluster);
     if (visual.hidden) return;
-    try writer.writeAll("<g class=\"cluster\">\n");
+    try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.name);
     try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
         box.x,
@@ -8329,8 +8329,8 @@ test "SVG renderer wraps nodes in Graphviz-like groups" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(countSubstrings(svg, "<g class=\"node\">") >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"node\">\n<title>a</title>") != null);
+    try std.testing.expect(countSubstrings(svg, "class=\"node\"") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">\n<title>a</title>") != null);
 }
 
 test "SVG renderer wraps edges in Graphviz-like groups" {
@@ -8347,8 +8347,8 @@ test "SVG renderer wraps edges in Graphviz-like groups" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(countSubstrings(svg, "<g class=\"edge\">") >= 1);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"edge\">\n<title>a-&gt;b</title>") != null);
+    try std.testing.expect(countSubstrings(svg, "class=\"edge\"") >= 1);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">\n<title>a-&gt;b</title>") != null);
 }
 
 test "SVG renderer uses Graphviz default font family" {
@@ -9480,7 +9480,7 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"clusters\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"cluster\">\n<title>cluster_api</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">\n<title>cluster_api</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>cluster_api</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
