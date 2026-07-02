@@ -3529,9 +3529,44 @@ fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(Nod
         rank = levels.len - 1;
         while (rank > 0) : (rank -= 1) {
             nudgeLevelTowardNeighbors(graph, ranks, levels[rank - 1].items, centers, false);
+            centerLevelOnNeighborSpans(graph, ranks, levels[rank - 1].items, centers, sizes, false, 0.45);
             compactLevelCenters(levels[rank - 1].items, centers, sizes, options.node_gap);
         }
     }
+}
+
+fn centerLevelOnNeighborSpans(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, sizes: []const NodeSize, use_parents: bool, blend: f64) void {
+    for (level) |node_id| {
+        const target = neighborSpanCenter(graph, ranks, centers, sizes, node_id, use_parents) orelse continue;
+        centers[node_id] = centers[node_id] + (target - centers[node_id]) * blend;
+    }
+}
+
+fn neighborSpanCenter(graph: *const Graph, ranks: []const usize, centers: []const f64, sizes: []const NodeSize, node_id: NodeId, use_parents: bool) ?f64 {
+    if (node_id >= ranks.len or node_id >= centers.len or node_id >= sizes.len) return null;
+    var min_left = std.math.floatMax(f64);
+    var max_right: f64 = -std.math.floatMax(f64);
+    var count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        const neighbor = if (use_parents and edge_item.to == node_id)
+            edge_item.from
+        else if (!use_parents and edge_item.from == node_id)
+            edge_item.to
+        else
+            continue;
+        if (neighbor >= ranks.len or neighbor >= centers.len or neighbor >= sizes.len) continue;
+        const adjacent = if (use_parents)
+            ranks[neighbor] + 1 == ranks[node_id]
+        else
+            ranks[node_id] + 1 == ranks[neighbor];
+        if (!adjacent) continue;
+        min_left = @min(min_left, centers[neighbor] - sizes[neighbor].width / 2.0);
+        max_right = @max(max_right, centers[neighbor] + sizes[neighbor].width / 2.0);
+        count += 1;
+    }
+    if (count == 0) return null;
+    return (min_left + max_right) / 2.0;
 }
 
 fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64) void {
@@ -6937,6 +6972,41 @@ test "simple adjacent edge straightening reduces chain wobble" {
     const after = @abs(centers[b] - centers[a]) + @abs(centers[b] - centers[c]);
     try std.testing.expect(after < before);
     try std.testing.expect(centers[side] >= centers[b] + sizes[b].width / 2.0 + 10 + sizes[side].width / 2.0);
+}
+
+test "coordinate refinement centers nodes on adjacent neighbor spans" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const parent = try graph.node("parent");
+    const left = try graph.node("left");
+    const right = try graph.node("right");
+    _ = try graph.edge(parent, left, .{});
+    _ = try graph.edge(parent, right, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[parent] = 0;
+    ranks[left] = 1;
+    ranks[right] = 1;
+
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[parent] = 0;
+    centers[left] = 40;
+    centers[right] = 160;
+
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    sizes[parent] = .{ .width = 20, .height = 20 };
+    sizes[left] = .{ .width = 20, .height = 20 };
+    sizes[right] = .{ .width = 60, .height = 20 };
+
+    const target = neighborSpanCenter(&graph, ranks, centers, sizes, parent, false) orelse return error.MissingNeighborSpan;
+    try std.testing.expectEqual(@as(f64, 110), target);
+    centerLevelOnNeighborSpans(&graph, ranks, &.{parent}, centers, sizes, false, 1.0);
+    try std.testing.expectEqual(target, centers[parent]);
 }
 
 test "virtual levels include dummy nodes for skip-rank edges" {
