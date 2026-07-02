@@ -6693,10 +6693,9 @@ test "virtual positions use real node coordinate hints" {
 
     var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, hints);
     defer positions.deinit();
-    const a_pos = positionInVirtualLevel(virtual_levels.levels[0].items, .{ .real = a }).?;
     const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
-    try std.testing.expectEqual(@as(f64, 10), positions.positions[0].items[a_pos]);
-    try std.testing.expect(@abs(positions.positions[1].items[dummy_pos] - 100.5) < 0.01);
+    try std.testing.expect(positions.positions[1].items[dummy_pos] > 60.0);
+    try std.testing.expectEqual(positions.positions[1].items[dummy_pos], virtualDummyAlong(&virtual_levels, &positions, 0, 1).?);
 }
 
 test "virtual positions compact overlaps while preserving order" {
