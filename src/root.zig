@@ -8700,6 +8700,44 @@ test "rank assignment helpers measure feasibility and weighted span cost" {
     try std.testing.expect(rankAssignmentCost(&graph, tight, acyclic_edge) < rankAssignmentCost(&graph, loose, acyclic_edge));
 }
 
+test "rank slack tightening reduces whole graph weighted span cost" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c -> d;
+        \\  x -> d [weight=5];
+        \\  y -> x [weight=1];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const x = graph.node_index.get("x").?;
+    const y = graph.node_index.get("y").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 2;
+    ranks[d] = 3;
+    ranks[x] = 0;
+    ranks[y] = 0;
+
+    const before = rankAssignmentCost(&graph, ranks, acyclic_edge);
+    tightenRanksTowardSinks(&graph, ranks, acyclic_edge);
+    const after = rankAssignmentCost(&graph, ranks, acyclic_edge);
+    try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
+    try std.testing.expect(after < before);
+    try std.testing.expectEqual(ranks[x] + 1, ranks[d]);
+}
+
 test "rank slack tightening preserves explicit boundary ranks" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
