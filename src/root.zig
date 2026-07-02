@@ -2746,6 +2746,25 @@ fn bestFeasibleRankForNode(graph: *const Graph, ranks: []const usize, acyclic_ed
     return best_rank;
 }
 
+fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, passes: usize) void {
+    if (passes == 0) return;
+    for (0..passes) |_| {
+        var changed = false;
+        for (ranks, 0..) |current_rank, node_id| {
+            if (rankTighteningPinned(graph, node_id)) continue;
+            const target_rank = bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id) orelse continue;
+            if (target_rank == current_rank) continue;
+            const before = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, current_rank);
+            const after = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, target_rank);
+            if (after < before) {
+                ranks[node_id] = target_rank;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+}
+
 fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
     var cost: f64 = 0;
     for (graph.edges.items) |edge_item| {
@@ -8740,6 +8759,44 @@ test "rank local search finds best feasible node rank" {
     try std.testing.expectEqual(@as(usize, 1), bounds.min);
     try std.testing.expectEqual(@as(usize, 2), bounds.max);
     try std.testing.expectEqual(@as(usize, 2), bestFeasibleRankForNode(&graph, ranks, acyclic_edge, x).?);
+}
+
+test "bounded rank local search can move nodes upward when it lowers cost" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  source -> a -> b -> c -> sink;
+        \\  source -> x [weight=8];
+        \\  x -> sink [weight=1];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const source = graph.node_index.get("source").?;
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const sink = graph.node_index.get("sink").?;
+    const x = graph.node_index.get("x").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[source] = 0;
+    ranks[a] = 1;
+    ranks[b] = 2;
+    ranks[c] = 3;
+    ranks[sink] = 4;
+    ranks[x] = 3;
+
+    const before = rankAssignmentCost(&graph, ranks, acyclic_edge);
+    improveRanksByLocalSearch(&graph, ranks, acyclic_edge, 4);
+    const after = rankAssignmentCost(&graph, ranks, acyclic_edge);
+    try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
+    try std.testing.expect(after < before);
+    try std.testing.expectEqual(@as(usize, 1), ranks[x]);
 }
 
 test "rank slack tightening reduces whole graph weighted span cost" {
