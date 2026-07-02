@@ -6906,6 +6906,24 @@ test "layered layout orients rank progression for every rankdir" {
     try expectRankDirection(&rl, &rl_layout, .RL);
 }
 
+test "layered layout applies separated margins for horizontal rankdirs" {
+    const allocator = std.testing.allocator;
+    var lr = try parseDot(allocator, "digraph G { graph [rankdir=LR]; a -> b; }");
+    defer lr.deinit();
+
+    var layout = try layoutLayered(allocator, &lr, .{ .margin = 40, .margin_y = 8 });
+    defer layout.deinit();
+    const a = lr.node_index.get("a").?;
+    const b = lr.node_index.get("b").?;
+
+    try std.testing.expectEqual(@as(f64, 40), layout.margin_x);
+    try std.testing.expectEqual(@as(f64, 8), layout.margin_y);
+    try std.testing.expect(layout.nodes[a].center.x >= layout.margin_x + layout.nodes[a].width / 2.0);
+    try std.testing.expect(layout.nodes[a].center.y >= layout.margin_y + layout.nodes[a].height / 2.0);
+    try std.testing.expect(layout.nodes[b].center.x > layout.nodes[a].center.x);
+    try std.testing.expect(layout.height < layout.width);
+}
+
 fn expectRankDirection(graph: *const Graph, layout: *const Layout, rankdir: RankDir) !void {
     const a = graph.node_index.get("a").?;
     const b = graph.node_index.get("b").?;
