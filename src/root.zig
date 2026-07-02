@@ -1709,6 +1709,23 @@ fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: 
     return .{ .allocator = allocator, .levels = levels };
 }
 
+fn extractRealLevelsFromVirtual(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels) ![]std.ArrayList(NodeId) {
+    const levels = try allocator.alloc(std.ArrayList(NodeId), virtual_levels.levels.len);
+    errdefer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    errdefer for (levels) |*level| level.deinit(allocator);
+
+    for (virtual_levels.levels, 0..) |virtual_level, rank| {
+        for (virtual_level.items) |vnode| {
+            switch (vnode) {
+                .real => |node_id| try levels[rank].append(allocator, node_id),
+                .dummy => {},
+            }
+        }
+    }
+    return levels;
+}
+
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
     const font_scale = font_size / 14.0;
@@ -6070,6 +6087,43 @@ test "virtual levels include dummy nodes for skip-rank edges" {
     try std.testing.expect(virtualLevelContains(virtual_levels.levels[1].items, .{ .dummy = 0 }));
     try std.testing.expect(virtualLevelContains(virtual_levels.levels[2].items, .{ .dummy = 0 }));
     try std.testing.expect(virtualLevelContains(virtual_levels.levels[3].items, .{ .real = d }));
+}
+
+test "virtual levels can extract real node levels" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 3;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    const real_levels = try extractRealLevelsFromVirtual(allocator, &virtual_levels);
+    defer {
+        for (real_levels) |*level| level.deinit(allocator);
+        allocator.free(real_levels);
+    }
+
+    try std.testing.expectEqual(@as(usize, 4), real_levels.len);
+    try std.testing.expectEqual(@as(usize, 2), real_levels[0].items.len);
+    try std.testing.expectEqual(a, real_levels[0].items[0]);
+    try std.testing.expectEqual(b, real_levels[0].items[1]);
+    try std.testing.expectEqual(@as(usize, 1), real_levels[1].items.len);
+    try std.testing.expectEqual(c, real_levels[1].items[0]);
+    try std.testing.expectEqual(@as(usize, 0), real_levels[2].items.len);
+    try std.testing.expectEqual(d, real_levels[3].items[0]);
 }
 
 fn virtualLevelContains(level: []const VirtualNode, needle: VirtualNode) bool {
