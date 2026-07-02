@@ -2894,6 +2894,7 @@ pub const SvgOptions = struct {
 
 pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
     const edge_routing = svgEdgeRoutingMode(graph);
+    const concentrate = graphConcentrateEnabled(graph);
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
     const title = attrValue(graph.attrs.items, "label") orelse graph.name;
     try writer.print(
@@ -2925,6 +2926,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (graph.directed) {
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
+            if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(edge_item);
             if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, visual.stroke, visual.marker_scale);
             if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, visual.stroke, visual.marker_scale);
@@ -2936,6 +2938,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 
     try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
     for (graph.edges.items) |edge_item| {
+        if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
         const visual = resolveEdgeVisual(edge_item);
         if (visual.hidden) continue;
         const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
@@ -3165,6 +3168,32 @@ fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
         offset += found + needle.len;
     }
     return count;
+}
+
+fn renderedEdgePathCount(svg: []const u8) usize {
+    const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
+    const end_rel = std.mem.indexOf(u8, svg[start..], "</g>") orelse return 0;
+    return countSubstrings(svg[start .. start + end_rel], "<path d=\"M ");
+}
+
+fn graphConcentrateEnabled(graph: *const Graph) bool {
+    const value = attrValue(graph.attrs.items, "concentrate") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn isConcentratedDuplicateEdge(graph: *const Graph, edge_id: EdgeId) bool {
+    const edge_item = graph.edges.items[edge_id];
+    for (graph.edges.items[0..edge_id]) |candidate| {
+        if (candidate.from == candidate.to or edge_item.from == edge_item.to) continue;
+        if (graph.directed) {
+            if (candidate.from == edge_item.from and candidate.to == edge_item.to) return true;
+        } else {
+            const same = candidate.from == edge_item.from and candidate.to == edge_item.to;
+            const reverse = candidate.from == edge_item.to and candidate.to == edge_item.from;
+            if (same or reverse) return true;
+        }
+    }
+    return false;
 }
 
 const EdgeRoute = struct {
@@ -6064,6 +6093,40 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
     try std.testing.expectEqual(layout.nodes[b].center.y, unclipped.start.y);
     try std.testing.expectEqual(layout.nodes[c].center.x, unclipped.end.x);
     try std.testing.expectEqual(layout.nodes[c].center.y, unclipped.end.y);
+}
+
+test "SVG renderer honors DOT concentrate graph attribute for duplicate edges" {
+    const allocator = std.testing.allocator;
+    var concentrated = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [concentrate=true];
+        \\  a -> b [label="first"];
+        \\  a -> b [label="second"];
+        \\}
+    );
+    defer concentrated.deinit();
+    var concentrated_layout = try layoutLayered(allocator, &concentrated, .{});
+    defer concentrated_layout.deinit();
+    const concentrated_svg = try renderSvgAlloc(allocator, &concentrated, &concentrated_layout, .{});
+    defer allocator.free(concentrated_svg);
+    try std.testing.expect(countSubstrings(concentrated_svg, "marker id=\"arrow-") == 1);
+    try std.testing.expectEqual(@as(usize, 1), renderedEdgePathCount(concentrated_svg));
+    try std.testing.expect(std.mem.indexOf(u8, concentrated_svg, "first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, concentrated_svg, "second") == null);
+
+    var normal = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [label="first"];
+        \\  a -> b [label="second"];
+        \\}
+    );
+    defer normal.deinit();
+    var normal_layout = try layoutLayered(allocator, &normal, .{});
+    defer normal_layout.deinit();
+    const normal_svg = try renderSvgAlloc(allocator, &normal, &normal_layout, .{});
+    defer allocator.free(normal_svg);
+    try std.testing.expect(renderedEdgePathCount(normal_svg) >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, normal_svg, "second") != null);
 }
 
 test "DOT subgraphs scope default node and edge attributes" {
