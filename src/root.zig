@@ -2693,8 +2693,7 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
             for (ranks, 0..) |node_rank, node_id| {
                 if (node_rank != rank) continue;
                 if (rankTighteningPinned(graph, node_id)) continue;
-                const upper_bound = tightRankUpperBoundFromChildren(graph, ranks, acyclic_edge, node_id) orelse continue;
-                const target_rank = bestWeightedTightenedRank(graph, ranks, acyclic_edge, node_id, upper_bound);
+                const target_rank = bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id) orelse continue;
                 if (target_rank > ranks[node_id]) {
                     ranks[node_id] = target_rank;
                     changed = true;
@@ -2705,37 +2704,6 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
         }
         if (!changed) break;
     }
-}
-
-fn tightRankUpperBoundFromChildren(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId) ?usize {
-    var bound: ?usize = null;
-    for (graph.edges.items) |edge_item| {
-        if (edge_item.from != node_id or !edge_item.constraint) continue;
-        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
-        if (edge_item.to >= ranks.len) continue;
-        const min_len = @max(edge_item.min_len, 1);
-        if (ranks[edge_item.to] < min_len) continue;
-        const candidate = ranks[edge_item.to] - min_len;
-        bound = if (bound) |current| @min(current, candidate) else candidate;
-    }
-    return bound;
-}
-
-fn bestWeightedTightenedRank(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, upper_bound: usize) usize {
-    if (node_id >= ranks.len) return 0;
-    const current_rank = ranks[node_id];
-    if (upper_bound <= current_rank) return current_rank;
-    var best_rank = current_rank;
-    var best_cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, current_rank);
-    var candidate = current_rank + 1;
-    while (candidate <= upper_bound) : (candidate += 1) {
-        const cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, candidate);
-        if (cost < best_cost or @abs(cost - best_cost) <= 0.0001) {
-            best_cost = cost;
-            best_rank = candidate;
-        }
-    }
-    return best_rank;
 }
 
 const RankBounds = struct {
