@@ -2526,8 +2526,8 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
 
 fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
     const pad_x: f64 = 12;
-    const pad_y: f64 = 24;
-    const label_band: f64 = 22;
+    const pad_y: f64 = 12;
+    const label_band: f64 = 18;
     const child_gap: f64 = 12;
     for (graph.clusters.items, 0..) |cluster, index| {
         var min_x = std.math.floatMax(f64);
@@ -8940,6 +8940,8 @@ test "cluster layout uses compact padding while fitting labels" {
     const node = layout.nodes[a];
     try std.testing.expect(cluster_box.width >= node.width + 24.0);
     try std.testing.expect(cluster_box.width <= 104.0);
+    try std.testing.expect(cluster_box.height >= node.height + 42.0);
+    try std.testing.expect(cluster_box.height <= node.height + 48.0);
 }
 
 test "cluster fill follows Graphviz style filled color semantics" {
