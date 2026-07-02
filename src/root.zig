@@ -5469,10 +5469,50 @@ fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, of
     const to_rank = layout.ranks[edge_item.to];
     const increasing = to_rank > from_rank;
     const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
-    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| return offsetPoint(point, rankdir, offset);
+    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| return offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), rankdir, offset);
     const along = longEdgeDummyAlongFromLayout(layout, edge_item, rankdir, rank) orelse interpolatedWaypointAlong(layout, edge_item, rankdir, index, count);
     const depth = rankDepthCenter(layout, rank);
-    return offsetPoint(orientWaypoint(rankdir, along, depth, layout), rankdir, offset);
+    const point = orientWaypoint(rankdir, along, depth, layout);
+    return offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), rankdir, offset);
+}
+
+fn avoidNodeAtRankForWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, rank: usize, point: Point) Point {
+    var result = point;
+    const clearance = 12.0;
+    for (layout.nodes, 0..) |node, node_id| {
+        if (node_id == edge_item.from or node_id == edge_item.to) continue;
+        if (node_id >= layout.ranks.len or layout.ranks[node_id] != rank) continue;
+        if (!pointInsideNodeWithPadding(result, node, clearance)) continue;
+        const push_negative = pointAlongAxis(layout.nodes[edge_item.from].center, rankdir) <= pointAlongAxis(node.center, rankdir);
+        result = pushWaypointOutsideNode(result, node, rankdir, clearance, push_negative);
+    }
+    return result;
+}
+
+fn pointInsideNodeWithPadding(point: Point, node: NodeLayout, padding: f64) bool {
+    return point.x >= node.center.x - node.width / 2.0 - padding and
+        point.x <= node.center.x + node.width / 2.0 + padding and
+        point.y >= node.center.y - node.height / 2.0 - padding and
+        point.y <= node.center.y + node.height / 2.0 + padding;
+}
+
+fn pushWaypointOutsideNode(point: Point, node: NodeLayout, rankdir: RankDir, clearance: f64, push_negative: bool) Point {
+    var result = point;
+    switch (rankdir) {
+        .TB, .BT => {
+            result.x = if (push_negative)
+                node.center.x - node.width / 2.0 - clearance
+            else
+                node.center.x + node.width / 2.0 + clearance;
+        },
+        .LR, .RL => {
+            result.y = if (push_negative)
+                node.center.y - node.height / 2.0 - clearance
+            else
+                node.center.y + node.height / 2.0 + clearance;
+        },
+    }
+    return result;
 }
 
 fn storedEdgeWaypoint(layout: *const Layout, edge_id: EdgeId, rank: usize) ?Point {
@@ -7990,6 +8030,45 @@ test "long-edge waypoints use rankdir-aware dummy along axis" {
     const lr_waypoint = longEdgeWaypoint(&lr_layout, lr_edge, lr.rankdir, 0, 0, 2);
     try std.testing.expectEqual(lr_layout.edge_waypoints[lr_edge.id].points[0].point.x, lr_waypoint.x);
     try std.testing.expectEqual(lr_layout.edge_waypoints[lr_edge.id].points[0].point.y, lr_waypoint.y);
+}
+
+test "long-edge waypoints avoid same-rank node boxes" {
+    const allocator = std.testing.allocator;
+    var layout = Layout{
+        .allocator = allocator,
+        .nodes = try allocator.alloc(NodeLayout, 3),
+        .clusters = try allocator.alloc(ClusterLayout, 0),
+        .edge_waypoints = try allocator.alloc(EdgeWaypoints, 1),
+        .ranks = try allocator.alloc(usize, 3),
+        .rank_depths = try allocator.alloc(f64, 3),
+        .rank_heights = try allocator.alloc(f64, 3),
+        .margin = 40,
+        .width = 220,
+        .height = 260,
+    };
+    defer layout.deinit();
+    layout.nodes[0] = .{ .center = .{ .x = 80, .y = 60 }, .width = 40, .height = 30 };
+    layout.nodes[1] = .{ .center = .{ .x = 80, .y = 130 }, .width = 54, .height = 36 };
+    layout.nodes[2] = .{ .center = .{ .x = 80, .y = 200 }, .width = 40, .height = 30 };
+    layout.edge_waypoints[0] = .{ .points = try allocator.dupe(EdgeWaypoint, &.{.{ .rank = 1, .point = .{ .x = 80, .y = 130 } }}) };
+    layout.ranks[0] = 0;
+    layout.ranks[1] = 1;
+    layout.ranks[2] = 2;
+    layout.rank_depths[0] = 0;
+    layout.rank_depths[1] = 70;
+    layout.rank_depths[2] = 140;
+    layout.rank_heights[0] = 30;
+    layout.rank_heights[1] = 36;
+    layout.rank_heights[2] = 30;
+
+    const edge_item = Edge{
+        .id = 0,
+        .from = 0,
+        .to = 2,
+    };
+    const waypoint = longEdgeWaypoint(&layout, edge_item, .TB, 0, 0, 1);
+    try std.testing.expect(!pointInsideNodeWithPadding(waypoint, layout.nodes[1], 0));
+    try std.testing.expect(waypoint.x < layout.nodes[1].center.x - layout.nodes[1].width / 2.0);
 }
 
 test "SVG routes skip-rank edges through intermediate waypoints" {
