@@ -1584,6 +1584,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     const axis_sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(axis_sizes);
     for (sizes, 0..) |size, id| axis_sizes[id] = orientSizeForLayout(size, graph.rankdir);
+    var virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap);
+    defer virtual_positions.deinit();
 
     const centers = try allocator.alloc(f64, n);
     defer allocator.free(centers);
@@ -1647,7 +1649,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, nodes, cluster_layouts);
-    try computeEdgeWaypoints(allocator, graph, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, edge_waypoints);
+    try computeEdgeWaypoints(allocator, graph, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, edge_waypoints, &virtual_levels, &virtual_positions);
 
     const base_width = total_along + effective_options.margin * 2.0;
     const base_height = total_depth + effective_options.margin * 2.0;
@@ -1682,6 +1684,17 @@ const VirtualLevels = struct {
     fn deinit(self: *VirtualLevels) void {
         for (self.levels) |*level| level.deinit(self.allocator);
         self.allocator.free(self.levels);
+        self.* = undefined;
+    }
+};
+
+const VirtualPositions = struct {
+    allocator: std.mem.Allocator,
+    positions: []std.ArrayList(f64),
+
+    fn deinit(self: *VirtualPositions) void {
+        for (self.positions) |*level| level.deinit(self.allocator);
+        self.allocator.free(self.positions);
         self.* = undefined;
     }
 };
@@ -1815,6 +1828,47 @@ fn virtualAdjacentNode(edge_item: Edge, node: VirtualNode, ranks: []const usize,
         },
     }
     return null;
+}
+
+fn computeVirtualPositions(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels, graph: *const Graph, sizes: []const NodeSize, gap: f64) !VirtualPositions {
+    const positions = try allocator.alloc(std.ArrayList(f64), virtual_levels.levels.len);
+    errdefer allocator.free(positions);
+    for (positions) |*level| level.* = .empty;
+    errdefer for (positions) |*level| level.deinit(allocator);
+
+    var max_width: f64 = 0;
+    for (virtual_levels.levels, 0..) |level, rank| {
+        var left: f64 = 0;
+        for (level.items) |vnode| {
+            const width = virtualNodeWidth(vnode, sizes, graph);
+            try positions[rank].append(allocator, left + width / 2.0);
+            left += width + gap;
+        }
+        if (level.items.len > 0) max_width = @max(max_width, left - gap);
+    }
+    for (virtual_levels.levels, 0..) |level, rank| {
+        if (level.items.len == 0) continue;
+        const level_width = virtualLevelWidth(level.items, sizes, graph, gap);
+        const shift = (max_width - level_width) / 2.0;
+        for (positions[rank].items) |*pos| pos.* += shift;
+    }
+    return .{ .allocator = allocator, .positions = positions };
+}
+
+fn virtualNodeWidth(vnode: VirtualNode, sizes: []const NodeSize, graph: *const Graph) f64 {
+    _ = graph;
+    return switch (vnode) {
+        .real => |node_id| if (node_id < sizes.len) sizes[node_id].width else 1.0,
+        .dummy => 1.0,
+    };
+}
+
+fn virtualLevelWidth(level: []const VirtualNode, sizes: []const NodeSize, graph: *const Graph, gap: f64) f64 {
+    if (level.len == 0) return 0;
+    var width: f64 = 0;
+    for (level) |vnode| width += virtualNodeWidth(vnode, sizes, graph);
+    width += gap * @as(f64, @floatFromInt(level.len - 1));
+    return width;
 }
 
 fn extractRealLevelsFromVirtual(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels) ![]std.ArrayList(NodeId) {
@@ -3081,6 +3135,8 @@ fn computeEdgeWaypoints(
     total_depth: f64,
     margin: f64,
     edge_waypoints: []EdgeWaypoints,
+    virtual_levels: *const VirtualLevels,
+    virtual_positions: *const VirtualPositions,
 ) !void {
     for (graph.edges.items) |edge_item| {
         if (edge_item.id >= edge_waypoints.len) continue;
@@ -3099,7 +3155,9 @@ fn computeEdgeWaypoints(
             rank += 1;
             i += 1;
         }) {
-            const along = longEdgeDummyAlongFromNodes(nodes, ranks, edge_item, graph.rankdir, rank) orelse continue;
+            const along = virtualDummyAlong(virtual_levels, virtual_positions, edge_item.id, rank) orelse
+                longEdgeDummyAlongFromNodes(nodes, ranks, edge_item, graph.rankdir, rank) orelse
+                continue;
             const depth = rankDepthCenterFrom(rank_depths, rank_heights, rank);
             points[i] = .{
                 .rank = rank,
@@ -3108,6 +3166,19 @@ fn computeEdgeWaypoints(
         }
         edge_waypoints[edge_item.id] = .{ .points = points };
     }
+}
+
+fn virtualDummyAlong(virtual_levels: *const VirtualLevels, virtual_positions: *const VirtualPositions, edge_id: EdgeId, rank: usize) ?f64 {
+    if (rank >= virtual_levels.levels.len or rank >= virtual_positions.positions.len) return null;
+    for (virtual_levels.levels[rank].items, 0..) |vnode, index| {
+        switch (vnode) {
+            .dummy => |dummy_edge| {
+                if (dummy_edge == edge_id and index < virtual_positions.positions[rank].items.len) return virtual_positions.positions[rank].items[index];
+            },
+            .real => {},
+        }
+    }
+    return null;
 }
 
 fn longEdgeDummyAlongFromNodes(nodes: []const NodeLayout, ranks: []const usize, edge_item: Edge, rankdir: RankDir, rank: usize) ?f64 {
@@ -6305,6 +6376,40 @@ test "virtual reducer real-node order can be extracted" {
         allocator.free(real_levels);
     }
     try std.testing.expectEqual(c, real_levels[1].items[0]);
+}
+
+test "virtual positions expose dummy along coordinates" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 2;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2);
+
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10);
+    defer positions.deinit();
+    const dummy_along = virtualDummyAlong(&virtual_levels, &positions, 0, 1) orelse return error.MissingDummyAlong;
+    const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
+    try std.testing.expectEqual(positions.positions[1].items[dummy_pos], dummy_along);
 }
 
 fn virtualLevelContains(level: []const VirtualNode, needle: VirtualNode) bool {
