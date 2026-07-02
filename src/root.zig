@@ -1612,6 +1612,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     normalizeCenters(centers, axis_sizes);
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
+    applyVirtualRealPositionsExceptGroups(graph, &virtual_levels, &final_virtual_positions, centers);
+    normalizeCenters(centers, axis_sizes);
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -1902,6 +1904,23 @@ fn applyVirtualRealPositions(virtual_levels: *const VirtualLevels, virtual_posit
             switch (vnode) {
                 .real => |node_id| {
                     if (node_id < centers.len) centers[node_id] = virtual_positions.positions[rank].items[index];
+                },
+                .dummy => {},
+            }
+        }
+    }
+}
+
+fn applyVirtualRealPositionsExceptGroups(graph: *const Graph, virtual_levels: *const VirtualLevels, virtual_positions: *const VirtualPositions, centers: []f64) void {
+    for (virtual_levels.levels, 0..) |level, rank| {
+        if (rank >= virtual_positions.positions.len) continue;
+        for (level.items, 0..) |vnode, index| {
+            if (index >= virtual_positions.positions[rank].items.len) continue;
+            switch (vnode) {
+                .real => |node_id| {
+                    if (node_id < centers.len and node_id < graph.nodes.items.len and nodeGroupName(graph.nodes.items[node_id]) == null) {
+                        centers[node_id] = virtual_positions.positions[rank].items[index];
+                    }
                 },
                 .dummy => {},
             }
@@ -6594,6 +6613,41 @@ test "virtual positions can update real node centers" {
     applyVirtualRealPositions(&virtual_levels, &positions, centers);
     try std.testing.expectEqual(@as(f64, 30), centers[a]);
     try std.testing.expectEqual(@as(f64, 90), centers[b]);
+}
+
+test "virtual real center update preserves grouped nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const grouped = try graph.node("grouped");
+    const plain = try graph.node("plain");
+    try graph.setNodeAttr(grouped, "group", "main");
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[grouped] = 0;
+    ranks[plain] = 0;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+    const hints = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(hints);
+    hints[grouped] = 20;
+    hints[plain] = 80;
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, hints);
+    defer positions.deinit();
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[grouped] = 5;
+    centers[plain] = 5;
+
+    applyVirtualRealPositionsExceptGroups(&graph, &virtual_levels, &positions, centers);
+    try std.testing.expectEqual(@as(f64, 5), centers[grouped]);
+    try std.testing.expectEqual(@as(f64, 80), centers[plain]);
 }
 
 fn virtualLevelContains(level: []const VirtualNode, needle: VirtualNode) bool {
