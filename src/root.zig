@@ -1552,6 +1552,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
     try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
     refineAdjacentExchanges(graph, levels, ranks, 2);
+    applyOrderingHints(graph, levels, ranks);
     enforceClusterContiguity(graph, levels);
     alignGroupedNodes(graph, levels);
 
@@ -2574,6 +2575,75 @@ fn firstClusterMemberIndex(cluster: Cluster, nodes: []const NodeId) ?usize {
         if (containsNode(cluster.nodes, node_id)) return index;
     }
     return null;
+}
+
+const OrderingMode = enum {
+    none,
+    in,
+    out,
+};
+
+fn applyOrderingHints(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize) void {
+    const graph_mode = orderingMode(attrValue(graph.attrs.items, "ordering"));
+    for (graph.nodes.items) |node_item| {
+        const mode = if (graph_mode != .none) graph_mode else orderingMode(attrValue(node_item.attrs.items, "ordering"));
+        switch (mode) {
+            .none => {},
+            .out => applyNodeOrdering(graph, levels, ranks, node_item.id, true),
+            .in => applyNodeOrdering(graph, levels, ranks, node_item.id, false),
+        }
+    }
+}
+
+fn orderingMode(value: ?[]const u8) OrderingMode {
+    const text = value orelse return .none;
+    if (std.ascii.eqlIgnoreCase(text, "out")) return .out;
+    if (std.ascii.eqlIgnoreCase(text, "in")) return .in;
+    return .none;
+}
+
+fn applyNodeOrdering(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, node_id: NodeId, out_order: bool) void {
+    var ordered: [64]NodeId = undefined;
+    var count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        const neighbor = if (out_order and edge_item.from == node_id)
+            edge_item.to
+        else if (!out_order and edge_item.to == node_id)
+            edge_item.from
+        else
+            continue;
+        if (neighbor >= ranks.len or count >= ordered.len) continue;
+        ordered[count] = neighbor;
+        count += 1;
+    }
+    if (count <= 1) return;
+
+    var rank: usize = 0;
+    while (rank < levels.len) : (rank += 1) {
+        var present: [64]NodeId = undefined;
+        var present_count: usize = 0;
+        for (ordered[0..count]) |neighbor| {
+            if (ranks[neighbor] != rank) continue;
+            if (positionInLayer(levels[rank].items, neighbor) == null) continue;
+            present[present_count] = neighbor;
+            present_count += 1;
+        }
+        if (present_count <= 1) continue;
+        reorderLayerBySequence(levels[rank].items, present[0..present_count]);
+    }
+}
+
+fn reorderLayerBySequence(level: []NodeId, sequence: []const NodeId) void {
+    var insert_at = level.len;
+    for (sequence) |id| {
+        if (positionInLayer(level, id)) |pos| insert_at = @min(insert_at, pos);
+    }
+    if (insert_at == level.len) return;
+    for (sequence) |id| {
+        const current = positionInLayer(level, id) orelse continue;
+        moveLevelItem(level, current, insert_at);
+        insert_at += 1;
+    }
 }
 
 const GroupOrder = struct {
@@ -6409,6 +6479,46 @@ test "layered layout uses DOT edge weight as a coordinate hint" {
     const weighted_distance = @abs(weighted_layout.nodes[weighted_child].center.x - weighted_layout.nodes[weighted_right].center.x);
     const balanced_distance = @abs(balanced_layout.nodes[balanced_child].center.x - balanced_layout.nodes[balanced_right].center.x);
     try std.testing.expect(weighted_distance < balanced_distance);
+}
+
+test "layered layout honors DOT ordering hints for edge declaration order" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB, ordering=out];
+        \\  source -> c;
+        \\  source -> a;
+        \\  source -> b;
+        \\  { rank=same; a; b; c; }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    try std.testing.expect(layout.nodes[c].center.x < layout.nodes[a].center.x);
+    try std.testing.expect(layout.nodes[a].center.x < layout.nodes[b].center.x);
+
+    var incoming = try parseDot(allocator,
+        \\digraph G {
+        \\  sink [ordering=in];
+        \\  c -> sink;
+        \\  a -> sink;
+        \\  b -> sink;
+        \\  { rank=same; a; b; c; }
+        \\}
+    );
+    defer incoming.deinit();
+    var incoming_layout = try layoutLayered(allocator, &incoming, .{});
+    defer incoming_layout.deinit();
+    const ia = incoming.node_index.get("a").?;
+    const ib = incoming.node_index.get("b").?;
+    const ic = incoming.node_index.get("c").?;
+    try std.testing.expect(incoming_layout.nodes[ic].center.x < incoming_layout.nodes[ia].center.x);
+    try std.testing.expect(incoming_layout.nodes[ia].center.x < incoming_layout.nodes[ib].center.x);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {
