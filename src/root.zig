@@ -1994,7 +1994,7 @@ fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *Virtual
     var node_medians: [128]f64 = undefined;
     var block_count: usize = 0;
     for (level.items, 0..) |node, index| {
-        const key = virtualBlockKey(graph, node);
+        const key = virtualBlockKeyAtRank(graph, ranks, node, rank);
         const median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, index);
         node_medians[index] = median;
         const block_index = virtualBlockIndex(blocks[0..block_count], key) orelse blk: {
@@ -2012,12 +2012,12 @@ fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *Virtual
     var scratch: [128]VirtualNode = undefined;
     var out: usize = 0;
     for (blocks[0..block_count]) |block| {
-        appendVirtualBlockSortedByMedian(level.items, node_medians[0..level.items.len], block.key, graph, scratch[0..], &out);
+        appendVirtualBlockSortedByMedian(level.items, node_medians[0..level.items.len], block.key, graph, ranks, rank, scratch[0..], &out);
     }
     @memcpy(level.items, scratch[0..level.items.len]);
 }
 
-fn appendVirtualBlockSortedByMedian(level: []const VirtualNode, medians: []const f64, block_key: usize, graph: *const Graph, scratch: []VirtualNode, out: *usize) void {
+fn appendVirtualBlockSortedByMedian(level: []const VirtualNode, medians: []const f64, block_key: usize, graph: *const Graph, ranks: []const usize, rank: usize, scratch: []VirtualNode, out: *usize) void {
     var remaining = true;
     var used: [128]bool = undefined;
     @memset(used[0..level.len], false);
@@ -2026,7 +2026,7 @@ fn appendVirtualBlockSortedByMedian(level: []const VirtualNode, medians: []const
         var best: ?usize = null;
         for (level, 0..) |node, index| {
             if (used[index]) continue;
-            if (virtualBlockKey(graph, node) != block_key) continue;
+            if (virtualBlockKeyAtRank(graph, ranks, node, rank) != block_key) continue;
             remaining = true;
             if (best == null or medians[index] < medians[best.?] or (medians[index] == medians[best.?] and index < best.?)) {
                 best = index;
@@ -2054,6 +2054,10 @@ fn lessThanVirtualBlockOrder(_: void, a: VirtualBlockOrder, b: VirtualBlockOrder
 }
 
 fn virtualBlockKey(graph: *const Graph, node: VirtualNode) usize {
+    return virtualBlockKeyAtRank(graph, &.{}, node, 0);
+}
+
+fn virtualBlockKeyAtRank(graph: *const Graph, ranks: []const usize, node: VirtualNode, rank: usize) usize {
     const root_base = graph.clusters.items.len + 1;
     return switch (node) {
         .real => |node_id| (clusterIndexContainingNode(graph, node_id) orelse (root_base + node_id)),
@@ -2063,9 +2067,25 @@ fn virtualBlockKey(graph: *const Graph, node: VirtualNode) usize {
             const from_cluster = clusterIndexContainingNode(graph, edge_item.from);
             const to_cluster = clusterIndexContainingNode(graph, edge_item.to);
             if (from_cluster != null and to_cluster != null and from_cluster.? == to_cluster.?) break :blk from_cluster.?;
+            if (ranks.len > 0) {
+                if (crossClusterEndpointBlockKey(edge_item, ranks, rank, from_cluster, to_cluster)) |key| break :blk key;
+            }
             break :blk root_base + graph.nodes.items.len + edge_id;
         },
     };
+}
+
+fn crossClusterEndpointBlockKey(edge_item: Edge, ranks: []const usize, rank: usize, from_cluster: ?usize, to_cluster: ?usize) ?usize {
+    if (edge_item.ltail == null and edge_item.lhead == null) return null;
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    if (from_cluster == null and to_cluster == null) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank + 1 >= to_rank) return null;
+    if (rank <= from_rank or rank >= to_rank) return null;
+    if (rank == from_rank + 1) return from_cluster;
+    if (rank + 1 == to_rank) return to_cluster;
+    return null;
 }
 
 fn virtualNodeNeighborMedian(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, node: VirtualNode, rank: usize, use_parents: bool, fallback: usize) f64 {
@@ -2106,7 +2126,7 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
             if (level.items.len < 2 or level.items.len > 64) continue;
             var i: usize = 0;
             while (i + 1 < level.items.len) : (i += 1) {
-                if (virtualSwapCrossesClusterBlock(graph, level.items[i], level.items[i + 1])) continue;
+                if (virtualSwapCrossesClusterBlock(graph, ranks, rank, level.items[i], level.items[i + 1])) continue;
                 const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
                 std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
                 const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
@@ -2121,9 +2141,9 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
     }
 }
 
-fn virtualSwapCrossesClusterBlock(graph: *const Graph, a: VirtualNode, b: VirtualNode) bool {
-    const a_key = virtualBlockKey(graph, a);
-    const b_key = virtualBlockKey(graph, b);
+fn virtualSwapCrossesClusterBlock(graph: *const Graph, ranks: []const usize, rank: usize, a: VirtualNode, b: VirtualNode) bool {
+    const a_key = virtualBlockKeyAtRank(graph, ranks, a, rank);
+    const b_key = virtualBlockKeyAtRank(graph, ranks, b, rank);
     if (a_key == b_key) return false;
     return isClusterVirtualBlockKey(graph, a_key) or isClusterVirtualBlockKey(graph, b_key);
 }
@@ -7314,6 +7334,30 @@ test "virtual block keys leave root nodes as singleton blocks" {
     try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = a }), virtualBlockKey(&graph, .{ .real = b }));
     try std.testing.expect(virtualBlockKey(&graph, .{ .real = outside }) != virtualBlockKey(&graph, .{ .real = a }));
     try std.testing.expect(virtualBlockKey(&graph, .{ .dummy = 1 }) != virtualBlockKey(&graph, .{ .real = outside }));
+}
+
+test "cross-cluster long-edge dummies attach to nearest endpoint block" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    const edge_id = try graph.edge(a, d, .{ .ltail = "cluster_tail", .lhead = "cluster_head" });
+    _ = try graph.addCluster("cluster_tail", null, &.{a}, &.{});
+    _ = try graph.addCluster("cluster_head", null, &.{d}, &.{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 2;
+    ranks[d] = 3;
+
+    try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = a }), virtualBlockKeyAtRank(&graph, ranks, .{ .dummy = edge_id }, 1));
+    try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = d }), virtualBlockKeyAtRank(&graph, ranks, .{ .dummy = edge_id }, 2));
 }
 
 test "virtual adjacent exchange preserves cluster block boundaries" {
