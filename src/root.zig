@@ -4119,7 +4119,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
         else
             24.0;
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">", .{ title_x, title_y, text_anchor, options.font_family });
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"14\" fill=\"black\">", .{ title_x, title_y, text_anchor, options.font_family });
         try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
@@ -5479,7 +5479,7 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     return .{
         .fill = fill,
         .stroke = color,
-        .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
+        .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(node_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.0),
@@ -5500,7 +5500,7 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     const tail_enabled = markerEnabledByDir(dir, false);
     return .{
         .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
-        .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "#475569",
+        .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 12.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
@@ -5522,7 +5522,7 @@ fn resolveClusterVisual(cluster: Cluster) ClusterVisual {
     return .{
         .fill = attrValue(cluster.attrs.items, "fillcolor") orelse if (filled) color else "none",
         .stroke = color,
-        .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "#475569",
+        .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 13.0),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.0),
@@ -8312,6 +8312,27 @@ test "SVG renderer uses Graphviz default font family" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "ui-sans-serif") == null);
+}
+
+test "SVG renderer uses Graphviz default text color" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="Title"];
+        \\  subgraph cluster_c { label="Cluster"; c; }
+        \\  a -> b [label="edge"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "fill=\"black\"") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#475569\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#0f172a\"") == null);
 }
 
 test "SVG renderer emits headlabel taillabel and xlabel" {
