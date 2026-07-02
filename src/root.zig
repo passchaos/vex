@@ -1973,10 +1973,12 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     const rounded = styleHas(style, "rounded");
     const dashed = styleHas(style, "dashed");
     const dotted = styleHas(style, "dotted");
-    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) node_item.color else "#f8fafc";
+    const color = attrValue(node_item.attrs.items, "color") orelse node_item.color;
+    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) color else "#f8fafc";
+    const stroke = if (std.mem.eql(u8, color, "#f8fafc")) "#334155" else color;
     return .{
         .fill = fill,
-        .stroke = attrValue(node_item.attrs.items, "color") orelse "#334155",
+        .stroke = stroke,
         .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", 1.5),
         .radius = if (rounded) 10 else 0,
@@ -2816,6 +2818,29 @@ test "SVG renderer honors common Graphviz visual attributes" {
     const second_offset = parallelEdgeOffset(&graph, 1);
     try std.testing.expect(first_offset < 0);
     try std.testing.expect(second_offset > 0);
+}
+
+test "SVG node rendering separates Graphviz color and fillcolor semantics" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  default_node;
+        \\  stroked [color="#dc2626"];
+        \\  filled [style=filled, color="#16a34a"];
+        \\  filled_explicit [color="#1d4ed8", fillcolor="#dbeafe"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f8fafc\" stroke=\"#334155\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f8fafc\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
 }
 
 test "DOT subgraphs scope default node and edge attributes" {
