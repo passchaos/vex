@@ -14,6 +14,7 @@ pub const Shape = enum {
     ellipse,
     egg,
     box,
+    polygon,
     square,
     circle,
     doublecircle,
@@ -522,6 +523,7 @@ fn setAttrInList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name:
 
 fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "box") or std.ascii.eqlIgnoreCase(value, "rect") or std.ascii.eqlIgnoreCase(value, "rectangle")) return .box;
+    if (std.ascii.eqlIgnoreCase(value, "polygon")) return .polygon;
     if (std.ascii.eqlIgnoreCase(value, "square")) return .square;
     if (std.ascii.eqlIgnoreCase(value, "ellipse") or std.ascii.eqlIgnoreCase(value, "oval")) return .ellipse;
     if (std.ascii.eqlIgnoreCase(value, "egg")) return .egg;
@@ -564,6 +566,7 @@ fn shapeName(shape: Shape) []const u8 {
         .ellipse => "ellipse",
         .egg => "egg",
         .box => "box",
+        .polygon => "polygon",
         .square => "square",
         .circle => "circle",
         .doublecircle => "doublecircle",
@@ -1671,6 +1674,14 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         .triangle, .invtriangle => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
             height = @max(height, text_height + options.node_padding_y * 2.4);
+        },
+        .polygon => {
+            width = @max(width, text_width + options.node_padding_x * 3.0);
+            if (customPolygonFromAttrs(node_item.attrs.items).regular) {
+                const side = @max(width, height);
+                width = side;
+                height = side;
+            }
         },
         .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
@@ -3188,6 +3199,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             }
         },
         .egg => try renderSvgEggShape(writer, layout, visual),
+        .polygon => try renderSvgCustomPolygon(writer, node_item, layout, visual),
         .diamond => try renderSvgPolygonRings(6, writer, layout, visual, diamondPoints),
         .mdiamond => {
             try renderSvgPolygonRings(6, writer, layout, visual, diamondPoints);
@@ -3252,6 +3264,94 @@ fn renderSvgPolygonRings(comptime N: usize, writer: *Io.Writer, layout: NodeLayo
         const points = pointsFn(ring_layout);
         try renderSvgPolygon(writer, &points, ring_visual);
     }
+}
+
+const CustomPolygon = struct {
+    sides: usize,
+    regular: bool,
+    orientation_deg: f64,
+    skew: f64,
+    distortion: f64,
+};
+
+fn customPolygonFromAttrs(attrs: []const Attr) CustomPolygon {
+    const raw_sides = parseAttrUsize(attrs, "sides", 4);
+    const regular = if (attrValue(attrs, "regular")) |value| parseBool(value) orelse false else false;
+    return .{
+        .sides = std.math.clamp(raw_sides, 3, 32),
+        .regular = regular,
+        .orientation_deg = parseAttrFloat(attrs, "orientation", 0.0),
+        .skew = std.math.clamp(parseAttrFloat(attrs, "skew", 0.0), -4.0, 4.0),
+        .distortion = std.math.clamp(parseAttrFloat(attrs, "distortion", 0.0), -4.0, 4.0),
+    };
+}
+
+fn renderSvgCustomPolygon(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const spec = customPolygonFromAttrs(node_item.attrs.items);
+    var ring: usize = 0;
+    while (ring < visual.peripheries) : (ring += 1) {
+        const inset = @as(f64, @floatFromInt(ring)) * 5.0;
+        const ring_layout = NodeLayout{
+            .center = layout.center,
+            .width = @max(1, layout.width - inset * 2.0),
+            .height = @max(1, layout.height - inset * 2.0),
+        };
+        var points: [32]Point = undefined;
+        customPolygonPoints(spec, ring_layout, &points);
+        var ring_visual = visual;
+        if (ring > 0) ring_visual.fill = "none";
+        try renderSvgPolygon(writer, points[0..spec.sides], ring_visual);
+    }
+}
+
+fn customPolygonPoints(spec: CustomPolygon, layout: NodeLayout, points: *[32]Point) void {
+    const width = if (spec.regular) @max(layout.width, layout.height) else layout.width;
+    const height = if (spec.regular) @max(layout.width, layout.height) else layout.height;
+    const sector = 2.0 * std.math.pi / @as(f64, @floatFromInt(spec.sides));
+    const side_len = std.math.sin(sector / 2.0);
+    const skew_dist = std.math.hypot(@abs(spec.distortion) + @abs(spec.skew), 1.0);
+    const g_distortion = spec.distortion * std.math.sqrt2 / std.math.cos(sector / 2.0);
+    const g_skew = spec.skew / 2.0;
+    var angle = (sector - std.math.pi) / 2.0;
+    var r = Point{ .x = 0.5 * std.math.cos(angle), .y = 0.5 * std.math.sin(angle) };
+    angle += (std.math.pi - sector) / 2.0;
+    const orientation = degreesToRadians(spec.orientation_deg);
+
+    var max_x: f64 = 0;
+    var max_y: f64 = 0;
+    var raw: [32]Point = undefined;
+    for (0..spec.sides) |i| {
+        angle += sector;
+        r.x += side_len * std.math.cos(angle);
+        r.y += side_len * std.math.sin(angle);
+
+        var p = Point{
+            .x = r.x * (skew_dist + r.y * g_distortion) + r.y * g_skew,
+            .y = r.y,
+        };
+        const rotated_angle = orientation + std.math.atan2(p.y, p.x);
+        const magnitude = std.math.hypot(p.x, p.y);
+        p = .{
+            .x = magnitude * std.math.cos(rotated_angle),
+            .y = magnitude * std.math.sin(rotated_angle),
+        };
+        raw[i] = p;
+        max_x = @max(max_x, @abs(p.x));
+        max_y = @max(max_y, @abs(p.y));
+    }
+
+    const scale_x = if (max_x > 0) (width / 2.0) / max_x else 1.0;
+    const scale_y = if (max_y > 0) (height / 2.0) / max_y else 1.0;
+    for (0..spec.sides) |i| {
+        points[i] = .{
+            .x = layout.center.x + raw[i].x * scale_x,
+            .y = layout.center.y + raw[i].y * scale_y,
+        };
+    }
+}
+
+fn degreesToRadians(degrees: f64) f64 {
+    return degrees * std.math.pi / 180.0;
 }
 
 fn diamondPoints(layout: NodeLayout) [6]Point {
@@ -6079,6 +6179,42 @@ test "DOT parser and SVG renderer support Graphviz M shapes star and egg" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon") != null);
     try std.testing.expect(countSubstrings(svg, "fill=\"none\" stroke=") >= 8);
     try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+}
+
+test "DOT parser and SVG renderer support parameterized Graphviz polygon shape" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  pent [label="five", shape=polygon, sides=5, orientation=18];
+        \\  reg [label="regular", shape=polygon, sides=6, regular=true, peripheries=2];
+        \\  skewed [label="skewed", shape=polygon, sides=4, skew=0.6, distortion=-0.25];
+        \\  pent -> reg -> skewed;
+        \\}
+    );
+    defer graph.deinit();
+
+    const pent = graph.node_index.get("pent").?;
+    const reg = graph.node_index.get("reg").?;
+    const skewed = graph.node_index.get("skewed").?;
+    try std.testing.expectEqual(Shape.polygon, graph.nodes.items[pent].shape);
+    try std.testing.expectEqual(Shape.polygon, graph.nodes.items[reg].shape);
+    try std.testing.expectEqual(Shape.polygon, graph.nodes.items[skewed].shape);
+    try std.testing.expectEqual(@as(usize, 5), customPolygonFromAttrs(graph.nodes.items[pent].attrs.items).sides);
+    try std.testing.expect(customPolygonFromAttrs(graph.nodes.items[reg].attrs.items).regular);
+    try std.testing.expect(customPolygonFromAttrs(graph.nodes.items[skewed].attrs.items).skew > 0);
+    try std.testing.expect(customPolygonFromAttrs(graph.nodes.items[skewed].attrs.items).distortion < 0);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expect(@abs(layout.nodes[reg].width - layout.nodes[reg].height) < 0.01);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(countSubstrings(svg, "<polygon") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "five") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "skewed") != null);
 }
 
 test "DOT doublecircle shape renders as two circle peripheries" {
