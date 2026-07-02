@@ -868,10 +868,28 @@ pub const LayoutOptions = struct {
     rank_gap: f64 = 110,
     node_gap: f64 = 56,
     margin: f64 = 40,
+    label_char_width: f64 = 8,
+    label_line_height: f64 = 18,
+    node_padding_x: f64 = 28,
+    node_padding_y: f64 = 16,
+    crossing_passes: usize = 8,
+    coordinate_passes: usize = 4,
 };
 
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
     const n = graph.nodes.items.len;
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+
+    if (n == 0) {
+        return .{
+            .allocator = allocator,
+            .nodes = nodes,
+            .width = options.margin * 2.0,
+            .height = options.margin * 2.0,
+        };
+    }
+
     const ranks = try allocator.alloc(usize, n);
     defer allocator.free(ranks);
     @memset(ranks, 0);
@@ -912,42 +930,69 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
 
-    var rank_counts = try allocator.alloc(usize, max_rank + 1);
-    defer allocator.free(rank_counts);
-    @memset(rank_counts, 0);
-    for (ranks) |rank| rank_counts[rank] += 1;
+    var levels = try allocator.alloc(std.ArrayList(NodeId), max_rank + 1);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
 
-    var rank_offsets = try allocator.alloc(usize, max_rank + 1);
-    defer allocator.free(rank_offsets);
-    @memset(rank_offsets, 0);
+    for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
+    try reduceLayerCrossings(allocator, graph, levels, ranks, options.crossing_passes);
 
-    const nodes = try allocator.alloc(NodeLayout, n);
-    errdefer allocator.free(nodes);
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, options);
 
+    const axis_sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(axis_sizes);
+    for (sizes, 0..) |size, id| axis_sizes[id] = orientSizeForLayout(size, graph.rankdir);
+
+    const centers = try allocator.alloc(f64, n);
+    defer allocator.free(centers);
+    @memset(centers, 0);
+
+    var rank_widths = try allocator.alloc(f64, levels.len);
+    defer allocator.free(rank_widths);
     var max_width: f64 = 0;
-    for (rank_counts) |count| {
-        const count_f: f64 = @floatFromInt(count);
-        const rank_width = if (count == 0) 0 else count_f * options.node_width + (count_f - 1) * options.node_gap;
-        max_width = @max(max_width, rank_width);
+    for (levels, 0..) |level, rank| {
+        rank_widths[rank] = packLevelFromLeft(level.items, axis_sizes, options.node_gap, centers);
+        max_width = @max(max_width, rank_widths[rank]);
     }
 
-    const depth_f: f64 = @floatFromInt(max_rank + 1);
-    const total_depth = depth_f * options.node_height + (depth_f - 1) * options.rank_gap;
+    for (levels, 0..) |level, rank| {
+        const shift = (max_width - rank_widths[rank]) / 2.0;
+        for (level.items) |id| centers[id] += shift;
+    }
+
+    refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, options);
+    normalizeCenters(centers, axis_sizes);
+
+    var total_along: f64 = 0;
+    for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
+
+    var rank_heights = try allocator.alloc(f64, levels.len);
+    defer allocator.free(rank_heights);
+    @memset(rank_heights, options.node_height);
+    for (levels, 0..) |level, rank| {
+        for (level.items) |id| rank_heights[rank] = @max(rank_heights[rank], axis_sizes[id].height);
+    }
+
+    var rank_depths = try allocator.alloc(f64, levels.len);
+    defer allocator.free(rank_depths);
+    var total_depth: f64 = 0;
+    for (rank_heights, 0..) |rank_height, rank| {
+        rank_depths[rank] = total_depth;
+        total_depth += rank_height;
+        if (rank + 1 < rank_heights.len) total_depth += options.rank_gap;
+    }
 
     for (graph.nodes.items, 0..) |_, id| {
         const rank = ranks[id];
-        const slot = rank_offsets[rank];
-        rank_offsets[rank] += 1;
-        const count_f: f64 = @floatFromInt(rank_counts[rank]);
-        const rank_width = count_f * options.node_width + (count_f - 1) * options.node_gap;
-        const slot_f: f64 = @floatFromInt(slot);
-        const along = options.margin + (max_width - rank_width) / 2.0 + options.node_width / 2.0 + slot_f * (options.node_width + options.node_gap);
-        const depth = options.margin + options.node_height / 2.0 + @as(f64, @floatFromInt(rank)) * (options.node_height + options.rank_gap);
-        const center = orientPoint(graph.rankdir, along, depth, max_width, total_depth, options.margin);
-        nodes[id] = .{ .center = center, .width = options.node_width, .height = options.node_height };
+        const depth = rank_depths[rank] + rank_heights[rank] / 2.0;
+        const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, options.margin);
+        nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
 
-    const base_width = max_width + options.margin * 2.0;
+    const base_width = total_along + options.margin * 2.0;
     const base_height = total_depth + options.margin * 2.0;
     return .{
         .allocator = allocator,
@@ -957,14 +1002,254 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     };
 }
 
-fn orientPoint(rankdir: RankDir, along: f64, depth: f64, max_width: f64, total_depth: f64, margin: f64) Point {
-    _ = max_width;
+const NodeSize = struct {
+    width: f64,
+    height: f64,
+};
+
+fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
+    const line_count = labelLineCount(node_item.label);
+    const max_line_len = labelMaxLineLen(node_item.label);
+    const text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width;
+    const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height;
+    var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
+    var height = @max(options.node_height, text_height + options.node_padding_y * 2.0);
+    if (node_item.shape == .circle) {
+        const diameter = @max(width, height);
+        width = diameter;
+        height = diameter;
+    }
+    return .{ .width = width, .height = height };
+}
+
+fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
+    return switch (rankdir) {
+        .TB, .BT => size,
+        .LR, .RL => .{ .width = size.height, .height = size.width },
+    };
+}
+
+fn labelLineCount(text: []const u8) usize {
+    var count: usize = 1;
+    for (text) |c| {
+        if (c == '\n') count += 1;
+    }
+    return count;
+}
+
+fn labelMaxLineLen(text: []const u8) usize {
+    var current: usize = 0;
+    var max_len: usize = 0;
+    for (text) |c| {
+        if (c == '\n') {
+            max_len = @max(max_len, current);
+            current = 0;
+        } else if (c == '\t') {
+            current += 4;
+        } else if ((c & 0xc0) != 0x80) {
+            current += 1;
+        }
+    }
+    return @max(max_len, current);
+}
+
+fn reduceLayerCrossings(allocator: std.mem.Allocator, graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) !void {
+    if (levels.len <= 1 or passes == 0) return;
+
+    const positions = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(positions);
+    const median_positions = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(median_positions);
+
+    for (0..passes) |_| {
+        var rank: usize = 1;
+        while (rank < levels.len) : (rank += 1) {
+            buildPositionMap(positions, levels[rank - 1].items);
+            orderLevelByMedian(graph, ranks, &levels[rank], positions, median_positions, true);
+        }
+
+        rank = levels.len - 1;
+        while (rank > 0) : (rank -= 1) {
+            buildPositionMap(positions, levels[rank].items);
+            orderLevelByMedian(graph, ranks, &levels[rank - 1], positions, median_positions, false);
+        }
+    }
+}
+
+fn buildPositionMap(positions: []usize, level: []const NodeId) void {
+    @memset(positions, std.math.maxInt(usize));
+    for (level, 0..) |id, pos| positions[id] = pos;
+}
+
+const MedianOrder = struct {
+    id: NodeId,
+    median: f64,
+    original: usize,
+};
+
+fn orderLevelByMedian(
+    graph: *const Graph,
+    ranks: []const usize,
+    level: *std.ArrayList(NodeId),
+    adjacent_positions: []const usize,
+    median_positions: []usize,
+    use_parents: bool,
+) void {
+    if (level.items.len <= 1) return;
+
+    var orders_buf: [128]MedianOrder = undefined;
+    if (level.items.len > orders_buf.len) {
+        orderLevelByMedianSlow(graph, ranks, level, adjacent_positions, median_positions, use_parents) catch return;
+        return;
+    }
+
+    const orders = orders_buf[0..level.items.len];
+    fillMedianOrders(graph, ranks, level.items, adjacent_positions, median_positions, use_parents, orders);
+    std.mem.sort(MedianOrder, orders, {}, lessThanMedianOrder);
+    for (orders, 0..) |order, i| level.items[i] = order.id;
+}
+
+fn orderLevelByMedianSlow(
+    graph: *const Graph,
+    ranks: []const usize,
+    level: *std.ArrayList(NodeId),
+    adjacent_positions: []const usize,
+    median_positions: []usize,
+    use_parents: bool,
+) !void {
+    const orders = try graph.allocator.alloc(MedianOrder, level.items.len);
+    defer graph.allocator.free(orders);
+    fillMedianOrders(graph, ranks, level.items, adjacent_positions, median_positions, use_parents, orders);
+    std.mem.sort(MedianOrder, orders, {}, lessThanMedianOrder);
+    for (orders, 0..) |order, i| level.items[i] = order.id;
+}
+
+fn fillMedianOrders(
+    graph: *const Graph,
+    ranks: []const usize,
+    level_nodes: []const NodeId,
+    adjacent_positions: []const usize,
+    median_positions: []usize,
+    use_parents: bool,
+    orders: []MedianOrder,
+) void {
+    for (level_nodes, 0..) |node_id, original| {
+        var count: usize = 0;
+        for (graph.edges.items) |edge_item| {
+            const neighbor = if (use_parents and edge_item.to == node_id and ranks[edge_item.from] < ranks[node_id])
+                edge_item.from
+            else if (!use_parents and edge_item.from == node_id and ranks[edge_item.to] > ranks[node_id])
+                edge_item.to
+            else
+                continue;
+
+            const pos = adjacent_positions[neighbor];
+            if (pos != std.math.maxInt(usize)) {
+                median_positions[count] = pos;
+                count += 1;
+            }
+        }
+
+        orders[original] = .{
+            .id = node_id,
+            .median = medianOfPositions(median_positions[0..count], original),
+            .original = original,
+        };
+    }
+}
+
+fn lessThanMedianOrder(_: void, a: MedianOrder, b: MedianOrder) bool {
+    if (a.median == b.median) return a.original < b.original;
+    return a.median < b.median;
+}
+
+fn lessThanUsize(_: void, a: usize, b: usize) bool {
+    return a < b;
+}
+
+fn medianOfPositions(positions: []usize, fallback: usize) f64 {
+    if (positions.len == 0) return @floatFromInt(fallback);
+    std.mem.sort(usize, positions, {}, lessThanUsize);
+    if (positions.len % 2 == 1) return @floatFromInt(positions[positions.len / 2]);
+    const mid = positions.len / 2;
+    return (@as(f64, @floatFromInt(positions[mid - 1])) + @as(f64, @floatFromInt(positions[mid]))) / 2.0;
+}
+
+fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
+    var left: f64 = 0;
+    for (level) |id| {
+        centers[id] = left + sizes[id].width / 2.0;
+        left += sizes[id].width + gap;
+    }
+    return if (level.len == 0) 0 else left - gap;
+}
+
+fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, sizes: []const NodeSize, centers: []f64, options: LayoutOptions) void {
+    if (levels.len <= 1 or options.coordinate_passes == 0) return;
+
+    for (0..options.coordinate_passes) |_| {
+        var rank: usize = 1;
+        while (rank < levels.len) : (rank += 1) {
+            nudgeLevelTowardNeighbors(graph, ranks, levels[rank].items, centers, true);
+            compactLevelCenters(levels[rank].items, centers, sizes, options.node_gap);
+        }
+
+        rank = levels.len - 1;
+        while (rank > 0) : (rank -= 1) {
+            nudgeLevelTowardNeighbors(graph, ranks, levels[rank - 1].items, centers, false);
+            compactLevelCenters(levels[rank - 1].items, centers, sizes, options.node_gap);
+        }
+    }
+}
+
+fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, use_parents: bool) void {
+    const blend = 0.65;
+    for (level) |node_id| {
+        var sum: f64 = 0;
+        var count: usize = 0;
+        for (graph.edges.items) |edge_item| {
+            const neighbor = if (use_parents and edge_item.to == node_id and ranks[edge_item.from] < ranks[node_id])
+                edge_item.from
+            else if (!use_parents and edge_item.from == node_id and ranks[edge_item.to] > ranks[node_id])
+                edge_item.to
+            else
+                continue;
+            sum += centers[neighbor];
+            count += 1;
+        }
+        if (count > 0) {
+            const target = sum / @as(f64, @floatFromInt(count));
+            centers[node_id] = centers[node_id] + (target - centers[node_id]) * blend;
+        }
+    }
+}
+
+fn compactLevelCenters(level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (level.len == 0) return;
+    var prev = level[0];
+    centers[prev] = @max(centers[prev], sizes[prev].width / 2.0);
+    for (level[1..]) |id| {
+        const min_center = centers[prev] + sizes[prev].width / 2.0 + gap + sizes[id].width / 2.0;
+        centers[id] = @max(centers[id], min_center);
+        prev = id;
+    }
+}
+
+fn normalizeCenters(centers: []f64, sizes: []const NodeSize) void {
+    if (centers.len == 0) return;
+    var min_left = std.math.floatMax(f64);
+    for (centers, 0..) |center, id| min_left = @min(min_left, center - sizes[id].width / 2.0);
+    if (min_left == 0 or min_left == std.math.floatMax(f64)) return;
+    for (centers) |*center| center.* -= min_left;
+}
+
+fn orientPoint(rankdir: RankDir, along: f64, depth: f64, total_depth: f64, margin: f64) Point {
     const base_height = total_depth + margin * 2.0;
     return switch (rankdir) {
-        .TB => .{ .x = along, .y = depth },
-        .BT => .{ .x = along, .y = base_height - depth },
-        .LR => .{ .x = depth, .y = along },
-        .RL => .{ .x = base_height - depth, .y = along },
+        .TB => .{ .x = margin + along, .y = margin + depth },
+        .BT => .{ .x = margin + along, .y = base_height - (margin + depth) },
+        .LR => .{ .x = margin + depth, .y = margin + along },
+        .RL => .{ .x = base_height - (margin + depth), .y = margin + along },
     };
 }
 
@@ -1054,20 +1339,31 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</text>\n");
     }
     if (graph.directed) {
-        try writer.writeAll("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#64748b\"/></marker></defs>\n");
+        try writer.writeAll("<defs>\n");
+        for (graph.edges.items) |edge_item| {
+            try writer.print("<marker id=\"arrow-{d}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{s}\"/></marker>\n", .{ edge_item.id, edge_item.color });
+        }
+        try writer.writeAll("</defs>\n");
     }
 
-    try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\">\n");
+    try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
     for (graph.edges.items) |edge_item| {
-        const a = layout.nodes[edge_item.from].center;
-        const b = layout.nodes[edge_item.to].center;
-        try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"1.8\"", .{ a.x, a.y, b.x, b.y, edge_item.color });
-        if (graph.directed) try writer.writeAll(" marker-end=\"url(#arrow)\"");
+        const route = edgeRoute(layout.nodes[edge_item.from], layout.nodes[edge_item.to], graph.rankdir);
+        try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"1.8\"", .{
+            route.start.x,
+            route.start.y,
+            route.control1.x,
+            route.control1.y,
+            route.control2.x,
+            route.control2.y,
+            route.end.x,
+            route.end.y,
+            edge_item.color,
+        });
+        if (graph.directed) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
         try writer.writeAll("/>\n");
         if (edge_item.label) |label| {
-            try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"12\" fill=\"#475569\">", .{ (a.x + b.x) / 2.0, (a.y + b.y) / 2.0 - 6.0, options.font_family });
-            try writeXmlEscaped(writer, label);
-            try writer.writeAll("</text>\n");
+            try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, 12, "#475569", options.font_family, true, true);
         }
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
@@ -1079,9 +1375,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             .circle => try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x, l.center.y, @min(l.width, l.height) / 2.0, node_item.color }),
             .ellipse => try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"#334155\" stroke-width=\"1.5\"/>\n", .{ l.center.x, l.center.y, l.width / 2.0, l.height / 2.0, node_item.color }),
         }
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"14\" fill=\"#0f172a\">", .{ l.center.x, l.center.y, options.font_family });
-        try writeXmlEscaped(writer, node_item.label);
-        try writer.writeAll("</text>\n");
+        try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, "#0f172a", options.font_family, false, false);
     }
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -1102,6 +1396,111 @@ fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
         0x27 => try writer.writeAll("&apos;"),
         else => try writer.writeByte(c),
     };
+}
+
+const EdgeRoute = struct {
+    start: Point,
+    control1: Point,
+    control2: Point,
+    end: Point,
+    label: Point,
+};
+
+const EdgeControls = struct {
+    c1: Point,
+    c2: Point,
+};
+
+fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir) EdgeRoute {
+    const start = boundaryPoint(from, to.center, rankdir, true);
+    const end = boundaryPoint(to, from.center, rankdir, false);
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const curve = @max(24.0, @min(160.0, if (rankdir == .LR or rankdir == .RL) @abs(dx) * 0.45 else @abs(dy) * 0.45));
+    const controls: EdgeControls = switch (rankdir) {
+        .TB => .{
+            .c1 = Point{ .x = start.x, .y = start.y + curve },
+            .c2 = Point{ .x = end.x, .y = end.y - curve },
+        },
+        .BT => .{
+            .c1 = Point{ .x = start.x, .y = start.y - curve },
+            .c2 = Point{ .x = end.x, .y = end.y + curve },
+        },
+        .LR => .{
+            .c1 = Point{ .x = start.x + curve, .y = start.y },
+            .c2 = Point{ .x = end.x - curve, .y = end.y },
+        },
+        .RL => .{
+            .c1 = Point{ .x = start.x - curve, .y = start.y },
+            .c2 = Point{ .x = end.x + curve, .y = end.y },
+        },
+    };
+    return .{
+        .start = start,
+        .control1 = controls.c1,
+        .control2 = controls.c2,
+        .end = end,
+        .label = cubicPoint(start, controls.c1, controls.c2, end, 0.5),
+    };
+}
+
+fn boundaryPoint(node: NodeLayout, toward: Point, rankdir: RankDir, leaving: bool) Point {
+    _ = toward;
+    return switch (rankdir) {
+        .TB => .{ .x = node.center.x, .y = node.center.y + (if (leaving) node.height / 2.0 else -node.height / 2.0) },
+        .BT => .{ .x = node.center.x, .y = node.center.y + (if (leaving) -node.height / 2.0 else node.height / 2.0) },
+        .LR => .{ .x = node.center.x + (if (leaving) node.width / 2.0 else -node.width / 2.0), .y = node.center.y },
+        .RL => .{ .x = node.center.x + (if (leaving) -node.width / 2.0 else node.width / 2.0), .y = node.center.y },
+    };
+}
+
+fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
+    const mt = 1.0 - t;
+    const a = mt * mt * mt;
+    const b = 3.0 * mt * mt * t;
+    const c = 3.0 * mt * t * t;
+    const d = t * t * t;
+    return .{
+        .x = a * p0.x + b * p1.x + c * p2.x + d * p3.x,
+        .y = a * p0.y + b * p1.y + c * p2.y + d * p3.y,
+    };
+}
+
+fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: usize, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
+    const line_count = labelLineCount(text);
+    const line_height = @as(f64, @floatFromInt(font_size)) * 1.25;
+    const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
+    const first_y = center_y - block_height / 2.0 + line_height * 0.72;
+
+    if (label_background) {
+        const max_len = labelMaxLineLen(text);
+        const width = @as(f64, @floatFromInt(max_len * font_size)) * 0.62 + 12.0;
+        const height = block_height + 8.0;
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"4\" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n", .{
+            x - width / 2.0,
+            center_y - height / 2.0,
+            width,
+            height,
+        });
+    }
+
+    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d}\" fill=\"{s}\"", .{ x, first_y, font_family, font_size, fill });
+    if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
+    try writer.writeAll(">");
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var idx: usize = 0;
+    while (lines.next()) |line| : (idx += 1) {
+        if (idx == 0) {
+            try writer.writeAll("<tspan x=\"");
+            try writer.print("{d:.1}", .{x});
+            try writer.writeAll("\">");
+        } else {
+            try writer.print("<tspan x=\"{d:.1}\" dy=\"{d:.1}\">", .{ x, line_height });
+        }
+        try writeXmlEscaped(writer, line);
+        try writer.writeAll("</tspan>");
+    }
+    try writer.writeAll("</text>\n");
 }
 
 pub fn renderPdf(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) (Io.Writer.Error || std.mem.Allocator.Error)!void {
@@ -1539,4 +1938,81 @@ test "DOT parser handles mainstream node lists, string concat, and boolean attrs
     try std.testing.expect(found_tooltip);
     const esc = graph.node_index.get("esc").?;
     try std.testing.expectEqualStrings("left\nright\\N quote\" slash\\ keep\\x", graph.nodes.items[esc].label);
+}
+
+test "layered layout uses crossing reduction and variable label sizes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  A; B; C; D;
+        \\  A -> D;
+        \\  B -> C;
+        \\  wide [label="a much wider label\nsecond line", shape=box];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = graph.node_index.get("A").?;
+    const b = graph.node_index.get("B").?;
+    const c = graph.node_index.get("C").?;
+    const d = graph.node_index.get("D").?;
+    try std.testing.expect(layout.nodes[a].center.x < layout.nodes[b].center.x);
+    try std.testing.expect(layout.nodes[d].center.x < layout.nodes[c].center.x);
+
+    const wide = graph.node_index.get("wide").?;
+    try std.testing.expect(layout.nodes[wide].width > 180);
+    try std.testing.expect(layout.nodes[wide].height > 56);
+}
+
+test "LR layout accounts for oriented long-label extents" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  left [label="short"];
+        \\  right [label="very very very wide label"];
+        \\  left -> right;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const right = graph.node_index.get("right").?;
+    const right_box = layout.nodes[right];
+    try std.testing.expect(right_box.center.x + right_box.width / 2.0 <= layout.width);
+    try std.testing.expect(right_box.center.y + right_box.height / 2.0 <= layout.height);
+}
+
+test "SVG renderer emits curved clipped edges and multiline text spans" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a [label="hello\nworld"];
+        \\  b;
+        \\  a -> b [label="line1\nline2", color="#2563eb"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "dy=\"17.5\"") != null);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const route = edgeRoute(layout.nodes[a], layout.nodes[b], graph.rankdir);
+    try std.testing.expect(route.start.x > layout.nodes[a].center.x);
+    try std.testing.expect(route.end.x < layout.nodes[b].center.x);
 }
