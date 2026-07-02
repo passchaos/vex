@@ -1988,13 +1988,15 @@ fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *Virtual
     if (use_parents and rank == 0) return;
     if (!use_parents and rank + 1 >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
-    if (level.items.len <= 2 or level.items.len > 128) return;
+    if (level.items.len <= 1 or level.items.len > 128) return;
 
     var blocks: [128]VirtualBlockOrder = undefined;
+    var node_medians: [128]f64 = undefined;
     var block_count: usize = 0;
     for (level.items, 0..) |node, index| {
         const key = virtualBlockKey(graph, node);
         const median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, index);
+        node_medians[index] = median;
         const block_index = virtualBlockIndex(blocks[0..block_count], key) orelse blk: {
             blocks[block_count] = .{ .key = key, .median_sum = 0, .count = 0, .first = index };
             block_count += 1;
@@ -2003,20 +2005,38 @@ fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *Virtual
         blocks[block_index].median_sum += median;
         blocks[block_index].count += 1;
     }
-    if (block_count <= 1) return;
+    if (block_count == 0) return;
 
     std.mem.sort(VirtualBlockOrder, blocks[0..block_count], {}, lessThanVirtualBlockOrder);
 
     var scratch: [128]VirtualNode = undefined;
     var out: usize = 0;
     for (blocks[0..block_count]) |block| {
-        for (level.items) |node| {
-            if (virtualBlockKey(graph, node) != block.key) continue;
-            scratch[out] = node;
-            out += 1;
-        }
+        appendVirtualBlockSortedByMedian(level.items, node_medians[0..level.items.len], block.key, graph, scratch[0..], &out);
     }
     @memcpy(level.items, scratch[0..level.items.len]);
+}
+
+fn appendVirtualBlockSortedByMedian(level: []const VirtualNode, medians: []const f64, block_key: usize, graph: *const Graph, scratch: []VirtualNode, out: *usize) void {
+    var remaining = true;
+    var used: [128]bool = undefined;
+    @memset(used[0..level.len], false);
+    while (remaining) {
+        remaining = false;
+        var best: ?usize = null;
+        for (level, 0..) |node, index| {
+            if (used[index]) continue;
+            if (virtualBlockKey(graph, node) != block_key) continue;
+            remaining = true;
+            if (best == null or medians[index] < medians[best.?] or (medians[index] == medians[best.?] and index < best.?)) {
+                best = index;
+            }
+        }
+        const next_index = best orelse break;
+        used[next_index] = true;
+        scratch[out.*] = level[next_index];
+        out.* += 1;
+    }
 }
 
 fn virtualBlockIndex(blocks: []const VirtualBlockOrder, key: usize) ?usize {
@@ -7233,6 +7253,38 @@ test "virtual level block ordering keeps cluster members adjacent" {
     const a_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = a }).?;
     const b_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = b }).?;
     try std.testing.expect(a_pos + 1 == b_pos or b_pos + 1 == a_pos);
+}
+
+test "virtual level block ordering sorts members by individual medians" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const top_a = try graph.node("top_a");
+    const top_b = try graph.node("top_b");
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    _ = try graph.edge(top_a, a, .{});
+    _ = try graph.edge(top_b, b, .{});
+    _ = try graph.addCluster("cluster_pair", null, &.{ a, b }, &.{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[top_a] = 0;
+    ranks[top_b] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    virtual_levels.levels[0].items[0] = .{ .real = top_a };
+    virtual_levels.levels[0].items[1] = .{ .real = top_b };
+    virtual_levels.levels[1].items[0] = .{ .real = b };
+    virtual_levels.levels[1].items[1] = .{ .real = a };
+
+    orderVirtualLevelBlocksByMedian(&graph, &virtual_levels, ranks, 1, true);
+    try std.testing.expectEqual(a, virtual_levels.levels[1].items[0].real);
+    try std.testing.expectEqual(b, virtual_levels.levels[1].items[1].real);
 }
 
 test "virtual block keys leave root nodes as singleton blocks" {
