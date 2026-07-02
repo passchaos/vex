@@ -4007,13 +4007,16 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const edge_routing = svgEdgeRoutingMode(graph);
     const concentrate = graphConcentrateEnabled(graph);
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
-    const title = attrValue(graph.attrs.items, "label") orelse graph.name;
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{d:.0}\" height=\"{d:.0}\" viewBox=\"0 0 {d:.0} {d:.0}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
     );
+    try writer.writeAll("<title>");
+    try writeXmlEscaped(writer, graph.name);
+    try writer.writeAll("</title>\n");
     try writer.print("<rect width=\"100%\" height=\"100%\" fill=\"{s}\"/>\n", .{background});
-    if (options.show_title) {
+    if (options.show_title and attrValue(graph.attrs.items, "label") != null) {
+        const graph_label = attrValue(graph.attrs.items, "label").?;
         const label_just = attrValue(graph.attrs.items, "labeljust");
         const label_loc = attrValue(graph.attrs.items, "labelloc");
         const text_anchor: []const u8 = if (label_just) |value|
@@ -4031,7 +4034,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         else
             24.0;
         try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">", .{ title_x, title_y, text_anchor, options.font_family });
-        try writeXmlEscaped(writer, title);
+        try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
     if (graph.directed) {
@@ -8016,6 +8019,24 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
+}
+
+test "SVG renderer keeps graph name as metadata unless graph label is explicit" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
 }
 
 test "SVG renderer honors graph labelloc and labeljust attributes" {
