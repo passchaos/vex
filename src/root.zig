@@ -1911,7 +1911,13 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
     var rows: usize = 0;
     var max_cols: usize = 0;
     var max_cell_len: usize = 1;
+    var occupied: [32]usize = @splat(0);
     while (findHtmlTag(label, "tr", pos)) |tr_start| {
+        if (rows > 0) {
+            for (&occupied) |*remaining| {
+                if (remaining.* > 0) remaining.* -= 1;
+            }
+        }
         const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
         const content_start = tr_start + tr_open_end + 1;
         const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
@@ -1919,13 +1925,20 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
         var cell_pos: usize = 0;
         var cols: usize = 0;
         while (findHtmlTag(row, "td", cell_pos)) |td_start| {
+            cols = nextFreeHtmlColumn(&occupied, cols);
             const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
             const td_tag = row[td_start + 1 .. td_start + td_open_end];
             const cell_start = td_start + td_open_end + 1;
             const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
             const cell = row[cell_start..td_close];
             max_cell_len = @max(max_cell_len, displayLabelMaxLineLen(cell));
-            cols += @max(htmlIntAttr(td_tag, "colspan", 1), 1);
+            const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
+            const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
+            var span_i: usize = 0;
+            while (span_i < colspan and cols + span_i < occupied.len) : (span_i += 1) {
+                occupied[cols + span_i] = @max(occupied[cols + span_i], rowspan);
+            }
+            cols += colspan;
             cell_pos = td_close + 1;
         }
         if (cols > 0) {
@@ -1950,6 +1963,12 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
 fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
     const value = htmlAttrValue(tag, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
+}
+
+fn nextFreeHtmlColumn(occupied: *const [32]usize, start: usize) usize {
+    var index = start;
+    while (index < occupied.len and occupied[index] > 0) : (index += 1) {}
+    return index;
 }
 
 fn htmlAttrValue(tag: []const u8, name: []const u8) ?[]const u8 {
@@ -2724,7 +2743,13 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
 
     var row_pos: usize = 0;
     var row_index: usize = 0;
+    var occupied: [32]usize = @splat(0);
     while (findHtmlTag(label, "tr", row_pos)) |tr_start| : (row_index += 1) {
+        if (row_index > 0) {
+            for (&occupied) |*remaining| {
+                if (remaining.* > 0) remaining.* -= 1;
+            }
+        }
         const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
         const content_start = tr_start + tr_open_end + 1;
         const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
@@ -2732,20 +2757,28 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
         var cell_pos: usize = 0;
         var col_index: usize = 0;
         while (findHtmlTag(row, "td", cell_pos)) |td_start| : (col_index += 1) {
+            col_index = nextFreeHtmlColumn(&occupied, col_index);
             const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
             const td_tag = row[td_start + 1 .. td_start + td_open_end];
             const cell_start = td_start + td_open_end + 1;
             const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
             const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
+            const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
             const span_f: f64 = @floatFromInt(colspan);
+            const row_span_f: f64 = @floatFromInt(rowspan);
             const cell_x = x + metrics.cell_spacing + @as(f64, @floatFromInt(col_index)) * (cell_w + metrics.cell_spacing);
             const cell_y = y + metrics.cell_spacing + @as(f64, @floatFromInt(row_index)) * (cell_h + metrics.cell_spacing);
             const spanned_w = cell_w * span_f + metrics.cell_spacing * @as(f64, @floatFromInt(colspan - 1));
+            const spanned_h = cell_h * row_span_f + metrics.cell_spacing * @as(f64, @floatFromInt(rowspan - 1));
+            var span_i: usize = 0;
+            while (span_i < colspan and col_index + span_i < occupied.len) : (span_i += 1) {
+                occupied[col_index + span_i] = @max(occupied[col_index + span_i], rowspan);
+            }
             if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_x, cell_y, spanned_w, cell_h, cell_bg });
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, cell_bg });
             }
             if (metrics.cell_border > 0) {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, spanned_w, cell_h, visual.stroke, metrics.cell_border });
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, visual.stroke, metrics.cell_border });
             }
             const cell = row[cell_start..td_close];
             const align_attr = htmlAttrValue(td_tag, "align");
@@ -2763,7 +2796,7 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
                 writer,
                 cell,
                 text_x,
-                cell_y + cell_h / 2.0,
+                cell_y + spanned_h / 2.0,
                 visual.font_size,
                 visual.font_color,
                 visual.font_family,
@@ -4417,6 +4450,31 @@ test "SVG renderer honors HTML table colspan bgcolor and alignment" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Header</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\"") != null);
+}
+
+test "SVG renderer honors HTML table rowspan cells" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=plain,label=<
+        \\    <TABLE CELLBORDER="1" CELLSPACING="2">
+        \\      <TR><TD ROWSPAN="2" BGCOLOR="lightgrey">Left</TD><TD>Top</TD></TR>
+        \\      <TR><TD>Bottom</TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
 }
 
 test "SVG renderer honors graph label and bgcolor attributes" {
