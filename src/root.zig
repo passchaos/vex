@@ -1422,6 +1422,8 @@ pub const Layout = struct {
     rank_depths: []f64,
     rank_heights: []f64,
     margin: f64,
+    margin_x: f64,
+    margin_y: f64,
     width: f64,
     height: f64,
 
@@ -1443,6 +1445,7 @@ pub const LayoutOptions = struct {
     rank_gap: f64 = 36,
     node_gap: f64 = 36,
     margin: f64 = 16,
+    margin_y: f64 = 8,
     label_char_width: f64 = 8,
     label_line_height: f64 = 18,
     node_padding_x: f64 = 14,
@@ -1573,8 +1576,10 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
             .rank_depths = empty_rank_depths,
             .rank_heights = empty_rank_heights,
             .margin = effective_options.margin,
+            .margin_x = effective_options.margin,
+            .margin_y = effective_options.margin_y,
             .width = effective_options.margin * 2.0,
-            .height = effective_options.margin * 2.0,
+            .height = effective_options.margin_y * 2.0,
         };
     }
 
@@ -1705,15 +1710,17 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     for (graph.nodes.items, 0..) |_, id| {
         const rank = ranks[id];
         const depth = rank_depths[rank] + rank_heights[rank] / 2.0;
-        const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, effective_options.margin);
+        const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, effective_options.margin, effective_options.margin_y);
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, nodes, cluster_layouts);
-    try computeEdgeWaypoints(allocator, graph, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, edge_waypoints, &virtual_levels, &final_virtual_positions);
+    try computeEdgeWaypoints(allocator, graph, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
 
-    const base_width = total_along + effective_options.margin * 2.0;
-    const base_height = total_depth + effective_options.margin * 2.0;
+    const along_margin = if (graph.rankdir == .LR or graph.rankdir == .RL) effective_options.margin_y else effective_options.margin;
+    const depth_margin = if (graph.rankdir == .LR or graph.rankdir == .RL) effective_options.margin else effective_options.margin_y;
+    const base_along = total_along + along_margin * 2.0;
+    const base_depth = total_depth + depth_margin * 2.0;
     return .{
         .allocator = allocator,
         .nodes = nodes,
@@ -1723,8 +1730,10 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         .rank_depths = rank_depths,
         .rank_heights = layout_rank_heights,
         .margin = effective_options.margin,
-        .width = if (graph.rankdir == .LR or graph.rankdir == .RL) base_height else base_width,
-        .height = if (graph.rankdir == .LR or graph.rankdir == .RL) base_width else base_height,
+        .margin_x = effective_options.margin,
+        .margin_y = effective_options.margin_y,
+        .width = if (graph.rankdir == .LR or graph.rankdir == .RL) base_depth else base_along,
+        .height = if (graph.rankdir == .LR or graph.rankdir == .RL) base_along else base_depth,
     };
 }
 
@@ -1760,6 +1769,8 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
             .rank_depths = rank_depths,
             .rank_heights = rank_heights,
             .margin = options.margin,
+            .margin_x = options.margin,
+            .margin_y = options.margin,
             .width = options.width,
             .height = options.height,
         };
@@ -1841,6 +1852,8 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
         .rank_depths = rank_depths,
         .rank_heights = rank_heights,
         .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
         .width = options.width,
         .height = options.height,
     };
@@ -3829,7 +3842,8 @@ fn computeEdgeWaypoints(
     rank_depths: []const f64,
     rank_heights: []const f64,
     total_depth: f64,
-    margin: f64,
+    margin_x: f64,
+    margin_y: f64,
     edge_waypoints: []EdgeWaypoints,
     virtual_levels: *const VirtualLevels,
     virtual_positions: *const VirtualPositions,
@@ -3857,7 +3871,7 @@ fn computeEdgeWaypoints(
             const depth = rankDepthCenterFrom(rank_depths, rank_heights, rank);
             points[i] = .{
                 .rank = rank,
-                .point = orientPoint(graph.rankdir, along, depth, total_depth, margin),
+                .point = orientPoint(graph.rankdir, along, depth, total_depth, margin_x, margin_y),
             };
         }
         edge_waypoints[edge_item.id] = .{ .points = points };
@@ -3933,13 +3947,12 @@ fn normalizeCenters(centers: []f64, sizes: []const NodeSize) void {
     for (centers) |*center| center.* -= min_left;
 }
 
-fn orientPoint(rankdir: RankDir, along: f64, depth: f64, total_depth: f64, margin: f64) Point {
-    const base_height = total_depth + margin * 2.0;
+fn orientPoint(rankdir: RankDir, along: f64, depth: f64, total_depth: f64, margin_x: f64, margin_y: f64) Point {
     return switch (rankdir) {
-        .TB => .{ .x = margin + along, .y = margin + depth },
-        .BT => .{ .x = margin + along, .y = base_height - (margin + depth) },
-        .LR => .{ .x = margin + depth, .y = margin + along },
-        .RL => .{ .x = base_height - (margin + depth), .y = margin + along },
+        .TB => .{ .x = margin_x + along, .y = margin_y + depth },
+        .BT => .{ .x = margin_x + along, .y = total_depth + margin_y * 2.0 - (margin_y + depth) },
+        .LR => .{ .x = margin_x + depth, .y = margin_y + along },
+        .RL => .{ .x = total_depth + margin_x * 2.0 - (margin_x + depth), .y = margin_y + along },
     };
 }
 
@@ -5862,10 +5875,10 @@ fn rankDepthCenterFrom(rank_depths: []const f64, rank_heights: []const f64, rank
 
 fn orientWaypoint(rankdir: RankDir, along_screen: f64, depth: f64, layout: *const Layout) Point {
     return switch (rankdir) {
-        .TB => .{ .x = along_screen, .y = layout.margin + depth },
-        .BT => .{ .x = along_screen, .y = layout.height - (layout.margin + depth) },
-        .LR => .{ .x = layout.margin + depth, .y = along_screen },
-        .RL => .{ .x = layout.width - (layout.margin + depth), .y = along_screen },
+        .TB => .{ .x = along_screen, .y = layout.margin_y + depth },
+        .BT => .{ .x = along_screen, .y = layout.height - (layout.margin_y + depth) },
+        .LR => .{ .x = layout.margin_x + depth, .y = along_screen },
+        .RL => .{ .x = layout.width - (layout.margin_x + depth), .y = along_screen },
     };
 }
 
@@ -6726,10 +6739,11 @@ test "layered layout default margin is compact and overrideable" {
 
     var compact = try layoutLayered(allocator, &graph, .{});
     defer compact.deinit();
-    var roomy = try layoutLayered(allocator, &graph, .{ .margin = 40 });
+    var roomy = try layoutLayered(allocator, &graph, .{ .margin = 40, .margin_y = 40 });
     defer roomy.deinit();
 
     try std.testing.expectEqual(@as(f64, 16), compact.margin);
+    try std.testing.expectEqual(@as(f64, 8), compact.margin_y);
     try std.testing.expectEqual(@as(f64, 40), roomy.margin);
     try std.testing.expect(roomy.width > compact.width);
     try std.testing.expect(roomy.height > compact.height);
@@ -8667,6 +8681,8 @@ test "long-edge waypoints avoid same-rank node boxes" {
         .rank_depths = try allocator.alloc(f64, 3),
         .rank_heights = try allocator.alloc(f64, 3),
         .margin = 40,
+        .margin_x = 40,
+        .margin_y = 40,
         .width = 220,
         .height = 260,
     };
@@ -8757,6 +8773,8 @@ test "back-edge side channel prefers stable negative side for same column" {
         .rank_depths = try allocator.alloc(f64, 0),
         .rank_heights = try allocator.alloc(f64, 0),
         .margin = 40,
+        .margin_x = 40,
+        .margin_y = 40,
         .width = 220,
         .height = 260,
     };
