@@ -4440,6 +4440,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     if (box.width <= 0 or box.height <= 0) return;
     const visual = resolveClusterVisual(cluster);
     if (visual.hidden) return;
+    try writeSvgTitle(writer, cluster.name);
     try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
         box.x,
         box.y,
@@ -9088,6 +9089,7 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"clusters\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>cluster_api</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
