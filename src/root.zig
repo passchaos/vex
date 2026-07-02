@@ -1531,7 +1531,26 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         },
         else => {},
     }
+    applyNodeSizeAttrs(node_item, &width, &height);
     return .{ .width = width, .height = height };
+}
+
+fn applyNodeSizeAttrs(node_item: Node, width: *f64, height: *f64) void {
+    const fixed = if (attrValue(node_item.attrs.items, "fixedsize")) |value| parseBool(value) orelse false else false;
+    if (attrValue(node_item.attrs.items, "width")) |value| {
+        const attr_width = parseInchDimension(value) orelse width.*;
+        width.* = if (fixed) attr_width else @max(width.*, attr_width);
+    }
+    if (attrValue(node_item.attrs.items, "height")) |value| {
+        const attr_height = parseInchDimension(value) orelse height.*;
+        height.* = if (fixed) attr_height else @max(height.*, attr_height);
+    }
+}
+
+fn parseInchDimension(value: []const u8) ?f64 {
+    const inches = std.fmt.parseFloat(f64, value) catch return null;
+    if (inches <= 0) return null;
+    return @max(12.0, inches * 72.0);
 }
 
 fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
@@ -4443,4 +4462,25 @@ test "layout honors DOT ranksep equally center spacing" {
     const ab = @abs(layout.nodes[b].center.y - layout.nodes[a].center.y);
     const bc = @abs(layout.nodes[c].center.y - layout.nodes[b].center.y);
     try std.testing.expect(@abs(ab - bc) < 0.01);
+}
+
+test "layout honors DOT node width height and fixedsize attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  min_sized [label="small", width=3.0, height=1.5];
+        \\  fixed [label="this label is intentionally much wider than the box", width=1.0, height=0.5, fixedsize=true];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const min_sized = graph.node_index.get("min_sized").?;
+    const fixed = graph.node_index.get("fixed").?;
+    try std.testing.expect(layout.nodes[min_sized].width >= 216);
+    try std.testing.expect(layout.nodes[min_sized].height >= 108);
+    try std.testing.expect(@abs(layout.nodes[fixed].width - 72.0) < 0.01);
+    try std.testing.expect(@abs(layout.nodes[fixed].height - 36.0) < 0.01);
 }
