@@ -1523,6 +1523,10 @@ fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) Layo
     if (attrValue(graph.attrs.items, "nodesep")) |value| {
         result.node_gap = parseGraphSpacing(value, result.node_gap);
     }
+    if (attrValue(graph.attrs.items, "label") != null) {
+        const font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
+        result.margin_y = @max(result.margin_y, font_size + 12.0);
+    }
     return result;
 }
 
@@ -8184,6 +8188,7 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
+    try std.testing.expect(layout.margin_y >= 26.0);
 }
 
 test "SVG renderer keeps graph name as metadata unless graph label is explicit" {
