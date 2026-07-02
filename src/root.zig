@@ -14,6 +14,10 @@ pub const Shape = enum {
     ellipse,
     box,
     circle,
+    diamond,
+    parallelogram,
+    hexagon,
+    plaintext,
 };
 
 pub const RankDir = enum {
@@ -434,6 +438,10 @@ fn setAttrInList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name:
 fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "box") or std.ascii.eqlIgnoreCase(value, "rect") or std.ascii.eqlIgnoreCase(value, "rectangle")) return .box;
     if (std.ascii.eqlIgnoreCase(value, "circle")) return .circle;
+    if (std.ascii.eqlIgnoreCase(value, "diamond")) return .diamond;
+    if (std.ascii.eqlIgnoreCase(value, "parallelogram")) return .parallelogram;
+    if (std.ascii.eqlIgnoreCase(value, "hexagon")) return .hexagon;
+    if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "plain") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
     return .ellipse;
 }
 
@@ -442,6 +450,10 @@ fn shapeName(shape: Shape) []const u8 {
         .ellipse => "ellipse",
         .box => "box",
         .circle => "circle",
+        .diamond => "diamond",
+        .parallelogram => "parallelogram",
+        .hexagon => "hexagon",
+        .plaintext => "plaintext",
     };
 }
 
@@ -1266,10 +1278,24 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height;
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0);
-    if (node_item.shape == .circle) {
-        const diameter = @max(width, height);
-        width = diameter;
-        height = diameter;
+    switch (node_item.shape) {
+        .circle => {
+            const diameter = @max(width, height);
+            width = diameter;
+            height = diameter;
+        },
+        .diamond => {
+            width = @max(width, text_width + options.node_padding_x * 3.0);
+            height = @max(height, text_height + options.node_padding_y * 2.6);
+        },
+        .parallelogram, .hexagon => {
+            width = @max(width, text_width + options.node_padding_x * 3.0);
+        },
+        .plaintext => {
+            width = @max(24, text_width + 8);
+            height = @max(18, text_height + 6);
+        },
+        else => {},
     }
     return .{ .width = width, .height = height };
 }
@@ -1727,32 +1753,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
-        switch (node_item.shape) {
-            .box => {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                    l.center.x - l.width / 2.0,
-                    l.center.y - l.height / 2.0,
-                    l.width,
-                    l.height,
-                    visual.radius,
-                    visual.fill,
-                    visual.stroke,
-                    visual.width,
-                });
-                try writeSvgDash(writer, visual.dash);
-                try writer.writeAll("/>\n");
-            },
-            .circle => {
-                try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ l.center.x, l.center.y, @min(l.width, l.height) / 2.0, visual.fill, visual.stroke, visual.width });
-                try writeSvgDash(writer, visual.dash);
-                try writer.writeAll("/>\n");
-            },
-            .ellipse => {
-                try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ l.center.x, l.center.y, l.width / 2.0, l.height / 2.0, visual.fill, visual.stroke, visual.width });
-                try writeSvgDash(writer, visual.dash);
-                try writer.writeAll("/>\n");
-            },
-        }
+        try renderSvgNodeShape(writer, node_item.shape, l, visual);
         try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, visual.font_color, options.font_family, false, false);
     }
     try writer.writeAll("</g>\n</svg>\n");
@@ -1868,6 +1869,101 @@ fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Lay
         try writer.writeAll("</text>\n");
     }
     try writer.writeAll("</g>\n");
+}
+
+fn renderSvgNodeShape(writer: *Io.Writer, shape: Shape, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    switch (shape) {
+        .box => {
+            try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                layout.center.x - layout.width / 2.0,
+                layout.center.y - layout.height / 2.0,
+                layout.width,
+                layout.height,
+                visual.radius,
+                visual.fill,
+                visual.stroke,
+                visual.width,
+            });
+            try writeSvgDash(writer, visual.dash);
+            try writer.writeAll("/>\n");
+        },
+        .circle => {
+            try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ layout.center.x, layout.center.y, @min(layout.width, layout.height) / 2.0, visual.fill, visual.stroke, visual.width });
+            try writeSvgDash(writer, visual.dash);
+            try writer.writeAll("/>\n");
+        },
+        .ellipse => {
+            try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ layout.center.x, layout.center.y, layout.width / 2.0, layout.height / 2.0, visual.fill, visual.stroke, visual.width });
+            try writeSvgDash(writer, visual.dash);
+            try writer.writeAll("/>\n");
+        },
+        .diamond => try renderSvgPolygon(writer, diamondPoints(layout), visual),
+        .parallelogram => try renderSvgPolygon(writer, parallelogramPoints(layout), visual),
+        .hexagon => try renderSvgPolygon(writer, hexagonPoints(layout), visual),
+        .plaintext => {},
+    }
+}
+
+fn renderSvgPolygon(writer: *Io.Writer, points: [6]Point, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.writeAll("<polygon points=\"");
+    var written: usize = 0;
+    for (points) |point| {
+        if (point.x < 0 and point.y < 0) continue;
+        if (written > 0) try writer.writeByte(' ');
+        try writer.print("{d:.1},{d:.1}", .{ point.x, point.y });
+        written += 1;
+    }
+    try writer.print("\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.fill, visual.stroke, visual.width });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn diamondPoints(layout: NodeLayout) [6]Point {
+    const cx = layout.center.x;
+    const cy = layout.center.y;
+    const hw = layout.width / 2.0;
+    const hh = layout.height / 2.0;
+    return .{
+        .{ .x = cx, .y = cy - hh },
+        .{ .x = cx + hw, .y = cy },
+        .{ .x = cx, .y = cy + hh },
+        .{ .x = cx - hw, .y = cy },
+        .{ .x = -1, .y = -1 },
+        .{ .x = -1, .y = -1 },
+    };
+}
+
+fn parallelogramPoints(layout: NodeLayout) [6]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const skew = @min(layout.width * 0.18, 28);
+    return .{
+        .{ .x = left + skew, .y = top },
+        .{ .x = right, .y = top },
+        .{ .x = right - skew, .y = bottom },
+        .{ .x = left, .y = bottom },
+        .{ .x = -1, .y = -1 },
+        .{ .x = -1, .y = -1 },
+    };
+}
+
+fn hexagonPoints(layout: NodeLayout) [6]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const inset = @min(layout.width * 0.22, 32);
+    const cy = layout.center.y;
+    return .{
+        .{ .x = left + inset, .y = top },
+        .{ .x = right - inset, .y = top },
+        .{ .x = right, .y = cy },
+        .{ .x = right - inset, .y = bottom },
+        .{ .x = left + inset, .y = bottom },
+        .{ .x = left, .y = cy },
+    };
 }
 
 fn resolveNodeVisual(node_item: Node) NodeVisual {
@@ -2955,4 +3051,35 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
+}
+
+test "DOT parser and SVG renderer support common Graphviz node shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  decision [label="Valid?", shape=diamond, color="#f59e0b"];
+        \\  io [label="Write", shape=parallelogram];
+        \\  done [label="Done", shape=hexagon];
+        \\  note [label="No box", shape=plaintext];
+        \\  decision -> io -> done;
+        \\  note -> decision [constraint=false];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(Shape.diamond, graph.nodes.items[graph.node_index.get("decision").?].shape);
+    try std.testing.expectEqual(Shape.parallelogram, graph.nodes.items[graph.node_index.get("io").?].shape);
+    try std.testing.expectEqual(Shape.hexagon, graph.nodes.items[graph.node_index.get("done").?].shape);
+    try std.testing.expectEqual(Shape.plaintext, graph.nodes.items[graph.node_index.get("note").?].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const note = graph.node_index.get("note").?;
+    try std.testing.expect(layout.nodes[note].width < 120);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(countSubstrings(svg, "<polygon") >= 3);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Valid?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "No box") != null);
 }
