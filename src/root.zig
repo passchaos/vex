@@ -2419,6 +2419,13 @@ const MarkerShape = enum {
     vee,
     dot,
     odot,
+    box,
+    obox,
+    diamond,
+    odiamond,
+    tee,
+    crow,
+    empty,
 };
 
 const default_svg_font_family = "Inter, ui-sans-serif, system-ui, sans-serif";
@@ -2836,6 +2843,13 @@ fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, sh
         .vee => try writer.print("<path d=\"M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{color}),
         .dot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"{s}\"/>", .{color}),
         .odot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
+        .box => try writer.print("<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"{s}\"/>", .{color}),
+        .obox => try writer.print("<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
+        .diamond => try writer.print("<path d=\"M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"{s}\"/>", .{color}),
+        .odiamond => try writer.print("<path d=\"M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
+        .tee => try writer.print("<path d=\"M 8.5 1 L 8.5 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"2\" stroke-linecap=\"round\"/>", .{color}),
+        .crow => try writer.print("<path d=\"M 9 1 L 1 5 L 9 9 M 1 5 L 9 5\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{color}),
+        .empty => try writer.print("<path d=\"M 0.8 0.8 L 9.2 5 L 0.8 9.2 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
     }
     try writer.writeAll("</marker>\n");
 }
@@ -2853,6 +2867,13 @@ fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
     if (std.ascii.eqlIgnoreCase(text, "vee")) return .vee;
     if (std.ascii.eqlIgnoreCase(text, "dot")) return .dot;
     if (std.ascii.eqlIgnoreCase(text, "odot")) return .odot;
+    if (std.ascii.eqlIgnoreCase(text, "box")) return .box;
+    if (std.ascii.eqlIgnoreCase(text, "obox")) return .obox;
+    if (std.ascii.eqlIgnoreCase(text, "diamond")) return .diamond;
+    if (std.ascii.eqlIgnoreCase(text, "odiamond")) return .odiamond;
+    if (std.ascii.eqlIgnoreCase(text, "tee")) return .tee;
+    if (std.ascii.eqlIgnoreCase(text, "crow")) return .crow;
+    if (std.ascii.eqlIgnoreCase(text, "empty")) return .empty;
     return fallback;
 }
 
@@ -4113,6 +4134,35 @@ test "SVG renderer honors common Graphviz arrow marker attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-2-head)\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-3-tail)\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-3-head)\"") == null);
+}
+
+test "SVG renderer honors additional Graphviz arrow marker shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [arrowhead=box, color="#2563eb"];
+        \\  b -> c [arrowhead=obox, color="#dc2626"];
+        \\  c -> d [arrowhead=diamond, color="#16a34a"];
+        \\  d -> e [arrowhead=odiamond, color="#f59e0b"];
+        \\  e -> f [arrowhead=tee, color="#64748b"];
+        \\  f -> g [arrowhead=crow, color="#9333ea"];
+        \\  g -> h [arrowhead=empty, color="#0f172a"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#ffffff\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"#f59e0b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1 L 8.5 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 0.8 0.8 L 9.2 5 L 0.8 9.2 z") != null);
 }
 
 test "DOT subgraphs scope default node and edge attributes" {
