@@ -18,6 +18,8 @@ pub const Shape = enum {
     parallelogram,
     hexagon,
     plaintext,
+    record,
+    mrecord,
 };
 
 pub const RankDir = enum {
@@ -442,6 +444,8 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "parallelogram")) return .parallelogram;
     if (std.ascii.eqlIgnoreCase(value, "hexagon")) return .hexagon;
     if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "plain") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
+    if (std.ascii.eqlIgnoreCase(value, "record")) return .record;
+    if (std.ascii.eqlIgnoreCase(value, "mrecord")) return .mrecord;
     return .ellipse;
 }
 
@@ -454,6 +458,8 @@ fn shapeName(shape: Shape) []const u8 {
         .parallelogram => "parallelogram",
         .hexagon => "hexagon",
         .plaintext => "plaintext",
+        .record => "record",
+        .mrecord => "Mrecord",
     };
 }
 
@@ -1295,6 +1301,11 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = @max(24, text_width + 8);
             height = @max(18, text_height + 6);
         },
+        .record, .mrecord => {
+            const metrics = recordMetrics(node_item.label);
+            width = @max(options.node_width, @as(f64, @floatFromInt(metrics.max_field_len)) * options.label_char_width + options.node_padding_x * 2.0);
+            height = @max(options.node_height, @as(f64, @floatFromInt(metrics.field_count)) * options.label_line_height + options.node_padding_y * 2.0);
+        },
         else => {},
     }
     return .{ .width = width, .height = height };
@@ -1410,6 +1421,42 @@ fn labelMaxLineLen(text: []const u8) usize {
         }
     }
     return @max(max_len, current);
+}
+
+const RecordMetrics = struct {
+    field_count: usize,
+    max_field_len: usize,
+};
+
+fn recordMetrics(label: []const u8) RecordMetrics {
+    var field_count: usize = 0;
+    var current_len: usize = 0;
+    var max_len: usize = 0;
+    var in_port = false;
+    for (label) |c| {
+        switch (c) {
+            '<' => in_port = true,
+            '>' => in_port = false,
+            '|', '{', '}' => {
+                if (!in_port) {
+                    if (current_len > 0) {
+                        field_count += 1;
+                        max_len = @max(max_len, current_len);
+                        current_len = 0;
+                    }
+                    continue;
+                }
+            },
+            else => {
+                if (!in_port and (c & 0xc0) != 0x80) current_len += 1;
+            },
+        }
+    }
+    if (current_len > 0 or field_count == 0) {
+        field_count += 1;
+        max_len = @max(max_len, current_len);
+    }
+    return .{ .field_count = field_count, .max_field_len = @max(max_len, 1) };
 }
 
 fn reduceLayerCrossings(allocator: std.mem.Allocator, graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) !void {
@@ -1754,8 +1801,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
-        try renderSvgNodeShape(writer, node_item.shape, l, visual);
-        try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, visual.font_color, options.font_family, false, false);
+        try renderSvgNodeShape(writer, node_item, l, visual, options);
+        if (node_item.shape != .record and node_item.shape != .mrecord) {
+            try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, 14, visual.font_color, options.font_family, false, false);
+        }
     }
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -1881,8 +1930,8 @@ fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Lay
     try writer.writeAll("</g>\n");
 }
 
-fn renderSvgNodeShape(writer: *Io.Writer, shape: Shape, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
-    switch (shape) {
+fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
+    switch (node_item.shape) {
         .box => {
             try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
                 layout.center.x - layout.width / 2.0,
@@ -1911,6 +1960,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, shape: Shape, layout: NodeLayout, visu
         .parallelogram => try renderSvgPolygon(writer, parallelogramPoints(layout), visual),
         .hexagon => try renderSvgPolygon(writer, hexagonPoints(layout), visual),
         .plaintext => {},
+        .record => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, false),
+        .mrecord => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, true),
     }
 }
 
@@ -1975,6 +2026,97 @@ fn hexagonPoints(layout: NodeLayout) [6]Point {
         .{ .x = left, .y = cy },
     };
 }
+
+fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual, options: SvgOptions, rounded: bool) Io.Writer.Error!void {
+    const x = layout.center.x - layout.width / 2.0;
+    const y = layout.center.y - layout.height / 2.0;
+    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        x,
+        y,
+        layout.width,
+        layout.height,
+        if (rounded) 10 else visual.radius,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+
+    const metrics = recordMetrics(label);
+    const count_f: f64 = @floatFromInt(metrics.field_count);
+    const field_width = layout.width / count_f;
+    var field_index: usize = 0;
+    var scanner: RecordFieldScanner = .{ .label = label };
+    while (scanner.next()) |field| : (field_index += 1) {
+        const field_label = std.mem.trim(u8, field, " \t\r\n");
+        const field_x = x + field_width * @as(f64, @floatFromInt(field_index));
+        if (field_index > 0) {
+            try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+                field_x,
+                y,
+                field_x,
+                y + layout.height,
+                visual.stroke,
+                visual.width,
+            });
+        }
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"{s}\" font-size=\"13\" fill=\"{s}\">", .{
+            field_x + field_width / 2.0,
+            layout.center.y,
+            options.font_family,
+            visual.font_color,
+        });
+        try writeXmlEscaped(writer, field_label);
+        try writer.writeAll("</text>\n");
+    }
+}
+
+const RecordFieldScanner = struct {
+    label: []const u8,
+    index: usize = 0,
+    buffer: [128]u8 = undefined,
+
+    fn next(self: *RecordFieldScanner) ?[]const u8 {
+        var out_len: usize = 0;
+        var in_port = false;
+        while (self.index < self.label.len) : (self.index += 1) {
+            const c = self.label[self.index];
+            switch (c) {
+                '<' => {
+                    in_port = true;
+                    continue;
+                },
+                '>' => {
+                    in_port = false;
+                    continue;
+                },
+                '|', '{', '}' => {
+                    if (!in_port) {
+                        self.index += 1;
+                        if (out_len == 0) continue;
+                        return self.buffer[0..out_len];
+                    }
+                },
+                '\\' => {
+                    if (self.index + 1 < self.label.len and out_len < self.buffer.len) {
+                        self.index += 1;
+                        self.buffer[out_len] = self.label[self.index];
+                        out_len += 1;
+                    }
+                    continue;
+                },
+                else => {},
+            }
+            if (!in_port and out_len < self.buffer.len) {
+                self.buffer[out_len] = c;
+                out_len += 1;
+            }
+        }
+        if (out_len == 0) return null;
+        return self.buffer[0..out_len];
+    }
+};
 
 fn resolveNodeVisual(node_item: Node) NodeVisual {
     const style = attrValue(node_item.attrs.items, "style");
@@ -3190,4 +3332,35 @@ test "DOT parser and SVG renderer support common Graphviz node shapes" {
     try std.testing.expect(countSubstrings(svg, "<polygon") >= 3);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Valid?") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "No box") != null);
+}
+
+test "DOT record and Mrecord nodes render field separators" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=record];
+        \\  entity [label="<id> id|name|email"];
+        \\  rounded [shape=Mrecord, label="<port> left|right"];
+        \\  entity -> rounded;
+        \\}
+    );
+    defer graph.deinit();
+
+    const entity = graph.node_index.get("entity").?;
+    const rounded = graph.node_index.get("rounded").?;
+    try std.testing.expectEqual(Shape.record, graph.nodes.items[entity].shape);
+    try std.testing.expectEqual(Shape.mrecord, graph.nodes.items[rounded].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expect(layout.nodes[entity].height >= 56);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">id</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">name</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">email</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">port") == null);
+    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10.0\"") != null);
 }
