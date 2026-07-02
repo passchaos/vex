@@ -4406,16 +4406,17 @@ fn resolveClusterVisual(cluster: Cluster) ClusterVisual {
     const dashed = styleHas(style, "dashed");
     const dotted = styleHas(style, "dotted");
     const rounded = styleHas(style, "rounded");
+    const color = attrValue(cluster.attrs.items, "color") orelse "#94a3b8";
     return .{
-        .fill = attrValue(cluster.attrs.items, "fillcolor") orelse if (filled) "#f8fafc" else "#ffffff",
-        .stroke = attrValue(cluster.attrs.items, "color") orelse "#94a3b8",
+        .fill = attrValue(cluster.attrs.items, "fillcolor") orelse if (filled) color else "none",
+        .stroke = color,
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "#475569",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 13.0),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.4),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
-        .fill_opacity = if (filled or attrValue(cluster.attrs.items, "fillcolor") != null) "0.32" else "0.08",
+        .fill_opacity = if (filled or attrValue(cluster.attrs.items, "fillcolor") != null) "1.0" else "1.0",
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -6861,6 +6862,33 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
+}
+
+test "cluster fill follows Graphviz style filled color semantics" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_filled {
+        \\    style=filled;
+        \\    color=lightgrey;
+        \\    a -> b;
+        \\  }
+        \\  subgraph cluster_outline {
+        \\    color=blue;
+        \\    c -> d;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"lightgrey\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" fill-opacity=\"1.0\" stroke=\"blue\"") != null);
 }
 
 test "cluster labels honor labelloc and labeljust" {
