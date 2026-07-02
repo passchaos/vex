@@ -1754,6 +1754,7 @@ fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph
         while (rank > 0) : (rank -= 1) {
             orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank - 1, false, median_positions);
         }
+        refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
     }
 }
 
@@ -1806,6 +1807,66 @@ fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usiz
         if (std.meta.eql(node, needle)) return index;
     }
     return null;
+}
+
+fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize) void {
+    if (virtual_levels.levels.len < 2) return;
+    for (0..2) |_| {
+        var changed = false;
+        for (0..virtual_levels.levels.len) |rank| {
+            var level = &virtual_levels.levels[rank];
+            if (level.items.len < 2 or level.items.len > 64) continue;
+            var i: usize = 0;
+            while (i + 1 < level.items.len) : (i += 1) {
+                const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
+                std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
+                const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
+                if (after < before) {
+                    changed = true;
+                } else {
+                    std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn virtualCrossingScoreAroundLevel(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize) usize {
+    var score: usize = 0;
+    if (rank > 0) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank - 1);
+    if (rank + 1 < virtual_levels.levels.len) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank);
+    return score;
+}
+
+fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) usize {
+    if (upper_rank + 1 >= virtual_levels.levels.len) return 0;
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |a, ai| {
+        const a_segment = virtualEdgeSegment(a, virtual_levels, ranks, upper_rank) orelse continue;
+        for (graph.edges.items[ai + 1 ..]) |b| {
+            const b_segment = virtualEdgeSegment(b, virtual_levels, ranks, upper_rank) orelse continue;
+            if ((a_segment.upper < b_segment.upper and a_segment.lower > b_segment.lower) or
+                (a_segment.upper > b_segment.upper and a_segment.lower < b_segment.lower))
+            {
+                crossings += 1;
+            }
+        }
+    }
+    return crossings;
+}
+
+fn virtualEdgeSegment(edge_item: Edge, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) ?LayerSegment {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank >= to_rank) return null;
+    if (upper_rank < from_rank or upper_rank + 1 > to_rank) return null;
+    const upper_node: VirtualNode = if (upper_rank == from_rank) .{ .real = edge_item.from } else .{ .dummy = edge_item.id };
+    const lower_node: VirtualNode = if (upper_rank + 1 == to_rank) .{ .real = edge_item.to } else .{ .dummy = edge_item.id };
+    const upper_pos = positionInVirtualLevel(virtual_levels.levels[upper_rank].items, upper_node) orelse return null;
+    const lower_pos = positionInVirtualLevel(virtual_levels.levels[upper_rank + 1].items, lower_node) orelse return null;
+    return .{ .upper = @floatFromInt(upper_pos), .lower = @floatFromInt(lower_pos) };
 }
 
 fn virtualAdjacentNode(edge_item: Edge, node: VirtualNode, ranks: []const usize, rank: usize, use_parents: bool) ?VirtualNode {
@@ -6462,6 +6523,37 @@ test "virtual level median orders dummy nodes" {
     const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
     const c_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = c }).?;
     try std.testing.expect(dummy_pos < c_pos);
+}
+
+test "virtual adjacent exchange reduces dummy crossings" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    const e = try graph.node("e");
+    const f = try graph.node("f");
+    _ = try graph.edge(a, f, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 1;
+    ranks[e] = 2;
+    ranks[f] = 2;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1));
+    refineVirtualAdjacentExchanges(&graph, &virtual_levels, ranks);
+    try std.testing.expectEqual(@as(usize, 0), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1));
 }
 
 test "virtual reducer real-node order can be extracted" {
