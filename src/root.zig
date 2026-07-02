@@ -2523,6 +2523,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     for (graph.edges.items) |edge_item| {
         const visual = resolveEdgeVisual(edge_item);
         if (visual.hidden) continue;
+        const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
         if (edge_item.from == edge_item.to) {
             const route = selfLoopRoute(layout.nodes[edge_item.from]);
             try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
@@ -2543,6 +2544,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             if (edge_item.label) |label| {
                 try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
             }
+            try writeSvgInteractiveClose(writer, edge_wrap);
             continue;
         }
 
@@ -2557,6 +2559,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (edge_item.label) |label| {
             try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
         }
+        try writeSvgInteractiveClose(writer, edge_wrap);
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
 
@@ -2564,14 +2567,17 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
+        const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
         if (htmlTableMetrics(node_item.label) != null) {
             try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
+            try writeSvgInteractiveClose(writer, node_wrap);
             continue;
         }
         try renderSvgNodeShape(writer, node_item, l, visual, options);
         if (node_item.shape != .record and node_item.shape != .mrecord) {
             try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, visual.font_size, visual.font_color, visual.font_family, false, false);
         }
+        try writeSvgInteractiveClose(writer, node_wrap);
     }
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -2592,6 +2598,44 @@ fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
         0x27 => try writer.writeAll("&apos;"),
         else => try writer.writeByte(c),
     };
+}
+
+const SvgInteractiveWrap = enum {
+    none,
+    anchor,
+    group,
+};
+
+fn writeSvgInteractiveOpen(writer: *Io.Writer, attrs: []const Attr) Io.Writer.Error!SvgInteractiveWrap {
+    const href = attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url");
+    const tooltip = attrValue(attrs, "tooltip") orelse attrValue(attrs, "title");
+    if (href == null and tooltip == null) return .none;
+
+    if (href) |target| {
+        try writer.writeAll("<a href=\"");
+        try writeXmlEscaped(writer, target);
+        try writer.writeAll("\">");
+        if (tooltip) |tip| try writeSvgTitle(writer, tip);
+        return .anchor;
+    }
+
+    try writer.writeAll("<g>");
+    if (tooltip) |tip| try writeSvgTitle(writer, tip);
+    return .group;
+}
+
+fn writeSvgTitle(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    try writer.writeAll("<title>");
+    try writeXmlEscaped(writer, text);
+    try writer.writeAll("</title>");
+}
+
+fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Writer.Error!void {
+    switch (wrap) {
+        .none => {},
+        .anchor => try writer.writeAll("</a>\n"),
+        .group => try writer.writeAll("</g>\n"),
+    }
 }
 
 fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
@@ -4530,6 +4574,28 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
+}
+
+test "SVG renderer emits URL href and tooltip metadata" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a [URL="https://example.com/a", tooltip="Node A"];
+        \\  b;
+        \\  a -> b [href="https://example.com/e", tooltip="Edge A to B"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Node A</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
 }
 
 test "SVG renderer honors DOT fontname and fontsize attributes" {
