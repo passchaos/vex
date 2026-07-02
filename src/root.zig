@@ -2106,6 +2106,7 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
             if (level.items.len < 2 or level.items.len > 64) continue;
             var i: usize = 0;
             while (i + 1 < level.items.len) : (i += 1) {
+                if (virtualSwapCrossesClusterBlock(graph, level.items[i], level.items[i + 1])) continue;
                 const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
                 std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
                 const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
@@ -2118,6 +2119,17 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
         }
         if (!changed) break;
     }
+}
+
+fn virtualSwapCrossesClusterBlock(graph: *const Graph, a: VirtualNode, b: VirtualNode) bool {
+    const a_key = virtualBlockKey(graph, a);
+    const b_key = virtualBlockKey(graph, b);
+    if (a_key == b_key) return false;
+    return isClusterVirtualBlockKey(graph, a_key) or isClusterVirtualBlockKey(graph, b_key);
+}
+
+fn isClusterVirtualBlockKey(graph: *const Graph, key: usize) bool {
+    return key < graph.clusters.items.len;
 }
 
 fn virtualCrossingScoreAroundLevel(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize) usize {
@@ -7302,6 +7314,40 @@ test "virtual block keys leave root nodes as singleton blocks" {
     try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = a }), virtualBlockKey(&graph, .{ .real = b }));
     try std.testing.expect(virtualBlockKey(&graph, .{ .real = outside }) != virtualBlockKey(&graph, .{ .real = a }));
     try std.testing.expect(virtualBlockKey(&graph, .{ .dummy = 1 }) != virtualBlockKey(&graph, .{ .real = outside }));
+}
+
+test "virtual adjacent exchange preserves cluster block boundaries" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const top_a = try graph.node("top_a");
+    const top_b = try graph.node("top_b");
+    const a = try graph.node("a");
+    const outside = try graph.node("outside");
+    const b = try graph.node("b");
+    _ = try graph.edge(top_a, a, .{});
+    _ = try graph.edge(top_b, b, .{});
+    _ = try graph.addCluster("cluster_pair", null, &.{ a, b }, &.{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[top_a] = 0;
+    ranks[top_b] = 0;
+    ranks[a] = 1;
+    ranks[outside] = 1;
+    ranks[b] = 1;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    virtual_levels.levels[1].items[0] = .{ .real = a };
+    virtual_levels.levels[1].items[1] = .{ .real = b };
+    virtual_levels.levels[1].items[2] = .{ .real = outside };
+
+    refineVirtualAdjacentExchanges(&graph, &virtual_levels, ranks);
+    const a_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = a }).?;
+    const b_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = b }).?;
+    try std.testing.expect(a_pos + 1 == b_pos or b_pos + 1 == a_pos);
 }
 
 test "virtual adjacent exchange reduces dummy crossings" {
