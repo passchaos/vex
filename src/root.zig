@@ -64,12 +64,27 @@ pub const RankConstraint = struct {
     node_ids: []NodeId,
 };
 
+pub const CompassPort = enum {
+    auto,
+    center,
+    north,
+    north_east,
+    east,
+    south_east,
+    south,
+    south_west,
+    west,
+    north_west,
+};
+
 pub const EdgeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
     weight: ?f64 = null,
     constraint: ?bool = null,
     min_len: ?usize = null,
+    tail_port: CompassPort = .auto,
+    head_port: CompassPort = .auto,
     tail_record_port: ?[]const u8 = null,
     head_record_port: ?[]const u8 = null,
 };
@@ -105,6 +120,8 @@ pub const Edge = struct {
     weight: f64 = 1.0,
     constraint: bool = true,
     min_len: usize = 1,
+    tail_port: CompassPort = .auto,
+    head_port: CompassPort = .auto,
     tail_record_port: ?[]const u8 = null,
     head_record_port: ?[]const u8 = null,
     attrs: std.ArrayList(Attr) = .empty,
@@ -298,6 +315,8 @@ pub const Graph = struct {
             .weight = options.weight orelse self.edge_defaults.weight,
             .constraint = options.constraint orelse self.edge_defaults.constraint,
             .min_len = @max(options.min_len orelse self.edge_defaults.min_len, 1),
+            .tail_port = options.tail_port,
+            .head_port = options.head_port,
             .tail_record_port = owned_tail_record_port,
             .head_record_port = owned_head_record_port,
             .attrs = attrs,
@@ -482,16 +501,21 @@ fn parseBool(value: []const u8) ?bool {
 }
 
 fn isCompassPort(value: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(value, "n") or
-        std.ascii.eqlIgnoreCase(value, "ne") or
-        std.ascii.eqlIgnoreCase(value, "e") or
-        std.ascii.eqlIgnoreCase(value, "se") or
-        std.ascii.eqlIgnoreCase(value, "s") or
-        std.ascii.eqlIgnoreCase(value, "sw") or
-        std.ascii.eqlIgnoreCase(value, "w") or
-        std.ascii.eqlIgnoreCase(value, "nw") or
-        std.ascii.eqlIgnoreCase(value, "c") or
-        std.ascii.eqlIgnoreCase(value, "_");
+    return parseCompassPort(value) != null;
+}
+
+fn parseCompassPort(value: []const u8) ?CompassPort {
+    if (std.ascii.eqlIgnoreCase(value, "n")) return .north;
+    if (std.ascii.eqlIgnoreCase(value, "ne")) return .north_east;
+    if (std.ascii.eqlIgnoreCase(value, "e")) return .east;
+    if (std.ascii.eqlIgnoreCase(value, "se")) return .south_east;
+    if (std.ascii.eqlIgnoreCase(value, "s")) return .south;
+    if (std.ascii.eqlIgnoreCase(value, "sw")) return .south_west;
+    if (std.ascii.eqlIgnoreCase(value, "w")) return .west;
+    if (std.ascii.eqlIgnoreCase(value, "nw")) return .north_west;
+    if (std.ascii.eqlIgnoreCase(value, "c")) return .center;
+    if (std.ascii.eqlIgnoreCase(value, "_")) return .auto;
+    return null;
 }
 
 const TokenTag = enum {
@@ -657,10 +681,16 @@ const NodeSet = std.ArrayList(NodeId);
 
 const NodeRef = struct {
     id: NodeId,
+    port: CompassPort = .auto,
     record_port: ?[]const u8 = null,
 };
 
 const NodeRefSet = std.ArrayList(NodeRef);
+
+const ParsedPort = struct {
+    compass: CompassPort = .auto,
+    record_port: ?[]const u8 = null,
+};
 
 fn containsNode(nodes: []const NodeId, id: NodeId) bool {
     for (nodes) |existing| if (existing == id) return true;
@@ -833,8 +863,8 @@ const Parser = struct {
 
         const first_name = try self.parseIdText();
         defer self.allocator.free(first_name);
-        const first_record_port = try self.parseOptionalRecordPort();
-        defer if (first_record_port) |port| self.allocator.free(port);
+        const first_port = try self.parseOptionalPort();
+        defer if (first_port.record_port) |port| self.allocator.free(port);
 
         if (self.match(.equal)) {
             const value = try self.parseIdText();
@@ -863,7 +893,8 @@ const Parser = struct {
             defer freeNodeRefSet(self.allocator, &first_refs);
             try first_refs.append(self.allocator, .{
                 .id = first_id,
-                .record_port = if (first_record_port) |port| try self.allocator.dupe(u8, port) else null,
+                .port = first_port.compass,
+                .record_port = if (first_port.record_port) |port| try self.allocator.dupe(u8, port) else null,
             });
             for (first.items[1..]) |id| try first_refs.append(self.allocator, .{ .id = id });
             try self.parseEdgeTailRefs(graph, &first_refs);
@@ -913,6 +944,8 @@ const Parser = struct {
             for (operands.items[i].items) |from| {
                 for (operands.items[i + 1].items) |to| {
                     const edge_id = try graph.edge(from.id, to.id, .{
+                        .tail_port = from.port,
+                        .head_port = to.port,
                         .tail_record_port = from.record_port,
                         .head_record_port = to.record_port,
                     });
@@ -969,27 +1002,30 @@ const Parser = struct {
         const name = try self.parseIdText();
         defer self.allocator.free(name);
         const id = try graph.node(name);
-        const record_port = try self.parseOptionalRecordPort();
-        return .{ .id = id, .record_port = record_port };
+        const parsed_port = try self.parseOptionalPort();
+        return .{ .id = id, .port = parsed_port.compass, .record_port = parsed_port.record_port };
     }
 
-    fn parseOptionalRecordPort(self: *Parser) !?[]const u8 {
-        if (!self.match(.colon)) return null;
+    fn parseOptionalPort(self: *Parser) !ParsedPort {
+        if (!self.match(.colon)) return .{};
 
         const port = try self.parseIdText();
         defer self.allocator.free(port);
 
-        var record_port: ?[]const u8 = null;
-        if (!isCompassPort(port)) {
-            record_port = try self.allocator.dupe(u8, port);
+        var result: ParsedPort = .{};
+        if (parseCompassPort(port)) |compass| {
+            result.compass = compass;
+        } else {
+            result.record_port = try self.allocator.dupe(u8, port);
         }
 
         if (self.match(.colon)) {
             const compass = try self.parseIdText();
+            if (parseCompassPort(compass)) |compass_port| result.compass = compass_port;
             self.allocator.free(compass);
         }
 
-        return record_port;
+        return result;
     }
 
     fn parseSubgraph(self: *Parser, graph: *Graph) anyerror!NodeSet {
@@ -2523,8 +2559,8 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
 fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64) EdgeRoute {
     const from = layout.nodes[edge_item.from];
     const to = layout.nodes[edge_item.to];
-    const start = recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, rankdir, true) orelse boundaryPoint(from, to.center, rankdir, true);
-    const end = recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, rankdir, false) orelse boundaryPoint(to, from.center, rankdir, false);
+    const start = recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true);
+    const end = recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false);
     return edgeRouteFromEndpoints(start, end, rankdir, offset);
 }
 
@@ -2582,14 +2618,39 @@ const RectF = struct {
     height: f64,
 };
 
-fn recordBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, record_port: ?[]const u8, rankdir: RankDir, leaving: bool) ?Point {
-    _ = rankdir;
+fn portBoundaryPoint(node: NodeLayout, toward: Point, port: CompassPort, rankdir: RankDir, leaving: bool) Point {
+    if (port == .auto) return boundaryPoint(node, toward, rankdir, leaving);
+    return pointForPort(.{
+        .x = node.center.x - node.width / 2.0,
+        .y = node.center.y - node.height / 2.0,
+        .width = node.width,
+        .height = node.height,
+    }, port, toward);
+}
+
+fn recordBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, record_port: ?[]const u8, port: CompassPort, leaving: bool) ?Point {
     _ = leaving;
     if (record_port == null) return null;
     if (node_item.shape != .record and node_item.shape != .mrecord) return null;
     const rect = recordFieldRect(node_item.label, layout, record_port.?) orelse return null;
+    return pointForPort(rect, port, toward);
+}
+
+fn pointForPort(rect: RectF, port: CompassPort, toward: Point) Point {
     const cx = rect.x + rect.width / 2.0;
     const cy = rect.y + rect.height / 2.0;
+    switch (port) {
+        .center => return .{ .x = cx, .y = cy },
+        .north => return .{ .x = cx, .y = rect.y },
+        .north_east => return .{ .x = rect.x + rect.width, .y = rect.y },
+        .east => return .{ .x = rect.x + rect.width, .y = cy },
+        .south_east => return .{ .x = rect.x + rect.width, .y = rect.y + rect.height },
+        .south => return .{ .x = cx, .y = rect.y + rect.height },
+        .south_west => return .{ .x = rect.x, .y = rect.y + rect.height },
+        .west => return .{ .x = rect.x, .y = cy },
+        .north_west => return .{ .x = rect.x, .y = rect.y },
+        .auto => {},
+    }
     const dx = toward.x - cx;
     const dy = toward.y - cy;
     if (@abs(dx) > @abs(dy)) {
@@ -3622,4 +3683,40 @@ test "DOT record field ports route edge endpoints to fields" {
     try std.testing.expect(route.end.x <= head_rect.x + head_rect.width);
     try std.testing.expect(route.end.y >= head_rect.y);
     try std.testing.expect(route.end.y <= head_rect.y + head_rect.height);
+}
+
+test "DOT compass ports route edge endpoints to requested sides" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a:e -> b:w;
+        \\  customer [shape=Mrecord,label="<id> Customer|<orders> orders[]"];
+        \\  order [shape=record,label="<id> Order|total"];
+        \\  customer:orders:e -> order:id:w;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(CompassPort.east, graph.edges.items[0].tail_port);
+    try std.testing.expectEqual(CompassPort.west, graph.edges.items[0].head_port);
+    try std.testing.expectEqualStrings("orders", graph.edges.items[1].tail_record_port.?);
+    try std.testing.expectEqual(CompassPort.east, graph.edges.items[1].tail_port);
+    try std.testing.expectEqualStrings("id", graph.edges.items[1].head_record_port.?);
+    try std.testing.expectEqual(CompassPort.west, graph.edges.items[1].head_port);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const first = graph.edges.items[0];
+    const first_route = edgeRouteForEdge(&graph, &layout, first, graph.rankdir, 0);
+    try std.testing.expectEqual(layout.nodes[first.from].center.x + layout.nodes[first.from].width / 2.0, first_route.start.x);
+    try std.testing.expectEqual(layout.nodes[first.to].center.x - layout.nodes[first.to].width / 2.0, first_route.end.x);
+
+    const record_edge = graph.edges.items[1];
+    const record_route = edgeRouteForEdge(&graph, &layout, record_edge, graph.rankdir, 0);
+    const tail_rect = recordFieldRect(graph.nodes.items[record_edge.from].label, layout.nodes[record_edge.from], "orders").?;
+    const head_rect = recordFieldRect(graph.nodes.items[record_edge.to].label, layout.nodes[record_edge.to], "id").?;
+    try std.testing.expectEqual(tail_rect.x + tail_rect.width, record_route.start.x);
+    try std.testing.expectEqual(head_rect.x, record_route.end.x);
 }
