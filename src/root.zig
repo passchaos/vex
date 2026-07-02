@@ -1701,7 +1701,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
             const visual = resolveEdgeVisual(edge_item);
-            try writer.print("<marker id=\"arrow-{d}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{s}\"/></marker>\n", .{ edge_item.id, visual.stroke });
+            if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, visual.stroke);
+            if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, visual.stroke);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -1727,7 +1728,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
                 visual.width,
             });
             try writeSvgDash(writer, visual.dash);
-            if (graph.directed and visual.marker_end) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
+            try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
             try writer.writeAll("/>\n");
             if (edge_item.label) |label| {
                 try renderSvgTextBlock(writer, label, route.label.x, route.label.y, 12, visual.font_color, options.font_family, true, true);
@@ -1741,7 +1742,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeEdgePath(writer, layout, edge_item, graph.rankdir, offset, route);
         try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
         try writeSvgDash(writer, visual.dash);
-        if (graph.directed and visual.marker_end) try writer.print(" marker-end=\"url(#arrow-{d})\"", .{edge_item.id});
+        try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
         try writer.writeAll("/>\n");
         if (edge_item.label) |label| {
             try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, 12, visual.font_color, options.font_family, true, true);
@@ -1807,6 +1808,14 @@ const DashStyle = enum {
     dotted,
 };
 
+const MarkerShape = enum {
+    none,
+    normal,
+    vee,
+    dot,
+    odot,
+};
+
 const NodeVisual = struct {
     fill: []const u8,
     stroke: []const u8,
@@ -1822,7 +1831,8 @@ const EdgeVisual = struct {
     font_color: []const u8,
     width: f64,
     dash: DashStyle,
-    marker_end: bool,
+    marker_start: MarkerShape,
+    marker_end: MarkerShape,
     hidden: bool,
 };
 
@@ -1990,12 +2000,17 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
 fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     const style = attrValue(edge_item.attrs.items, "style");
     const arrowhead = attrValue(edge_item.attrs.items, "arrowhead");
+    const arrowtail = attrValue(edge_item.attrs.items, "arrowtail");
+    const dir = attrValue(edge_item.attrs.items, "dir");
+    const head_enabled = markerEnabledByDir(dir, true);
+    const tail_enabled = markerEnabledByDir(dir, false);
     return .{
         .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "#475569",
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", 1.8),
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
-        .marker_end = arrowhead == null or !std.ascii.eqlIgnoreCase(arrowhead.?, "none"),
+        .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
+        .marker_end = if (head_enabled) parseMarkerShape(arrowhead, .normal) else .none,
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -2045,6 +2060,45 @@ fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
         .dashed => try writer.writeAll(" stroke-dasharray=\"8,5\""),
         .dotted => try writer.writeAll(" stroke-dasharray=\"2,5\""),
     }
+}
+
+fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, color: []const u8) Io.Writer.Error!void {
+    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto", .{ edge_id, suffix });
+    if (std.mem.eql(u8, suffix, "tail")) try writer.writeAll("-start-reverse");
+    try writer.writeAll("\">");
+    switch (shape) {
+        .none => {},
+        .normal => try writer.print("<path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{s}\"/>", .{color}),
+        .vee => try writer.print("<path d=\"M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{color}),
+        .dot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"{s}\"/>", .{color}),
+        .odot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
+    }
+    try writer.writeAll("</marker>\n");
+}
+
+fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visual: EdgeVisual) Io.Writer.Error!void {
+    if (!directed) return;
+    if (visual.marker_start != .none) try writer.print(" marker-start=\"url(#arrow-{d}-tail)\"", .{edge_id});
+    if (visual.marker_end != .none) try writer.print(" marker-end=\"url(#arrow-{d}-head)\"", .{edge_id});
+}
+
+fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
+    const text = value orelse return fallback;
+    if (std.ascii.eqlIgnoreCase(text, "none")) return .none;
+    if (std.ascii.eqlIgnoreCase(text, "normal")) return .normal;
+    if (std.ascii.eqlIgnoreCase(text, "vee")) return .vee;
+    if (std.ascii.eqlIgnoreCase(text, "dot")) return .dot;
+    if (std.ascii.eqlIgnoreCase(text, "odot")) return .odot;
+    return fallback;
+}
+
+fn markerEnabledByDir(dir: ?[]const u8, head: bool) bool {
+    const value = dir orelse return head;
+    if (std.ascii.eqlIgnoreCase(value, "none")) return false;
+    if (std.ascii.eqlIgnoreCase(value, "both")) return true;
+    if (std.ascii.eqlIgnoreCase(value, "back")) return !head;
+    if (std.ascii.eqlIgnoreCase(value, "forward")) return head;
+    return head;
 }
 
 fn parallelEdgeOffset(graph: *const Graph, edge_id: EdgeId) f64 {
@@ -2774,7 +2828,7 @@ test "SVG renderer emits curved clipped edges and multiline text spans" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0-head\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "dy=\"17.5\"") != null);
 
@@ -2811,7 +2865,7 @@ test "SVG renderer honors common Graphviz visual attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"4.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0)\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0-head)\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "loop") != null);
 
     const first_offset = parallelEdgeOffset(&graph, 0);
@@ -2841,6 +2895,35 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f8fafc\" stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+}
+
+test "SVG renderer honors common Graphviz arrow marker attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [arrowhead=vee, color="#2563eb"];
+        \\  b -> c [dir=both, arrowtail=dot, arrowhead=odot, color="#dc2626"];
+        \\  c -> d [dir=back, arrowtail=vee];
+        \\  d -> e [dir=none];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "arrow-0-head") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-1-tail)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-1-head)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-2-tail)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-2-head)\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-3-tail)\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-3-head)\"") == null);
 }
 
 test "DOT subgraphs scope default node and edge attributes" {
