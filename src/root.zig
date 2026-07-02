@@ -4478,6 +4478,10 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         try writeOrthoEdgePath(writer, direct_route.start, direct_route.end, rankdir);
         return;
     }
+    if (isBackEdge(layout, edge_item)) {
+        try writeBackEdgePath(writer, layout, edge_item, rankdir, offset, direct_route, routing);
+        return;
+    }
 
     const waypoint_count = longEdgeWaypointCount(layout, edge_item);
     if (waypoint_count == 0) {
@@ -4541,6 +4545,78 @@ fn writeOrthoEdgePath(writer: *Io.Writer, start: Point, end: Point, rankdir: Ran
             mid_y,
             end.x,
             end.y,
+        });
+    }
+}
+
+fn isBackEdge(layout: *const Layout, edge_item: Edge) bool {
+    if (edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) return false;
+    return layout.ranks[edge_item.to] < layout.ranks[edge_item.from];
+}
+
+fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting) Io.Writer.Error!void {
+    const from = layout.nodes[edge_item.from];
+    const to = layout.nodes[edge_item.to];
+    const side_gap = @max(28.0, layout.margin * 0.55) + @abs(offset);
+
+    if (rankdir == .TB or rankdir == .BT) {
+        const prefer_left = from.center.x <= to.center.x;
+        const side_x = if (prefer_left)
+            @max(8.0, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
+        else
+            @min(layout.width - 8.0, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
+        const p1 = Point{ .x = side_x, .y = route.start.y };
+        const p2 = Point{ .x = side_x, .y = route.end.y };
+        if (routing == .polyline) {
+            try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
+                route.start.x, route.start.y, p1.x, p1.y, p2.x, p2.y, route.end.x, route.end.y,
+            });
+        } else {
+            const curve = @min(36.0, @abs(route.start.x - side_x) * 0.5 + 12.0);
+            const c1x = if (prefer_left) route.start.x - curve else route.start.x + curve;
+            const c2x = if (prefer_left) side_x + curve else side_x - curve;
+            const c3x = if (prefer_left) side_x + curve else side_x - curve;
+            const c4x = if (prefer_left) route.end.x - curve else route.end.x + curve;
+            try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
+                route.start.x, route.start.y,
+                c1x,           route.start.y,
+                c2x,           p1.y,
+                p1.x,          p1.y,
+                p2.x,          p2.y,
+                c3x,           p2.y,
+                c4x,           route.end.y,
+                route.end.x,   route.end.y,
+            });
+        }
+        return;
+    }
+
+    const prefer_top = from.center.y <= to.center.y;
+    const side_y = if (prefer_top)
+        @max(8.0, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
+    else
+        @min(layout.height - 8.0, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
+    const p1 = Point{ .x = route.start.x, .y = side_y };
+    const p2 = Point{ .x = route.end.x, .y = side_y };
+    if (routing == .polyline) {
+        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
+            route.start.x, route.start.y, p1.x, p1.y, p2.x, p2.y, route.end.x, route.end.y,
+        });
+    } else {
+        const curve = @min(36.0, @abs(route.start.y - side_y) * 0.5 + 12.0);
+        const c1y = if (prefer_top) route.start.y - curve else route.start.y + curve;
+        const c2y = if (prefer_top) side_y + curve else side_y - curve;
+        const c3y = if (prefer_top) side_y + curve else side_y - curve;
+        const c4y = if (prefer_top) route.end.y - curve else route.end.y + curve;
+        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
+            route.start.x, route.start.y,
+            route.start.x, c1y,
+            p1.x,          c2y,
+            p1.x,          p1.y,
+            p2.x,          p2.y,
+            p2.x,          c3y,
+            route.end.x,   c4y,
+            route.end.x,   route.end.y,
         });
     }
 }
@@ -6332,6 +6408,33 @@ test "SVG routes skip-rank edges through intermediate waypoints" {
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingLongPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
     try std.testing.expect(countSubstrings(path, " C ") >= 3);
+}
+
+test "SVG routes multi-rank back edges around the side" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a0 -> a1 -> a2 -> a3;
+        \\  a3 -> a0 [label="back"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[3], graph.rankdir, 0);
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const label_pos = std.mem.indexOf(u8, svg, ">back</tspan>") orelse return error.MissingBackLabel;
+    const before_label = svg[0..label_pos];
+    const path_start = std.mem.lastIndexOf(u8, before_label, "<path") orelse return error.MissingBackPath;
+    const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingBackPathEnd;
+    const path = svg[path_start .. path_start + path_end_rel];
+    try std.testing.expect(isBackEdge(&layout, graph.edges.items[3]));
+    try std.testing.expect(countSubstrings(path, " C ") == 2);
+    try std.testing.expect(countSubstrings(path, " L ") == 1);
+    try std.testing.expect(std.mem.indexOf(u8, path, " C ") != null);
+    try std.testing.expect(route.start.y > route.end.y);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
