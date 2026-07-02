@@ -4148,6 +4148,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
         const visual = resolveEdgeVisual(edge_item);
         if (visual.hidden) continue;
+        try writer.writeAll("<g class=\"edge\">\n");
         const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
         if (edge_wrap == .none) try writeSvgEdgeTitle(writer, graph, edge_item);
         if (edge_item.from == edge_item.to) {
@@ -4172,6 +4173,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             }
             try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
             try writeSvgInteractiveClose(writer, edge_wrap);
+            try writer.writeAll("</g>\n");
             continue;
         }
 
@@ -4188,6 +4190,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         }
         try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
         try writeSvgInteractiveClose(writer, edge_wrap);
+        try writer.writeAll("</g>\n");
     }
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
 
@@ -4393,7 +4396,7 @@ fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
 
 fn renderedEdgePathCount(svg: []const u8) usize {
     const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
-    const end_rel = std.mem.indexOf(u8, svg[start..], "</g>") orelse return 0;
+    const end_rel = std.mem.indexOf(u8, svg[start..], "\n<g class=\"nodes\"") orelse return 0;
     return countSubstrings(svg[start .. start + end_rel], "<path d=\"M ");
 }
 
@@ -8326,6 +8329,24 @@ test "SVG renderer wraps nodes in Graphviz-like groups" {
 
     try std.testing.expect(countSubstrings(svg, "<g class=\"node\">") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"node\">\n<title>a</title>") != null);
+}
+
+test "SVG renderer wraps edges in Graphviz-like groups" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "<g class=\"edge\">") >= 1);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"edge\">\n<title>a-&gt;b</title>") != null);
 }
 
 test "SVG renderer uses Graphviz default font family" {
