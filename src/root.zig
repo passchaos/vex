@@ -4382,7 +4382,7 @@ const MarkerShape = enum {
     empty,
 };
 
-const default_svg_font_family = "Inter, ui-sans-serif, system-ui, sans-serif";
+const default_svg_font_family = "Times,serif";
 
 const NodeVisual = struct {
     fill: []const u8,
@@ -8190,6 +8190,24 @@ test "SVG renderer emits default Graphviz-like node and edge titles" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>b</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a-&gt;b</title>") != null);
+}
+
+test "SVG renderer uses Graphviz default font family" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "ui-sans-serif") == null);
 }
 
 test "SVG renderer emits headlabel taillabel and xlabel" {
