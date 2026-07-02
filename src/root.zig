@@ -1505,6 +1505,9 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     var indegree = try allocator.alloc(usize, n);
     defer allocator.free(indegree);
     @memset(indegree, 0);
+    var acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, false);
 
     for (graph.edges.items) |edge_item| {
         if (!edge_item.constraint) continue;
@@ -1523,6 +1526,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
             if (edge_item.from != u) continue;
             const min_len = @max(edge_item.min_len, 1);
             if (ranks[edge_item.to] < ranks[u] + min_len) ranks[edge_item.to] = ranks[u] + min_len;
+            acyclic_edge[edge_item.id] = true;
             if (indegree[edge_item.to] > 0) {
                 indegree[edge_item.to] -= 1;
                 if (indegree[edge_item.to] == 0) try queue.append(allocator, edge_item.to);
@@ -1530,14 +1534,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         }
     }
 
-    // Cycles leave some nodes unvisited. Keep them deterministic and close to
-    // their predecessors rather than failing layout for non-DAG input.
-    for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
-        if (ranks[edge_item.to] <= ranks[edge_item.from] and edge_item.to != edge_item.from) {
-            ranks[edge_item.to] = ranks[edge_item.from] + @max(edge_item.min_len, 1);
-        }
-    }
+    assignRanksForCyclicComponents(graph, ranks, acyclic_edge);
 
     applyRankConstraints(graph, ranks);
 
@@ -1870,6 +1867,33 @@ fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
             else => {},
         }
     }
+}
+
+fn assignRanksForCyclicComponents(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
+    const state = graph.allocator.alloc(u8, ranks.len) catch return;
+    defer graph.allocator.free(state);
+    @memset(state, 0);
+    for (graph.nodes.items, 0..) |_, id| relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, id);
+}
+
+fn relaxRanksDepthFirst(graph: *const Graph, ranks: []usize, state: []u8, acyclic_edge: []const bool, node_id: NodeId) void {
+    if (node_id >= state.len) return;
+    if (state[node_id] == 1) return;
+    if (state[node_id] == 2) return;
+    state[node_id] = 1;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id]) continue;
+        if (!edge_item.constraint or edge_item.from != node_id) continue;
+        if (edge_item.to >= ranks.len or edge_item.to == node_id) continue;
+        if (state[edge_item.to] == 1) continue;
+        const candidate = ranks[node_id] + @max(edge_item.min_len, 1);
+        if (ranks[edge_item.to] < candidate) {
+            ranks[edge_item.to] = candidate;
+            if (state[edge_item.to] == 2) state[edge_item.to] = 0;
+        }
+        relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, edge_item.to);
+    }
+    state[node_id] = 2;
 }
 
 fn labelLineCount(text: []const u8) usize {
@@ -6217,6 +6241,29 @@ test "layered layout applies rank same and boundary constraints" {
     try std.testing.expect(layout.nodes[source].center.y < layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[archive].center.y > layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[source].center.y <= layout.nodes[free].center.y);
+}
+
+test "layered layout keeps back edges from expanding ranks" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a0 -> a1 -> a2 -> a3;
+        \\  a3 -> a0;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a0 = graph.node_index.get("a0").?;
+    const a1 = graph.node_index.get("a1").?;
+    const a2 = graph.node_index.get("a2").?;
+    const a3 = graph.node_index.get("a3").?;
+    try std.testing.expect(layout.ranks[a0] < layout.ranks[a1]);
+    try std.testing.expect(layout.ranks[a1] < layout.ranks[a2]);
+    try std.testing.expect(layout.ranks[a2] < layout.ranks[a3]);
+    try std.testing.expect(layout.ranks[a3] <= layout.ranks[a0] + 3);
 }
 
 test "SVG auto endpoints use side anchors for same-rank edges" {
