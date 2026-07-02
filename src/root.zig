@@ -87,6 +87,8 @@ pub const EdgeOptions = struct {
     head_port: CompassPort = .auto,
     tail_record_port: ?[]const u8 = null,
     head_record_port: ?[]const u8 = null,
+    ltail: ?[]const u8 = null,
+    lhead: ?[]const u8 = null,
 };
 
 pub const NodeOptions = struct {
@@ -124,6 +126,8 @@ pub const Edge = struct {
     head_port: CompassPort = .auto,
     tail_record_port: ?[]const u8 = null,
     head_record_port: ?[]const u8 = null,
+    ltail: ?[]const u8 = null,
+    lhead: ?[]const u8 = null,
     attrs: std.ArrayList(Attr) = .empty,
 };
 
@@ -198,6 +202,8 @@ pub const Graph = struct {
             if (e.label) |label| self.allocator.free(label);
             if (e.tail_record_port) |port| self.allocator.free(port);
             if (e.head_record_port) |port| self.allocator.free(port);
+            if (e.ltail) |cluster_name| self.allocator.free(cluster_name);
+            if (e.lhead) |cluster_name| self.allocator.free(cluster_name);
             self.allocator.free(e.color);
             for (e.attrs.items) |attr| {
                 self.allocator.free(attr.name);
@@ -293,6 +299,10 @@ pub const Graph = struct {
         errdefer if (owned_tail_record_port) |port| self.allocator.free(port);
         const owned_head_record_port = if (options.head_record_port) |port| try self.allocator.dupe(u8, port) else null;
         errdefer if (owned_head_record_port) |port| self.allocator.free(port);
+        const owned_ltail = if (options.ltail) |cluster_name| try self.allocator.dupe(u8, cluster_name) else null;
+        errdefer if (owned_ltail) |cluster_name| self.allocator.free(cluster_name);
+        const owned_lhead = if (options.lhead) |cluster_name| try self.allocator.dupe(u8, cluster_name) else null;
+        errdefer if (owned_lhead) |cluster_name| self.allocator.free(cluster_name);
 
         var attrs = try copyAttrList(self.allocator, self.edge_default_attrs.items);
         errdefer {
@@ -319,6 +329,8 @@ pub const Graph = struct {
             .head_port = options.head_port,
             .tail_record_port = owned_tail_record_port,
             .head_record_port = owned_head_record_port,
+            .ltail = owned_ltail,
+            .lhead = owned_lhead,
             .attrs = attrs,
         };
         try self.edges.append(self.allocator, e);
@@ -432,6 +444,12 @@ pub const Graph = struct {
             e.constraint = parseBool(value) orelse e.constraint;
         } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
             e.min_len = @max(std.fmt.parseInt(usize, value, 10) catch e.min_len, 1);
+        } else if (std.ascii.eqlIgnoreCase(name, "ltail")) {
+            if (e.ltail) |cluster_name| self.allocator.free(cluster_name);
+            e.ltail = try self.allocator.dupe(u8, value);
+        } else if (std.ascii.eqlIgnoreCase(name, "lhead")) {
+            if (e.lhead) |cluster_name| self.allocator.free(cluster_name);
+            e.lhead = try self.allocator.dupe(u8, value);
         }
         try setAttrInList(self.allocator, &e.attrs, name, value);
     }
@@ -2670,8 +2688,16 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
 fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64) EdgeRoute {
     const from = layout.nodes[edge_item.from];
     const to = layout.nodes[edge_item.to];
-    const start = recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true);
-    const end = recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false);
+    const raw_start = recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true);
+    const raw_end = recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false);
+    const start = if (edge_item.ltail) |cluster_name|
+        clusterBoundaryPoint(graph, layout, cluster_name, raw_start, raw_end) orelse raw_start
+    else
+        raw_start;
+    const end = if (edge_item.lhead) |cluster_name|
+        clusterBoundaryPoint(graph, layout, cluster_name, raw_end, raw_start) orelse raw_end
+    else
+        raw_end;
     return edgeRouteFromEndpoints(start, end, rankdir, offset);
 }
 
@@ -2728,6 +2754,71 @@ const RectF = struct {
     width: f64,
     height: f64,
 };
+
+fn clusterBoundaryPoint(graph: *const Graph, layout: *const Layout, name: []const u8, from: Point, toward: Point) ?Point {
+    const rect = clusterRect(graph, layout, name) orelse return null;
+    return intersectRectBoundary(rect, from, toward);
+}
+
+fn clusterRect(graph: *const Graph, layout: *const Layout, name: []const u8) ?RectF {
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (!std.mem.eql(u8, cluster.name, name)) continue;
+        if (index >= layout.clusters.len) return null;
+        const box = layout.clusters[index];
+        if (box.width <= 0 or box.height <= 0) return null;
+        return .{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
+    }
+    return null;
+}
+
+fn intersectRectBoundary(rect: RectF, from: Point, toward: Point) ?Point {
+    const dx = toward.x - from.x;
+    const dy = toward.y - from.y;
+    var best_t = std.math.floatMax(f64);
+    var result: ?Point = null;
+
+    if (dx != 0) {
+        const left_t = (rect.x - from.x) / dx;
+        const left_y = from.y + left_t * dy;
+        if (left_t >= 0 and left_t <= 1 and left_y >= rect.y and left_y <= rect.y + rect.height and left_t < best_t) {
+            best_t = left_t;
+            result = .{ .x = rect.x, .y = left_y };
+        }
+        const right_t = (rect.x + rect.width - from.x) / dx;
+        const right_y = from.y + right_t * dy;
+        if (right_t >= 0 and right_t <= 1 and right_y >= rect.y and right_y <= rect.y + rect.height and right_t < best_t) {
+            best_t = right_t;
+            result = .{ .x = rect.x + rect.width, .y = right_y };
+        }
+    }
+
+    if (dy != 0) {
+        const top_t = (rect.y - from.y) / dy;
+        const top_x = from.x + top_t * dx;
+        if (top_t >= 0 and top_t <= 1 and top_x >= rect.x and top_x <= rect.x + rect.width and top_t < best_t) {
+            best_t = top_t;
+            result = .{ .x = top_x, .y = rect.y };
+        }
+        const bottom_t = (rect.y + rect.height - from.y) / dy;
+        const bottom_x = from.x + bottom_t * dx;
+        if (bottom_t >= 0 and bottom_t <= 1 and bottom_x >= rect.x and bottom_x <= rect.x + rect.width and bottom_t < best_t) {
+            result = .{ .x = bottom_x, .y = rect.y + rect.height };
+        }
+    }
+
+    return result;
+}
+
+fn pointOnRectBoundary(rect: RectF, point: Point) bool {
+    const eps = 0.01;
+    const on_left = @abs(point.x - rect.x) <= eps;
+    const on_right = @abs(point.x - (rect.x + rect.width)) <= eps;
+    const on_top = @abs(point.y - rect.y) <= eps;
+    const on_bottom = @abs(point.y - (rect.y + rect.height)) <= eps;
+    const within_x = point.x >= rect.x - eps and point.x <= rect.x + rect.width + eps;
+    const within_y = point.y >= rect.y - eps and point.y <= rect.y + rect.height + eps;
+    return ((on_left or on_right) and within_y) or ((on_top or on_bottom) and within_x);
+}
 
 fn portBoundaryPoint(node: NodeLayout, toward: Point, port: CompassPort, rankdir: RankDir, leaving: bool) Point {
     if (port == .auto) return boundaryPoint(node, toward, rankdir, leaving);
@@ -3876,4 +3967,36 @@ test "DOT nested record groups alternate field orientation" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">email</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">status</text>") != null);
     try std.testing.expect(countSubstrings(svg, " L ") >= 4);
+}
+
+test "DOT compound edges clip to cluster boundaries" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  compound=true;
+        \\  subgraph cluster_left {
+        \\    label="Left";
+        \\    a -> b;
+        \\  }
+        \\  subgraph cluster_right {
+        \\    label="Right";
+        \\    c -> d;
+        \\  }
+        \\  b -> c [ltail=cluster_left, lhead=cluster_right, label="handoff"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const edge_item = graph.edges.items[2];
+    try std.testing.expectEqualStrings("cluster_left", edge_item.ltail.?);
+    try std.testing.expectEqualStrings("cluster_right", edge_item.lhead.?);
+
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, graph.rankdir, 0);
+    const left = clusterRect(&graph, &layout, "cluster_left").?;
+    const right = clusterRect(&graph, &layout, "cluster_right").?;
+    try std.testing.expect(pointOnRectBoundary(left, route.start));
+    try std.testing.expect(pointOnRectBoundary(right, route.end));
 }
