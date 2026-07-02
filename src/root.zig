@@ -2525,8 +2525,8 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
 }
 
 fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
-    const pad_x: f64 = 28;
-    const pad_y: f64 = 32;
+    const pad_x: f64 = 12;
+    const pad_y: f64 = 24;
     const label_band: f64 = 22;
     const child_gap: f64 = 12;
     for (graph.clusters.items, 0..) |cluster, index| {
@@ -8903,6 +8903,27 @@ test "cluster layout boxes contain member nodes and render to SVG" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
+}
+
+test "cluster layout uses compact padding while fitting labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_process {
+        \\    label="process #1";
+        \\    a;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const cluster_box = layout.clusters[0];
+    const a = graph.node_index.get("a").?;
+    const node = layout.nodes[a];
+    try std.testing.expect(cluster_box.width >= node.width + 24.0);
+    try std.testing.expect(cluster_box.width <= 104.0);
 }
 
 test "cluster fill follows Graphviz style filled color semantics" {
