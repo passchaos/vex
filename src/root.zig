@@ -2526,8 +2526,8 @@ fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId),
 
 fn crossingScoreAroundLevel(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, rank: usize) usize {
     var score: usize = 0;
-    if (rank > 0) score += countLayerCrossings(graph, levels[rank - 1].items, levels[rank].items, ranks);
-    if (rank + 1 < levels.len) score += countLayerCrossings(graph, levels[rank].items, levels[rank + 1].items, ranks);
+    if (rank > 0) score += countLayerCrossingsWithDummies(graph, levels, ranks, rank - 1);
+    if (rank + 1 < levels.len) score += countLayerCrossingsWithDummies(graph, levels, ranks, rank);
     return score;
 }
 
@@ -2545,6 +2545,48 @@ fn countLayerCrossings(graph: *const Graph, upper: []const NodeId, lower: []cons
         }
     }
     return crossings;
+}
+
+const LayerSegment = struct {
+    upper: f64,
+    lower: f64,
+};
+
+fn countLayerCrossingsWithDummies(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, upper_rank: usize) usize {
+    if (upper_rank + 1 >= levels.len) return 0;
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |a, ai| {
+        const a_segment = edgeVirtualSegment(a, levels, ranks, upper_rank) orelse continue;
+        for (graph.edges.items[ai + 1 ..]) |b| {
+            const b_segment = edgeVirtualSegment(b, levels, ranks, upper_rank) orelse continue;
+            if ((a_segment.upper < b_segment.upper and a_segment.lower > b_segment.lower) or
+                (a_segment.upper > b_segment.upper and a_segment.lower < b_segment.lower))
+            {
+                crossings += 1;
+            }
+        }
+    }
+    return crossings;
+}
+
+fn edgeVirtualSegment(edge_item: Edge, levels: []const std.ArrayList(NodeId), ranks: []const usize, upper_rank: usize) ?LayerSegment {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank >= to_rank) return null;
+    if (upper_rank < from_rank or upper_rank + 1 > to_rank) return null;
+    if (from_rank >= levels.len or to_rank >= levels.len) return null;
+    const from_pos = positionInLayer(levels[from_rank].items, edge_item.from) orelse return null;
+    const to_pos = positionInLayer(levels[to_rank].items, edge_item.to) orelse return null;
+    const span = @as(f64, @floatFromInt(to_rank - from_rank));
+    const upper_t = @as(f64, @floatFromInt(upper_rank - from_rank)) / span;
+    const lower_t = @as(f64, @floatFromInt(upper_rank + 1 - from_rank)) / span;
+    const from_f: f64 = @floatFromInt(from_pos);
+    const to_f: f64 = @floatFromInt(to_pos);
+    return .{
+        .upper = from_f + (to_f - from_f) * upper_t,
+        .lower = from_f + (to_f - from_f) * lower_t,
+    };
 }
 
 fn edgeConnectsLayers(edge_item: Edge, upper: []const NodeId, lower: []const NodeId, ranks: []const usize) bool {
@@ -5690,6 +5732,42 @@ test "adjacent exchange reduces residual two-layer crossings" {
     try std.testing.expectEqual(@as(usize, 1), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
     refineAdjacentExchanges(&graph, levels, ranks, 2);
     try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
+}
+
+test "long edges contribute virtual segments to crossing score" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    const e = try graph.node("e");
+    _ = try graph.edge(a, e, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 2;
+    ranks[e] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+    try levels[1].append(allocator, c);
+    try levels[2].append(allocator, d);
+    try levels[2].append(allocator, e);
+
+    try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
+    try std.testing.expectEqual(@as(usize, 1), countLayerCrossingsWithDummies(&graph, levels, ranks, 0));
 }
 
 test "LR layout accounts for oriented long-label extents" {
