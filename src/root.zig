@@ -2752,6 +2752,28 @@ fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge:
     return cost;
 }
 
+fn rankAssignmentCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool) f64 {
+    var cost: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        cost += rankSpanCost(ranks[edge_item.from], ranks[edge_item.to], edge_item.weight);
+    }
+    return cost;
+}
+
+fn rankAssignmentFeasible(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool) bool {
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        const min_len = @max(edge_item.min_len, 1);
+        if (ranks[edge_item.to] < ranks[edge_item.from] + min_len) return false;
+    }
+    return true;
+}
+
 fn rankSpanCost(from_rank: usize, to_rank: usize, weight: f64) f64 {
     const span = if (from_rank > to_rank) from_rank - to_rank else to_rank - from_rank;
     return @as(f64, @floatFromInt(span)) * @max(weight, 0.1);
@@ -8643,6 +8665,39 @@ test "rank slack tightening propagates through dependent slack nodes" {
     const d = graph.node_index.get("d").?;
     try std.testing.expectEqual(layout.ranks[y] + 1, layout.ranks[d]);
     try std.testing.expectEqual(layout.ranks[x] + 1, layout.ranks[y]);
+}
+
+test "rank assignment helpers measure feasibility and weighted span cost" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c;
+        \\  x -> c [weight=4];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const x = graph.node_index.get("x").?;
+    const loose = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(loose);
+    loose[a] = 0;
+    loose[b] = 1;
+    loose[c] = 2;
+    loose[x] = 0;
+    const tight = try allocator.dupe(usize, loose);
+    defer allocator.free(tight);
+    tight[x] = 1;
+
+    try std.testing.expect(rankAssignmentFeasible(&graph, loose, acyclic_edge));
+    try std.testing.expect(rankAssignmentFeasible(&graph, tight, acyclic_edge));
+    try std.testing.expect(rankAssignmentCost(&graph, tight, acyclic_edge) < rankAssignmentCost(&graph, loose, acyclic_edge));
 }
 
 test "rank slack tightening preserves explicit boundary ranks" {
