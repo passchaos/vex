@@ -15,6 +15,7 @@ pub const Shape = enum {
     box,
     circle,
     doublecircle,
+    point,
     diamond,
     parallelogram,
     hexagon,
@@ -499,6 +500,7 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "box") or std.ascii.eqlIgnoreCase(value, "rect") or std.ascii.eqlIgnoreCase(value, "rectangle")) return .box;
     if (std.ascii.eqlIgnoreCase(value, "circle")) return .circle;
     if (std.ascii.eqlIgnoreCase(value, "doublecircle")) return .doublecircle;
+    if (std.ascii.eqlIgnoreCase(value, "point")) return .point;
     if (std.ascii.eqlIgnoreCase(value, "diamond")) return .diamond;
     if (std.ascii.eqlIgnoreCase(value, "parallelogram")) return .parallelogram;
     if (std.ascii.eqlIgnoreCase(value, "hexagon")) return .hexagon;
@@ -514,6 +516,7 @@ fn shapeName(shape: Shape) []const u8 {
         .box => "box",
         .circle => "circle",
         .doublecircle => "doublecircle",
+        .point => "point",
         .diamond => "diamond",
         .parallelogram => "parallelogram",
         .hexagon => "hexagon",
@@ -1574,6 +1577,10 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0);
     switch (node_item.shape) {
+        .point => {
+            width = 12;
+            height = 12;
+        },
         .circle, .doublecircle => {
             const diameter = @max(width, height);
             width = diameter;
@@ -2677,7 +2684,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             continue;
         }
         try renderSvgNodeShape(writer, node_item, l, visual, options);
-        if (node_item.shape != .record and node_item.shape != .mrecord) {
+        if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
             try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, visual.font_size, visual.font_color, visual.font_family, false, false);
         }
         try writeSvgInteractiveClose(writer, node_wrap);
@@ -2993,6 +3000,16 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     switch (node_item.shape) {
+        .point => {
+            try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+                layout.center.x,
+                layout.center.y,
+                @min(layout.width, layout.height) / 2.0,
+                visual.stroke,
+                visual.stroke,
+                visual.width,
+            });
+        },
         .box => {
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
@@ -5274,6 +5291,29 @@ test "DOT doublecircle shape renders as two circle peripheries" {
     defer allocator.free(svg);
     try std.testing.expect(countSubstrings(svg, "<circle") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
+}
+
+test "DOT point shape renders as small unlabeled filled point" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  p [shape=point, label="hidden"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const p = graph.node_index.get("p").?;
+    try std.testing.expectEqual(Shape.point, graph.nodes.items[p].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expect(layout.nodes[p].width <= 12.0);
+    try std.testing.expect(layout.nodes[p].height <= 12.0);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "hidden") == null);
 }
 
 test "DOT record and Mrecord nodes render field separators" {
