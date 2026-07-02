@@ -1589,11 +1589,15 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     defer allocator.free(centers);
     @memset(centers, 0);
 
+    var initial_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, null);
+    defer initial_virtual_positions.deinit();
+    applyVirtualRealPositions(&virtual_levels, &initial_virtual_positions, centers);
+
     var rank_widths = try allocator.alloc(f64, levels.len);
     defer allocator.free(rank_widths);
     var max_width: f64 = 0;
     for (levels, 0..) |level, rank| {
-        rank_widths[rank] = packLevelFromLeft(level.items, axis_sizes, effective_options.node_gap, centers);
+        rank_widths[rank] = rankWidthFromCenters(level.items, axis_sizes, centers);
         max_width = @max(max_width, rank_widths[rank]);
     }
 
@@ -3248,6 +3252,17 @@ fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, c
         left += sizes[id].width + gap;
     }
     return if (level.len == 0) 0 else left - gap;
+}
+
+fn rankWidthFromCenters(level: []const NodeId, sizes: []const NodeSize, centers: []const f64) f64 {
+    if (level.len == 0) return 0;
+    var min_left = std.math.floatMax(f64);
+    var max_right: f64 = 0;
+    for (level) |id| {
+        min_left = @min(min_left, centers[id] - sizes[id].width / 2.0);
+        max_right = @max(max_right, centers[id] + sizes[id].width / 2.0);
+    }
+    return if (min_left == std.math.floatMax(f64)) 0 else max_right - min_left;
 }
 
 fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, sizes: []const NodeSize, centers: []f64, options: LayoutOptions) void {
