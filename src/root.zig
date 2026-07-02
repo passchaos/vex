@@ -145,7 +145,7 @@ pub const Edge = struct {
     from: NodeId,
     to: NodeId,
     label: ?[]const u8 = null,
-    color: []const u8 = "#6b7280",
+    color: []const u8 = "black",
     weight: f64 = 1.0,
     constraint: bool = true,
     min_len: usize = 1,
@@ -168,12 +168,12 @@ pub const Cluster = struct {
 };
 
 const NodeDefaults = struct {
-    color: []const u8 = "#f8fafc",
+    color: []const u8 = "black",
     shape: Shape = .ellipse,
 };
 
 const EdgeDefaults = struct {
-    color: []const u8 = "#6b7280",
+    color: []const u8 = "black",
     weight: f64 = 1.0,
     constraint: bool = true,
     min_len: usize = 1,
@@ -199,9 +199,9 @@ pub const Graph = struct {
     pub fn init(allocator: std.mem.Allocator, options: GraphOptions) !Graph {
         const name = try allocator.dupe(u8, options.name);
         errdefer allocator.free(name);
-        const node_color = try allocator.dupe(u8, "#f8fafc");
+        const node_color = try allocator.dupe(u8, "black");
         errdefer allocator.free(node_color);
-        const edge_color = try allocator.dupe(u8, "#6b7280");
+        const edge_color = try allocator.dupe(u8, "black");
         errdefer allocator.free(edge_color);
         return .{
             .allocator = allocator,
@@ -5412,12 +5412,13 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     const dashed = styleHas(style, "dashed");
     const dotted = styleHas(style, "dotted");
     const bold = styleHas(style, "bold");
-    const color = attrValue(node_item.attrs.items, "color") orelse node_item.color;
-    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) color else "#f8fafc";
-    const stroke = if (std.mem.eql(u8, color, "#f8fafc")) "#334155" else color;
+    const color_attr = attrValue(node_item.attrs.items, "color");
+    const color = color_attr orelse node_item.color;
+    const explicit_color = color_attr != null and !(std.ascii.eqlIgnoreCase(color_attr.?, "black") and std.ascii.eqlIgnoreCase(node_item.color, "black"));
+    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) (if (explicit_color) color else "lightgrey") else "#ffffff";
     return .{
         .fill = fill,
-        .stroke = stroke,
+        .stroke = color,
         .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "#0f172a",
         .font_family = attrValue(node_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
@@ -7896,6 +7897,7 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
         \\digraph G {
         \\  default_node;
         \\  stroked [color="#dc2626"];
+        \\  filled_default [style=filled];
         \\  filled [style=filled, color="#16a34a"];
         \\  filled_explicit [color="#1d4ed8", fillcolor="#dbeafe"];
         \\}
@@ -7907,8 +7909,9 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f8fafc\" stroke=\"#334155\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f8fafc\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#ffffff\" stroke=\"black\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#ffffff\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"black\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
 }
@@ -8435,12 +8438,12 @@ test "DOT subgraphs scope default node and edge attributes" {
     try std.testing.expectEqual(Shape.ellipse, graph.nodes.items[e].shape);
 
     try std.testing.expectEqualStrings("#fee2e2", graph.nodes.items[a].color);
-    try std.testing.expectEqualStrings("#f8fafc", graph.nodes.items[c].color);
-    try std.testing.expectEqualStrings("#f8fafc", graph.nodes.items[e].color);
+    try std.testing.expectEqualStrings("black", graph.nodes.items[c].color);
+    try std.testing.expectEqualStrings("black", graph.nodes.items[e].color);
 
     try std.testing.expectEqualStrings("#dc2626", graph.edges.items[0].color);
-    try std.testing.expectEqualStrings("#6b7280", graph.edges.items[1].color);
-    try std.testing.expectEqualStrings("#6b7280", graph.edges.items[2].color);
+    try std.testing.expectEqualStrings("black", graph.edges.items[1].color);
+    try std.testing.expectEqualStrings("black", graph.edges.items[2].color);
     try std.testing.expectEqual(@as(f64, 3.0), graph.edges.items[0].weight);
     try std.testing.expectEqual(@as(f64, 1.0), graph.edges.items[1].weight);
     try std.testing.expectEqualStrings("4", attrValue(graph.edges.items[0].attrs.items, "penwidth").?);
