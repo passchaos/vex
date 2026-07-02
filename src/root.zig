@@ -3538,13 +3538,45 @@ fn rasterize(graph: *const Graph, layout: *const Layout, width: usize, height: u
 const Rgba = [4]u8;
 
 fn parseHexColor(value: []const u8) ?Rgba {
-    if (value.len != 7 or value[0] != '#') return null;
+    if (value.len == 0) return null;
+    if (value[0] != '#') return namedColor(value);
+    if (value.len == 4) {
+        const r = std.fmt.parseInt(u8, value[1..2], 16) catch return null;
+        const g = std.fmt.parseInt(u8, value[2..3], 16) catch return null;
+        const b = std.fmt.parseInt(u8, value[3..4], 16) catch return null;
+        return .{ r * 17, g * 17, b * 17, 255 };
+    }
+    if (value.len != 7) return null;
     return .{
         std.fmt.parseInt(u8, value[1..3], 16) catch return null,
         std.fmt.parseInt(u8, value[3..5], 16) catch return null,
         std.fmt.parseInt(u8, value[5..7], 16) catch return null,
         255,
     };
+}
+
+fn namedColor(value: []const u8) ?Rgba {
+    if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "transparent")) return .{ 0, 0, 0, 0 };
+    if (std.ascii.eqlIgnoreCase(value, "black")) return .{ 0, 0, 0, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "white")) return .{ 255, 255, 255, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "red")) return .{ 255, 0, 0, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "green")) return .{ 0, 128, 0, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "blue")) return .{ 0, 0, 255, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "yellow")) return .{ 255, 255, 0, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "orange")) return .{ 255, 165, 0, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "purple")) return .{ 128, 0, 128, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "pink")) return .{ 255, 192, 203, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "brown")) return .{ 165, 42, 42, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "cyan")) return .{ 0, 255, 255, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "magenta")) return .{ 255, 0, 255, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "gray") or std.ascii.eqlIgnoreCase(value, "grey")) return .{ 128, 128, 128, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "lightgray") or std.ascii.eqlIgnoreCase(value, "lightgrey")) return .{ 211, 211, 211, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "darkgray") or std.ascii.eqlIgnoreCase(value, "darkgrey")) return .{ 169, 169, 169, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "slategray") or std.ascii.eqlIgnoreCase(value, "slategrey")) return .{ 112, 128, 144, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "lightblue")) return .{ 173, 216, 230, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "lightgreen")) return .{ 144, 238, 144, 255 };
+    if (std.ascii.eqlIgnoreCase(value, "gold")) return .{ 255, 215, 0, 255 };
+    return null;
 }
 
 fn setPixel(pixels: []u8, width: usize, height: usize, x: i64, y: i64, color: Rgba) void {
@@ -4655,4 +4687,12 @@ test "layout honors DOT node width height and fixedsize attributes" {
     try std.testing.expect(layout.nodes[min_sized].height >= 108);
     try std.testing.expect(@abs(layout.nodes[fixed].width - 72.0) < 0.01);
     try std.testing.expect(@abs(layout.nodes[fixed].height - 36.0) < 0.01);
+}
+
+test "color parser accepts common DOT named colors" {
+    try std.testing.expectEqual(Rgba{ 211, 211, 211, 255 }, parseHexColor("lightgrey").?);
+    try std.testing.expectEqual(Rgba{ 128, 128, 128, 255 }, parseHexColor("gray").?);
+    try std.testing.expectEqual(Rgba{ 255, 0, 0, 255 }, parseHexColor("red").?);
+    try std.testing.expectEqual(Rgba{ 170, 187, 204, 255 }, parseHexColor("#abc").?);
+    try std.testing.expectEqual(Rgba{ 0, 0, 0, 0 }, parseHexColor("transparent").?);
 }
