@@ -2529,7 +2529,8 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
             if (node_rank != rank) continue;
             if (rankTighteningPinned(graph, node_id)) continue;
             const upper_bound = tightRankUpperBoundFromChildren(graph, ranks, acyclic_edge, node_id) orelse continue;
-            if (upper_bound > ranks[node_id]) ranks[node_id] = upper_bound;
+            const target_rank = bestWeightedTightenedRank(graph, ranks, acyclic_edge, node_id, upper_bound);
+            if (target_rank > ranks[node_id]) ranks[node_id] = target_rank;
         }
         if (rank == 0) break;
         rank -= 1;
@@ -2548,6 +2549,42 @@ fn tightRankUpperBoundFromChildren(graph: *const Graph, ranks: []const usize, ac
         bound = if (bound) |current| @min(current, candidate) else candidate;
     }
     return bound;
+}
+
+fn bestWeightedTightenedRank(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, upper_bound: usize) usize {
+    if (node_id >= ranks.len) return 0;
+    const current_rank = ranks[node_id];
+    if (upper_bound <= current_rank) return current_rank;
+    var best_rank = current_rank;
+    var best_cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, current_rank);
+    var candidate = current_rank + 1;
+    while (candidate <= upper_bound) : (candidate += 1) {
+        const cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, candidate);
+        if (cost < best_cost or @abs(cost - best_cost) <= 0.0001) {
+            best_cost = cost;
+            best_rank = candidate;
+        }
+    }
+    return best_rank;
+}
+
+fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
+    var cost: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        if (edge_item.from == node_id and edge_item.to < ranks.len) {
+            cost += rankSpanCost(candidate_rank, ranks[edge_item.to], edge_item.weight);
+        } else if (edge_item.to == node_id and edge_item.from < ranks.len) {
+            cost += rankSpanCost(ranks[edge_item.from], candidate_rank, edge_item.weight);
+        }
+    }
+    return cost;
+}
+
+fn rankSpanCost(from_rank: usize, to_rank: usize, weight: f64) f64 {
+    const span = if (from_rank > to_rank) from_rank - to_rank else to_rank - from_rank;
+    return @as(f64, @floatFromInt(span)) * @max(weight, 0.1);
 }
 
 fn rankTighteningPinned(graph: *const Graph, node_id: NodeId) bool {
@@ -8032,6 +8069,30 @@ test "layered layout tightens avoidable rank slack" {
     const x = graph.node_index.get("x").?;
     try std.testing.expectEqual(layout.ranks[c], layout.ranks[x]);
     try std.testing.expectEqual(layout.ranks[x] + 1, layout.ranks[d]);
+}
+
+test "rank slack tightening minimizes weighted incident spans" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c -> d;
+        \\  y;
+        \\  x -> d [weight=10];
+        \\  y -> x [weight=1];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const x = graph.node_index.get("x").?;
+    const y = graph.node_index.get("y").?;
+    try std.testing.expectEqual(layout.ranks[c], layout.ranks[x]);
+    try std.testing.expectEqual(layout.ranks[x] + 1, layout.ranks[d]);
+    try std.testing.expect(layout.ranks[y] < layout.ranks[x]);
 }
 
 test "rank slack tightening preserves explicit boundary ranks" {
