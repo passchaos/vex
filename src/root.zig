@@ -1667,6 +1667,48 @@ const NodeSize = struct {
     height: f64,
 };
 
+const VirtualNode = union(enum) {
+    real: NodeId,
+    dummy: EdgeId,
+};
+
+const VirtualLevels = struct {
+    allocator: std.mem.Allocator,
+    levels: []std.ArrayList(VirtualNode),
+
+    fn deinit(self: *VirtualLevels) void {
+        for (self.levels) |*level| level.deinit(self.allocator);
+        self.allocator.free(self.levels);
+        self.* = undefined;
+    }
+};
+
+fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize) !VirtualLevels {
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    const levels = try allocator.alloc(std.ArrayList(VirtualNode), max_rank + 1);
+    errdefer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    errdefer for (levels) |*level| level.deinit(allocator);
+
+    for (ranks, 0..) |rank, node_id| {
+        try levels[rank].append(allocator, .{ .real = node_id });
+    }
+
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        const from_rank = ranks[edge_item.from];
+        const to_rank = ranks[edge_item.to];
+        if (from_rank + 1 >= to_rank) continue;
+        var rank = from_rank + 1;
+        while (rank < to_rank) : (rank += 1) {
+            try levels[rank].append(allocator, .{ .dummy = edge_item.id });
+        }
+    }
+
+    return .{ .allocator = allocator, .levels = levels };
+}
+
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
     const font_scale = font_size / 14.0;
@@ -5998,6 +6040,43 @@ test "long-edge dummy positions influence coordinate refinement" {
     const before = centers[b];
     refineLongEdgeDummyCoordinates(&graph, levels, ranks, centers, sizes, 10);
     try std.testing.expect(centers[b] < before);
+}
+
+test "virtual levels include dummy nodes for skip-rank edges" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 3;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), virtual_levels.levels.len);
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[0].items, .{ .real = a }));
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[1].items, .{ .real = c }));
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[1].items, .{ .dummy = 0 }));
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[2].items, .{ .dummy = 0 }));
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[3].items, .{ .real = d }));
+}
+
+fn virtualLevelContains(level: []const VirtualNode, needle: VirtualNode) bool {
+    for (level) |node| {
+        if (std.meta.eql(node, needle)) return true;
+    }
+    return false;
 }
 
 test "LR layout accounts for oriented long-label extents" {
