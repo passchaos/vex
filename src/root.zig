@@ -1501,8 +1501,8 @@ const NodeSize = struct {
 };
 
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
-    const line_count = labelLineCount(node_item.label);
-    const max_line_len = labelMaxLineLen(node_item.label);
+    const line_count = displayLabelLineCount(node_item.label);
+    const max_line_len = displayLabelMaxLineLen(node_item.label);
     const text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width;
     const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height;
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
@@ -1679,6 +1679,129 @@ fn labelMaxLineLen(text: []const u8) usize {
         }
     }
     return @max(max_len, current);
+}
+
+fn isHtmlLikeLabel(text: []const u8) bool {
+    var index: usize = 0;
+    while (std.mem.indexOfScalar(u8, text[index..], '<')) |rel| {
+        const start = index + rel + 1;
+        const close_rel = std.mem.indexOfScalar(u8, text[start..], '>') orelse return false;
+        const tag = htmlTagName(text[start .. start + close_rel]);
+        if (isKnownHtmlLabelTag(tag)) return true;
+        index = start + close_rel + 1;
+    }
+    return false;
+}
+
+fn isKnownHtmlLabelTag(tag: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(tag, "br") or
+        std.ascii.eqlIgnoreCase(tag, "b") or
+        std.ascii.eqlIgnoreCase(tag, "i") or
+        std.ascii.eqlIgnoreCase(tag, "u") or
+        std.ascii.eqlIgnoreCase(tag, "font") or
+        std.ascii.eqlIgnoreCase(tag, "sub") or
+        std.ascii.eqlIgnoreCase(tag, "sup") or
+        std.ascii.eqlIgnoreCase(tag, "table") or
+        std.ascii.eqlIgnoreCase(tag, "tr") or
+        std.ascii.eqlIgnoreCase(tag, "td");
+}
+
+fn htmlTagName(raw_tag: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, raw_tag, " \t\r\n/");
+    var end: usize = 0;
+    while (end < trimmed.len and !std.ascii.isWhitespace(trimmed[end]) and trimmed[end] != '/') : (end += 1) {}
+    return trimmed[0..end];
+}
+
+fn displayLabelLineCount(text: []const u8) usize {
+    if (!isHtmlLikeLabel(text)) return labelLineCount(text);
+    var count: usize = 1;
+    var scanner: HtmlLabelScanner = .{ .text = text };
+    while (scanner.next()) |token| {
+        if (token == .newline) count += 1;
+    }
+    return count;
+}
+
+fn displayLabelMaxLineLen(text: []const u8) usize {
+    if (!isHtmlLikeLabel(text)) return labelMaxLineLen(text);
+    var current: usize = 0;
+    var max_len: usize = 0;
+    var has_text = false;
+    var pending_space = false;
+    var scanner: HtmlLabelScanner = .{ .text = text };
+    while (scanner.next()) |token| {
+        switch (token) {
+            .newline => {
+                max_len = @max(max_len, current);
+                current = 0;
+                has_text = false;
+                pending_space = false;
+            },
+            .char => |c| {
+                if (isHtmlLabelSpace(c)) {
+                    if (has_text) pending_space = true;
+                    continue;
+                }
+                if (pending_space) {
+                    current += 1;
+                    pending_space = false;
+                }
+                if ((c & 0xc0) != 0x80) current += 1;
+                has_text = true;
+            },
+        }
+    }
+    return @max(max_len, current);
+}
+
+fn isHtmlLabelSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\r' or c == '\n';
+}
+
+const HtmlToken = union(enum) {
+    char: u8,
+    newline,
+};
+
+const HtmlLabelScanner = struct {
+    text: []const u8,
+    index: usize = 0,
+
+    fn next(self: *HtmlLabelScanner) ?HtmlToken {
+        while (self.index < self.text.len) {
+            const c = self.text[self.index];
+            if (c == '<') {
+                const start = self.index + 1;
+                const close_rel = std.mem.indexOfScalar(u8, self.text[start..], '>') orelse {
+                    self.index += 1;
+                    return .{ .char = c };
+                };
+                const tag = htmlTagName(self.text[start .. start + close_rel]);
+                self.index = start + close_rel + 1;
+                if (std.ascii.eqlIgnoreCase(tag, "br")) return .newline;
+                continue;
+            }
+            if (c == '&') {
+                if (htmlEntity(self, "&amp;")) return .{ .char = '&' };
+                if (htmlEntity(self, "&lt;")) return .{ .char = '<' };
+                if (htmlEntity(self, "&gt;")) return .{ .char = '>' };
+                if (htmlEntity(self, "&quot;")) return .{ .char = '"' };
+                if (htmlEntity(self, "&apos;")) return .{ .char = '\'' };
+            }
+            self.index += 1;
+            if (c == '\n') return .newline;
+            return .{ .char = c };
+        }
+        return null;
+    }
+};
+
+fn htmlEntity(scanner: *HtmlLabelScanner, entity: []const u8) bool {
+    if (scanner.index + entity.len > scanner.text.len) return false;
+    if (!std.mem.eql(u8, scanner.text[scanner.index .. scanner.index + entity.len], entity)) return false;
+    scanner.index += entity.len;
+    return true;
 }
 
 const RecordMetrics = struct {
@@ -3037,13 +3160,13 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
 }
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: usize, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
-    const line_count = labelLineCount(text);
+    const line_count = displayLabelLineCount(text);
     const line_height = @as(f64, @floatFromInt(font_size)) * 1.25;
     const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
     const first_y = center_y - block_height / 2.0 + line_height * 0.72;
 
     if (label_background) {
-        const max_len = labelMaxLineLen(text);
+        const max_len = displayLabelMaxLineLen(text);
         const width = @as(f64, @floatFromInt(max_len * font_size)) * 0.62 + 12.0;
         const height = block_height + 8.0;
         try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"4\" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n", .{
@@ -3057,20 +3180,46 @@ fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f6
     try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d}\" fill=\"{s}\"", .{ x, first_y, font_family, font_size, fill });
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    var idx: usize = 0;
-    while (lines.next()) |line| : (idx += 1) {
-        if (idx == 0) {
-            try writer.writeAll("<tspan x=\"");
-            try writer.print("{d:.1}", .{x});
-            try writer.writeAll("\">");
-        } else {
-            try writer.print("<tspan x=\"{d:.1}\" dy=\"{d:.1}\">", .{ x, line_height });
-        }
-        try writeXmlEscaped(writer, line);
-        try writer.writeAll("</tspan>");
-    }
+    try writeDisplayLabelTspans(writer, text, x, line_height);
     try writer.writeAll("</text>\n");
+}
+
+fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_height: f64) Io.Writer.Error!void {
+    try writer.print("<tspan x=\"{d:.1}\">", .{x});
+    if (isHtmlLikeLabel(text)) {
+        var scanner: HtmlLabelScanner = .{ .text = text };
+        var has_text = false;
+        var pending_space = false;
+        while (scanner.next()) |token| {
+            switch (token) {
+                .newline => {
+                    try writer.print("</tspan><tspan x=\"{d:.1}\" dy=\"{d:.1}\">", .{ x, line_height });
+                    has_text = false;
+                    pending_space = false;
+                },
+                .char => |c| {
+                    if (isHtmlLabelSpace(c)) {
+                        if (has_text) pending_space = true;
+                        continue;
+                    }
+                    if (pending_space) {
+                        try writer.writeByte(' ');
+                        pending_space = false;
+                    }
+                    try writeXmlEscaped(writer, &.{c});
+                    has_text = true;
+                },
+            }
+        }
+    } else {
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        var idx: usize = 0;
+        while (lines.next()) |line| : (idx += 1) {
+            if (idx > 0) try writer.print("</tspan><tspan x=\"{d:.1}\" dy=\"{d:.1}\">", .{ x, line_height });
+            try writeXmlEscaped(writer, line);
+        }
+    }
+    try writer.writeAll("</tspan>");
 }
 
 pub fn renderPdf(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) (Io.Writer.Error || std.mem.Allocator.Error)!void {
@@ -3643,6 +3792,27 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f8fafc\" stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+}
+
+test "SVG renderer normalizes simple HTML-like labels without affecting plain angle text" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [label=< <B>Title</B><BR/>A &amp; B >, shape=box];
+        \\  plain [label="<&>"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Title</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">A &amp; B</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;B&gt;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;&amp;&gt;") != null);
 }
 
 test "SVG renderer honors common Graphviz arrow marker attributes" {
