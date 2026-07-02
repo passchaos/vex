@@ -6277,6 +6277,36 @@ test "virtual level median orders dummy nodes" {
     try std.testing.expect(dummy_pos < c_pos);
 }
 
+test "virtual reducer real-node order can be extracted" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 2;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2);
+    const real_levels = try extractRealLevelsFromVirtual(allocator, &virtual_levels);
+    defer {
+        for (real_levels) |*level| level.deinit(allocator);
+        allocator.free(real_levels);
+    }
+    try std.testing.expectEqual(c, real_levels[1].items[0]);
+}
+
 fn virtualLevelContains(level: []const VirtualNode, needle: VirtualNode) bool {
     for (level) |node| {
         if (std.meta.eql(node, needle)) return true;
