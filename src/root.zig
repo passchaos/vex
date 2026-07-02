@@ -2852,9 +2852,17 @@ fn countTightRankEdges(edges: []const RankEdge, ranks: []const usize) usize {
 
 fn tightRankEdgeComponentCount(allocator: std.mem.Allocator, edges: []const RankEdge, ranks: []const usize) !usize {
     if (ranks.len == 0) return 0;
+    const labels = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(labels);
+    return labelTightRankEdgeComponents(allocator, edges, ranks, labels);
+}
+
+fn labelTightRankEdgeComponents(allocator: std.mem.Allocator, edges: []const RankEdge, ranks: []const usize, labels: []usize) !usize {
+    if (labels.len < ranks.len) return error.BufferTooSmall;
     const visited = try allocator.alloc(bool, ranks.len);
     defer allocator.free(visited);
     @memset(visited, false);
+    @memset(labels[0..ranks.len], std.math.maxInt(usize));
 
     var stack = std.ArrayList(NodeId).empty;
     defer stack.deinit(allocator);
@@ -2862,9 +2870,11 @@ fn tightRankEdgeComponentCount(allocator: std.mem.Allocator, edges: []const Rank
     var components: usize = 0;
     for (0..ranks.len) |start| {
         if (visited[start]) continue;
+        const component = components;
         components += 1;
         try stack.append(allocator, start);
         visited[start] = true;
+        labels[start] = component;
         while (stack.pop()) |node_id| {
             for (edges) |edge| {
                 if (!rankEdgeTight(edge, ranks)) continue;
@@ -2876,6 +2886,7 @@ fn tightRankEdgeComponentCount(allocator: std.mem.Allocator, edges: []const Rank
                     continue;
                 if (neighbor >= visited.len or visited[neighbor]) continue;
                 visited[neighbor] = true;
+                labels[neighbor] = component;
                 try stack.append(allocator, neighbor);
             }
         }
@@ -9072,8 +9083,17 @@ test "tight rank edge components count connected tight tree pieces" {
     const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
     defer allocator.free(rank_edges);
     try std.testing.expectEqual(@as(usize, 2), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
+    const labels = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(labels);
+    try std.testing.expectEqual(@as(usize, 2), labelTightRankEdgeComponents(allocator, rank_edges, ranks, labels));
+    try std.testing.expectEqual(labels[a], labels[b]);
+    try std.testing.expectEqual(labels[b], labels[c]);
+    try std.testing.expect(labels[d] != labels[a]);
     ranks[c] = 3;
     try std.testing.expectEqual(@as(usize, 3), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
+    try std.testing.expectEqual(@as(usize, 3), labelTightRankEdgeComponents(allocator, rank_edges, ranks, labels));
+    try std.testing.expectEqual(labels[a], labels[b]);
+    try std.testing.expect(labels[c] != labels[b]);
 }
 
 test "rank local search finds best feasible node rank" {
