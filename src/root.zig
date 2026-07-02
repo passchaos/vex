@@ -1576,6 +1576,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     applyOrderingHints(graph, levels, ranks);
     enforceClusterContiguity(graph, levels);
     alignGroupedNodes(graph, levels);
+    syncVirtualRealOrder(&virtual_levels, levels);
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
@@ -1996,6 +1997,24 @@ fn replaceLevelsFromVirtual(allocator: std.mem.Allocator, levels: []std.ArrayLis
     for (levels, 0..) |*level, index| {
         level.deinit(allocator);
         level.* = real_levels[index];
+    }
+}
+
+fn syncVirtualRealOrder(virtual_levels: *VirtualLevels, levels: []const std.ArrayList(NodeId)) void {
+    for (levels, 0..) |real_level, rank| {
+        if (rank >= virtual_levels.levels.len or real_level.items.len == 0) continue;
+        var next_real: usize = 0;
+        for (virtual_levels.levels[rank].items) |*vnode| {
+            switch (vnode.*) {
+                .real => {
+                    if (next_real < real_level.items.len) {
+                        vnode.* = .{ .real = real_level.items[next_real] };
+                        next_real += 1;
+                    }
+                },
+                .dummy => {},
+            }
+        }
     }
 }
 
@@ -6473,6 +6492,43 @@ test "virtual reducer real-node order can be extracted" {
         allocator.free(real_levels);
     }
     try std.testing.expectEqual(c, real_levels[1].items[0]);
+}
+
+test "virtual levels sync real order without moving dummies" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    _ = try graph.edge(a, d, .{});
+    _ = try graph.edge(b, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 2;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+
+    var real_levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(real_levels);
+    for (real_levels) |*level| level.* = .empty;
+    defer for (real_levels) |*level| level.deinit(allocator);
+    try real_levels[0].append(allocator, b);
+    try real_levels[0].append(allocator, a);
+    try real_levels[1].append(allocator, c);
+    try real_levels[2].append(allocator, d);
+
+    syncVirtualRealOrder(&virtual_levels, real_levels);
+    try std.testing.expectEqual(b, virtual_levels.levels[0].items[0].real);
+    try std.testing.expectEqual(a, virtual_levels.levels[0].items[1].real);
+    try std.testing.expect(virtualLevelContains(virtual_levels.levels[1].items, .{ .dummy = 0 }));
 }
 
 test "virtual positions expose dummy along coordinates" {
