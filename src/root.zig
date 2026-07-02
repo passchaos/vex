@@ -4119,7 +4119,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
         else
             24.0;
-        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"14\" fill=\"black\">", .{ title_x, title_y, text_anchor, options.font_family });
+        const title_font = attrValue(graph.attrs.items, "fontname") orelse options.font_family;
+        const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
+        const title_color = attrValue(graph.attrs.items, "fontcolor") orelse "black";
+        try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{ title_x, title_y, text_anchor, title_font, title_size, title_color });
         try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
@@ -8417,7 +8420,7 @@ test "SVG renderer honors DOT fontname and fontsize attributes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [fontname="Courier", fontsize=18];
+        \\  graph [label="Graph", fontname="Courier", fontsize=18];
         \\  node [fontname="Courier", fontsize=22];
         \\  edge [fontname="Times", fontsize=16];
         \\  subgraph cluster_fonts {
@@ -8437,6 +8440,7 @@ test "SVG renderer honors DOT fontname and fontsize attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"18.0\" fill=\"black\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"22.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times\" font-size=\"16.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Georgia\" font-size=\"20.0\"") != null);
