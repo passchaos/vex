@@ -9312,10 +9312,10 @@ test "user cluster example stays compact and Graphviz-like" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     try std.testing.expect(layout.width <= 224.0);
-    try std.testing.expect(layout.height <= 430.0);
+    try std.testing.expect(layout.height <= 414.0);
     for (layout.clusters) |cluster_box| {
-        try std.testing.expect(cluster_box.width <= 110.0);
-        try std.testing.expect(cluster_box.height <= 300.0);
+        try std.testing.expect(cluster_box.width <= 104.0);
+        try std.testing.expect(cluster_box.height <= 294.0);
     }
 
     const a0 = graph.node_index.get("a0").?;
@@ -9335,8 +9335,14 @@ test "user cluster example stays compact and Graphviz-like" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 8.0 ") != null);
 }
 
