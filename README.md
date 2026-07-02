@@ -1,11 +1,11 @@
 # Topos
 
 Topos is a Zig graph visualization prototype: DOT-compatible at the boundary,
-with a native graph-building API inside. By default the CLI uses Graphviz's
-`dot` as an exact compatibility backend, so supported CLI outputs are
-byte-for-byte Graphviz results. The long-term goal is to keep the Graphviz
-ecosystem's strengths while exploring a cleaner, modern layout and rendering
-architecture.
+with a native graph-building API inside. The goal is to reimplement Graphviz
+semantics in Zig while keeping Graphviz as a compatibility oracle for tests,
+not as a runtime rendering dependency. The long-term goal is to keep the
+Graphviz ecosystem's strengths while exploring a cleaner, modern layout and
+rendering architecture.
 
 See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide.
 
@@ -18,20 +18,16 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 - SVG renderer, terminal renderer, and a simple native PNG raster path.
 - Output format dispatch for `terminal`, `svg`, `png`, and `pdf`.
 - CLI that reads DOT from a file or stdin and writes to a file or stdout.
-- Default `graphviz` engine that shells out to `dot` for exact Graphviz output; experimental native engine remains available with `--engine native`.
+- Native parser/layout/rendering path by default; Graphviz `dot` is used only as a development/test oracle.
 
 ## CLI
 
 ```sh
-# Exact Graphviz-compatible output (default engine):
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/simple.dot --format terminal
+zig build run -- --input examples/subgraph.dot --output subgraph.svg
+zig build run -- --input examples/mainstream.dot --format terminal
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
-
-# Experimental native Zig engine:
-zig build run -- --engine native --input examples/subgraph.dot --output subgraph.svg
-zig build run -- --engine native --input examples/mainstream.dot --format terminal
-zig build run -- --engine native --input examples/simple.dot --output simple.png
 ```
 
 ## Zig API sketch
@@ -52,20 +48,13 @@ defer layout.deinit();
 try topos.render(writer, &graph, &layout, .svg, .{});
 ```
 
-## Exact Graphviz compatibility
+## Graphviz compatibility target
 
-For the CLI, exactness means Topos delegates rendering to Graphviz:
-
-```sh
-zig build run -- --input graph.dot --output graph.svg
-dot -Tsvg graph.dot > graphviz.svg
-cmp graph.svg graphviz.svg
-```
-
-The default engine is `graphviz`; it invokes `dot -T<format>` and forwards
-Graphviz stdout/stderr. Use `--dot-path /path/to/dot` to choose a specific
-Graphviz binary. Use `--engine native` for Topos' own parser/layout/renderers;
-native output is intentionally not promised to be byte-equal to Graphviz yet.
+Topos is intended to reimplement Graphviz behavior rather than shell out to
+`dot`. During development, Graphviz should be used as an oracle in tests and
+fixtures: compare parsed semantics, layout coordinates, and rendered output for
+representative graphs, then close gaps in the native implementation. Runtime CLI
+rendering should stay on Topos' native parser/layout/renderers.
 
 ## Mainstream DOT support
 
