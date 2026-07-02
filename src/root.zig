@@ -1473,6 +1473,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
     try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
     refineAdjacentExchanges(graph, levels, ranks, 2);
+    enforceClusterContiguity(graph, levels);
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
@@ -2396,6 +2397,47 @@ fn edgeConnectsLayers(edge_item: Edge, upper: []const NodeId, lower: []const Nod
 fn positionInLayer(layer: []const NodeId, id: NodeId) ?usize {
     for (layer, 0..) |node_id, index| {
         if (node_id == id) return index;
+    }
+    return null;
+}
+
+fn enforceClusterContiguity(graph: *const Graph, levels: []std.ArrayList(NodeId)) void {
+    for (graph.clusters.items) |cluster| {
+        for (levels) |*level| {
+            if (level.items.len < 3 or level.items.len > 256) continue;
+            const first = firstClusterMemberIndex(cluster, level.items) orelse continue;
+            var member_count: usize = 0;
+            for (level.items) |node_id| {
+                if (containsNode(cluster.nodes, node_id)) member_count += 1;
+            }
+            if (member_count < 2) continue;
+
+            var reordered: [256]NodeId = undefined;
+            var out: usize = 0;
+            for (level.items[0..first]) |node_id| {
+                reordered[out] = node_id;
+                out += 1;
+            }
+            for (level.items[first..]) |node_id| {
+                if (containsNode(cluster.nodes, node_id)) {
+                    reordered[out] = node_id;
+                    out += 1;
+                }
+            }
+            for (level.items[first..]) |node_id| {
+                if (!containsNode(cluster.nodes, node_id)) {
+                    reordered[out] = node_id;
+                    out += 1;
+                }
+            }
+            @memcpy(level.items, reordered[0..level.items.len]);
+        }
+    }
+}
+
+fn firstClusterMemberIndex(cluster: Cluster, nodes: []const NodeId) ?usize {
+    for (nodes, 0..) |node_id, index| {
+        if (containsNode(cluster.nodes, node_id)) return index;
     }
     return null;
 }
@@ -5150,6 +5192,37 @@ test "nested cluster layout expands parent around child cluster" {
     const outer_pos = std.mem.indexOf(u8, svg, "Outer") orelse return error.MissingOuterCluster;
     const inner_pos = std.mem.indexOf(u8, svg, "Inner") orelse return error.MissingInnerCluster;
     try std.testing.expect(outer_pos < inner_pos);
+}
+
+test "cluster members are kept contiguous within a rank" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; c; d; }
+        \\  subgraph cluster_pair {
+        \\    a; c;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 1);
+    defer allocator.free(levels);
+    levels[0] = .empty;
+    defer levels[0].deinit(allocator);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+    try levels[0].append(allocator, c);
+    try levels[0].append(allocator, d);
+
+    enforceClusterContiguity(&graph, levels);
+    try std.testing.expectEqual(a, levels[0].items[0]);
+    try std.testing.expectEqual(c, levels[0].items[1]);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {
