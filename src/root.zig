@@ -2738,6 +2738,46 @@ fn bestWeightedTightenedRank(graph: *const Graph, ranks: []const usize, acyclic_
     return best_rank;
 }
 
+const RankBounds = struct {
+    min: usize,
+    max: usize,
+};
+
+fn feasibleRankBoundsForNode(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId) ?RankBounds {
+    if (node_id >= ranks.len) return null;
+    var min_rank: usize = 0;
+    var max_rank: usize = std.math.maxInt(usize);
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        if (edge_item.id >= acyclic_edge.len or !acyclic_edge[edge_item.id]) continue;
+        const min_len = @max(edge_item.min_len, 1);
+        if (edge_item.to == node_id and edge_item.from < ranks.len) {
+            min_rank = @max(min_rank, ranks[edge_item.from] + min_len);
+        } else if (edge_item.from == node_id and edge_item.to < ranks.len) {
+            if (ranks[edge_item.to] < min_len) return null;
+            max_rank = @min(max_rank, ranks[edge_item.to] - min_len);
+        }
+    }
+    if (max_rank == std.math.maxInt(usize)) max_rank = ranks[node_id];
+    if (min_rank > max_rank) return null;
+    return .{ .min = min_rank, .max = max_rank };
+}
+
+fn bestFeasibleRankForNode(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId) ?usize {
+    const bounds = feasibleRankBoundsForNode(graph, ranks, acyclic_edge, node_id) orelse return null;
+    var best_rank = bounds.min;
+    var best_cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, best_rank);
+    var candidate = bounds.min + 1;
+    while (candidate <= bounds.max) : (candidate += 1) {
+        const cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, candidate);
+        if (cost < best_cost or (@abs(cost - best_cost) <= 0.0001 and candidate > best_rank)) {
+            best_cost = cost;
+            best_rank = candidate;
+        }
+    }
+    return best_rank;
+}
+
 fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
     var cost: f64 = 0;
     for (graph.edges.items) |edge_item| {
@@ -8698,6 +8738,40 @@ test "rank assignment helpers measure feasibility and weighted span cost" {
     try std.testing.expect(rankAssignmentFeasible(&graph, loose, acyclic_edge));
     try std.testing.expect(rankAssignmentFeasible(&graph, tight, acyclic_edge));
     try std.testing.expect(rankAssignmentCost(&graph, tight, acyclic_edge) < rankAssignmentCost(&graph, loose, acyclic_edge));
+}
+
+test "rank local search finds best feasible node rank" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  source -> x [weight=1];
+        \\  x -> sink [weight=8];
+        \\  source -> a -> b -> sink;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const source = graph.node_index.get("source").?;
+    const x = graph.node_index.get("x").?;
+    const sink = graph.node_index.get("sink").?;
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[source] = 0;
+    ranks[x] = 1;
+    ranks[a] = 1;
+    ranks[b] = 2;
+    ranks[sink] = 3;
+
+    const bounds = feasibleRankBoundsForNode(&graph, ranks, acyclic_edge, x).?;
+    try std.testing.expectEqual(@as(usize, 1), bounds.min);
+    try std.testing.expectEqual(@as(usize, 2), bounds.max);
+    try std.testing.expectEqual(@as(usize, 2), bestFeasibleRankForNode(&graph, ranks, acyclic_edge, x).?);
 }
 
 test "rank slack tightening reduces whole graph weighted span cost" {
