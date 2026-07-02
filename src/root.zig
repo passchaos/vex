@@ -2285,14 +2285,16 @@ pub const SvgOptions = struct {
 
 pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
     const edge_routing = svgEdgeRoutingMode(graph);
+    const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
+    const title = attrValue(graph.attrs.items, "label") orelse graph.name;
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{d:.0}\" height=\"{d:.0}\" viewBox=\"0 0 {d:.0} {d:.0}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
     );
-    try writer.print("<rect width=\"100%\" height=\"100%\" fill=\"{s}\"/>\n", .{options.background});
+    try writer.print("<rect width=\"100%\" height=\"100%\" fill=\"{s}\"/>\n", .{background});
     if (options.show_title) {
         try writer.print("<text x=\"16\" y=\"24\" font-family=\"{s}\" font-size=\"14\" fill=\"#475569\">", .{options.font_family});
-        try writeXmlEscaped(writer, graph.name);
+        try writeXmlEscaped(writer, title);
         try writer.writeAll("</text>\n");
     }
     if (graph.directed) {
@@ -4028,6 +4030,26 @@ test "SVG renderer normalizes simple HTML-like labels without affecting plain an
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A &amp; B</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;B&gt;") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;&amp;&gt;") != null);
+}
+
+test "SVG renderer honors graph label and bgcolor attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph InternalName {
+        \\  graph [label="Visible Title", bgcolor=lightgrey];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
 }
 
 test "SVG renderer honors DOT fontname and fontsize attributes" {
