@@ -12,12 +12,16 @@ pub const EdgeId = usize;
 
 pub const Shape = enum {
     ellipse,
+    egg,
     box,
     square,
     circle,
     doublecircle,
     point,
     diamond,
+    mdiamond,
+    msquare,
+    mcircle,
     triangle,
     invtriangle,
     parallelogram,
@@ -31,6 +35,7 @@ pub const Shape = enum {
     octagon,
     doubleoctagon,
     tripleoctagon,
+    star,
     note,
     tab,
     folder,
@@ -519,10 +524,14 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "box") or std.ascii.eqlIgnoreCase(value, "rect") or std.ascii.eqlIgnoreCase(value, "rectangle")) return .box;
     if (std.ascii.eqlIgnoreCase(value, "square")) return .square;
     if (std.ascii.eqlIgnoreCase(value, "ellipse") or std.ascii.eqlIgnoreCase(value, "oval")) return .ellipse;
+    if (std.ascii.eqlIgnoreCase(value, "egg")) return .egg;
     if (std.ascii.eqlIgnoreCase(value, "circle")) return .circle;
     if (std.ascii.eqlIgnoreCase(value, "doublecircle")) return .doublecircle;
     if (std.ascii.eqlIgnoreCase(value, "point")) return .point;
     if (std.ascii.eqlIgnoreCase(value, "diamond")) return .diamond;
+    if (std.ascii.eqlIgnoreCase(value, "Mdiamond")) return .mdiamond;
+    if (std.ascii.eqlIgnoreCase(value, "Msquare")) return .msquare;
+    if (std.ascii.eqlIgnoreCase(value, "Mcircle")) return .mcircle;
     if (std.ascii.eqlIgnoreCase(value, "triangle")) return .triangle;
     if (std.ascii.eqlIgnoreCase(value, "invtriangle")) return .invtriangle;
     if (std.ascii.eqlIgnoreCase(value, "parallelogram")) return .parallelogram;
@@ -536,6 +545,7 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "octagon")) return .octagon;
     if (std.ascii.eqlIgnoreCase(value, "doubleoctagon")) return .doubleoctagon;
     if (std.ascii.eqlIgnoreCase(value, "tripleoctagon")) return .tripleoctagon;
+    if (std.ascii.eqlIgnoreCase(value, "star")) return .star;
     if (std.ascii.eqlIgnoreCase(value, "note")) return .note;
     if (std.ascii.eqlIgnoreCase(value, "tab")) return .tab;
     if (std.ascii.eqlIgnoreCase(value, "folder")) return .folder;
@@ -552,12 +562,16 @@ fn parseShape(value: []const u8) Shape {
 fn shapeName(shape: Shape) []const u8 {
     return switch (shape) {
         .ellipse => "ellipse",
+        .egg => "egg",
         .box => "box",
         .square => "square",
         .circle => "circle",
         .doublecircle => "doublecircle",
         .point => "point",
         .diamond => "diamond",
+        .mdiamond => "Mdiamond",
+        .msquare => "Msquare",
+        .mcircle => "Mcircle",
         .triangle => "triangle",
         .invtriangle => "invtriangle",
         .parallelogram => "parallelogram",
@@ -571,6 +585,7 @@ fn shapeName(shape: Shape) []const u8 {
         .octagon => "octagon",
         .doubleoctagon => "doubleoctagon",
         .tripleoctagon => "tripleoctagon",
+        .star => "star",
         .note => "note",
         .tab => "tab",
         .folder => "folder",
@@ -1639,17 +1654,17 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = 12;
             height = 12;
         },
-        .square => {
+        .square, .msquare => {
             const side = @max(width, height);
             width = side;
             height = side;
         },
-        .circle, .doublecircle => {
+        .circle, .doublecircle, .mcircle => {
             const diameter = @max(width, height);
             width = diameter;
             height = diameter;
         },
-        .diamond => {
+        .diamond, .mdiamond => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
             height = @max(height, text_height + options.node_padding_y * 2.6);
         },
@@ -1657,8 +1672,12 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             width = @max(width, text_width + options.node_padding_x * 3.0);
             height = @max(height, text_height + options.node_padding_y * 2.4);
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .note, .tab, .folder, .box3d, .component => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
+        },
+        .egg => {
+            width = @max(width, text_width + options.node_padding_x * 3.0);
+            height = @max(height, text_height + options.node_padding_y * 2.2);
         },
         .cylinder => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
@@ -3114,7 +3133,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 visual.width,
             });
         },
-        .box, .square => {
+        .box, .square, .msquare => {
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
@@ -3131,8 +3150,9 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
+            if (node_item.shape == .msquare) try renderSvgCornerDiagonals(writer, layout, visual);
         },
-        .circle, .doublecircle => {
+        .circle, .doublecircle, .mcircle => {
             var ring: usize = 0;
             const ring_count = if (node_item.shape == .doublecircle) @max(visual.peripheries, 2) else visual.peripheries;
             while (ring < ring_count) : (ring += 1) {
@@ -3148,6 +3168,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
+            if (node_item.shape == .mcircle) try renderSvgCircleDiagonals(writer, layout, visual);
         },
         .ellipse => {
             var ring: usize = 0;
@@ -3166,7 +3187,12 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writer.writeAll("/>\n");
             }
         },
+        .egg => try renderSvgEggShape(writer, layout, visual),
         .diamond => try renderSvgPolygonRings(6, writer, layout, visual, diamondPoints),
+        .mdiamond => {
+            try renderSvgPolygonRings(6, writer, layout, visual, diamondPoints);
+            try renderSvgDiamondDiagonals(writer, layout, visual);
+        },
         .triangle => try renderSvgPolygonRings(6, writer, layout, visual, trianglePoints),
         .invtriangle => try renderSvgPolygonRings(6, writer, layout, visual, invTrianglePoints),
         .parallelogram => try renderSvgPolygonRings(6, writer, layout, visual, parallelogramPoints),
@@ -3184,6 +3210,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             ring_visual.peripheries = @max(visual.peripheries, default_peripheries);
             try renderSvgPolygonRings(8, writer, layout, ring_visual, octagonPoints);
         },
+        .star => try renderSvgPolygonRings(10, writer, layout, visual, starPoints),
         .note => try renderSvgNoteShape(writer, layout, visual),
         .tab => try renderSvgTabShape(writer, layout, visual),
         .folder => try renderSvgFolderShape(writer, layout, visual),
@@ -3411,6 +3438,93 @@ fn regularPolygonPoints(comptime N: usize, layout: NodeLayout, rotation: f64) [N
         };
     }
     return points;
+}
+
+fn starPoints(layout: NodeLayout) [10]Point {
+    const rx = layout.width / 2.0;
+    const ry = layout.height / 2.0;
+    var points: [10]Point = undefined;
+    inline for (0..10) |i| {
+        const outer = (i % 2) == 0;
+        const scale: f64 = if (outer) 1.0 else 0.42;
+        const angle = -std.math.pi / 2.0 + @as(f64, @floatFromInt(i)) * std.math.pi / 5.0;
+        points[i] = .{
+            .x = layout.center.x + std.math.cos(angle) * rx * scale,
+            .y = layout.center.y + std.math.sin(angle) * ry * scale,
+        };
+    }
+    return points;
+}
+
+fn renderSvgEggShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    var ring: usize = 0;
+    while (ring < visual.peripheries) : (ring += 1) {
+        const inset = @as(f64, @floatFromInt(ring)) * 5.0;
+        const rx = @max(1, layout.width / 2.0 - inset);
+        const ry = @max(1, layout.height / 2.0 - inset);
+        const cx = layout.center.x;
+        const cy = layout.center.y;
+        const top = cy - ry;
+        const bottom = cy + ry;
+        const upper_rx = rx * 0.78;
+        const lower_rx = rx;
+        var ring_visual = visual;
+        if (ring > 0) ring_visual.fill = "none";
+        try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+            cx,
+            top,
+            cx + upper_rx,
+            top,
+            cx + lower_rx,
+            cy + ry * 0.22,
+            cx + lower_rx * 0.72,
+            cy + ry * 0.78,
+            cx + lower_rx * 0.42,
+            bottom,
+            cx - lower_rx * 0.42,
+            bottom,
+            cx - lower_rx * 0.72,
+            cy + ry * 0.78,
+            cx - lower_rx,
+            cy + ry * 0.22,
+            cx - upper_rx,
+            top,
+            cx,
+            top,
+            ring_visual.fill,
+            ring_visual.stroke,
+            ring_visual.width,
+        });
+        try writeSvgDash(writer, ring_visual.dash);
+        try writer.writeAll("/>\n");
+    }
+}
+
+fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const cx = layout.center.x;
+    const cy = layout.center.y;
+    const hw = layout.width / 2.0;
+    const hh = layout.height / 2.0;
+    try writeSvgLine(writer, cx - hw * 0.52, cy, cx, cy - hh * 0.52, visual);
+    try writeSvgLine(writer, cx, cy - hh * 0.52, cx + hw * 0.52, cy, visual);
+    try writeSvgLine(writer, cx + hw * 0.52, cy, cx, cy + hh * 0.52, visual);
+    try writeSvgLine(writer, cx, cy + hh * 0.52, cx - hw * 0.52, cy, visual);
+}
+
+fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const rect = nodeRect(layout);
+    const d = @min(@min(rect.width, rect.height) * 0.22, 18);
+    try writeSvgLine(writer, rect.x, rect.y + d, rect.x + d, rect.y, visual);
+    try writeSvgLine(writer, rect.x + rect.width - d, rect.y, rect.x + rect.width, rect.y + d, visual);
+    try writeSvgLine(writer, rect.x + rect.width, rect.y + rect.height - d, rect.x + rect.width - d, rect.y + rect.height, visual);
+    try writeSvgLine(writer, rect.x + d, rect.y + rect.height, rect.x, rect.y + rect.height - d, visual);
+}
+
+fn renderSvgCircleDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const r = @min(layout.width, layout.height) / 2.0;
+    const d = r * 0.62;
+    try writeSvgLine(writer, layout.center.x - d, layout.center.y - d, layout.center.x + d, layout.center.y + d, visual);
+    try writeSvgLine(writer, layout.center.x + d, layout.center.y - d, layout.center.x - d, layout.center.y + d, visual);
 }
 
 fn renderSvgNoteShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -5927,6 +6041,44 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Component") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Underline") != null);
+}
+
+test "DOT parser and SVG renderer support Graphviz M shapes star and egg" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  egg [label="Egg", shape=egg];
+        \\  star [label="Star", shape=star];
+        \\  md [label="Mdiamond", shape=Mdiamond];
+        \\  ms [label="Msquare", shape=Msquare];
+        \\  mc [label="Mcircle", shape=Mcircle];
+        \\  egg -> star -> md -> ms -> mc;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(Shape.egg, graph.nodes.items[graph.node_index.get("egg").?].shape);
+    try std.testing.expectEqual(Shape.star, graph.nodes.items[graph.node_index.get("star").?].shape);
+    try std.testing.expectEqual(Shape.mdiamond, graph.nodes.items[graph.node_index.get("md").?].shape);
+    try std.testing.expectEqual(Shape.msquare, graph.nodes.items[graph.node_index.get("ms").?].shape);
+    try std.testing.expectEqual(Shape.mcircle, graph.nodes.items[graph.node_index.get("mc").?].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const ms = graph.node_index.get("ms").?;
+    const mc = graph.node_index.get("mc").?;
+    try std.testing.expect(@abs(layout.nodes[ms].width - layout.nodes[ms].height) < 0.01);
+    try std.testing.expect(@abs(layout.nodes[mc].width - layout.nodes[mc].height) < 0.01);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Egg") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Star") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon") != null);
+    try std.testing.expect(countSubstrings(svg, "fill=\"none\" stroke=") >= 8);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
 }
 
 test "DOT doublecircle shape renders as two circle peripheries" {
