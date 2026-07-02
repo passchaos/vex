@@ -2832,6 +2832,28 @@ fn collectRankEdges(allocator: std.mem.Allocator, graph: *const Graph, acyclic_e
     return edges.toOwnedSlice(allocator);
 }
 
+fn rankEdgeSlack(edge: RankEdge, ranks: []const usize) ?usize {
+    if (edge.from >= ranks.len or edge.to >= ranks.len) return null;
+    if (ranks[edge.to] < ranks[edge.from] + edge.min_len) return null;
+    return ranks[edge.to] - ranks[edge.from] - edge.min_len;
+}
+
+fn rankEdgesFeasible(edges: []const RankEdge, ranks: []const usize) bool {
+    for (edges) |edge| {
+        if (rankEdgeSlack(edge, ranks) == null) return false;
+    }
+    return true;
+}
+
+fn rankEdgesCost(edges: []const RankEdge, ranks: []const usize) f64 {
+    var cost: f64 = 0;
+    for (edges) |edge| {
+        if (edge.from >= ranks.len or edge.to >= ranks.len) continue;
+        cost += rankSpanCost(ranks[edge.from], ranks[edge.to], edge.weight);
+    }
+    return cost;
+}
+
 fn rankSpanCost(from_rank: usize, to_rank: usize, weight: f64) f64 {
     const span = if (from_rank > to_rank) from_rank - to_rank else to_rank - from_rank;
     return @as(f64, @floatFromInt(span)) * @max(weight, 0.1);
@@ -8939,6 +8961,38 @@ test "rank edge collection returns active weighted minlen edges" {
     try std.testing.expectEqual(@as(EdgeId, 1), rank_edges[0].edge_id);
     try std.testing.expectEqual(@as(usize, 3), rank_edges[0].min_len);
     try std.testing.expectEqual(@as(f64, 2.5), rank_edges[0].weight);
+}
+
+test "rank edge helpers compute slack feasibility and cost" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [minlen=2, weight=3];
+        \\  b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 3;
+    ranks[c] = 4;
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    try std.testing.expect(rankEdgesFeasible(rank_edges, ranks));
+    try std.testing.expectEqual(@as(usize, 1), rankEdgeSlack(rank_edges[0], ranks).?);
+    try std.testing.expectEqual(@as(f64, 10.0), rankEdgesCost(rank_edges, ranks));
+    ranks[b] = 1;
+    try std.testing.expect(!rankEdgesFeasible(rank_edges, ranks));
 }
 
 test "rank local search finds best feasible node rank" {
