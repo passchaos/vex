@@ -2838,6 +2838,18 @@ fn rankEdgeSlack(edge: RankEdge, ranks: []const usize) ?usize {
     return ranks[edge.to] - ranks[edge.from] - edge.min_len;
 }
 
+fn rankEdgeTight(edge: RankEdge, ranks: []const usize) bool {
+    return (rankEdgeSlack(edge, ranks) orelse return false) == 0;
+}
+
+fn countTightRankEdges(edges: []const RankEdge, ranks: []const usize) usize {
+    var count: usize = 0;
+    for (edges) |edge| {
+        if (rankEdgeTight(edge, ranks)) count += 1;
+    }
+    return count;
+}
+
 fn rankEdgesFeasible(edges: []const RankEdge, ranks: []const usize) bool {
     for (edges) |edge| {
         if (rankEdgeSlack(edge, ranks) == null) return false;
@@ -8990,6 +9002,9 @@ test "rank edge helpers compute slack feasibility and cost" {
     defer allocator.free(rank_edges);
     try std.testing.expect(rankEdgesFeasible(rank_edges, ranks));
     try std.testing.expectEqual(@as(usize, 1), rankEdgeSlack(rank_edges[0], ranks).?);
+    try std.testing.expect(!rankEdgeTight(rank_edges[0], ranks));
+    try std.testing.expect(rankEdgeTight(rank_edges[1], ranks));
+    try std.testing.expectEqual(@as(usize, 1), countTightRankEdges(rank_edges, ranks));
     try std.testing.expectEqual(@as(f64, 10.0), rankEdgesCost(rank_edges, ranks));
     ranks[b] = 1;
     try std.testing.expect(!rankEdgesFeasible(rank_edges, ranks));
