@@ -5482,7 +5482,7 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     const color_attr = attrValue(node_item.attrs.items, "color");
     const color = color_attr orelse node_item.color;
     const explicit_color = color_attr != null and !(std.ascii.eqlIgnoreCase(color_attr.?, "black") and std.ascii.eqlIgnoreCase(node_item.color, "black"));
-    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) (if (explicit_color) color else "lightgrey") else "#ffffff";
+    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) (if (explicit_color) color else "lightgrey") else "none";
     return .{
         .fill = fill,
         .stroke = color,
@@ -8001,8 +8001,8 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#ffffff\" stroke=\"black\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#ffffff\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"black\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"black\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
