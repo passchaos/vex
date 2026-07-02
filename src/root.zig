@@ -1648,10 +1648,11 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const font_scale = font_size / 14.0;
     const line_count = displayLabelLineCount(node_item.label);
     const max_line_len = displayLabelMaxLineLen(node_item.label);
+    const margin = nodeMargin(node_item.attrs.items, 0);
     const text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
     const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
-    var width = @max(options.node_width, text_width + options.node_padding_x * 2.0);
-    var height = @max(options.node_height, text_height + options.node_padding_y * 2.0);
+    var width = @max(options.node_width, text_width + options.node_padding_x * 2.0 + margin.x * 2.0);
+    var height = @max(options.node_height, text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
     switch (node_item.shape) {
         .point => {
             width = 12;
@@ -1729,6 +1730,20 @@ fn parseInchDimension(value: []const u8) ?f64 {
     const inches = std.fmt.parseFloat(f64, value) catch return null;
     if (inches <= 0) return null;
     return @max(12.0, inches * 72.0);
+}
+
+const NodeMargin = struct {
+    x: f64,
+    y: f64,
+};
+
+fn nodeMargin(attrs: []const Attr, fallback: f64) NodeMargin {
+    const value = attrValue(attrs, "margin") orelse return .{ .x = fallback, .y = fallback };
+    var parts = std.mem.tokenizeAny(u8, value, ", \t");
+    const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
+    const x = parseInchDimension(first) orelse fallback;
+    const y = if (parts.next()) |second| parseInchDimension(second) orelse x else x;
+    return .{ .x = x, .y = y };
 }
 
 fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
@@ -2802,8 +2817,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         }
         try renderSvgNodeShape(writer, node_item, l, visual, options);
         if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
-            try renderSvgTextBlock(writer, node_item.label, l.center.x, l.center.y, visual.font_size, visual.font_color, visual.font_family, false, false);
+            try renderSvgNodeLabel(writer, node_item, l, visual);
         }
+        try renderSvgNodeXLabel(writer, node_item, l, visual);
         try writeSvgInteractiveClose(writer, node_wrap);
     }
     try writer.writeAll("</g>\n</svg>\n");
@@ -2897,6 +2913,43 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRout
             .hidden = false,
         });
     }
+}
+
+fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const margin = nodeMargin(node_item.attrs.items, 0);
+    const anchor = nodeLabelAnchor(node_item.attrs.items, layout, margin.x);
+    const y = nodeLabelY(node_item.attrs.items, layout, margin.y);
+    try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, false, false, anchor.anchor);
+}
+
+fn renderSvgNodeXLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    const label = attrValue(node_item.attrs.items, "xlabel") orelse return;
+    const x = layout.center.x + layout.width / 2.0 + 10.0 + @as(f64, @floatFromInt(displayLabelMaxLineLen(label))) * visual.font_size * 0.18;
+    const y = layout.center.y - layout.height / 2.0 - visual.font_size * 0.6;
+    try renderSvgTextBlock(writer, label, x, y, visual.font_size, visual.font_color, visual.font_family, true, true);
+}
+
+const NodeLabelAnchor = struct {
+    x: f64,
+    anchor: []const u8,
+};
+
+fn nodeLabelAnchor(attrs: []const Attr, layout: NodeLayout, margin_x: f64) NodeLabelAnchor {
+    const value = attrValue(attrs, "labeljust") orelse return .{ .x = layout.center.x, .anchor = "middle" };
+    if (std.ascii.eqlIgnoreCase(value, "l")) {
+        return .{ .x = layout.center.x - layout.width / 2.0 + margin_x + 4.0, .anchor = "start" };
+    }
+    if (std.ascii.eqlIgnoreCase(value, "r")) {
+        return .{ .x = layout.center.x + layout.width / 2.0 - margin_x - 4.0, .anchor = "end" };
+    }
+    return .{ .x = layout.center.x, .anchor = "middle" };
+}
+
+fn nodeLabelY(attrs: []const Attr, layout: NodeLayout, margin_y: f64) f64 {
+    const value = attrValue(attrs, "labelloc") orelse return layout.center.y;
+    if (std.ascii.eqlIgnoreCase(value, "t")) return layout.center.y - layout.height / 2.0 + margin_y + 12.0;
+    if (std.ascii.eqlIgnoreCase(value, "b")) return layout.center.y + layout.height / 2.0 - margin_y - 12.0;
+    return layout.center.y;
 }
 
 fn endpointLabelPosition(endpoint: Point, toward: Point, distance: f64, angle_degrees: f64, head: bool) Point {
@@ -5565,6 +5618,35 @@ test "SVG renderer honors graph labelloc and labeljust attributes" {
     const expected_y = try std.fmt.bufPrint(&expected_y_buf, "y=\"{d:.1}\"", .{layout.height - 16.0});
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_x) != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
+}
+
+test "SVG renderer honors node xlabel labelloc labeljust and margin attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  top_left [label="Top Left", xlabel="external", shape=box, labelloc=t, labeljust=l, margin="0.5,0.25"];
+        \\  bottom_right [label="Bottom Right", shape=box, labelloc=b, labeljust=r];
+        \\  plain [label="Top Left", shape=box];
+        \\  top_left -> bottom_right;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const top_left = graph.node_index.get("top_left").?;
+    const plain = graph.node_index.get("plain").?;
+    try std.testing.expect(layout.nodes[top_left].width > layout.nodes[plain].width);
+    try std.testing.expect(layout.nodes[top_left].height > layout.nodes[plain].height);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "external") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top Left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom Right</tspan>") != null);
 }
 
 test "SVG renderer emits URL href and tooltip metadata" {
