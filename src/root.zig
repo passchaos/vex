@@ -1622,6 +1622,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     assignRanksForCyclicComponents(graph, ranks, acyclic_edge);
     applyRankConstraints(graph, ranks);
     tightenRanksTowardSinks(graph, ranks, acyclic_edge);
+    improveRanksByLocalSearch(graph, ranks, acyclic_edge, 2);
     applyRankConstraints(graph, ranks);
 
     var max_rank: usize = 0;
