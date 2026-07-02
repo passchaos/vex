@@ -2736,8 +2736,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
             const visual = resolveEdgeVisual(edge_item);
-            if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, visual.stroke);
-            if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, visual.stroke);
+            if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, visual.stroke, visual.marker_scale);
+            if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, visual.stroke, visual.marker_scale);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -2955,6 +2955,7 @@ const EdgeVisual = struct {
     dash: DashStyle,
     marker_start: MarkerShape,
     marker_end: MarkerShape,
+    marker_scale: f64,
     hidden: bool,
 };
 
@@ -3994,6 +3995,7 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
         .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
         .marker_end = if (head_enabled) parseMarkerShape(arrowhead, .normal) else .none,
+        .marker_scale = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "arrowsize", 1.0), 0.0, 8.0),
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -4058,8 +4060,10 @@ fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
     }
 }
 
-fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, color: []const u8) Io.Writer.Error!void {
-    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto", .{ edge_id, suffix });
+fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, color: []const u8, scale: f64) Io.Writer.Error!void {
+    if (scale <= 0) return;
+    const marker_size = 7.0 * scale;
+    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, marker_size, marker_size });
     if (std.mem.eql(u8, suffix, "tail")) try writer.writeAll("-start-reverse");
     try writer.writeAll("\">");
     switch (shape) {
@@ -4081,6 +4085,7 @@ fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, sh
 
 fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visual: EdgeVisual) Io.Writer.Error!void {
     if (!directed) return;
+    if (visual.marker_scale <= 0) return;
     if (visual.marker_start != .none) try writer.print(" marker-start=\"url(#arrow-{d}-tail)\"", .{edge_id});
     if (visual.marker_end != .none) try writer.print(" marker-end=\"url(#arrow-{d}-head)\"", .{edge_id});
 }
@@ -4320,8 +4325,16 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
 fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64) EdgeRoute {
     const from = layout.nodes[edge_item.from];
     const to = layout.nodes[edge_item.to];
-    const raw_start = recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true);
-    const raw_end = recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false);
+    const tail_clip = edgeClipEnabled(edge_item.attrs.items, "tailclip");
+    const head_clip = edgeClipEnabled(edge_item.attrs.items, "headclip");
+    const raw_start = if (tail_clip)
+        recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true)
+    else
+        from.center;
+    const raw_end = if (head_clip)
+        recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
+    else
+        to.center;
     const start = if (edge_item.ltail) |cluster_name|
         clusterBoundaryPoint(graph, layout, cluster_name, raw_start, raw_end) orelse raw_start
     else
@@ -4331,6 +4344,11 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     else
         raw_end;
     return edgeRouteFromEndpoints(start, end, rankdir, offset);
+}
+
+fn edgeClipEnabled(attrs: []const Attr, name: []const u8) bool {
+    const value = attrValue(attrs, name) orelse return true;
+    return parseBool(value) orelse true;
 }
 
 fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, offset: f64) EdgeRoute {
@@ -5634,6 +5652,44 @@ test "SVG renderer honors additional Graphviz arrow marker shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1 L 8.5 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 0.8 0.8 L 9.2 5 L 0.8 9.2 z") != null);
+}
+
+test "SVG renderer honors arrowsize and edge clipping attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a [shape=box];
+        \\  b [shape=box];
+        \\  c [shape=box];
+        \\  a -> b [arrowsize=2.0, color="#2563eb"];
+        \\  a -> c [arrowsize=0, color="#dc2626"];
+        \\  b -> c [tailclip=false, headclip=false, color="#16a34a"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "markerWidth=\"14.00\" markerHeight=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "arrow-1-head") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-1-head)\"") == null);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const clipped = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], graph.rankdir, 0);
+    try std.testing.expect(clipped.start.x > layout.nodes[a].center.x);
+    try std.testing.expect(clipped.end.x < layout.nodes[b].center.x);
+
+    const unclipped = edgeRouteForEdge(&graph, &layout, graph.edges.items[2], graph.rankdir, 0);
+    try std.testing.expectEqual(layout.nodes[b].center.x, unclipped.start.x);
+    try std.testing.expectEqual(layout.nodes[b].center.y, unclipped.start.y);
+    try std.testing.expectEqual(layout.nodes[c].center.x, unclipped.end.x);
+    try std.testing.expectEqual(layout.nodes[c].center.y, unclipped.end.y);
 }
 
 test "DOT subgraphs scope default node and edge attributes" {
