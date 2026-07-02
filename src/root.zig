@@ -8232,6 +8232,9 @@ test "SVG renderer honors graph labelloc and labeljust attributes" {
     const expected_y = try std.fmt.bufPrint(&expected_y_buf, "y=\"{d:.1}\"", .{layout.height - 16.0});
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_x) != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
+    try std.testing.expect(layout.margin_y >= 26.0);
+    const b = graph.node_index.get("b").?;
+    try std.testing.expect(layout.nodes[b].center.y + layout.nodes[b].height / 2.0 < layout.height - 16.0);
 }
 
 test "SVG renderer honors node xlabel labelloc labeljust and margin attributes" {
