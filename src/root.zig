@@ -8820,6 +8820,67 @@ fn expectBackEdgeSidePath(svg: []const u8) !void {
     try std.testing.expect(countSubstrings(path, " L ") == 1);
 }
 
+test "user cluster example stays compact and Graphviz-like" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_0 {
+        \\    style=filled;
+        \\    color=lightgrey;
+        \\    node [style=filled,color=white];
+        \\    a0 -> a1 -> a2 -> a3;
+        \\    label = "process #1";
+        \\  }
+        \\  subgraph cluster_1 {
+        \\    node [style=filled];
+        \\    b0 -> b1 -> b2 -> b3;
+        \\    label = "process #2";
+        \\    color=blue
+        \\  }
+        \\  start -> a0;
+        \\  start -> b0;
+        \\  a1 -> b3;
+        \\  b2 -> a3;
+        \\  a3 -> a0;
+        \\  a3 -> end;
+        \\  b3 -> end;
+        \\  start [shape=Mdiamond];
+        \\  end [shape=Msquare];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expect(layout.width <= 224.0);
+    try std.testing.expect(layout.height <= 430.0);
+    for (layout.clusters) |cluster_box| {
+        try std.testing.expect(cluster_box.width <= 110.0);
+        try std.testing.expect(cluster_box.height <= 300.0);
+    }
+
+    const a0 = graph.node_index.get("a0").?;
+    const a1 = graph.node_index.get("a1").?;
+    const a2 = graph.node_index.get("a2").?;
+    const a3 = graph.node_index.get("a3").?;
+    const b0 = graph.node_index.get("b0").?;
+    const b1 = graph.node_index.get("b1").?;
+    const b2 = graph.node_index.get("b2").?;
+    const b3 = graph.node_index.get("b3").?;
+    try std.testing.expect(@abs(layout.nodes[a0].center.x - layout.nodes[a1].center.x) <= 1.0);
+    try std.testing.expect(@abs(layout.nodes[a1].center.x - layout.nodes[a2].center.x) <= 1.0);
+    try std.testing.expect(@abs(layout.nodes[a2].center.x - layout.nodes[a3].center.x) <= 1.0);
+    try std.testing.expect(@abs(layout.nodes[b0].center.x - layout.nodes[b1].center.x) <= 1.0);
+    try std.testing.expect(@abs(layout.nodes[b1].center.x - layout.nodes[b2].center.x) <= 1.0);
+    try std.testing.expect(@abs(layout.nodes[b2].center.x - layout.nodes[b3].center.x) <= 1.0);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " L 8.0 ") != null);
+}
+
 test "SVG renderer honors DOT splines graph attribute" {
     const allocator = std.testing.allocator;
     var ortho = try parseDot(allocator,
