@@ -522,6 +522,59 @@ fn containsNode(nodes: []const NodeId, id: NodeId) bool {
     return false;
 }
 
+const DefaultScope = struct {
+    node_attrs: AttrList,
+    edge_attrs: AttrList,
+    node_color: []const u8,
+    node_shape: Shape,
+    edge_color: []const u8,
+    edge_weight: f64,
+    restored: bool = false,
+
+    fn snapshot(allocator: std.mem.Allocator, graph: *const Graph) !DefaultScope {
+        var node_attrs = try copyAttrList(allocator, graph.node_default_attrs.items);
+        errdefer freeAttrList(allocator, &node_attrs);
+        var edge_attrs = try copyAttrList(allocator, graph.edge_default_attrs.items);
+        errdefer freeAttrList(allocator, &edge_attrs);
+        const node_color = try allocator.dupe(u8, graph.node_defaults.color);
+        errdefer allocator.free(node_color);
+        const edge_color = try allocator.dupe(u8, graph.edge_defaults.color);
+        errdefer allocator.free(edge_color);
+        return .{
+            .node_attrs = node_attrs,
+            .edge_attrs = edge_attrs,
+            .node_color = node_color,
+            .node_shape = graph.node_defaults.shape,
+            .edge_color = edge_color,
+            .edge_weight = graph.edge_defaults.weight,
+        };
+    }
+
+    fn restore(self: *DefaultScope, allocator: std.mem.Allocator, graph: *Graph) void {
+        freeAttrList(allocator, &graph.node_default_attrs);
+        freeAttrList(allocator, &graph.edge_default_attrs);
+        allocator.free(graph.node_defaults.color);
+        allocator.free(graph.edge_defaults.color);
+
+        graph.node_default_attrs = self.node_attrs;
+        graph.edge_default_attrs = self.edge_attrs;
+        graph.node_defaults = .{ .color = self.node_color, .shape = self.node_shape };
+        graph.edge_defaults = .{ .color = self.edge_color, .weight = self.edge_weight };
+
+        self.node_attrs = .empty;
+        self.edge_attrs = .empty;
+        self.restored = true;
+    }
+
+    fn deinit(self: *DefaultScope, allocator: std.mem.Allocator) void {
+        if (self.restored) return;
+        freeAttrList(allocator, &self.node_attrs);
+        freeAttrList(allocator, &self.edge_attrs);
+        allocator.free(self.node_color);
+        allocator.free(self.edge_color);
+    }
+};
+
 const Parser = struct {
     allocator: std.mem.Allocator,
     lexer: Lexer,
@@ -697,6 +750,9 @@ const Parser = struct {
         }
         try self.expect(.lbrace);
 
+        var defaults = try DefaultScope.snapshot(self.allocator, graph);
+        defer defaults.deinit(self.allocator);
+
         var nodes = NodeSet.empty;
         errdefer nodes.deinit(self.allocator);
         try self.collectors.append(self.allocator, &nodes);
@@ -704,6 +760,7 @@ const Parser = struct {
         try self.parseStmtList(graph);
         self.collectors.items.len -= 1;
         try self.expect(.rbrace);
+        defaults.restore(self.allocator, graph);
         return nodes;
     }
 
@@ -2229,4 +2286,41 @@ test "SVG renderer honors common Graphviz visual attributes" {
     const second_offset = parallelEdgeOffset(&graph, 1);
     try std.testing.expect(first_offset < 0);
     try std.testing.expect(second_offset > 0);
+}
+
+test "DOT subgraphs scope default node and edge attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_left {
+        \\    node [shape=box, color="#fee2e2", fontcolor="#991b1b"];
+        \\    edge [color="#dc2626", weight=3, penwidth=4];
+        \\    a -> b;
+        \\  }
+        \\  subgraph cluster_right {
+        \\    c -> d;
+        \\  }
+        \\  e -> f;
+        \\}
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const c = graph.node_index.get("c").?;
+    const e = graph.node_index.get("e").?;
+    try std.testing.expectEqual(Shape.box, graph.nodes.items[a].shape);
+    try std.testing.expectEqual(Shape.ellipse, graph.nodes.items[c].shape);
+    try std.testing.expectEqual(Shape.ellipse, graph.nodes.items[e].shape);
+
+    try std.testing.expectEqualStrings("#fee2e2", graph.nodes.items[a].color);
+    try std.testing.expectEqualStrings("#f8fafc", graph.nodes.items[c].color);
+    try std.testing.expectEqualStrings("#f8fafc", graph.nodes.items[e].color);
+
+    try std.testing.expectEqualStrings("#dc2626", graph.edges.items[0].color);
+    try std.testing.expectEqualStrings("#6b7280", graph.edges.items[1].color);
+    try std.testing.expectEqualStrings("#6b7280", graph.edges.items[2].color);
+    try std.testing.expectEqual(@as(f64, 3.0), graph.edges.items[0].weight);
+    try std.testing.expectEqual(@as(f64, 1.0), graph.edges.items[1].weight);
+    try std.testing.expectEqualStrings("4", attrValue(graph.edges.items[0].attrs.items, "penwidth").?);
+    try std.testing.expect(attrValue(graph.edges.items[1].attrs.items, "penwidth") == null);
 }
