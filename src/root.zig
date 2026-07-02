@@ -1920,11 +1920,12 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
         var cols: usize = 0;
         while (findHtmlTag(row, "td", cell_pos)) |td_start| {
             const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
+            const td_tag = row[td_start + 1 .. td_start + td_open_end];
             const cell_start = td_start + td_open_end + 1;
             const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
             const cell = row[cell_start..td_close];
             max_cell_len = @max(max_cell_len, displayLabelMaxLineLen(cell));
-            cols += 1;
+            cols += @max(htmlIntAttr(td_tag, "colspan", 1), 1);
             cell_pos = td_close + 1;
         }
         if (cols > 0) {
@@ -2732,26 +2733,46 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
         var col_index: usize = 0;
         while (findHtmlTag(row, "td", cell_pos)) |td_start| : (col_index += 1) {
             const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
+            const td_tag = row[td_start + 1 .. td_start + td_open_end];
             const cell_start = td_start + td_open_end + 1;
             const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
+            const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
+            const span_f: f64 = @floatFromInt(colspan);
             const cell_x = x + metrics.cell_spacing + @as(f64, @floatFromInt(col_index)) * (cell_w + metrics.cell_spacing);
             const cell_y = y + metrics.cell_spacing + @as(f64, @floatFromInt(row_index)) * (cell_h + metrics.cell_spacing);
+            const spanned_w = cell_w * span_f + metrics.cell_spacing * @as(f64, @floatFromInt(colspan - 1));
+            if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_x, cell_y, spanned_w, cell_h, cell_bg });
+            }
             if (metrics.cell_border > 0) {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, cell_w, cell_h, visual.stroke, metrics.cell_border });
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, spanned_w, cell_h, visual.stroke, metrics.cell_border });
             }
             const cell = row[cell_start..td_close];
-            try renderSvgTextBlock(
+            const align_attr = htmlAttrValue(td_tag, "align");
+            const text_anchor: []const u8 = if (align_attr) |value|
+                if (std.ascii.eqlIgnoreCase(value, "left")) "start" else if (std.ascii.eqlIgnoreCase(value, "right")) "end" else "middle"
+            else
+                "middle";
+            const text_x = if (std.mem.eql(u8, text_anchor, "start"))
+                cell_x + metrics.cell_padding
+            else if (std.mem.eql(u8, text_anchor, "end"))
+                cell_x + spanned_w - metrics.cell_padding
+            else
+                cell_x + spanned_w / 2.0;
+            try renderSvgTextBlockWithAnchor(
                 writer,
                 cell,
-                cell_x + cell_w / 2.0,
+                text_x,
                 cell_y + cell_h / 2.0,
                 visual.font_size,
                 visual.font_color,
                 visual.font_family,
                 false,
                 true,
+                text_anchor,
             );
             cell_pos = td_close + 1;
+            col_index += colspan - 1;
         }
         row_pos = tr_close + 1;
     }
@@ -3595,6 +3616,10 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
 }
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
+    try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font_family, label_background, dominant_middle, "middle");
+}
+
+fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool, text_anchor: []const u8) Io.Writer.Error!void {
     const line_count = displayLabelLineCount(text);
     const line_height = font_size * 1.25;
     const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
@@ -3612,7 +3637,7 @@ fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f6
         });
     }
 
-    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"middle\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\"", .{ x, first_y, font_family, font_size, fill });
+    try writer.print("<text x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\"", .{ x, first_y, text_anchor, font_family, font_size, fill });
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
     try writeDisplayLabelTspans(writer, text, x, line_height);
@@ -4367,6 +4392,31 @@ test "SVG renderer honors simple HTML table visual attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">B</tspan>") != null);
+}
+
+test "SVG renderer honors HTML table colspan bgcolor and alignment" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=plain,label=<
+        \\    <TABLE CELLBORDER="1" CELLSPACING="2" CELLPADDING="4">
+        \\      <TR><TD COLSPAN="2" BGCOLOR="gold" ALIGN="LEFT">Header</TD></TR>
+        \\      <TR><TD>A</TD><TD ALIGN="RIGHT">B</TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"gold\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Header</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\"") != null);
 }
 
 test "SVG renderer honors graph label and bgcolor attributes" {
