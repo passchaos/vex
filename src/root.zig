@@ -5502,7 +5502,7 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
         .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
-        .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 12.0),
+        .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
         .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
@@ -5524,7 +5524,7 @@ fn resolveClusterVisual(cluster: Cluster) ClusterVisual {
         .stroke = color,
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
-        .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 13.0),
+        .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
@@ -8333,6 +8333,25 @@ test "SVG renderer uses Graphviz default text color" {
     try std.testing.expect(countSubstrings(svg, "fill=\"black\"") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#475569\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#0f172a\"") == null);
+}
+
+test "SVG renderer uses Graphviz default edge and cluster label sizes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_c { label="Cluster"; c; }
+        \\  a -> b [label="edge"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.0\" fill=\"black\">Cluster") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.0\" fill=\"black\" dominant-baseline=\"middle\"") != null);
 }
 
 test "SVG renderer emits headlabel taillabel and xlabel" {
