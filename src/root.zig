@@ -2284,6 +2284,7 @@ pub const SvgOptions = struct {
 };
 
 pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
+    const edge_routing = svgEdgeRoutingMode(graph);
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{d:.0}\" height=\"{d:.0}\" viewBox=\"0 0 {d:.0} {d:.0}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
@@ -2336,7 +2337,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const offset = parallelEdgeOffset(graph, edge_item.id);
         const route = edgeRouteForEdge(graph, layout, edge_item, graph.rankdir, offset);
         try writer.writeAll("<path d=\"");
-        try writeEdgePath(writer, layout, edge_item, graph.rankdir, offset, route);
+        try writeEdgePath(writer, layout, edge_item, graph.rankdir, offset, route, edge_routing);
         try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
         try writeSvgDash(writer, visual.dash);
         try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
@@ -2873,9 +2874,37 @@ fn parallelEdgeOffset(graph: *const Graph, edge_id: EdgeId) f64 {
     return (@as(f64, @floatFromInt(index)) - (@as(f64, @floatFromInt(count - 1)) / 2.0)) * 22.0;
 }
 
-fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute) Io.Writer.Error!void {
+const SvgEdgeRouting = enum {
+    curved,
+    line,
+    polyline,
+    ortho,
+};
+
+fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
+    const value = attrValue(graph.attrs.items, "splines") orelse return .curved;
+    if (std.ascii.eqlIgnoreCase(value, "false") or std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "line")) return .line;
+    if (std.ascii.eqlIgnoreCase(value, "polyline")) return .polyline;
+    if (std.ascii.eqlIgnoreCase(value, "ortho")) return .ortho;
+    return .curved;
+}
+
+fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting) Io.Writer.Error!void {
+    if (routing == .line) {
+        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y, direct_route.end.x, direct_route.end.y });
+        return;
+    }
+    if (routing == .ortho) {
+        try writeOrthoEdgePath(writer, direct_route.start, direct_route.end, rankdir);
+        return;
+    }
+
     const waypoint_count = longEdgeWaypointCount(layout, edge_item);
     if (waypoint_count == 0) {
+        if (routing == .polyline) {
+            try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y, direct_route.end.x, direct_route.end.y });
+            return;
+        }
         try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
             direct_route.start.x,
             direct_route.start.y,
@@ -2894,10 +2923,46 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     var i: usize = 0;
     while (i < waypoint_count) : (i += 1) {
         const next = longEdgeWaypoint(layout, edge_item, rankdir, offset, i, waypoint_count);
-        try writeSmoothSegment(writer, current, next, rankdir);
+        if (routing == .polyline) {
+            try writer.print(" L {d:.1} {d:.1}", .{ next.x, next.y });
+        } else {
+            try writeSmoothSegment(writer, current, next, rankdir);
+        }
         current = next;
     }
-    try writeSmoothSegment(writer, current, direct_route.end, rankdir);
+    if (routing == .polyline) {
+        try writer.print(" L {d:.1} {d:.1}", .{ direct_route.end.x, direct_route.end.y });
+    } else {
+        try writeSmoothSegment(writer, current, direct_route.end, rankdir);
+    }
+}
+
+fn writeOrthoEdgePath(writer: *Io.Writer, start: Point, end: Point, rankdir: RankDir) Io.Writer.Error!void {
+    if (rankdir == .LR or rankdir == .RL) {
+        const mid_x = (start.x + end.x) / 2.0;
+        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
+            start.x,
+            start.y,
+            mid_x,
+            start.y,
+            mid_x,
+            end.y,
+            end.x,
+            end.y,
+        });
+    } else {
+        const mid_y = (start.y + end.y) / 2.0;
+        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
+            start.x,
+            start.y,
+            start.x,
+            mid_y,
+            end.x,
+            mid_y,
+            end.x,
+            end.y,
+        });
+    }
 }
 
 fn longEdgeWaypointCount(layout: *const Layout, edge_item: Edge) usize {
@@ -4146,6 +4211,37 @@ test "SVG routes skip-rank edges through intermediate waypoints" {
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingLongPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
     try std.testing.expect(countSubstrings(path, " C ") >= 3);
+}
+
+test "SVG renderer honors DOT splines graph attribute" {
+    const allocator = std.testing.allocator;
+    var ortho = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=ortho, rankdir=LR];
+        \\  a -> b [label="ortho"];
+        \\}
+    );
+    defer ortho.deinit();
+    var ortho_layout = try layoutLayered(allocator, &ortho, .{});
+    defer ortho_layout.deinit();
+    const ortho_svg = try renderSvgAlloc(allocator, &ortho, &ortho_layout, .{});
+    defer allocator.free(ortho_svg);
+    try std.testing.expect(std.mem.indexOf(u8, ortho_svg, " C ") == null);
+    try std.testing.expect(countSubstrings(ortho_svg, " L ") >= 3);
+
+    var line = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=line];
+        \\  a -> b [label="line"];
+        \\}
+    );
+    defer line.deinit();
+    var line_layout = try layoutLayered(allocator, &line, .{});
+    defer line_layout.deinit();
+    const line_svg = try renderSvgAlloc(allocator, &line, &line_layout, .{});
+    defer allocator.free(line_svg);
+    try std.testing.expect(std.mem.indexOf(u8, line_svg, " C ") == null);
+    try std.testing.expect(countSubstrings(line_svg, " L ") >= 1);
 }
 
 test "DOT parser propagates edge constraint and minlen controls" {
