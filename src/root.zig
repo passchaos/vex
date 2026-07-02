@@ -2416,7 +2416,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             height = 12;
         },
         .msquare => {
-            const side = @max(@max(36.0, text_width + options.node_padding_x * 2.0 + margin.x * 2.0), text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
+            const side = @max(@max(36.0, text_width + 8.0 + margin.x * 2.0), text_height + 8.0 + margin.y * 2.0);
             width = side;
             height = side;
         },
@@ -2426,7 +2426,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             height = side;
         },
         .mcircle => {
-            const diameter = @max(@max(36.0, text_width + options.node_padding_x * 2.0 + margin.x * 2.0), text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
+            const diameter = @max(@max(36.0, text_width + 8.0 + margin.x * 2.0), text_height + 8.0 + margin.y * 2.0);
             width = diameter;
             height = diameter;
         },
@@ -9352,8 +9352,8 @@ test "Graphviz M shapes use compact default sizing" {
     const end = graph.node_index.get("end").?;
     const badge = graph.node_index.get("mc").?;
     const long = graph.node_index.get("long").?;
-    try std.testing.expect(layout.nodes[end].width < 54);
-    try std.testing.expect(layout.nodes[badge].width < 54);
+    try std.testing.expect(layout.nodes[end].width <= 36.1);
+    try std.testing.expect(layout.nodes[badge].width <= 36.1);
     try std.testing.expect(layout.nodes[long].width > layout.nodes[end].width);
 }
 
