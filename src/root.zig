@@ -2686,17 +2686,24 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
     for (ranks) |rank| max_rank = @max(max_rank, rank);
     if (max_rank == 0) return;
 
-    var rank = max_rank;
-    while (true) {
-        for (ranks, 0..) |node_rank, node_id| {
-            if (node_rank != rank) continue;
-            if (rankTighteningPinned(graph, node_id)) continue;
-            const upper_bound = tightRankUpperBoundFromChildren(graph, ranks, acyclic_edge, node_id) orelse continue;
-            const target_rank = bestWeightedTightenedRank(graph, ranks, acyclic_edge, node_id, upper_bound);
-            if (target_rank > ranks[node_id]) ranks[node_id] = target_rank;
+    for (0..4) |_| {
+        var changed = false;
+        var rank = max_rank;
+        while (true) {
+            for (ranks, 0..) |node_rank, node_id| {
+                if (node_rank != rank) continue;
+                if (rankTighteningPinned(graph, node_id)) continue;
+                const upper_bound = tightRankUpperBoundFromChildren(graph, ranks, acyclic_edge, node_id) orelse continue;
+                const target_rank = bestWeightedTightenedRank(graph, ranks, acyclic_edge, node_id, upper_bound);
+                if (target_rank > ranks[node_id]) {
+                    ranks[node_id] = target_rank;
+                    changed = true;
+                }
+            }
+            if (rank == 0) break;
+            rank -= 1;
         }
-        if (rank == 0) break;
-        rank -= 1;
+        if (!changed) break;
     }
 }
 
@@ -8613,6 +8620,29 @@ test "rank slack tightening minimizes weighted incident spans" {
     try std.testing.expectEqual(layout.ranks[c], layout.ranks[x]);
     try std.testing.expectEqual(layout.ranks[x] + 1, layout.ranks[d]);
     try std.testing.expect(layout.ranks[y] < layout.ranks[x]);
+}
+
+test "rank slack tightening propagates through dependent slack nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  x;
+        \\  y;
+        \\  a -> b -> c -> d;
+        \\  y -> d;
+        \\  x -> y;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const x = graph.node_index.get("x").?;
+    const y = graph.node_index.get("y").?;
+    const d = graph.node_index.get("d").?;
+    try std.testing.expectEqual(layout.ranks[y] + 1, layout.ranks[d]);
+    try std.testing.expectEqual(layout.ranks[x] + 1, layout.ranks[y]);
 }
 
 test "rank slack tightening preserves explicit boundary ranks" {
