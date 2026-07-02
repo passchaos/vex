@@ -62,6 +62,8 @@ pub const EdgeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
     weight: ?f64 = null,
+    constraint: ?bool = null,
+    min_len: ?usize = null,
 };
 
 pub const NodeOptions = struct {
@@ -93,6 +95,8 @@ pub const Edge = struct {
     label: ?[]const u8 = null,
     color: []const u8 = "#6b7280",
     weight: f64 = 1.0,
+    constraint: bool = true,
+    min_len: usize = 1,
     attrs: std.ArrayList(Attr) = .empty,
 };
 
@@ -104,6 +108,8 @@ const NodeDefaults = struct {
 const EdgeDefaults = struct {
     color: []const u8 = "#6b7280",
     weight: f64 = 1.0,
+    constraint: bool = true,
+    min_len: usize = 1,
 };
 
 pub const Graph = struct {
@@ -258,6 +264,8 @@ pub const Graph = struct {
             .label = owned_label,
             .color = owned_color,
             .weight = options.weight orelse self.edge_defaults.weight,
+            .constraint = options.constraint orelse self.edge_defaults.constraint,
+            .min_len = @max(options.min_len orelse self.edge_defaults.min_len, 1),
             .attrs = attrs,
         };
         try self.edges.append(self.allocator, e);
@@ -303,6 +311,10 @@ pub const Graph = struct {
             self.edge_defaults.color = owned;
         } else if (std.ascii.eqlIgnoreCase(name, "weight")) {
             self.edge_defaults.weight = std.fmt.parseFloat(f64, value) catch self.edge_defaults.weight;
+        } else if (std.ascii.eqlIgnoreCase(name, "constraint")) {
+            self.edge_defaults.constraint = parseBool(value) orelse self.edge_defaults.constraint;
+        } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
+            self.edge_defaults.min_len = @max(std.fmt.parseInt(usize, value, 10) catch self.edge_defaults.min_len, 1);
         }
     }
 
@@ -340,6 +352,10 @@ pub const Graph = struct {
             e.color = owned;
         } else if (std.ascii.eqlIgnoreCase(name, "weight")) {
             e.weight = std.fmt.parseFloat(f64, value) catch e.weight;
+        } else if (std.ascii.eqlIgnoreCase(name, "constraint")) {
+            e.constraint = parseBool(value) orelse e.constraint;
+        } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
+            e.min_len = @max(std.fmt.parseInt(usize, value, 10) catch e.min_len, 1);
         }
         try setAttrInList(self.allocator, &e.attrs, name, value);
     }
@@ -388,6 +404,12 @@ fn shapeName(shape: Shape) []const u8 {
         .box => "box",
         .circle => "circle",
     };
+}
+
+fn parseBool(value: []const u8) ?bool {
+    if (std.ascii.eqlIgnoreCase(value, "true") or std.mem.eql(u8, value, "1")) return true;
+    if (std.ascii.eqlIgnoreCase(value, "false") or std.mem.eql(u8, value, "0")) return false;
+    return null;
 }
 
 const TokenTag = enum {
@@ -563,6 +585,8 @@ const DefaultScope = struct {
     node_shape: Shape,
     edge_color: []const u8,
     edge_weight: f64,
+    edge_constraint: bool,
+    edge_min_len: usize,
     restored: bool = false,
 
     fn snapshot(allocator: std.mem.Allocator, graph: *const Graph) !DefaultScope {
@@ -581,6 +605,8 @@ const DefaultScope = struct {
             .node_shape = graph.node_defaults.shape,
             .edge_color = edge_color,
             .edge_weight = graph.edge_defaults.weight,
+            .edge_constraint = graph.edge_defaults.constraint,
+            .edge_min_len = graph.edge_defaults.min_len,
         };
     }
 
@@ -593,7 +619,12 @@ const DefaultScope = struct {
         graph.node_default_attrs = self.node_attrs;
         graph.edge_default_attrs = self.edge_attrs;
         graph.node_defaults = .{ .color = self.node_color, .shape = self.node_shape };
-        graph.edge_defaults = .{ .color = self.edge_color, .weight = self.edge_weight };
+        graph.edge_defaults = .{
+            .color = self.edge_color,
+            .weight = self.edge_weight,
+            .constraint = self.edge_constraint,
+            .min_len = self.edge_min_len,
+        };
 
         self.node_attrs = .empty;
         self.edge_attrs = .empty;
@@ -1026,6 +1057,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     @memset(indegree, 0);
 
     for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
         if (edge_item.to < n) indegree[edge_item.to] += 1;
     }
 
@@ -1037,8 +1069,10 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     while (head < queue.items.len) : (head += 1) {
         const u = queue.items[head];
         for (graph.edges.items) |edge_item| {
+            if (!edge_item.constraint) continue;
             if (edge_item.from != u) continue;
-            if (ranks[edge_item.to] < ranks[u] + 1) ranks[edge_item.to] = ranks[u] + 1;
+            const min_len = @max(edge_item.min_len, 1);
+            if (ranks[edge_item.to] < ranks[u] + min_len) ranks[edge_item.to] = ranks[u] + min_len;
             if (indegree[edge_item.to] > 0) {
                 indegree[edge_item.to] -= 1;
                 if (indegree[edge_item.to] == 0) try queue.append(allocator, edge_item.to);
@@ -1049,8 +1083,9 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     // Cycles leave some nodes unvisited. Keep them deterministic and close to
     // their predecessors rather than failing layout for non-DAG input.
     for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
         if (ranks[edge_item.to] <= ranks[edge_item.from] and edge_item.to != edge_item.from) {
-            ranks[edge_item.to] = ranks[edge_item.from] + 1;
+            ranks[edge_item.to] = ranks[edge_item.from] + @max(edge_item.min_len, 1);
         }
     }
 
@@ -2631,4 +2666,44 @@ test "SVG routes skip-rank edges through intermediate waypoints" {
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingLongPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
     try std.testing.expect(countSubstrings(path, " C ") >= 3);
+}
+
+test "DOT parser propagates edge constraint and minlen controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  edge [constraint=false, minlen=2, weight=3];
+        \\  a -> b;
+        \\  b -> c [constraint=true, min_len=4, weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
+    try std.testing.expect(!graph.edges.items[0].constraint);
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items[0].min_len);
+    try std.testing.expectEqual(@as(f64, 3.0), graph.edges.items[0].weight);
+    try std.testing.expect(graph.edges.items[1].constraint);
+    try std.testing.expectEqual(@as(usize, 4), graph.edges.items[1].min_len);
+    try std.testing.expectEqual(@as(f64, 5.0), graph.edges.items[1].weight);
+}
+
+test "layered layout respects edge constraint false and minlen" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [constraint=false];
+        \\  a -> c [minlen=3];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+    try std.testing.expectEqual(layout.ranks[a] + 3, layout.ranks[c]);
 }
