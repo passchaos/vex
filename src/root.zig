@@ -2034,15 +2034,16 @@ fn lessThanVirtualBlockOrder(_: void, a: VirtualBlockOrder, b: VirtualBlockOrder
 }
 
 fn virtualBlockKey(graph: *const Graph, node: VirtualNode) usize {
+    const root_base = graph.clusters.items.len + 1;
     return switch (node) {
-        .real => |node_id| (clusterIndexContainingNode(graph, node_id) orelse std.math.maxInt(usize)),
+        .real => |node_id| (clusterIndexContainingNode(graph, node_id) orelse (root_base + node_id)),
         .dummy => |edge_id| blk: {
-            if (edge_id >= graph.edges.items.len) break :blk std.math.maxInt(usize);
+            if (edge_id >= graph.edges.items.len) break :blk root_base + graph.nodes.items.len + edge_id;
             const edge_item = graph.edges.items[edge_id];
             const from_cluster = clusterIndexContainingNode(graph, edge_item.from);
             const to_cluster = clusterIndexContainingNode(graph, edge_item.to);
             if (from_cluster != null and to_cluster != null and from_cluster.? == to_cluster.?) break :blk from_cluster.?;
-            break :blk std.math.maxInt(usize);
+            break :blk root_base + graph.nodes.items.len + edge_id;
         },
     };
 }
@@ -7232,6 +7233,23 @@ test "virtual level block ordering keeps cluster members adjacent" {
     const a_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = a }).?;
     const b_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = b }).?;
     try std.testing.expect(a_pos + 1 == b_pos or b_pos + 1 == a_pos);
+}
+
+test "virtual block keys leave root nodes as singleton blocks" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const outside = try graph.node("outside");
+    _ = try graph.edge(a, b, .{});
+    _ = try graph.edge(outside, b, .{});
+    _ = try graph.addCluster("cluster_pair", null, &.{ a, b }, &.{});
+
+    try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = a }), virtualBlockKey(&graph, .{ .real = b }));
+    try std.testing.expect(virtualBlockKey(&graph, .{ .real = outside }) != virtualBlockKey(&graph, .{ .real = a }));
+    try std.testing.expect(virtualBlockKey(&graph, .{ .dummy = 1 }) != virtualBlockKey(&graph, .{ .real = outside }));
 }
 
 test "virtual adjacent exchange reduces dummy crossings" {
