@@ -294,7 +294,7 @@ pub const Graph = struct {
             }
         }
 
-        const owned_label = if (options.label) |label| try self.allocator.dupe(u8, label) else null;
+        const owned_label = if (options.label) |label| try expandEdgeLabel(self.allocator, self, from, to, label) else null;
         errdefer if (owned_label) |label| self.allocator.free(label);
         const owned_color = try self.allocator.dupe(u8, options.color orelse self.edge_defaults.color);
         errdefer self.allocator.free(owned_color);
@@ -417,8 +417,9 @@ pub const Graph = struct {
         if (id >= self.nodes.items.len) return error.InvalidNodeId;
         var n = &self.nodes.items[id];
         if (std.ascii.eqlIgnoreCase(name, "label")) {
+            const expanded = try expandNodeLabel(self.allocator, self, n.name, value);
             if (n.label.ptr != n.name.ptr) self.allocator.free(n.label);
-            n.label = try self.allocator.dupe(u8, value);
+            n.label = expanded;
         } else if (std.ascii.eqlIgnoreCase(name, "color") or std.ascii.eqlIgnoreCase(name, "fillcolor")) {
             const owned = try self.allocator.dupe(u8, value);
             self.allocator.free(n.color);
@@ -439,8 +440,9 @@ pub const Graph = struct {
         if (id >= self.edges.items.len) return error.InvalidEdgeId;
         var e = &self.edges.items[id];
         if (std.ascii.eqlIgnoreCase(name, "label")) {
+            const expanded = try expandEdgeLabel(self.allocator, self, e.from, e.to, value);
             if (e.label) |label| self.allocator.free(label);
-            e.label = try self.allocator.dupe(u8, value);
+            e.label = expanded;
         } else if (std.ascii.eqlIgnoreCase(name, "color")) {
             const owned = try self.allocator.dupe(u8, value);
             self.allocator.free(e.color);
@@ -1234,6 +1236,63 @@ fn dupeDotString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
             '\\' => try out.append(allocator, '\\'),
             '\n' => {},
             else => {
+                try out.append(allocator, '\\');
+                try out.append(allocator, escaped);
+            },
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn expandNodeLabel(allocator: std.mem.Allocator, graph: *const Graph, node_name: []const u8, value: []const u8) ![]u8 {
+    return expandLabelEscapes(allocator, value, .{
+        .graph_name = graph.name,
+        .node_name = node_name,
+    });
+}
+
+fn expandEdgeLabel(allocator: std.mem.Allocator, graph: *const Graph, from: NodeId, to: NodeId, value: []const u8) ![]u8 {
+    const tail = graph.nodes.items[from].name;
+    const head = graph.nodes.items[to].name;
+    var edge_name_buf: [256]u8 = undefined;
+    const op = if (graph.directed) "->" else "--";
+    const edge_name = std.fmt.bufPrint(&edge_name_buf, "{s}{s}{s}", .{ tail, op, head }) catch tail;
+    return expandLabelEscapes(allocator, value, .{
+        .graph_name = graph.name,
+        .node_name = null,
+        .tail_name = tail,
+        .head_name = head,
+        .edge_name = edge_name,
+    });
+}
+
+const LabelEscapeContext = struct {
+    graph_name: []const u8,
+    node_name: ?[]const u8 = null,
+    tail_name: ?[]const u8 = null,
+    head_name: ?[]const u8 = null,
+    edge_name: ?[]const u8 = null,
+};
+
+fn expandLabelEscapes(allocator: std.mem.Allocator, value: []const u8, context: LabelEscapeContext) ![]u8 {
+    if (std.mem.indexOfScalar(u8, value, '\\') == null) return allocator.dupe(u8, value);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        const c = value[i];
+        if (c != '\\' or i + 1 >= value.len) {
+            try out.append(allocator, c);
+            continue;
+        }
+        i += 1;
+        switch (value[i]) {
+            'G' => try out.appendSlice(allocator, context.graph_name),
+            'N' => if (context.node_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\N"),
+            'T' => if (context.tail_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\T"),
+            'H' => if (context.head_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\H"),
+            'E' => if (context.edge_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\E"),
+            else => |escaped| {
                 try out.append(allocator, '\\');
                 try out.append(allocator, escaped);
             },
@@ -3875,7 +3934,22 @@ test "DOT parser handles mainstream node lists, string concat, and boolean attrs
     }
     try std.testing.expect(found_tooltip);
     const esc = graph.node_index.get("esc").?;
-    try std.testing.expectEqualStrings("left\nright\\N quote\" slash\\ keep\\x", graph.nodes.items[esc].label);
+    try std.testing.expectEqualStrings("left\nrightesc quote\" slash\\ keep\\x", graph.nodes.items[esc].label);
+}
+
+test "DOT label escapes expand graph node and edge context" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Ctx {
+        \\  node_a [label="node=\N graph=\G"];
+        \\  node_a -> node_b [label="\T|\H|\E|\G"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const node_a = graph.node_index.get("node_a").?;
+    try std.testing.expectEqualStrings("node=node_a graph=Ctx", graph.nodes.items[node_a].label);
+    try std.testing.expectEqualStrings("node_a|node_b|node_a->node_b|Ctx", graph.edges.items[0].label.?);
 }
 
 test "layered layout uses crossing reduction and variable label sizes" {
