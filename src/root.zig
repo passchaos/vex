@@ -6178,8 +6178,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         for (graph.edges.items) |edge_item| {
             if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(edge_item);
-            if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), visual.marker_scale);
-            if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), visual.marker_scale);
+            if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), visual.marker_scale);
+            if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), visual.marker_scale);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -6559,13 +6559,16 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
             const color_offset = colorListOffset(colors.len, index, spacing);
-            const path_route = routeForPathMarkers(edgeRouteForEdgeWithColorOffset(route, rankdir, color_offset), edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len));
+            const segment_route = edgeRouteForEdgeWithColorOffset(route, rankdir, color_offset);
+            const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
+            const path_route = routeForPathMarkers(segment_route, segment_visual);
             try writer.writeAll("<path d=\"");
             try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing);
             try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ segment.color, visual.width });
             try writeSvgDash(writer, visual.dash);
-            try writeSvgMarkerAttrs(writer, directed, edge_item.id, edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len));
+            try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
+            try writeSvgInlineArrowheads(writer, directed, segment_route, segment_visual);
         }
         return;
     }
@@ -6577,6 +6580,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     try writeSvgDash(writer, visual.dash);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
+    try writeSvgInlineArrowheads(writer, directed, route, visual);
 }
 
 fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
@@ -6589,6 +6593,7 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, r
             try writeSvgSelfLoopPath(writer, shifted, segment_visual);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
+            try writeSvgInlineArrowheads(writer, directed, shifted, segment_visual);
         }
         return;
     }
@@ -6596,6 +6601,7 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, r
     try writeSvgSelfLoopPath(writer, route, visual);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
+    try writeSvgInlineArrowheads(writer, directed, route, visual);
 }
 
 fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
@@ -8244,8 +8250,48 @@ fn markerRefX(shape: MarkerShape) f64 {
 fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visual: EdgeVisual) Io.Writer.Error!void {
     if (!directed) return;
     if (visual.marker_scale <= 0) return;
-    if (visual.marker_start != .none) try writer.print(" marker-start=\"url(#arrow-{d}-tail)\"", .{edge_id});
-    if (visual.marker_end != .none) try writer.print(" marker-end=\"url(#arrow-{d}-head)\"", .{edge_id});
+    if (visual.marker_start != .none and visual.marker_start != .normal) try writer.print(" marker-start=\"url(#arrow-{d}-tail)\"", .{edge_id});
+    if (visual.marker_end != .none and visual.marker_end != .normal) try writer.print(" marker-end=\"url(#arrow-{d}-head)\"", .{edge_id});
+}
+
+fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+    if (!directed or visual.marker_scale <= 0) return;
+    if (visual.marker_end == .normal) {
+        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, false);
+    }
+    if (visual.marker_start == .normal) {
+        try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, true);
+    }
+}
+
+fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, color: []const u8, scale: f64, reverse: bool) Io.Writer.Error!void {
+    var dx = tip.x - toward.x;
+    var dy = tip.y - toward.y;
+    if (reverse) {
+        dx = -dx;
+        dy = -dy;
+    }
+    const len = std.math.hypot(dx, dy);
+    if (len <= 0.001) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const arrow_len = 10.0 * scale;
+    const arrow_half = 3.5 * scale;
+    const base = Point{ .x = tip.x - ux * arrow_len, .y = tip.y - uy * arrow_len };
+    const px = -uy;
+    const py = ux;
+    const left = Point{ .x = base.x + px * arrow_half, .y = base.y + py * arrow_half };
+    const right = Point{ .x = base.x - px * arrow_half, .y = base.y - py * arrow_half };
+    try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\"/>\n", .{
+        color,
+        color,
+        left.x,
+        left.y,
+        tip.x,
+        tip.y,
+        right.x,
+        right.y,
+    });
 }
 
 fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
@@ -9842,7 +9888,7 @@ test "render dispatch covers terminal and svg formats" {
 
     const svg = try renderAlloc(allocator, &graph, &layout, .svg, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "go") != null);
 
     try graph.setNodeAttr(graph.node_index.get("left").?, "label", "<&>");
@@ -11160,7 +11206,7 @@ test "SVG renderer emits curved clipped edges and multiline text spans" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0-head\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0-head\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "dy=\"17.5\"") != null);
 
@@ -11996,7 +12042,7 @@ test "SVG renderer honors Graphviz edge color lists" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "multi") != null);
 }
 
-test "SVG renderer uses Graphviz-like normal arrow marker proportions" {
+test "SVG renderer uses Graphviz-like inline normal arrow proportions" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
@@ -12010,8 +12056,8 @@ test "SVG renderer uses Graphviz-like normal arrow marker proportions" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1.2 1.4 L 9.2 5 L 1.2 8.6 z") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "refX=\"9.2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0-head\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"black\" stroke=\"black\" points=") != null);
 }
 
 test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
@@ -12100,7 +12146,8 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "markerWidth=\"14.00\" markerHeight=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#2563eb\" stroke=\"#2563eb\" points=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "arrow-0-head") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "arrow-1-head") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-1-head)\"") == null);
 
@@ -12132,7 +12179,7 @@ test "SVG renderer honors DOT concentrate graph attribute for duplicate edges" {
     defer concentrated_layout.deinit();
     const concentrated_svg = try renderSvgAlloc(allocator, &concentrated, &concentrated_layout, .{});
     defer allocator.free(concentrated_svg);
-    try std.testing.expect(countSubstrings(concentrated_svg, "marker id=\"arrow-") == 1);
+    try std.testing.expect(countSubstrings(concentrated_svg, "marker id=\"arrow-") == 0);
     try std.testing.expectEqual(@as(usize, 1), renderedEdgePathCount(concentrated_svg));
     try std.testing.expect(std.mem.indexOf(u8, concentrated_svg, "first") != null);
     try std.testing.expect(std.mem.indexOf(u8, concentrated_svg, "second") == null);
