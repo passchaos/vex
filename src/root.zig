@@ -6918,11 +6918,50 @@ fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, of
     const to_rank = layout.ranks[edge_item.to];
     const increasing = to_rank > from_rank;
     const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
-    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| return axes.offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), offset);
+    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| {
+        const avoided = avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point);
+        if (edgeTouchesMultipleClusters(layout, edge_item) and waypointLeavesEndpointSpan(layout, edge_item, rankdir, avoided)) {
+            return fallbackLongEdgeWaypoint(layout, edge_item, rankdir, offset, index, count, rank);
+        }
+        return axes.offsetPoint(avoided, offset);
+    }
+    return fallbackLongEdgeWaypoint(layout, edge_item, rankdir, offset, index, count, rank);
+}
+
+fn fallbackLongEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, index: usize, count: usize, rank: usize) Point {
+    const axes = LayoutAxes.init(rankdir);
     const along = longEdgeDummyAlongFromLayout(layout, edge_item, rankdir, rank) orelse interpolatedWaypointAlong(layout, edge_item, rankdir, index, count);
     const depth = rankDepthCenter(layout, rank);
     const point = axes.orientWaypoint(along, depth, layout);
     return axes.offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), offset);
+}
+
+fn waypointLeavesEndpointSpan(layout: *const Layout, edge_item: Edge, rankdir: RankDir, waypoint: Point) bool {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return false;
+    const from_along = pointAlongAxis(layout.nodes[edge_item.from].center, rankdir);
+    const to_along = pointAlongAxis(layout.nodes[edge_item.to].center, rankdir);
+    const min_along = @min(from_along, to_along) - 2.0;
+    const max_along = @max(from_along, to_along) + 2.0;
+    const along = pointAlongAxis(waypoint, rankdir);
+    return along < min_along or along > max_along;
+}
+
+fn edgeTouchesMultipleClusters(layout: *const Layout, edge_item: Edge) bool {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return false;
+    var from_cluster: ?usize = null;
+    var to_cluster: ?usize = null;
+    for (layout.clusters, 0..) |cluster_box, cluster_index| {
+        if (pointInsideCluster(layout.nodes[edge_item.from].center, cluster_box)) from_cluster = cluster_index;
+        if (pointInsideCluster(layout.nodes[edge_item.to].center, cluster_box)) to_cluster = cluster_index;
+    }
+    if (from_cluster == null or to_cluster == null) return false;
+    return from_cluster.? != to_cluster.?;
+}
+
+fn pointInsideCluster(point: Point, cluster_box: ClusterLayout) bool {
+    return cluster_box.width > 0 and cluster_box.height > 0 and
+        point.x >= cluster_box.x and point.x <= cluster_box.x + cluster_box.width and
+        point.y >= cluster_box.y and point.y <= cluster_box.y + cluster_box.height;
 }
 
 fn avoidNodeAtRankForWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, rank: usize, point: Point) Point {
@@ -11220,6 +11259,38 @@ test "SVG routes skip-rank edges through intermediate waypoints" {
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingLongPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
     try std.testing.expect(countSubstrings(path, " C ") >= 3);
+}
+
+test "SVG clamps outward long-edge waypoints for forward cluster cross edges" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_0 {
+        \\    node [style=filled,color=white];
+        \\    a0 -> a1 -> a2 -> a3;
+        \\  }
+        \\  subgraph cluster_1 {
+        \\    node [style=filled];
+        \\    b0 -> b1 -> b2 -> b3;
+        \\  }
+        \\  a1 -> b3 [label="cross"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const edge_item = graph.edges.items[6];
+    try std.testing.expect(longEdgeWaypointCount(&layout, edge_item) >= 1);
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+
+    var aw = Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved);
+    const path = try aw.toOwnedSlice();
+    defer allocator.free(path);
+    try std.testing.expect(countSubstrings(path, " C ") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, path, "196.5") == null);
 }
 
 test "SVG routes multi-rank back edges around the side" {
