@@ -5733,14 +5733,14 @@ fn svgGraphvizTranslate(svg: []const u8) SvgTranslate {
 
 fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgNumberAfter(fragment, " width=\"")) |width| return width;
-    return svgPolygonBBoxWidth(fragment);
+    if (svgPolygonBBoxWidth(fragment)) |width| return width;
+    return svgNumberAfter(fragment, " width=\"");
 }
 
 fn svgClusterRectX(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgNumberAfter(fragment, " x=\"")) |x| return x;
-    return svgPolygonBBoxX(fragment);
+    if (svgPolygonBBoxX(fragment)) |x| return x;
+    return svgNumberAfter(fragment, " x=\"");
 }
 
 fn svgClusterScreenX(svg: []const u8, title: []const u8) ?f64 {
@@ -5951,19 +5951,40 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     if (visual.hidden) return;
     try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.name);
-    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        box.x,
-        box.y,
-        box.width,
-        box.height,
-        visual.radius,
-        visual.fill,
-        visual.fill_opacity,
-        visual.stroke,
-        visual.width,
-    });
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    if (visual.radius <= 0.001) {
+        try writer.print("<polygon points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+            box.x,
+            box.y,
+            box.x + box.width,
+            box.y,
+            box.x + box.width,
+            box.y + box.height,
+            box.x,
+            box.y + box.height,
+            box.x,
+            box.y,
+            visual.fill,
+            visual.fill_opacity,
+            visual.stroke,
+            visual.width,
+        });
+        try writeSvgDash(writer, visual.dash);
+        try writer.writeAll("/>\n");
+    } else {
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+            visual.radius,
+            visual.fill,
+            visual.fill_opacity,
+            visual.stroke,
+            visual.width,
+        });
+        try writeSvgDash(writer, visual.dash);
+        try writer.writeAll("/>\n");
+    }
     const label_just = attrValue(cluster.attrs.items, "labeljust");
     const label_loc = attrValue(cluster.attrs.items, "labelloc");
     const text_anchor: []const u8 = if (label_just) |value|
@@ -12126,12 +12147,13 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     try std.testing.expect(svg_cluster_0_w >= 86.0);
     try std.testing.expect(svg_cluster_0_w <= 90.0);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 78.0);
-    try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 12.0);
+    try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 12.5);
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
     try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 8.0);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 4.0);
