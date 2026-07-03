@@ -2687,7 +2687,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
 }
 
 fn applyNodeSizeAttrs(node_item: Node, width: *f64, height: *f64) void {
-    const fixed = if (attrValue(node_item.attrs.items, "fixedsize")) |value| parseBool(value) orelse false else false;
+    const fixed = fixedsizeMode(node_item.attrs.items) == .true;
     if (attrValue(node_item.attrs.items, "width")) |value| {
         const attr_width = parseInchDimension(value) orelse width.*;
         width.* = if (fixed) attr_width else @max(width.*, attr_width);
@@ -2696,6 +2696,18 @@ fn applyNodeSizeAttrs(node_item: Node, width: *f64, height: *f64) void {
         const attr_height = parseInchDimension(value) orelse height.*;
         height.* = if (fixed) attr_height else @max(height.*, attr_height);
     }
+}
+
+const FixedSizeMode = enum {
+    false,
+    true,
+    shape,
+};
+
+fn fixedsizeMode(attrs: []const Attr) FixedSizeMode {
+    const value = attrValue(attrs, "fixedsize") orelse return .false;
+    if (std.ascii.eqlIgnoreCase(value, "shape")) return .shape;
+    return if (parseBool(value) orelse false) .true else .false;
 }
 
 fn parseInchDimension(value: []const u8) ?f64 {
@@ -6782,12 +6794,13 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
+    const shape_layout = fixedShapeLayout(node_item, layout);
     switch (node_item.shape) {
         .point => {
             try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-                layout.center.x,
-                layout.center.y,
-                @min(layout.width, layout.height) / 2.0,
+                shape_layout.center.x,
+                shape_layout.center.y,
+                @min(shape_layout.width, shape_layout.height) / 2.0,
                 visual.stroke,
                 visual.stroke,
                 visual.width,
@@ -6798,10 +6811,10 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
                 const rect = RectF{
-                    .x = layout.center.x - layout.width / 2.0 + inset,
-                    .y = layout.center.y - layout.height / 2.0 + inset,
-                    .width = @max(1, layout.width - inset * 2.0),
-                    .height = @max(1, layout.height - inset * 2.0),
+                    .x = shape_layout.center.x - shape_layout.width / 2.0 + inset,
+                    .y = shape_layout.center.y - shape_layout.height / 2.0 + inset,
+                    .width = @max(1, shape_layout.width - inset * 2.0),
+                    .height = @max(1, shape_layout.height - inset * 2.0),
                 };
                 const radius = @max(0, visual.radius - inset / 2.0);
                 var ring_visual = visual;
@@ -6812,7 +6825,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                     try renderSvgBoxShape(writer, rect, ring_visual, radius);
                 }
             }
-            if (node_item.shape == .msquare) try renderSvgCornerDiagonals(writer, layout, visual);
+            if (node_item.shape == .msquare) try renderSvgCornerDiagonals(writer, shape_layout, visual);
         },
         .circle, .doublecircle, .mcircle => {
             var ring: usize = 0;
@@ -6820,9 +6833,9 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             while (ring < ring_count) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
                 try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                    layout.center.x,
-                    layout.center.y,
-                    @max(1, @min(layout.width, layout.height) / 2.0 - inset),
+                    shape_layout.center.x,
+                    shape_layout.center.y,
+                    @max(1, @min(shape_layout.width, shape_layout.height) / 2.0 - inset),
                     if (ring == 0) visual.fill else "none",
                     visual.stroke,
                     visual.width,
@@ -6830,17 +6843,17 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
-            if (node_item.shape == .mcircle) try renderSvgCircleDiagonals(writer, layout, visual);
+            if (node_item.shape == .mcircle) try renderSvgCircleDiagonals(writer, shape_layout, visual);
         },
         .ellipse => {
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
                 try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                    layout.center.x,
-                    layout.center.y,
-                    @max(1, layout.width / 2.0 - inset),
-                    @max(1, layout.height / 2.0 - inset),
+                    shape_layout.center.x,
+                    shape_layout.center.y,
+                    @max(1, shape_layout.width / 2.0 - inset),
+                    @max(1, shape_layout.height / 2.0 - inset),
                     if (ring == 0) visual.fill else "none",
                     visual.stroke,
                     visual.width,
@@ -6849,42 +6862,59 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writer.writeAll("/>\n");
             }
         },
-        .egg => try renderSvgEggShape(writer, layout, visual),
-        .polygon => try renderSvgCustomPolygon(writer, node_item, layout, visual),
-        .diamond => try renderSvgPolygonRings(6, writer, layout, visual, diamondPoints),
+        .egg => try renderSvgEggShape(writer, shape_layout, visual),
+        .polygon => try renderSvgCustomPolygon(writer, node_item, shape_layout, visual),
+        .diamond => try renderSvgPolygonRings(6, writer, shape_layout, visual, diamondPoints),
         .mdiamond => {
-            try renderSvgPolygonRings(6, writer, layout, visual, diamondPoints);
-            try renderSvgDiamondDiagonals(writer, layout, visual);
+            try renderSvgPolygonRings(6, writer, shape_layout, visual, diamondPoints);
+            try renderSvgDiamondDiagonals(writer, shape_layout, visual);
         },
-        .triangle => try renderSvgPolygonRings(6, writer, layout, visual, trianglePoints),
-        .invtriangle => try renderSvgPolygonRings(6, writer, layout, visual, invTrianglePoints),
-        .parallelogram => try renderSvgPolygonRings(6, writer, layout, visual, parallelogramPoints),
-        .trapezium => try renderSvgPolygonRings(6, writer, layout, visual, trapeziumPoints),
-        .invtrapezium => try renderSvgPolygonRings(6, writer, layout, visual, invTrapeziumPoints),
-        .house => try renderSvgPolygonRings(6, writer, layout, visual, housePoints),
-        .invhouse => try renderSvgPolygonRings(6, writer, layout, visual, invHousePoints),
-        .pentagon => try renderSvgPolygonRings(5, writer, layout, visual, pentagonPoints),
-        .hexagon => try renderSvgPolygonRings(6, writer, layout, visual, hexagonPoints),
-        .septagon => try renderSvgPolygonRings(7, writer, layout, visual, septagonPoints),
-        .octagon => try renderSvgPolygonRings(8, writer, layout, visual, octagonPoints),
+        .triangle => try renderSvgPolygonRings(6, writer, shape_layout, visual, trianglePoints),
+        .invtriangle => try renderSvgPolygonRings(6, writer, shape_layout, visual, invTrianglePoints),
+        .parallelogram => try renderSvgPolygonRings(6, writer, shape_layout, visual, parallelogramPoints),
+        .trapezium => try renderSvgPolygonRings(6, writer, shape_layout, visual, trapeziumPoints),
+        .invtrapezium => try renderSvgPolygonRings(6, writer, shape_layout, visual, invTrapeziumPoints),
+        .house => try renderSvgPolygonRings(6, writer, shape_layout, visual, housePoints),
+        .invhouse => try renderSvgPolygonRings(6, writer, shape_layout, visual, invHousePoints),
+        .pentagon => try renderSvgPolygonRings(5, writer, shape_layout, visual, pentagonPoints),
+        .hexagon => try renderSvgPolygonRings(6, writer, shape_layout, visual, hexagonPoints),
+        .septagon => try renderSvgPolygonRings(7, writer, shape_layout, visual, septagonPoints),
+        .octagon => try renderSvgPolygonRings(8, writer, shape_layout, visual, octagonPoints),
         .doubleoctagon, .tripleoctagon => {
             var ring_visual = visual;
             const default_peripheries: usize = if (node_item.shape == .tripleoctagon) 3 else 2;
             ring_visual.peripheries = @max(visual.peripheries, default_peripheries);
-            try renderSvgPolygonRings(8, writer, layout, ring_visual, octagonPoints);
+            try renderSvgPolygonRings(8, writer, shape_layout, ring_visual, octagonPoints);
         },
-        .star => try renderSvgPolygonRings(10, writer, layout, visual, starPoints),
-        .note => try renderSvgNoteShape(writer, layout, visual),
-        .tab => try renderSvgTabShape(writer, layout, visual),
-        .folder => try renderSvgFolderShape(writer, layout, visual),
-        .box3d => try renderSvgBox3dShape(writer, layout, visual),
-        .component => try renderSvgComponentShape(writer, layout, visual),
-        .underline => try renderSvgUnderlineShape(writer, layout, visual),
-        .cylinder => try renderSvgCylinderShape(writer, layout, visual),
+        .star => try renderSvgPolygonRings(10, writer, shape_layout, visual, starPoints),
+        .note => try renderSvgNoteShape(writer, shape_layout, visual),
+        .tab => try renderSvgTabShape(writer, shape_layout, visual),
+        .folder => try renderSvgFolderShape(writer, shape_layout, visual),
+        .box3d => try renderSvgBox3dShape(writer, shape_layout, visual),
+        .component => try renderSvgComponentShape(writer, shape_layout, visual),
+        .underline => try renderSvgUnderlineShape(writer, shape_layout, visual),
+        .cylinder => try renderSvgCylinderShape(writer, shape_layout, visual),
         .plaintext => {},
-        .record => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, false),
-        .mrecord => try renderSvgRecordNode(writer, node_item.label, layout, visual, options, true),
+        .record => try renderSvgRecordNode(writer, node_item.label, shape_layout, visual, options, false),
+        .mrecord => try renderSvgRecordNode(writer, node_item.label, shape_layout, visual, options, true),
     }
+}
+
+fn fixedShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
+    if (fixedsizeMode(node_item.attrs.items) != .shape) return layout;
+    const width = if (attrValue(node_item.attrs.items, "width")) |value|
+        parseInchDimension(value) orelse layout.width
+    else
+        layout.width;
+    const height = if (attrValue(node_item.attrs.items, "height")) |value|
+        parseInchDimension(value) orelse layout.height
+    else
+        layout.height;
+    return .{
+        .center = layout.center,
+        .width = @min(layout.width, width),
+        .height = @min(layout.height, height),
+    };
 }
 
 fn renderSvgPolygon(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
@@ -14291,6 +14321,7 @@ test "layout honors DOT node width height and fixedsize attributes" {
         \\digraph G {
         \\  min_sized [label="small", width=3.0, height=1.5];
         \\  fixed [label="this label is intentionally much wider than the box", width=1.0, height=0.5, fixedsize=true];
+        \\  shape_fixed [label="an even longer label than the fixed circle", shape=circle, width=0.5, height=0.5, fixedsize=shape];
         \\}
     );
     defer graph.deinit();
@@ -14300,10 +14331,18 @@ test "layout honors DOT node width height and fixedsize attributes" {
 
     const min_sized = graph.node_index.get("min_sized").?;
     const fixed = graph.node_index.get("fixed").?;
+    const shape_fixed = graph.node_index.get("shape_fixed").?;
     try std.testing.expect(layout.nodes[min_sized].width >= 216);
     try std.testing.expect(layout.nodes[min_sized].height >= 108);
     try std.testing.expect(@abs(layout.nodes[fixed].width - 72.0) < 0.01);
     try std.testing.expect(@abs(layout.nodes[fixed].height - 36.0) < 0.01);
+    try std.testing.expect(layout.nodes[shape_fixed].width > 72.0);
+    try std.testing.expect(layout.nodes[shape_fixed].height >= 36.0);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "an even longer label than the fixed circle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "r=\"18.0\" fill=\"none\" stroke=\"black\"") != null);
 }
 
 test "color parser accepts common DOT named colors" {
