@@ -2020,18 +2020,17 @@ fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: 
 
 fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, passes: usize) !void {
     if (virtual_levels.levels.len <= 1 or passes == 0) return;
-    _ = allocator;
 
     for (0..passes) |_| {
         var rank: usize = 1;
         while (rank < virtual_levels.levels.len) : (rank += 1) {
-            orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, true);
-            orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank, true);
+            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true);
+            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true);
         }
         rank = virtual_levels.levels.len - 1;
         while (rank > 0) : (rank -= 1) {
-            orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank - 1, false);
-            orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank - 1, false);
+            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false);
+            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false);
         }
         refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
     }
@@ -2069,6 +2068,18 @@ fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels
 fn lessThanVirtualMedianOrder(_: void, a: VirtualMedianOrder, b: VirtualMedianOrder) bool {
     if (a.median == b.median) return a.original < b.original;
     return a.median < b.median;
+}
+
+fn orderVirtualLevelByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) !void {
+    if (rank >= virtual_levels.levels.len) return;
+    const level = &virtual_levels.levels[rank];
+    if (level.items.len <= 1) return;
+    const before = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    const backup = try allocator.dupe(VirtualNode, level.items);
+    defer allocator.free(backup);
+    orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, use_parents);
+    const after = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    if (after > before) @memcpy(level.items, backup);
 }
 
 const VirtualBlockOrder = struct {
@@ -2146,6 +2157,18 @@ fn lessThanVirtualBlockOrder(_: void, a: VirtualBlockOrder, b: VirtualBlockOrder
     const b_median = b.median_sum / @as(f64, @floatFromInt(b.count));
     if (a_median == b_median) return a.first < b.first;
     return a_median < b_median;
+}
+
+fn orderVirtualLevelBlocksByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) !void {
+    if (rank >= virtual_levels.levels.len) return;
+    const level = &virtual_levels.levels[rank];
+    if (level.items.len <= 1) return;
+    const before = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    const backup = try allocator.dupe(VirtualNode, level.items);
+    defer allocator.free(backup);
+    orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank, use_parents);
+    const after = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    if (after > before) @memcpy(level.items, backup);
 }
 
 fn virtualBlockKey(graph: *const Graph, node: VirtualNode) usize {
@@ -2252,6 +2275,13 @@ fn virtualCrossingScoreAroundLevel(graph: *const Graph, virtual_levels: *const V
     if (rank > 0) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank - 1);
     if (rank + 1 < virtual_levels.levels.len) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank);
     return score;
+}
+
+fn totalVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize) usize {
+    var total: usize = 0;
+    if (virtual_levels.levels.len < 2) return 0;
+    for (0..virtual_levels.levels.len - 1) |rank| total += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank);
+    return total;
 }
 
 fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) usize {
@@ -4009,13 +4039,13 @@ fn reduceLayerCrossings(allocator: std.mem.Allocator, graph: *const Graph, level
         var rank: usize = 1;
         while (rank < levels.len) : (rank += 1) {
             buildPositionMap(positions, levels[rank - 1].items);
-            orderLevelByMedian(graph, ranks, &levels[rank], positions, median_positions, true);
+            try orderLevelByMedianGuarded(allocator, graph, ranks, levels, rank, positions, median_positions, true);
         }
 
         rank = levels.len - 1;
         while (rank > 0) : (rank -= 1) {
             buildPositionMap(positions, levels[rank].items);
-            orderLevelByMedian(graph, ranks, &levels[rank - 1], positions, median_positions, false);
+            try orderLevelByMedianGuarded(allocator, graph, ranks, levels, rank - 1, positions, median_positions, false);
         }
     }
 }
@@ -4066,6 +4096,25 @@ fn orderLevelByMedianSlow(
     fillMedianOrders(graph, ranks, level.items, adjacent_positions, median_positions, use_parents, orders);
     std.mem.sort(MedianOrder, orders, {}, lessThanMedianOrder);
     for (orders, 0..) |order, i| level.items[i] = order.id;
+}
+
+fn orderLevelByMedianGuarded(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    ranks: []const usize,
+    levels: []std.ArrayList(NodeId),
+    rank: usize,
+    adjacent_positions: []const usize,
+    median_positions: []usize,
+    use_parents: bool,
+) !void {
+    if (rank >= levels.len or levels[rank].items.len <= 1) return;
+    const before = totalLayerCrossings(graph, levels, ranks);
+    const backup = try allocator.dupe(NodeId, levels[rank].items);
+    defer allocator.free(backup);
+    orderLevelByMedian(graph, ranks, &levels[rank], adjacent_positions, median_positions, use_parents);
+    const after = totalLayerCrossings(graph, levels, ranks);
+    if (after > before) @memcpy(levels[rank].items, backup);
 }
 
 fn fillMedianOrders(
@@ -4155,6 +4204,13 @@ fn crossingScoreAroundLevel(graph: *const Graph, levels: []const std.ArrayList(N
     if (rank > 0) score += countLayerCrossingsWithDummies(graph, levels, ranks, rank - 1);
     if (rank + 1 < levels.len) score += countLayerCrossingsWithDummies(graph, levels, ranks, rank);
     return score;
+}
+
+fn totalLayerCrossings(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize) usize {
+    var total: usize = 0;
+    if (levels.len < 2) return 0;
+    for (0..levels.len - 1) |rank| total += countLayerCrossingsWithDummies(graph, levels, ranks, rank);
+    return total;
 }
 
 fn countLayerCrossings(graph: *const Graph, upper: []const NodeId, lower: []const NodeId, ranks: []const usize) usize {
@@ -7820,6 +7876,72 @@ test "adjacent exchange reduces residual two-layer crossings" {
     try std.testing.expectEqual(@as(usize, 1), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
     refineAdjacentExchanges(&graph, levels, ranks, 2);
     try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
+}
+
+test "guarded median ordering refuses worse total crossings" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const p0 = try graph.node("p0");
+    const p1 = try graph.node("p1");
+    const x = try graph.node("x");
+    const y = try graph.node("y");
+    const z = try graph.node("z");
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    _ = try graph.edge(p0, z, .{});
+    _ = try graph.edge(p1, x, .{});
+    _ = try graph.edge(x, a, .{});
+    _ = try graph.edge(y, b, .{});
+    _ = try graph.edge(z, c, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p0] = 0;
+    ranks[p1] = 0;
+    ranks[x] = 1;
+    ranks[y] = 1;
+    ranks[z] = 1;
+    ranks[a] = 2;
+    ranks[b] = 2;
+    ranks[c] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+
+    try levels[0].append(allocator, p0);
+    try levels[0].append(allocator, p1);
+    try levels[1].append(allocator, x);
+    try levels[1].append(allocator, y);
+    try levels[1].append(allocator, z);
+    try levels[2].append(allocator, a);
+    try levels[2].append(allocator, b);
+    try levels[2].append(allocator, c);
+
+    const positions = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(positions);
+    const median_positions = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(median_positions);
+
+    try std.testing.expectEqual(@as(usize, 1), totalLayerCrossings(&graph, levels, ranks));
+    buildPositionMap(positions, levels[0].items);
+    orderLevelByMedian(&graph, ranks, &levels[1], positions, median_positions, true);
+    try std.testing.expect(totalLayerCrossings(&graph, levels, ranks) > 1);
+
+    levels[1].clearRetainingCapacity();
+    try levels[1].append(allocator, x);
+    try levels[1].append(allocator, y);
+    try levels[1].append(allocator, z);
+    buildPositionMap(positions, levels[0].items);
+    try orderLevelByMedianGuarded(allocator, &graph, ranks, levels, 1, positions, median_positions, true);
+    try std.testing.expectEqual(@as(usize, 1), totalLayerCrossings(&graph, levels, ranks));
+    try std.testing.expectEqual(x, levels[1].items[0]);
+    try std.testing.expectEqual(y, levels[1].items[1]);
+    try std.testing.expectEqual(z, levels[1].items[2]);
 }
 
 test "long edges contribute virtual segments to crossing score" {
