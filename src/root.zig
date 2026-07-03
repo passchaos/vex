@@ -6977,6 +6977,10 @@ fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
     const margin = nodeMargin(node_item.attrs.items, 0);
     const anchor = nodeLabelAnchor(node_item.attrs.items, layout, margin.x);
     const y = nodeLabelY(node_item.attrs.items, layout, margin.y);
+    if (plainSingleLineLabel(node_item.label)) {
+        try renderSvgPlainTextBlock(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, anchor.anchor);
+        return;
+    }
     try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, false, false, anchor.anchor);
 }
 
@@ -9448,6 +9452,18 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
     try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font_family, label_background, dominant_middle, "middle");
+}
+
+fn plainSingleLineLabel(text: []const u8) bool {
+    return std.mem.indexOfScalar(u8, text, '\n') == null and !isHtmlLikeLabel(text);
+}
+
+fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, text_anchor: []const u8) Io.Writer.Error!void {
+    const line_height = font_size * 1.25;
+    const y = center_y - line_height / 2.0 + line_height * 0.72;
+    try writer.print("<text xml:space=\"preserve\" x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{ x, y, text_anchor, font_family, font_size, fill });
+    try writeXmlEscaped(writer, text);
+    try writer.writeAll("</text>\n");
 }
 
 fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool, text_anchor: []const u8) Io.Writer.Error!void {
@@ -12261,8 +12277,8 @@ test "SVG renderer honors node xlabel labelloc labeljust and margin attributes" 
     try std.testing.expect(std.mem.indexOf(u8, svg, "external") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top Left</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom Right</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top Left</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom Right</text>") != null);
 }
 
 test "SVG renderer emits URL href and tooltip metadata" {
@@ -14124,6 +14140,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#ffffff\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">a0</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">start</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">a0</tspan>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">start</tspan>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">") != null);
     const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
     const cluster_1_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_1</title>") orelse return error.MissingCluster1;
