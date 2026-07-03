@@ -8336,39 +8336,20 @@ fn renderSvgTabShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual)
     const rect = nodeRect(layout);
     const tab_w = @min(rect.width * 0.42, 52);
     const tab_h = @min(rect.height * 0.28, 18);
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        rect.x,
-        rect.y + tab_h,
-        rect.x + tab_w * 0.18,
-        rect.y + tab_h,
-        rect.x + tab_w * 0.18,
-        rect.y,
-        rect.x + tab_w,
-        rect.y,
-        rect.x + tab_w,
-        rect.y + tab_h,
-        rect.x + rect.width,
-        rect.y + tab_h,
-        rect.x + rect.width,
-        rect.y + rect.height,
-        rect.x,
-        rect.y + rect.height,
-        visual.fill,
-        visual.stroke,
-        visual.width,
-    });
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        rect.x + tab_w,
-        rect.y + tab_h,
-        rect.x + tab_w * 0.18,
-        rect.y + tab_h,
-        visual.stroke,
-        visual.width,
-    });
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try writeSvgClosedPath(writer, &.{
+        .{ .x = rect.x, .y = rect.y + tab_h },
+        .{ .x = rect.x + tab_w * 0.18, .y = rect.y + tab_h },
+        .{ .x = rect.x + tab_w * 0.18, .y = rect.y },
+        .{ .x = rect.x + tab_w, .y = rect.y },
+        .{ .x = rect.x + tab_w, .y = rect.y + tab_h },
+        .{ .x = rect.x + rect.width, .y = rect.y + tab_h },
+        .{ .x = rect.x + rect.width, .y = rect.y + rect.height },
+        .{ .x = rect.x, .y = rect.y + rect.height },
+    }, visual);
+    try writeSvgPolylinePath(writer, &.{
+        .{ .x = rect.x + tab_w, .y = rect.y + tab_h },
+        .{ .x = rect.x + tab_w * 0.18, .y = rect.y + tab_h },
+    }, visual);
 }
 
 fn renderSvgFolderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
