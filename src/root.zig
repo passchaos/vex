@@ -8477,20 +8477,12 @@ fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.
 }
 
 fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
-        x + width,
-        y,
-        x,
-        y,
-        x,
-        y + height,
-        x + width,
-        y + height,
-        visual.stroke,
-    });
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try writeSvgPolylinePath(writer, &.{
+        .{ .x = x + width, .y = y },
+        .{ .x = x, .y = y },
+        .{ .x = x, .y = y + height },
+        .{ .x = x + width, .y = y + height },
+    }, visual);
 }
 
 fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
