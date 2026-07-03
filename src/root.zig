@@ -7720,10 +7720,10 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
     const inner_y = hh * 0.72;
     const short_y = hh * 0.28;
     const short_x = hw * 0.28;
-    try writeSvgLine(writer, cx - inner_x, cy - short_y, cx - inner_x, cy + short_y, visual);
-    try writeSvgLine(writer, cx - short_x, cy + inner_y, cx + short_x, cy + inner_y, visual);
-    try writeSvgLine(writer, cx + inner_x, cy + short_y, cx + inner_x, cy - short_y, visual);
-    try writeSvgLine(writer, cx + short_x, cy - inner_y, cx - short_x, cy - inner_y, visual);
+    try writeSvgPolylineLine(writer, cx - inner_x, cy - short_y, cx - inner_x, cy + short_y, visual);
+    try writeSvgPolylineLine(writer, cx - short_x, cy + inner_y, cx + short_x, cy + inner_y, visual);
+    try writeSvgPolylineLine(writer, cx + inner_x, cy + short_y, cx + inner_x, cy - short_y, visual);
+    try writeSvgPolylineLine(writer, cx + short_x, cy - inner_y, cx - short_x, cy - inner_y, visual);
 }
 
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -12029,8 +12029,8 @@ test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=") != null);
-    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
-    try std.testing.expect(std.mem.indexOf(u8, svg, " L ") != null);
+    try std.testing.expect(countSubstrings(svg, "<polyline points=") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " fill=\"none\" stroke=\"black\"") != null);
 }
 
 test "SVG renderer draws Msquare with Graphviz-like corner marks" {
