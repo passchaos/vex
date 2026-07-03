@@ -6451,15 +6451,26 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const concentrate = graphConcentrateEnabled(graph);
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
     const content_translate = svgGraphContentTranslate(layout);
+    const background_left = if (@abs(content_translate) <= 0.0001) 0.0 else -content_translate;
+    const background_right = layout.width + background_left;
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
     );
-    try writer.writeAll("<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">\n");
+    try writer.print("<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate({d:.1} 0)\">\n", .{content_translate});
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
-    try writer.print("<polygon fill=\"{s}\" stroke=\"none\" points=\"0,0 0,{d:.0} {d:.0},{d:.0} {d:.0},0 0,0\"/>\n", .{ background, layout.height, layout.width, layout.height, layout.width });
+    try writer.print("<polygon fill=\"{s}\" stroke=\"none\" points=\"{d:.1},0 {d:.1},{d:.0} {d:.1},{d:.0} {d:.1},0 {d:.1},0\"/>\n", .{
+        background,
+        background_left,
+        background_left,
+        layout.height,
+        background_right,
+        layout.height,
+        background_right,
+        background_left,
+    });
     if (options.show_title and attrValue(graph.attrs.items, "label") != null) {
         const graph_label = attrValue(graph.attrs.items, "label").?;
         const label_just = attrValue(graph.attrs.items, "labeljust");
@@ -6498,7 +6509,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</defs>\n");
     }
 
-    if (content_translate != 0) try writer.print("<g class=\"content\" transform=\"translate({d:.1} 0)\">\n", .{content_translate});
     try renderSvgClusters(writer, graph, layout);
 
     for (graph.edges.items) |edge_item| {
@@ -6569,7 +6579,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgInteractiveClose(writer, node_wrap);
         try writer.writeAll("</g>\n");
     }
-    if (content_translate != 0) try writer.writeAll("</g>\n");
     try writer.writeAll("</g>\n</svg>\n");
 }
 
@@ -12283,7 +12292,7 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0,0 0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0.0,0 0.0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
     try std.testing.expect(layout.margin_y >= 26.0);
@@ -12303,7 +12312,7 @@ test "SVG renderer keeps graph name as metadata unless graph label is explicit" 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0.0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
 }
@@ -14236,9 +14245,10 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"223pt\" height=\"409pt\" viewBox=\"0.00 0.00 223.00 408.80\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8.0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"-8.0,0 -8.0,409 215.0,409 215.0,0 -8.0,0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"content\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"edges\"") == null);
