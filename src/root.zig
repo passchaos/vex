@@ -7736,7 +7736,7 @@ fn fixedShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
 }
 
 fn renderSvgPolygon(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.writeAll("<polygon points=\"");
+    try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{ visual.fill, visual.stroke });
     var written: usize = 0;
     for (points) |point| {
         if (point.x < 0 and point.y < 0) continue;
@@ -7744,7 +7744,8 @@ fn renderSvgPolygon(writer: *Io.Writer, points: []const Point, visual: NodeVisua
         try writer.print("{d:.1},{d:.1}", .{ point.x, point.y });
         written += 1;
     }
-    try writer.print("\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.fill, visual.stroke, visual.width });
+    try writer.writeByte('"');
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
@@ -8339,21 +8340,21 @@ fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius
 }
 
 fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<polygon points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        rect.x,
-        rect.y,
-        rect.x + rect.width,
-        rect.y,
-        rect.x + rect.width,
-        rect.y + rect.height,
-        rect.x,
-        rect.y + rect.height,
-        rect.x,
-        rect.y,
+    try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\"", .{
         visual.fill,
         visual.stroke,
-        visual.width,
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+        rect.x,
+        rect.y,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
@@ -12713,7 +12714,7 @@ test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"none\" stroke=\"black\" points=") != null);
     try std.testing.expect(countSubstrings(svg, "<polyline points=") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, svg, " fill=\"none\" stroke=\"black\"") != null);
 }
@@ -12732,7 +12733,7 @@ test "SVG renderer draws Msquare with Graphviz-like corner marks" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"none\" stroke=\"black\" points=") != null);
     try std.testing.expect(countSubstrings(svg, "<polyline points=") >= 4);
 }
 
@@ -14259,9 +14260,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline points=\"91.5,379.3 103.5,367.3\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon fill=\"none\" stroke=\"black\" points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
