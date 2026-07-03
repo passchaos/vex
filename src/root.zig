@@ -6452,7 +6452,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
     const content_translate = svgGraphContentTranslate(layout);
     try writer.print(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
     );
     try writer.writeAll("<g id=\"graph0\" class=\"graph\">\n");
@@ -14163,7 +14163,7 @@ test "user cluster example stays compact and Graphviz-like" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"223pt\" height=\"409pt\" viewBox=\"0.00 0.00 223.00 408.80\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"223pt\" height=\"409pt\" viewBox=\"0.00 0.00 223.00 408.80\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#ffffff\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
