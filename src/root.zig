@@ -7823,10 +7823,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
     const shape_layout = fixedShapeLayout(node_item, layout);
     switch (node_item.shape) {
         .point => {
-            try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-                shape_layout.center.x,
-                shape_layout.center.y,
-                @min(shape_layout.width, shape_layout.height) / 2.0,
+            try writeSvgCircleOpen(writer, shape_layout.center, @min(shape_layout.width, shape_layout.height) / 2.0);
+            try writer.print(" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
                 visual.stroke,
                 visual.stroke,
                 visual.width,
@@ -7858,10 +7856,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             const ring_count = if (node_item.shape == .doublecircle) @max(visual.peripheries, 2) else visual.peripheries;
             while (ring < ring_count) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
-                try writer.print("<circle cx=\"{d:.1}\" cy=\"{d:.1}\" r=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                    shape_layout.center.x,
-                    shape_layout.center.y,
-                    @max(1, @min(shape_layout.width, shape_layout.height) / 2.0 - inset),
+                try writeSvgCircleOpen(writer, shape_layout.center, @max(1, @min(shape_layout.width, shape_layout.height) / 2.0 - inset));
+                try writer.print(" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
                     if (ring == 0) visual.fill else "none",
                     visual.stroke,
                     visual.width,
@@ -7875,14 +7871,18 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
-                try writer.print("<ellipse fill=\"{s}\" stroke=\"{s}\" cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\"", .{
+                try writer.print("<ellipse fill=\"{s}\" stroke=\"{s}\" cx=\"", .{
                     if (ring == 0) visual.fill else "none",
                     visual.stroke,
-                    shape_layout.center.x,
-                    shape_layout.center.y,
-                    @max(1, shape_layout.width / 2.0 - inset),
-                    @max(1, shape_layout.height / 2.0 - inset),
                 });
+                try writeSvgNumber(writer, shape_layout.center.x);
+                try writer.writeAll("\" cy=\"");
+                try writeSvgNumber(writer, shape_layout.center.y);
+                try writer.writeAll("\" rx=\"");
+                try writeSvgNumber(writer, @max(1, shape_layout.width / 2.0 - inset));
+                try writer.writeAll("\" ry=\"");
+                try writeSvgNumber(writer, @max(1, shape_layout.height / 2.0 - inset));
+                try writer.writeByte('"');
                 try writeSvgStrokeWidth(writer, visual.width);
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
@@ -8622,6 +8622,16 @@ fn writeSvgNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
     } else {
         try writer.print("{d:.1}", .{normalized});
     }
+}
+
+fn writeSvgCircleOpen(writer: *Io.Writer, center: Point, radius: f64) Io.Writer.Error!void {
+    try writer.writeAll("<circle cx=\"");
+    try writeSvgNumber(writer, center.x);
+    try writer.writeAll("\" cy=\"");
+    try writeSvgNumber(writer, center.y);
+    try writer.writeAll("\" r=\"");
+    try writeSvgNumber(writer, radius);
+    try writer.writeByte('"');
 }
 
 fn nodeRect(layout: NodeLayout) RectF {
@@ -14517,7 +14527,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(node2_group_pos < edge1_group_pos);
     try std.testing.expect(node8_group_pos < edge9_group_pos);
     try std.testing.expect(edge10_group_pos < edge6_group_pos);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51\" cy=\"97.3\" rx=\"27\" ry=\"18\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0,49.3 90,49.3 90,343.3 0,343.3 0,49.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
@@ -15846,7 +15856,7 @@ test "layout honors DOT node width height and fixedsize attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "an even longer label than the fixed circle") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "r=\"18.0\" fill=\"none\" stroke=\"black\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "r=\"18\" fill=\"none\" stroke=\"black\"") != null);
 }
 
 test "color parser accepts common DOT named colors" {
