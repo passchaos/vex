@@ -6303,7 +6303,7 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
 
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
-    const d = @min(@min(rect.width, rect.height) * 0.22, 18);
+    const d = @min(@min(rect.width, rect.height) / 3.0, 18);
     try writeSvgLine(writer, rect.x, rect.y + d, rect.x + d, rect.y, visual);
     try writeSvgLine(writer, rect.x + rect.width - d, rect.y, rect.x + rect.width, rect.y + d, visual);
     try writeSvgLine(writer, rect.x + rect.width, rect.y + rect.height - d, rect.x + rect.width - d, rect.y + rect.height, visual);
@@ -10147,6 +10147,24 @@ test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
     var graph = try parseDot(allocator,
         \\digraph G {
         \\  start [shape=Mdiamond];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " L ") != null);
+}
+
+test "SVG renderer draws Msquare with Graphviz-like corner marks" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  end [shape=Msquare];
         \\}
     );
     defer graph.deinit();
