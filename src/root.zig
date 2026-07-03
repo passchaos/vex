@@ -7364,9 +7364,7 @@ const ClusterVisual = struct {
 
 fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) Io.Writer.Error!void {
     if (graph.clusters.items.len == 0) return;
-    try writer.writeAll("<g class=\"clusters\">\n");
     try renderSvgClusterTree(writer, graph, layout, null);
-    try writer.writeAll("</g>\n");
 }
 
 fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent_name: ?[]const u8) Io.Writer.Error!void {
@@ -14245,6 +14243,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"edges\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"nodes\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"clusters\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">a0</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">start</text>") != null);
@@ -14550,7 +14549,7 @@ test "cluster layout boxes contain member nodes and render to SVG" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"clusters\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"clusters\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">\n<title>cluster_api</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>cluster_api</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "API") != null);
