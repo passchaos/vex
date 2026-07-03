@@ -1385,6 +1385,229 @@ pub fn parseDot(allocator: std.mem.Allocator, source: []const u8) !Graph {
     return parser.parse();
 }
 
+pub const InputFormat = enum {
+    auto,
+    dot,
+    mermaid,
+
+    pub fn fromString(value: []const u8) ?InputFormat {
+        if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
+        if (std.ascii.eqlIgnoreCase(value, "dot") or std.ascii.eqlIgnoreCase(value, "graphviz")) return .dot;
+        if (std.ascii.eqlIgnoreCase(value, "mermaid") or std.ascii.eqlIgnoreCase(value, "mmd")) return .mermaid;
+        return null;
+    }
+};
+
+pub fn parseInput(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !Graph {
+    return switch (if (format == .auto) detectInputFormat(source) else format) {
+        .auto => unreachable,
+        .dot => parseDot(allocator, source),
+        .mermaid => parseMermaid(allocator, source),
+    };
+}
+
+pub fn detectInputFormat(source: []const u8) InputFormat {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line_raw| {
+        const line = trimMermaidLine(line_raw);
+        if (line.len == 0 or std.mem.startsWith(u8, line, "%%")) continue;
+        if (startsWithMermaidHeader(line)) return .mermaid;
+        return .dot;
+    }
+    return .dot;
+}
+
+pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "Mermaid" });
+    errdefer graph.deinit();
+
+    var saw_header = false;
+    while (lines.next()) |line_raw| {
+        const line = trimMermaidLine(line_raw);
+        if (line.len == 0 or std.mem.startsWith(u8, line, "%%")) continue;
+        if (!saw_header and startsWithMermaidHeader(line)) {
+            saw_header = true;
+            try applyMermaidDirection(&graph, line);
+            continue;
+        }
+        try parseMermaidStatement(&graph, line);
+    }
+
+    return graph;
+}
+
+fn startsWithMermaidHeader(line: []const u8) bool {
+    var parts = std.mem.tokenizeAny(u8, line, " \t");
+    const first = parts.next() orelse return false;
+    if (!std.mem.eql(u8, first, "graph") and !std.mem.eql(u8, first, "flowchart")) return false;
+    const second = parts.next() orelse return true;
+    return std.ascii.eqlIgnoreCase(second, "TD") or
+        std.ascii.eqlIgnoreCase(second, "TB") or
+        std.ascii.eqlIgnoreCase(second, "BT") or
+        std.ascii.eqlIgnoreCase(second, "LR") or
+        std.ascii.eqlIgnoreCase(second, "RL");
+}
+
+fn trimMermaidLine(line: []const u8) []const u8 {
+    var trimmed = std.mem.trim(u8, line, " \t\r\n;");
+    if (std.mem.indexOf(u8, trimmed, "%%")) |comment| {
+        trimmed = std.mem.trim(u8, trimmed[0..comment], " \t\r\n;");
+    }
+    return trimmed;
+}
+
+fn applyMermaidDirection(graph: *Graph, line: []const u8) !void {
+    var parts = std.mem.tokenizeAny(u8, line, " \t");
+    _ = parts.next();
+    const dir = parts.next() orelse "TD";
+    if (std.ascii.eqlIgnoreCase(dir, "LR")) {
+        try graph.setGraphAttr("rankdir", "LR");
+    } else if (std.ascii.eqlIgnoreCase(dir, "RL")) {
+        try graph.setGraphAttr("rankdir", "RL");
+    } else if (std.ascii.eqlIgnoreCase(dir, "BT")) {
+        try graph.setGraphAttr("rankdir", "BT");
+    } else {
+        try graph.setGraphAttr("rankdir", "TB");
+    }
+}
+
+fn parseMermaidStatement(graph: *Graph, line: []const u8) !void {
+    if (std.mem.startsWith(u8, line, "subgraph") or std.mem.eql(u8, line, "end")) return;
+    var pos: usize = 0;
+    var current = try parseMermaidNodeRef(graph, line, &pos) orelse return;
+    while (findMermaidArrow(line, pos)) |arrow| {
+        pos = arrow.start;
+        const edge_label = mermaidEdgeLabelBeforeArrow(line, &pos);
+        const arrow_text = line[arrow.start..arrow.end];
+        pos = arrow.end;
+        const label_after_arrow = mermaidEdgeLabelAfterArrow(line, &pos);
+        const target = try parseMermaidNodeRef(graph, line, &pos) orelse break;
+        const edge_id = try graph.edge(current, target, .{ .label = edge_label orelse label_after_arrow });
+        try applyMermaidEdgeStyle(graph, edge_id, arrow_text);
+        current = target;
+    }
+}
+
+const MermaidArrow = struct {
+    start: usize,
+    end: usize,
+};
+
+fn findMermaidArrow(line: []const u8, start: usize) ?MermaidArrow {
+    var i = start;
+    while (i < line.len) : (i += 1) {
+        const rest = line[i..];
+        const candidates = [_][]const u8{ "-->", "---", "-.->", "==>", "===", "--o", "--x" };
+        for (candidates) |candidate| {
+            if (std.mem.startsWith(u8, rest, candidate)) return .{ .start = i, .end = i + candidate.len };
+        }
+    }
+    return null;
+}
+
+fn mermaidEdgeLabelBeforeArrow(line: []const u8, arrow_start: *usize) ?[]const u8 {
+    var start = arrow_start.*;
+    while (start > 0 and std.ascii.isWhitespace(line[start - 1])) : (start -= 1) {}
+    if (start == 0 or line[start - 1] != '|') return null;
+    const close = start - 1;
+    var open = close;
+    while (open > 0) : (open -= 1) {
+        if (line[open - 1] == '|') {
+            const label = std.mem.trim(u8, line[open..close], " \t\r\n");
+            arrow_start.* = open - 1;
+            return if (label.len == 0) null else label;
+        }
+    }
+    return null;
+}
+
+fn mermaidEdgeLabelAfterArrow(line: []const u8, pos: *usize) ?[]const u8 {
+    while (pos.* < line.len and std.ascii.isWhitespace(line[pos.*])) : (pos.* += 1) {}
+    if (pos.* >= line.len or line[pos.*] != '|') return null;
+    const start = pos.* + 1;
+    var end = start;
+    while (end < line.len and line[end] != '|') : (end += 1) {}
+    if (end >= line.len) return null;
+    pos.* = end + 1;
+    const label = std.mem.trim(u8, line[start..end], " \t\r\n");
+    return if (label.len == 0) null else label;
+}
+
+fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize) !?NodeId {
+    while (pos.* < line.len and std.ascii.isWhitespace(line[pos.*])) : (pos.* += 1) {}
+    if (pos.* >= line.len) return null;
+    const id_start = pos.*;
+    while (pos.* < line.len and isMermaidIdChar(line[pos.*])) : (pos.* += 1) {}
+    if (pos.* == id_start) return null;
+    const id_text = std.mem.trim(u8, line[id_start..pos.*], " \t\r\n");
+    const node_id = try graph.node(id_text);
+    try parseMermaidNodeSuffix(graph, node_id, line, pos);
+    return node_id;
+}
+
+fn isMermaidIdChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == '.' or c >= 0x80;
+}
+
+fn parseMermaidNodeSuffix(graph: *Graph, node_id: NodeId, line: []const u8, pos: *usize) !void {
+    if (pos.* >= line.len) return;
+    const c = line[pos.*];
+    if (c == '[') {
+        if (findMatchingMermaidClose(line, pos.* + 1, ']')) |end| {
+            try graph.setNodeAttr(node_id, "label", stripMermaidLabelQuotes(std.mem.trim(u8, line[pos.* + 1 .. end], " \t\r\n")));
+            try graph.setNodeShape(node_id, .box);
+            pos.* = end + 1;
+        }
+    } else if (c == '(') {
+        const double = pos.* + 1 < line.len and line[pos.* + 1] == '(';
+        const content_start = pos.* + if (double) @as(usize, 2) else @as(usize, 1);
+        if (findMatchingMermaidClose(line, content_start, ')')) |end| {
+            var content_end = end;
+            if (double and end + 1 < line.len and line[end + 1] == ')') {
+                content_end = end;
+                pos.* = end + 2;
+                try graph.setNodeShape(node_id, .circle);
+            } else {
+                pos.* = end + 1;
+                try graph.setNodeShape(node_id, .box);
+                try graph.setNodeAttr(node_id, "style", "rounded");
+            }
+            try graph.setNodeAttr(node_id, "label", stripMermaidLabelQuotes(std.mem.trim(u8, line[content_start..content_end], " \t\r\n")));
+        }
+    } else if (c == '{') {
+        if (findMatchingMermaidClose(line, pos.* + 1, '}')) |end| {
+            try graph.setNodeAttr(node_id, "label", stripMermaidLabelQuotes(std.mem.trim(u8, line[pos.* + 1 .. end], " \t\r\n")));
+            try graph.setNodeShape(node_id, .diamond);
+            pos.* = end + 1;
+        }
+    }
+}
+
+fn findMatchingMermaidClose(line: []const u8, start: usize, close: u8) ?usize {
+    var i = start;
+    while (i < line.len) : (i += 1) {
+        if (line[i] == close) return i;
+    }
+    return null;
+}
+
+fn stripMermaidLabelQuotes(label: []const u8) []const u8 {
+    if (label.len >= 2 and ((label[0] == '"' and label[label.len - 1] == '"') or (label[0] == '\'' and label[label.len - 1] == '\''))) {
+        return label[1 .. label.len - 1];
+    }
+    if (label.len >= 2 and label[0] == '[' and label[label.len - 1] == ']') {
+        return label[1 .. label.len - 1];
+    }
+    return label;
+}
+
+fn applyMermaidEdgeStyle(graph: *Graph, edge_id: EdgeId, arrow: []const u8) !void {
+    if (std.mem.indexOf(u8, arrow, ".")) |_| try graph.setEdgeAttr(edge_id, "style", "dotted");
+    if (std.mem.indexOf(u8, arrow, "=")) |_| try graph.setEdgeAttr(edge_id, "style", "bold");
+    if (!std.mem.endsWith(u8, arrow, ">")) try graph.setEdgeAttr(edge_id, "arrowhead", "none");
+}
+
 pub const Point = struct {
     x: f64,
     y: f64,
@@ -9395,6 +9618,38 @@ test "DOT parser handles graphviz-like edge chain and attrs" {
     try std.testing.expectEqual(@as(usize, 3), graph.nodes.items.len);
     try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
     try std.testing.expectEqualStrings("flow", graph.edges.items[0].label.?);
+}
+
+test "Mermaid parser handles flowchart direction nodes and labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseMermaid(allocator,
+        \\flowchart LR
+        \\  start([Start]) --> decision{Ready?}
+        \\  decision -->|yes| done((Done))
+        \\  decision -.->|no| start
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(RankDir.LR, graph.rankdir);
+    try std.testing.expectEqual(@as(usize, 3), graph.edges.items.len);
+    const start = graph.node_index.get("start").?;
+    const decision = graph.node_index.get("decision").?;
+    const done = graph.node_index.get("done").?;
+    try std.testing.expectEqual(Shape.box, graph.nodes.items[start].shape);
+    try std.testing.expect(std.mem.indexOf(u8, attrValue(graph.nodes.items[start].attrs.items, "style").?, "rounded") != null);
+    try std.testing.expectEqual(Shape.diamond, graph.nodes.items[decision].shape);
+    try std.testing.expectEqual(Shape.circle, graph.nodes.items[done].shape);
+    try std.testing.expectEqualStrings("Start", graph.nodes.items[start].label);
+    try std.testing.expectEqualStrings("Ready?", graph.nodes.items[decision].label);
+    try std.testing.expectEqualStrings("yes", graph.edges.items[1].label.?);
+    try std.testing.expectEqualStrings("no", graph.edges.items[2].label.?);
+    try std.testing.expectEqualStrings("dotted", attrValue(graph.edges.items[2].attrs.items, "style").?);
+}
+
+test "input format auto detects Mermaid flowcharts without breaking DOT graphs" {
+    try std.testing.expectEqual(InputFormat.mermaid, detectInputFormat("flowchart TD\nA --> B"));
+    try std.testing.expectEqual(InputFormat.mermaid, detectInputFormat("graph LR\nA --> B"));
+    try std.testing.expectEqual(InputFormat.dot, detectInputFormat("graph G { a -- b }"));
 }
 
 test "SVG renderer emits document" {

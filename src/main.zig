@@ -8,11 +8,13 @@ const usage =
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--format terminal|svg|png|pdf] [--layout dot|sugiyama|fr|neato|fdp]
+    \\        [--input-format auto|dot|mermaid]
     \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
     \\output is written to stdout.
-    \\Default layout is DOT/Sugiyama and honors rankdir=TB|BT|LR|RL.
+    \\Default input format is auto. Default layout is DOT/Sugiyama and honors
+    \\rankdir=TB|BT|LR|RL.
     \\
 ;
 
@@ -29,6 +31,7 @@ pub fn main(init: std.process.Init) !void {
     var output_path: ?[]const u8 = null;
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
+    var input_format: vex.InputFormat = .auto;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -51,6 +54,12 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingFormat;
             format_arg = vex.OutputFormat.fromString(args[i]) orelse return error.UnknownFormat;
+        } else if (std.mem.eql(u8, arg, "--input-format")) {
+            i += 1;
+            if (i >= args.len) return error.MissingInputFormat;
+            input_format = vex.InputFormat.fromString(args[i]) orelse return error.UnknownInputFormat;
+        } else if (std.mem.eql(u8, arg, "--mermaid")) {
+            input_format = .mermaid;
         } else if (std.mem.eql(u8, arg, "--layout") or std.mem.eql(u8, arg, "-K")) {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
@@ -81,7 +90,7 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(dot);
 
-    var graph = try vex.parseDot(allocator, dot);
+    var graph = try vex.parseInput(allocator, dot, input_format);
     defer graph.deinit();
 
     var layout = try vex.layoutGraph(allocator, &graph, .{ .algorithm = layout_arg });
