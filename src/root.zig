@@ -6084,10 +6084,11 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
         box.x + box.width - 12.0
     else
         box.x + box.width / 2.0;
+    const top_label_offset: f64 = 15.3;
     const label_y = if (label_loc) |value|
-        if (std.ascii.eqlIgnoreCase(value, "b")) box.y + box.height - 10.0 else box.y + 18.0
+        if (std.ascii.eqlIgnoreCase(value, "b")) box.y + box.height - 10.0 else box.y + top_label_offset
     else
-        box.y + 18.0;
+        box.y + top_label_offset;
     try writer.print("<text xml:space=\"preserve\" x=\"{d:.1}\" y=\"{d:.1}\" text-anchor=\"{s}\" font-family=\"{s}\" font-size=\"{d:.1}\" fill=\"{s}\">", .{
         label_x,
         label_y,
@@ -12235,6 +12236,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     try std.testing.expect(svg_cluster_0_w >= 86.0);
