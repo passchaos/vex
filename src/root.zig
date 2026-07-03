@@ -2708,6 +2708,7 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
 fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
     const pad_x: f64 = 12;
     const pad_y: f64 = 12;
+    const label_pad_x: f64 = 6;
     const label_band: f64 = 18;
     const child_gap: f64 = 12;
     for (graph.clusters.items, 0..) |cluster, index| {
@@ -2730,7 +2731,7 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
             continue;
         }
         const label_font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0);
-        const label_min_width = @as(f64, @floatFromInt(displayLabelMaxLineLen(cluster.label))) * label_font_size * 0.50 + pad_x * 2.0;
+        const label_min_width = @as(f64, @floatFromInt(displayLabelMaxLineLen(cluster.label))) * label_font_size * 0.50 + label_pad_x * 2.0;
         var x = min_x - pad_x;
         var width = (max_x - min_x) + pad_x * 2.0;
         const height = (max_y - min_y) + pad_y * 2.0 + label_band;
@@ -11297,7 +11298,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(layout.width <= 224.0);
     try std.testing.expect(layout.height <= 414.0);
     for (layout.clusters) |cluster_box| {
-        try std.testing.expect(cluster_box.width <= 94.0);
+        try std.testing.expect(cluster_box.width <= 82.0);
         try std.testing.expect(cluster_box.height <= 294.0);
     }
 
