@@ -5770,7 +5770,7 @@ fn applyCrossClusterDiagonalNudges(graph: *const Graph, ranks: []const usize, ce
         const shift = @min(full_shift, available);
         if (shift <= 0) return;
         centers[edge_item.from] += shift;
-        nudgeSameClusterPredecessors(graph, ranks, centers, edge_item.from, from_cluster, shift * 0.4);
+        nudgeSameClusterPredecessors(graph, ranks, centers, edge_item.from, from_cluster, shift * 0.7);
     }
 }
 
@@ -14399,6 +14399,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(layout.nodes[a1].center.x - layout.nodes[a2].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[a2].center.x - layout.nodes[a3].center.x) <= 1.0);
     try std.testing.expect(layout.nodes[b1].center.x > layout.nodes[b0].center.x);
+    try std.testing.expect(layout.nodes[b1].center.x >= 168.7);
     try std.testing.expect(layout.nodes[b2].center.x > layout.nodes[b1].center.x);
     try std.testing.expect(@abs(layout.nodes[b3].center.x - layout.nodes[b0].center.x) <= 1.0);
     try std.testing.expect(layout.nodes[start].center.x > layout.nodes[a0].center.x);
