@@ -4835,12 +4835,61 @@ fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: [
 
 fn compactLevelCenters(level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
     if (level.len == 0) return;
+    compactLevelCentersForward(level, centers, sizes, gap);
+}
+
+fn compactLevelCentersSymmetric(level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (level.len == 0) return;
+    var forward: [128]f64 = undefined;
+    var backward: [128]f64 = undefined;
+    if (level.len > forward.len) {
+        compactLevelCentersForward(level, centers, sizes, gap);
+        return;
+    }
+
+    for (level, 0..) |id, index| {
+        forward[index] = centers[id];
+        backward[index] = centers[id];
+    }
+    compactCenterSliceForward(level, sizes, gap, forward[0..level.len]);
+    compactCenterSliceBackward(level, sizes, gap, backward[0..level.len], forward[level.len - 1] + sizes[level[level.len - 1]].width / 2.0);
+    for (level, 0..) |id, index| {
+        centers[id] = (forward[index] + backward[index]) / 2.0;
+    }
+}
+
+fn compactLevelCentersForward(level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
     var prev = level[0];
     centers[prev] = @max(centers[prev], sizes[prev].width / 2.0);
     for (level[1..]) |id| {
         const min_center = centers[prev] + sizes[prev].width / 2.0 + gap + sizes[id].width / 2.0;
         centers[id] = @max(centers[id], min_center);
         prev = id;
+    }
+}
+
+fn compactCenterSliceForward(level: []const NodeId, sizes: []const NodeSize, gap: f64, slice: []f64) void {
+    if (slice.len == 0) return;
+    slice[0] = @max(slice[0], sizes[level[0]].width / 2.0);
+    var index: usize = 1;
+    while (index < slice.len) : (index += 1) {
+        const prev_id = level[index - 1];
+        const id = level[index];
+        const min_center = slice[index - 1] + sizes[prev_id].width / 2.0 + gap + sizes[id].width / 2.0;
+        slice[index] = @max(slice[index], min_center);
+    }
+}
+
+fn compactCenterSliceBackward(level: []const NodeId, sizes: []const NodeSize, gap: f64, slice: []f64, right_edge: f64) void {
+    if (slice.len == 0) return;
+    var index = slice.len - 1;
+    slice[index] = @min(slice[index], right_edge - sizes[level[index]].width / 2.0);
+    while (index > 0) {
+        const next_id = level[index];
+        const id = level[index - 1];
+        const max_center = slice[index] - sizes[next_id].width / 2.0 - gap - sizes[id].width / 2.0;
+        slice[index - 1] = @min(slice[index - 1], max_center);
+        index -= 1;
     }
 }
 
@@ -8273,6 +8322,22 @@ test "coordinate refinement centers nodes on adjacent neighbor spans" {
     try std.testing.expectEqual(@as(f64, 110), target);
     centerLevelOnNeighborSpans(&graph, ranks, &.{parent}, centers, sizes, false, 1.0);
     try std.testing.expectEqual(target, centers[parent]);
+}
+
+test "level center compaction balances forward and backward pushes" {
+    const level = [_]NodeId{ 0, 1, 2 };
+    var centers = [_]f64{ 40, 42, 44 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+    };
+
+    compactLevelCentersSymmetric(level[0..], centers[0..], sizes[0..], 10);
+
+    try std.testing.expect(centers[1] - centers[0] >= 30);
+    try std.testing.expect(centers[2] - centers[1] >= 30);
+    try std.testing.expect(centers[1] < 70);
 }
 
 test "virtual levels include dummy nodes for skip-rank edges" {
