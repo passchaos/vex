@@ -3814,6 +3814,7 @@ fn displayLabelMaxLineLen(text: []const u8) usize {
                 if ((c & 0xc0) != 0x80) current += 1;
                 has_text = true;
             },
+            .tag_open, .tag_close => {},
         }
     }
     return @max(max_len, current);
@@ -3846,6 +3847,7 @@ fn displayLabelEstimatedWidth(text: []const u8, font_size: f64) f64 {
                 current += labelCharWidth(c, font_size);
                 has_text = true;
             },
+            .tag_open, .tag_close => {},
         }
     }
     return @max(max_width, current);
@@ -3887,6 +3889,8 @@ fn isHtmlLabelSpace(c: u8) bool {
 const HtmlToken = union(enum) {
     char: u8,
     newline,
+    tag_open: []const u8,
+    tag_close: []const u8,
 };
 
 const HtmlLabelScanner = struct {
@@ -3902,9 +3906,14 @@ const HtmlLabelScanner = struct {
                     self.index += 1;
                     return .{ .char = c };
                 };
-                const tag = htmlTagName(self.text[start .. start + close_rel]);
+                const raw_tag = self.text[start .. start + close_rel];
+                const tag = htmlTagName(raw_tag);
+                const is_close = htmlTagIsClosing(raw_tag);
                 self.index = start + close_rel + 1;
                 if (std.ascii.eqlIgnoreCase(tag, "br")) return .newline;
+                if (htmlStyleTagKind(tag) != .none) {
+                    return if (is_close) .{ .tag_close = tag } else .{ .tag_open = raw_tag };
+                }
                 continue;
             }
             if (c == '&') {
@@ -3921,6 +3930,124 @@ const HtmlLabelScanner = struct {
         return null;
     }
 };
+
+fn htmlTagIsClosing(raw_tag: []const u8) bool {
+    const trimmed = trimHtmlTagLeft(raw_tag);
+    return trimmed.len > 0 and trimmed[0] == '/';
+}
+
+fn trimHtmlTagLeft(raw_tag: []const u8) []const u8 {
+    var start: usize = 0;
+    while (start < raw_tag.len and isHtmlLabelSpace(raw_tag[start])) : (start += 1) {}
+    return raw_tag[start..];
+}
+
+const HtmlStyleTag = enum {
+    none,
+    bold,
+    italic,
+    underline,
+    overline,
+    strike,
+    subscript,
+    superscript,
+    font,
+};
+
+const HtmlTextStyle = struct {
+    bold: bool = false,
+    italic: bool = false,
+    underline: bool = false,
+    overline: bool = false,
+    strike: bool = false,
+    baseline_shift: []const u8 = "",
+    font_color: ?[]const u8 = null,
+    font_face: ?[]const u8 = null,
+    font_size: ?[]const u8 = null,
+};
+
+fn htmlStyleTagKind(tag: []const u8) HtmlStyleTag {
+    if (std.ascii.eqlIgnoreCase(tag, "b")) return .bold;
+    if (std.ascii.eqlIgnoreCase(tag, "i")) return .italic;
+    if (std.ascii.eqlIgnoreCase(tag, "u")) return .underline;
+    if (std.ascii.eqlIgnoreCase(tag, "o")) return .overline;
+    if (std.ascii.eqlIgnoreCase(tag, "s")) return .strike;
+    if (std.ascii.eqlIgnoreCase(tag, "sub")) return .subscript;
+    if (std.ascii.eqlIgnoreCase(tag, "sup")) return .superscript;
+    if (std.ascii.eqlIgnoreCase(tag, "font")) return .font;
+    return .none;
+}
+
+fn applyHtmlOpenStyle(style: *HtmlTextStyle, raw_tag: []const u8) void {
+    switch (htmlStyleTagKind(htmlTagName(raw_tag))) {
+        .bold => style.bold = true,
+        .italic => style.italic = true,
+        .underline => style.underline = true,
+        .overline => style.overline = true,
+        .strike => style.strike = true,
+        .subscript => style.baseline_shift = "sub",
+        .superscript => style.baseline_shift = "super",
+        .font => {
+            if (htmlAttrValue(raw_tag, "color")) |value| style.font_color = value;
+            if (htmlAttrValue(raw_tag, "face")) |value| style.font_face = value;
+            if (htmlAttrValue(raw_tag, "point-size")) |value| style.font_size = value;
+        },
+        .none => {},
+    }
+}
+
+fn resetHtmlCloseStyle(style: *HtmlTextStyle, tag: []const u8) void {
+    switch (htmlStyleTagKind(tag)) {
+        .bold => style.bold = false,
+        .italic => style.italic = false,
+        .underline => style.underline = false,
+        .overline => style.overline = false,
+        .strike => style.strike = false,
+        .subscript, .superscript => style.baseline_shift = "",
+        .font => {
+            style.font_color = null;
+            style.font_face = null;
+            style.font_size = null;
+        },
+        .none => {},
+    }
+}
+
+fn htmlStyleActive(style: HtmlTextStyle) bool {
+    return style.bold or style.italic or style.underline or style.overline or style.strike or
+        style.baseline_shift.len > 0 or style.font_color != null or style.font_face != null or style.font_size != null;
+}
+
+fn writeHtmlStyleOpen(writer: *Io.Writer, style: HtmlTextStyle) Io.Writer.Error!bool {
+    if (!htmlStyleActive(style)) return false;
+    try writer.writeAll("<tspan");
+    if (style.bold) try writer.writeAll(" font-weight=\"bold\"");
+    if (style.italic) try writer.writeAll(" font-style=\"italic\"");
+    if (style.underline or style.overline or style.strike) {
+        try writer.writeAll(" text-decoration=\"");
+        var wrote = false;
+        if (style.underline) {
+            try writer.writeAll("underline");
+            wrote = true;
+        }
+        if (style.overline) {
+            if (wrote) try writer.writeByte(' ');
+            try writer.writeAll("overline");
+            wrote = true;
+        }
+        if (style.strike) {
+            if (wrote) try writer.writeByte(' ');
+            try writer.writeAll("line-through");
+        }
+        try writer.writeByte('"');
+    }
+    if (style.baseline_shift.len > 0) try writer.print(" baseline-shift=\"{s}\"", .{style.baseline_shift});
+    if (style.font_color) |value| try writer.print(" fill=\"{s}\"", .{value});
+    if (style.font_face) |value| try writer.print(" font-family=\"{s}\"", .{value});
+    if (style.font_size) |value| try writer.print(" font-size=\"{s}\"", .{value});
+    try writer.writeByte('>');
+    return true;
+}
 
 fn htmlEntity(scanner: *HtmlLabelScanner, entity: []const u8) bool {
     if (scanner.index + entity.len > scanner.text.len) return false;
@@ -8423,12 +8550,32 @@ fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_he
         var scanner: HtmlLabelScanner = .{ .text = text };
         var has_text = false;
         var pending_space = false;
+        var style: HtmlTextStyle = .{};
+        var style_open = false;
         while (scanner.next()) |token| {
             switch (token) {
                 .newline => {
+                    if (style_open) {
+                        try writer.writeAll("</tspan>");
+                        style_open = false;
+                    }
                     try writer.print("</tspan><tspan x=\"{d:.1}\" dy=\"{d:.1}\">", .{ x, line_height });
                     has_text = false;
                     pending_space = false;
+                },
+                .tag_open => |raw_tag| {
+                    if (style_open) {
+                        try writer.writeAll("</tspan>");
+                        style_open = false;
+                    }
+                    applyHtmlOpenStyle(&style, raw_tag);
+                },
+                .tag_close => |tag| {
+                    if (style_open) {
+                        try writer.writeAll("</tspan>");
+                        style_open = false;
+                    }
+                    resetHtmlCloseStyle(&style, tag);
                 },
                 .char => |c| {
                     if (isHtmlLabelSpace(c)) {
@@ -8436,14 +8583,17 @@ fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_he
                         continue;
                     }
                     if (pending_space) {
+                        if (!style_open) style_open = try writeHtmlStyleOpen(writer, style);
                         try writer.writeByte(' ');
                         pending_space = false;
                     }
+                    if (!style_open) style_open = try writeHtmlStyleOpen(writer, style);
                     try writeXmlEscaped(writer, &.{c});
                     has_text = true;
                 },
             }
         }
+        if (style_open) try writer.writeAll("</tspan>");
     } else {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var idx: usize = 0;
@@ -10637,6 +10787,39 @@ test "SVG renderer normalizes simple HTML-like labels without affecting plain an
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A &amp; B</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;B&gt;") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;&amp;&gt;") != null);
+}
+
+test "SVG renderer honors common Graphviz HTML text styles" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=box,label=<
+        \\    <B>Bold</B> <I>Italic</I> <U>Under</U><BR/>
+        \\    <FONT COLOR="#dc2626" FACE="Courier" POINT-SIZE="18">Red</FONT>
+        \\    <SUP>sup</SUP><SUB>sub</SUB><S>strike</S><O>over</O>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-weight=\"bold\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bold</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-style=\"italic\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-decoration=\"underline\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"18\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "baseline-shift=\"super\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "baseline-shift=\"sub\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-decoration=\"line-through\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-decoration=\"overline\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<B>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<FONT") == null);
 }
 
 test "SVG renderer lays out simple HTML table labels as grids" {
