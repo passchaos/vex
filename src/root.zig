@@ -6460,7 +6460,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
-    try writer.print("<rect width=\"100%\" height=\"100%\" fill=\"{s}\"/>\n", .{background});
+    try writer.print("<polygon fill=\"{s}\" stroke=\"none\" points=\"0,0 0,{d:.0} {d:.0},{d:.0} {d:.0},0 0,0\"/>\n", .{ background, layout.height, layout.width, layout.height, layout.width });
     if (options.show_title and attrValue(graph.attrs.items, "label") != null) {
         const graph_label = attrValue(graph.attrs.items, "label").?;
         const label_just = attrValue(graph.attrs.items, "labeljust");
@@ -12128,7 +12128,7 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0,0 0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
     try std.testing.expect(layout.margin_y >= 26.0);
@@ -14048,6 +14048,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "height=\"409\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#ffffff\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">") != null);
     const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
