@@ -8335,18 +8335,11 @@ fn renderSvgNoteShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual
     });
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        rect.x + rect.width - fold,
-        rect.y,
-        rect.x + rect.width - fold,
-        rect.y + fold,
-        rect.x + rect.width,
-        rect.y + fold,
-        visual.stroke,
-        visual.width,
-    });
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try writeSvgPolylinePath(writer, &.{
+        .{ .x = rect.x + rect.width - fold, .y = rect.y },
+        .{ .x = rect.x + rect.width - fold, .y = rect.y + fold },
+        .{ .x = rect.x + rect.width, .y = rect.y + fold },
+    }, visual);
 }
 
 fn renderSvgTabShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -8557,6 +8550,17 @@ fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: 
     try writer.print("<path d=\"", .{});
     try writePathMove(writer, .{ .x = x1, .y = y1 });
     try writePathLine(writer, .{ .x = x2, .y = y2 });
+    try writer.print("\" fill=\"none\" stroke=\"{s}\"", .{visual.stroke});
+    try writeSvgStrokeWidth(writer, visual.width);
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn writeSvgPolylinePath(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
+    if (points.len == 0) return;
+    try writer.print("<path d=\"", .{});
+    try writePathMove(writer, points[0]);
+    for (points[1..]) |point| try writePathLine(writer, point);
     try writer.print("\" fill=\"none\" stroke=\"{s}\"", .{visual.stroke});
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
