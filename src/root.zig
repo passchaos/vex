@@ -8854,6 +8854,22 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     }
 
     const waypoint_count = longEdgeWaypointCount(layout, edge_item);
+    if (waypoint_count == 1 and routing == .curved) {
+        const mid = longEdgeWaypoint(layout, edge_item, rankdir, offset, 0, waypoint_count);
+        const first = smoothSegmentControls(direct_route.start, mid, rankdir);
+        const second = smoothSegmentControls(mid, direct_route.end, rankdir);
+        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
+            direct_route.start.x,
+            direct_route.start.y,
+            first.c1.x,
+            first.c1.y,
+            second.c2.x,
+            second.c2.y,
+            direct_route.end.x,
+            direct_route.end.y,
+        });
+        return;
+    }
     if (waypoint_count == 0) {
         if (routing == .polyline) {
             try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y, direct_route.end.x, direct_route.end.y });
@@ -9183,10 +9199,15 @@ fn splineCurveAmount(rankdir: RankDir, dx: f64, dy: f64, min_curve: f64, max_cur
 }
 
 fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankDir) Io.Writer.Error!void {
+    const controls = smoothSegmentControls(from, to, rankdir);
+    try writer.print(" C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{ controls.c1.x, controls.c1.y, controls.c2.x, controls.c2.y, to.x, to.y });
+}
+
+fn smoothSegmentControls(from: Point, to: Point, rankdir: RankDir) EdgeControls {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const curve = splineCurveAmount(rankdir, dx, dy, 18.0, 96.0);
-    const controls = diagonalEdgeControls(from, to, rankdir, curve) orelse switch (rankdir) {
+    return diagonalEdgeControls(from, to, rankdir, curve) orelse switch (rankdir) {
         .TB => EdgeControls{
             .c1 = .{ .x = from.x, .y = from.y + curve },
             .c2 = .{ .x = to.x, .y = to.y - curve },
@@ -9204,7 +9225,6 @@ fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankD
             .c2 = .{ .x = to.x + curve, .y = to.y },
         },
     };
-    try writer.print(" C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{ controls.c1.x, controls.c1.y, controls.c2.x, controls.c2.y, to.x, to.y });
 }
 
 fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) EdgeRoute {
@@ -14185,7 +14205,7 @@ test "SVG clamps outward long-edge waypoints for forward cluster cross edges" {
     try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved);
     const path = try aw.toOwnedSlice();
     defer allocator.free(path);
-    try std.testing.expect(countSubstrings(path, " C ") >= 2);
+    try std.testing.expect(countSubstrings(path, " C ") == 1);
     try std.testing.expect(std.mem.indexOf(u8, path, "196.5") == null);
 }
 
@@ -14420,7 +14440,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
     const cross_edge = svg[cross_label .. cross_label + cross_end];
     try std.testing.expect(std.mem.indexOf(u8, cross_edge, "196.5") == null);
-    try std.testing.expect(countSubstrings(cross_edge, " C ") >= 2);
+    try std.testing.expect(countSubstrings(cross_edge, " C ") == 1);
     var path_numbers: [32]f64 = undefined;
     const cross_count = svgPathNumbers(svg, "a1-&gt;b3", path_numbers[0..]);
     try std.testing.expect(cross_count >= 8);
