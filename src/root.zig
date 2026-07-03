@@ -8409,41 +8409,20 @@ fn renderSvgCylinderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVi
     const right = rect.x + rect.width;
     const top = rect.y;
     const bottom = rect.y + rect.height;
-    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        left,
-        top + ry,
-        left,
-        top,
-        right,
-        top,
-        right,
-        top + ry,
-        right,
-        bottom - ry,
-        right,
-        bottom,
-        left,
-        bottom,
-        left,
-        bottom - ry,
-        visual.fill,
-        visual.stroke,
-        visual.width,
-    });
+    try writer.print("<path d=\"", .{});
+    try writePathMove(writer, .{ .x = left, .y = top + ry });
+    try writePathCubic(writer, .{ .x = left, .y = top }, .{ .x = right, .y = top }, .{ .x = right, .y = top + ry });
+    try writePathLine(writer, .{ .x = right, .y = bottom - ry });
+    try writePathCubic(writer, .{ .x = right, .y = bottom }, .{ .x = left, .y = bottom }, .{ .x = left, .y = bottom - ry });
+    try writer.print("Z\" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
-    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        left,
-        top + ry,
-        left,
-        top + ry * 2.0,
-        right,
-        top + ry * 2.0,
-        right,
-        top + ry,
-        visual.stroke,
-        visual.width,
-    });
+    try writer.print("<path d=\"", .{});
+    try writePathMove(writer, .{ .x = left, .y = top + ry });
+    try writePathCubic(writer, .{ .x = left, .y = top + ry * 2.0 }, .{ .x = right, .y = top + ry * 2.0 }, .{ .x = right, .y = top + ry });
+    try writer.print("\" fill=\"none\" stroke=\"{s}\"", .{visual.stroke});
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
