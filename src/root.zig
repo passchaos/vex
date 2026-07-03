@@ -8385,25 +8385,14 @@ fn renderSvgFolderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisu
 fn renderSvgBox3dShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
     const depth = @min(@min(rect.width, rect.height) * 0.18, 18);
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-        rect.x,
-        rect.y + depth,
-        rect.x + depth,
-        rect.y,
-        rect.x + rect.width,
-        rect.y,
-        rect.x + rect.width,
-        rect.y + rect.height - depth,
-        rect.x + rect.width - depth,
-        rect.y + rect.height,
-        rect.x,
-        rect.y + rect.height,
-        visual.fill,
-        visual.stroke,
-        visual.width,
-    });
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try writeSvgClosedPath(writer, &.{
+        .{ .x = rect.x, .y = rect.y + depth },
+        .{ .x = rect.x + depth, .y = rect.y },
+        .{ .x = rect.x + rect.width, .y = rect.y },
+        .{ .x = rect.x + rect.width, .y = rect.y + rect.height - depth },
+        .{ .x = rect.x + rect.width - depth, .y = rect.y + rect.height },
+        .{ .x = rect.x, .y = rect.y + rect.height },
+    }, visual);
     try writeSvgLine(writer, rect.x + depth, rect.y, rect.x + depth, rect.y + rect.height - depth, visual);
     try writeSvgLine(writer, rect.x + depth, rect.y + rect.height - depth, rect.x, rect.y + rect.height, visual);
     try writeSvgLine(writer, rect.x + depth, rect.y + rect.height - depth, rect.x + rect.width, rect.y + rect.height - depth, visual);
