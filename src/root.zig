@@ -7257,15 +7257,21 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
         samePortBoundaryPoint(graph, layout, edge_item, true) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
     else
         to.center;
-    const start = if (edge_item.ltail) |cluster_name|
-        clusterBoundaryPoint(graph, layout, cluster_name, raw_start, raw_end) orelse raw_start
+    const compound = graphCompoundEnabled(graph);
+    const start = if (compound and edge_item.ltail != null)
+        clusterBoundaryPoint(graph, layout, edge_item.ltail.?, raw_start, raw_end) orelse raw_start
     else
         raw_start;
-    const end = if (edge_item.lhead) |cluster_name|
-        clusterBoundaryPoint(graph, layout, cluster_name, raw_end, raw_start) orelse raw_end
+    const end = if (compound and edge_item.lhead != null)
+        clusterBoundaryPoint(graph, layout, edge_item.lhead.?, raw_end, raw_start) orelse raw_end
     else
         raw_end;
     return edgeRouteFromEndpoints(start, end, rankdir, offset);
+}
+
+fn graphCompoundEnabled(graph: *const Graph) bool {
+    const value = attrValue(graph.attrs.items, "compound") orelse return false;
+    return parseBool(value) orelse false;
 }
 
 fn edgeClipEnabled(attrs: []const Attr, name: []const u8) bool {
@@ -12703,6 +12709,33 @@ test "DOT compound edges clip to cluster boundaries" {
     const path_points = svgPathStartEnd(svg, "b-&gt;c") orelse return error.MissingCompoundPath;
     try std.testing.expect(pointOnRectBoundary(left, path_points.start));
     try std.testing.expect(pointNearRectBoundary(right, path_points.end, 8.0));
+}
+
+test "DOT ltail and lhead are ignored unless graph compound is true" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_left {
+        \\    a -> b;
+        \\  }
+        \\  subgraph cluster_right {
+        \\    c -> d;
+        \\  }
+        \\  b -> c [ltail=cluster_left, lhead=cluster_right];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const edge_item = graph.edges.items[2];
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    const left = clusterRect(&graph, &layout, "cluster_left").?;
+    const right = clusterRect(&graph, &layout, "cluster_right").?;
+    try std.testing.expect(!pointOnRectBoundary(left, route.start));
+    try std.testing.expect(!pointOnRectBoundary(right, route.end));
+    try std.testing.expect(!graphCompoundEnabled(&graph));
 }
 
 test "DOT samehead and sametail route edges through shared ports" {
