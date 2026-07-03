@@ -4822,6 +4822,8 @@ fn applyBackEdgeChannelCenterConstraints(graph: *const Graph, ranks: []const usi
     if (graph.clusters.items.len == 0 or max_extent <= 0) return;
     const side_gap: f64 = 28.0;
     const min_clearance: f64 = 31.0;
+    var constraints: [64]GroupShiftConstraint = undefined;
+    var constraint_count: usize = 0;
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
         if (edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
@@ -4838,17 +4840,14 @@ fn applyBackEdgeChannelCenterConstraints(graph: *const Graph, ranks: []const usi
         const desired_center = side_along + min_clearance;
         const current_min = @min(centers[edge_item.from], centers[edge_item.to]);
         if (current_min >= desired_center) continue;
-        const shift = @min(desired_center - current_min, @max(0.0, max_extent - centersExtent(centers, sizes)));
-        if (shift <= 0) continue;
-        shiftClusterCenters(graph, from_cluster, centers, shift);
+        if (constraint_count >= constraints.len) return;
+        constraints[constraint_count] = .{
+            .nodes = graph.clusters.items[from_cluster].nodes,
+            .min_shift = desired_center - current_min,
+        };
+        constraint_count += 1;
     }
-}
-
-fn shiftClusterCenters(graph: *const Graph, cluster_index: usize, centers: []f64, shift: f64) void {
-    if (cluster_index >= graph.clusters.items.len or shift == 0) return;
-    for (graph.clusters.items[cluster_index].nodes) |node_id| {
-        if (node_id < centers.len) centers[node_id] += shift;
-    }
+    _ = applyGroupShiftConstraints(centers, constraints[0..constraint_count], max_extent, sizes);
 }
 
 const CoordConstraint = struct {
