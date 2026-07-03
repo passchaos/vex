@@ -6481,7 +6481,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const title_font = attrValue(graph.attrs.items, "fontname") orelse options.font_family;
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = attrValue(graph.attrs.items, "fontcolor") orelse "black";
-        try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\" fill=\"{s}\">", .{ text_anchor, title_x, title_y, title_font, title_size, title_color });
+        try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ text_anchor, title_x, title_y, title_font, title_size });
+        try writeSvgTextFill(writer, title_color);
+        try writer.writeAll(">");
         try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
@@ -7403,14 +7405,15 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
         if (std.ascii.eqlIgnoreCase(value, "b")) box.y + box.height - 10.0 else box.y + top_label_offset
     else
         box.y + top_label_offset;
-    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\" fill=\"{s}\">", .{
+    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{
         text_anchor,
         label_x,
         label_y,
         visual.font_family,
         visual.font_size,
-        visual.font_color,
     });
+    try writeSvgTextFill(writer, visual.font_color);
+    try writer.writeAll(">");
     try writeXmlEscaped(writer, cluster.label);
     try writer.writeAll("</text>\n");
     try writer.writeAll("</g>\n");
@@ -8378,13 +8381,14 @@ fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout
 
 fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     if (node.children.len == 0) {
-        try writer.print("<text xml:space=\"preserve\" text-anchor=\"middle\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\" fill=\"{s}\" dominant-baseline=\"middle\">", .{
+        try writer.print("<text xml:space=\"preserve\" text-anchor=\"middle\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{
             rect.x + rect.width / 2.0,
             rect.y + rect.height / 2.0,
             visual.font_family,
             visual.font_size,
-            visual.font_color,
         });
+        try writeSvgTextFill(writer, visual.font_color);
+        try writer.writeAll(" dominant-baseline=\"middle\">");
         try writeXmlEscaped(writer, node.label);
         try writer.writeAll("</text>\n");
         return;
@@ -9454,6 +9458,11 @@ fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f6
     try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font_family, label_background, dominant_middle, "middle");
 }
 
+fn writeSvgTextFill(writer: *Io.Writer, fill: []const u8) Io.Writer.Error!void {
+    if (std.ascii.eqlIgnoreCase(fill, "black")) return;
+    try writer.print(" fill=\"{s}\"", .{fill});
+}
+
 fn plainSingleLineLabel(text: []const u8) bool {
     return std.mem.indexOfScalar(u8, text, '\n') == null and !isHtmlLikeLabel(text);
 }
@@ -9461,7 +9470,9 @@ fn plainSingleLineLabel(text: []const u8) bool {
 fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, text_anchor: []const u8) Io.Writer.Error!void {
     const line_height = font_size * 1.25;
     const y = center_y - line_height / 2.0 + line_height * 0.72;
-    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\" fill=\"{s}\">", .{ text_anchor, x, y, font_family, font_size, fill });
+    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ text_anchor, x, y, font_family, font_size });
+    try writeSvgTextFill(writer, fill);
+    try writer.writeAll(">");
     try writeXmlEscaped(writer, text);
     try writer.writeAll("</text>\n");
 }
@@ -9484,7 +9495,8 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
         });
     }
 
-    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\" fill=\"{s}\"", .{ text_anchor, x, first_y, font_family, font_size, fill });
+    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ text_anchor, x, first_y, font_family, font_size });
+    try writeSvgTextFill(writer, fill);
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
     try writeDisplayLabelTspans(writer, text, x, line_height);
@@ -12411,9 +12423,25 @@ test "SVG renderer uses Graphviz default text color" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(countSubstrings(svg, "fill=\"black\"") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\" fill=\"black\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#475569\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#0f172a\"") == null);
+
+    var colored = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="Title", fontcolor="#111111"];
+        \\  node [fontcolor="#222222"];
+        \\  a -> b [label="edge", fontcolor="#333333"];
+        \\}
+    );
+    defer colored.deinit();
+    var colored_layout = try layoutLayered(allocator, &colored, .{});
+    defer colored_layout.deinit();
+    const colored_svg = try renderSvgAlloc(allocator, &colored, &colored_layout, .{});
+    defer allocator.free(colored_svg);
+    try std.testing.expect(std.mem.indexOf(u8, colored_svg, "fill=\"#111111\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, colored_svg, "fill=\"#222222\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, colored_svg, "fill=\"#333333\"") != null);
 }
 
 test "SVG renderer uses Graphviz default edge and cluster label sizes" {
@@ -12431,8 +12459,8 @@ test "SVG renderer uses Graphviz default edge and cluster label sizes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\" fill=\"black\">Cluster") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\" fill=\"black\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\">Cluster") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\" fill=\"black\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "dominant-baseline=\"middle\"") != null);
 }
 
@@ -12519,7 +12547,7 @@ test "SVG renderer honors DOT fontname and fontsize attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"18.00\" fill=\"black\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"18.00\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\" font-size=\"22.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times\" font-size=\"16.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Georgia\" font-size=\"20.00\"") != null);
@@ -14148,6 +14176,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.0\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"middle\" x=\"51.0\" y=\"101.1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\" fill=\"black\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">") != null);
     const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
     const cluster_1_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_1</title>") orelse return error.MissingCluster1;
