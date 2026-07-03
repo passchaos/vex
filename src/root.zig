@@ -1579,6 +1579,10 @@ pub const LayoutConfig = struct {
     force: ForceLayoutOptions = .{},
 };
 
+const defaultInterClusterGap: f64 = 22.0;
+const defaultClusterAlongExtentBudget: f64 = 224.0;
+const defaultClusterAlongShift: f64 = 4.0;
+
 pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: LayoutConfig) !Layout {
     return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
         .auto => unreachable,
@@ -1629,6 +1633,10 @@ fn parseGraphSpacing(value: []const u8, fallback: f64) f64 {
     // Graphviz ranksep/nodesep are in inches. Use a conservative 72 px/in
     // scale and keep the existing defaults as a lower bound for unset attrs.
     return @max(12.0, inches * 72.0);
+}
+
+fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
+    return @max(0.0, defaultClusterAlongExtentBudget - axes.alongMargin(options) * 2.0);
 }
 
 fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoints) void {
@@ -1760,7 +1768,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 1);
     alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
-    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, 20.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
+    const cluster_along_budget = clusterSpacingAlongBudget(axes, effective_options);
+    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
     applyVirtualRealPositionsExceptGroups(graph, &virtual_levels, &final_virtual_positions, centers);
@@ -1769,8 +1778,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
-    shiftCentersRightWithinBudget(centers, axis_sizes, 4.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
-    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, 20.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
+    shiftCentersRightWithinBudget(centers, axis_sizes, defaultClusterAlongShift, cluster_along_budget);
+    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -8226,6 +8235,33 @@ test "layered layout applies separated margins for horizontal rankdirs" {
     try std.testing.expect(layout.height < layout.width);
 }
 
+test "layered layout separates clusters along rankdir-aware same-rank axis" {
+    const allocator = std.testing.allocator;
+    var lr = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  { rank=same; top; bottom; }
+        \\  subgraph cluster_top { top; }
+        \\  subgraph cluster_bottom { bottom; }
+        \\  top -> sink;
+        \\  bottom -> sink;
+        \\}
+    );
+    defer lr.deinit();
+
+    var layout = try layoutLayered(allocator, &lr, .{});
+    defer layout.deinit();
+    const top = lr.node_index.get("top").?;
+    const bottom = lr.node_index.get("bottom").?;
+    const sink = lr.node_index.get("sink").?;
+
+    try std.testing.expectEqual(RankDir.LR, layout.rankdir);
+    try std.testing.expect(@abs(layout.nodes[top].center.x - layout.nodes[bottom].center.x) <= 0.01);
+    try std.testing.expect(layout.nodes[sink].center.x > layout.nodes[top].center.x);
+    try std.testing.expect(@abs(layout.nodes[bottom].center.y - layout.nodes[top].center.y) >= 80.0);
+    try std.testing.expect(layout.height <= defaultClusterAlongExtentBudget);
+}
+
 fn expectRankDirection(graph: *const Graph, layout: *const Layout, rankdir: RankDir) !void {
     const a = graph.node_index.get("a").?;
     const b = graph.node_index.get("b").?;
@@ -11700,12 +11736,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 47.0);
-    try std.testing.expect(svg_b0_x >= 145.0);
-    try std.testing.expect(svg_b0_x - svg_a0_x >= 98.0);
+    try std.testing.expect(svg_b0_x >= 147.0);
+    try std.testing.expect(svg_b0_x - svg_a0_x >= 100.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
-    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 16.0);
+    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 18.0);
     const cross_label = std.mem.indexOf(u8, svg, "<title>a1-&gt;b3</title>") orelse return error.MissingCrossClusterEdge;
     const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
     const cross_edge = svg[cross_label .. cross_label + cross_end];
