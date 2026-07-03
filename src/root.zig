@@ -1579,7 +1579,7 @@ pub const LayoutConfig = struct {
     force: ForceLayoutOptions = .{},
 };
 
-const defaultInterClusterGap: f64 = 22.0;
+const defaultInterClusterGap: f64 = 39.0;
 const defaultClusterAlongExtentBudget: f64 = 224.0;
 const defaultClusterAlongShift: f64 = 4.0;
 
@@ -1783,7 +1783,6 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
-    total_along = @max(total_along, virtualPositionsExtent(&virtual_levels, &final_virtual_positions, axis_sizes, graph));
 
     var rank_heights = try allocator.alloc(f64, levels.len);
     defer allocator.free(rank_heights);
@@ -1823,6 +1822,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, nodes, cluster_layouts);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
+    total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
 
     const along_margin = axes.alongMargin(effective_options);
     const depth_margin = axes.depthMargin(effective_options);
@@ -2788,6 +2788,20 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
         parent.width = max_x - min_x;
         parent.height = max_y - min_y;
     }
+}
+
+fn clusterLayoutsAlongExtent(axes: LayoutAxes, clusters: []const ClusterLayout, options: LayoutOptions) f64 {
+    const margin = axes.alongMargin(options);
+    var extent: f64 = 0;
+    for (clusters) |cluster_box| {
+        if (cluster_box.width <= 0 or cluster_box.height <= 0) continue;
+        const screen_extent = switch (axes.rankdir) {
+            .TB, .BT => cluster_box.x + cluster_box.width,
+            .LR, .RL => cluster_box.y + cluster_box.height,
+        };
+        extent = @max(extent, @max(0.0, screen_extent - margin));
+    }
+    return extent;
 }
 
 fn clusterIndexByName(graph: *const Graph, name: []const u8) ?usize {
@@ -9388,6 +9402,29 @@ test "virtual positions compact overlaps while preserving order" {
     try std.testing.expect(virtualPositionsExtent(&virtual_levels, &positions, sizes, &graph) >= 50);
 }
 
+test "layout root extent follows Graphviz normal-node and cluster bbox model" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_left { a0 -> a1 -> a2 -> a3; }
+        \\  subgraph cluster_right { b0 -> b1 -> b2 -> b3; }
+        \\  a3 -> a0;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    var node_right: f64 = 0;
+    for (layout.nodes) |node| node_right = @max(node_right, node.center.x + node.width / 2.0);
+    var cluster_right: f64 = 0;
+    for (layout.clusters) |cluster_box| cluster_right = @max(cluster_right, cluster_box.x + cluster_box.width);
+
+    try std.testing.expect(layout.width >= cluster_right);
+    try std.testing.expect(layout.width <= @max(node_right, cluster_right) + layout.margin_x + 0.01);
+}
+
 test "virtual position compaction honors node gap" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
@@ -11736,12 +11773,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 47.0);
-    try std.testing.expect(svg_b0_x >= 147.0);
-    try std.testing.expect(svg_b0_x - svg_a0_x >= 100.0);
+    try std.testing.expect(svg_b0_x >= 164.0);
+    try std.testing.expect(svg_b0_x - svg_a0_x >= 117.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
-    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 18.0);
+    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 35.0);
     const cross_label = std.mem.indexOf(u8, svg, "<title>a1-&gt;b3</title>") orelse return error.MissingCrossClusterEdge;
     const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
     const cross_edge = svg[cross_label .. cross_label + cross_end];
