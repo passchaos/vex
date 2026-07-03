@@ -8896,6 +8896,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             try writePathLine(writer, direct_route.end);
             return;
         }
+        if (alignedAdjacentControls(direct_route.start, direct_route.end, rankdir)) |controls| {
+            try writePathMove(writer, direct_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
+            return;
+        }
         try writePathMove(writer, direct_route.start);
         try writePathCubic(writer, direct_route.control1, direct_route.control2, direct_route.end);
         return;
@@ -8918,6 +8923,19 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     } else {
         try writeSmoothSegment(writer, current, direct_route.end, rankdir);
     }
+}
+
+fn alignedAdjacentControls(start: Point, end: Point, rankdir: RankDir) ?EdgeControls {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const axes = LayoutAxes.init(rankdir);
+    const axis_delta = axes.rankAxisDelta(dx, dy);
+    const cross_delta = if (axes.horizontalRanks()) @abs(dy) else @abs(dx);
+    if (axis_delta <= 0.001 or cross_delta > 1.0) return null;
+    return .{
+        .c1 = .{ .x = start.x + dx / 3.0, .y = start.y + dy / 3.0 },
+        .c2 = .{ .x = start.x + dx * 2.0 / 3.0, .y = start.y + dy * 2.0 / 3.0 },
+    };
 }
 
 fn writeOrthoEdgePath(writer: *Io.Writer, start: Point, end: Point, rankdir: RankDir) Io.Writer.Error!void {
@@ -14537,6 +14555,16 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 4.8);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 4.8);
+    const adjacent_count = svgPathNumbers(svg, "a0-&gt;a1", path_numbers[0..]);
+    try std.testing.expect(adjacent_count >= 8);
+    const oracle_adjacent_count = svgPathNumbers(graphviz_oracle, "a0-&gt;a1", oracle_path_numbers[0..]);
+    try std.testing.expect(oracle_adjacent_count >= 8);
+    const adjacent_control1 = svgScreenPoint(svg, .{ .x = path_numbers[2], .y = path_numbers[3] });
+    const oracle_adjacent_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
+    const adjacent_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
+    const oracle_adjacent_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
+    try std.testing.expect(distanceBetween(adjacent_control1, oracle_adjacent_control1) <= 4.8);
+    try std.testing.expect(distanceBetween(adjacent_control2, oracle_adjacent_control2) <= 4.8);
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
