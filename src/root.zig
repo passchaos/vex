@@ -2747,7 +2747,7 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
             continue;
         }
         const label_font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0);
-        const label_min_width = @as(f64, @floatFromInt(displayLabelMaxLineLen(cluster.label))) * label_font_size * 0.50 + label_pad_x * 2.0;
+        const label_min_width = displayLabelEstimatedWidth(cluster.label, label_font_size) + label_pad_x * 2.0;
         var x = min_x - pad_x;
         var width = (max_x - min_x) + pad_x * 2.0;
         const height = (max_y - min_y) + pad_y * 2.0 + label_band;
@@ -3727,6 +3727,67 @@ fn displayLabelMaxLineLen(text: []const u8) usize {
         }
     }
     return @max(max_len, current);
+}
+
+fn displayLabelEstimatedWidth(text: []const u8, font_size: f64) f64 {
+    if (!isHtmlLikeLabel(text)) return labelEstimatedWidth(text, font_size);
+    var current: f64 = 0;
+    var max_width: f64 = 0;
+    var has_text = false;
+    var pending_space = false;
+    var scanner: HtmlLabelScanner = .{ .text = text };
+    while (scanner.next()) |token| {
+        switch (token) {
+            .newline => {
+                max_width = @max(max_width, current);
+                current = 0;
+                has_text = false;
+                pending_space = false;
+            },
+            .char => |c| {
+                if (isHtmlLabelSpace(c)) {
+                    if (has_text) pending_space = true;
+                    continue;
+                }
+                if (pending_space) {
+                    current += labelCharWidth(' ', font_size);
+                    pending_space = false;
+                }
+                current += labelCharWidth(c, font_size);
+                has_text = true;
+            },
+        }
+    }
+    return @max(max_width, current);
+}
+
+fn labelEstimatedWidth(text: []const u8, font_size: f64) f64 {
+    var current: f64 = 0;
+    var max_width: f64 = 0;
+    for (text) |c| {
+        if (c == '\n') {
+            max_width = @max(max_width, current);
+            current = 0;
+        } else if (c == '\t') {
+            current += labelCharWidth(' ', font_size) * 4.0;
+        } else if ((c & 0xc0) != 0x80) {
+            current += labelCharWidth(c, font_size);
+        }
+    }
+    return @max(max_width, current);
+}
+
+fn labelCharWidth(c: u8, font_size: f64) f64 {
+    const em = font_size;
+    return switch (c) {
+        ' ', '.', ',', ':', ';', '!', '|', '\'', '`' => em * 0.25,
+        'i', 'j', 'l', 'I', '[', ']', '(', ')', '/', '\\' => em * 0.28,
+        'f', 't', 'r' => em * 0.34,
+        '0'...'9' => em * 0.50,
+        '#', '$', '+', '-', '=' => em * 0.50,
+        'm', 'w', 'M', 'W' => em * 0.78,
+        else => if (c < 0x80) em * 0.50 else em,
+    };
 }
 
 fn isHtmlLabelSpace(c: u8) bool {
@@ -8945,6 +9006,18 @@ test "coordinate edge stress rewards straighter edges" {
     try std.testing.expect(straight < skewed);
 }
 
+test "label width estimation uses Times-like character classes" {
+    const narrow = displayLabelEstimatedWidth("iiii", 14.0);
+    const wide = displayLabelEstimatedWidth("mmmm", 14.0);
+    const digits = displayLabelEstimatedWidth("####", 14.0);
+    const html = displayLabelEstimatedWidth("<B>ii</B> <I>mm</I>", 14.0);
+
+    try std.testing.expect(narrow < digits);
+    try std.testing.expect(digits < wide);
+    try std.testing.expect(html > narrow);
+    try std.testing.expect(html < wide);
+}
+
 test "guarded symmetric compaction rejects wider or higher-stress changes" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
@@ -11783,7 +11856,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(layout.width <= 224.0);
     try std.testing.expect(layout.height <= 409.0);
     for (layout.clusters) |cluster_box| {
-        try std.testing.expect(cluster_box.width <= 82.0);
+        try std.testing.expect(cluster_box.width <= 78.0);
         try std.testing.expect(cluster_box.height <= 294.0);
     }
 
@@ -11820,8 +11893,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
-    try std.testing.expect((svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect) <= 82.0);
-    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 82.0);
+    try std.testing.expect((svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect) <= 78.0);
+    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 78.0);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
     const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_start_x > svgNodeCenterX(svg, "a0").?);
