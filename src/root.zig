@@ -1687,7 +1687,7 @@ fn parseMermaidStatement(graph: *Graph, line: []const u8, subgraph_nodes: ?*std.
     var current = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes, class_defs) orelse return;
     while (findMermaidArrow(line, pos)) |arrow| {
         pos = arrow.start;
-        const edge_label = mermaidEdgeLabelBeforeArrow(line, &pos);
+        const edge_label = arrow.label orelse mermaidEdgeLabelBeforeArrow(line, &pos);
         const arrow_text = line[arrow.start..arrow.end];
         pos = arrow.end;
         const label_after_arrow = mermaidEdgeLabelAfterArrow(line, &pos);
@@ -1701,18 +1701,101 @@ fn parseMermaidStatement(graph: *Graph, line: []const u8, subgraph_nodes: ?*std.
 const MermaidArrow = struct {
     start: usize,
     end: usize,
+    label: ?[]const u8 = null,
 };
 
 fn findMermaidArrow(line: []const u8, start: usize) ?MermaidArrow {
     var i = start;
     while (i < line.len) : (i += 1) {
-        const rest = line[i..];
-        const candidates = [_][]const u8{ "-->", "---", "-.->", "==>", "===", "--o", "--x" };
-        for (candidates) |candidate| {
-            if (std.mem.startsWith(u8, rest, candidate)) return .{ .start = i, .end = i + candidate.len };
+        if (parseMermaidArrowAt(line, i)) |arrow| return arrow;
+    }
+    return null;
+}
+
+fn parseMermaidArrowAt(line: []const u8, start: usize) ?MermaidArrow {
+    const rest = line[start..];
+    const candidates = [_][]const u8{ "-->", "---", "-.->", "==>", "===", "--o", "--x" };
+    for (candidates) |candidate| {
+        if (std.mem.startsWith(u8, rest, candidate)) return .{ .start = start, .end = start + candidate.len };
+    }
+
+    if (std.mem.startsWith(u8, rest, "--")) {
+        if (parseMermaidDelimitedArrowLabel(line, start, "--", &.{ "-->", "---", "--o", "--x" })) |arrow| return arrow;
+    } else if (std.mem.startsWith(u8, rest, "==")) {
+        if (parseMermaidDelimitedArrowLabel(line, start, "==", &.{ "==>", "===" })) |arrow| return arrow;
+    } else if (std.mem.startsWith(u8, rest, "-.")) {
+        if (parseMermaidDelimitedArrowLabel(line, start, "-.", &.{ ".->", ".-" })) |arrow| return arrow;
+    }
+    return null;
+}
+
+fn parseMermaidDelimitedArrowLabel(line: []const u8, start: usize, prefix: []const u8, terminators: []const []const u8) ?MermaidArrow {
+    const label_start = start + prefix.len;
+    if (label_start >= line.len) return null;
+    if (line[label_start] == '|') {
+        const close = std.mem.indexOfScalarPos(u8, line, label_start + 1, '|') orelse return null;
+        const suffix_start = close + 1;
+        for (terminators) |terminator| {
+            if (std.mem.startsWith(u8, line[suffix_start..], terminator)) {
+                const label = std.mem.trim(u8, line[label_start + 1 .. close], " \t\r\n");
+                return .{
+                    .start = start,
+                    .end = suffix_start + terminator.len,
+                    .label = if (label.len == 0) null else stripMermaidLabelQuotes(label),
+                };
+            }
+        }
+        return null;
+    }
+    if (findMermaidArrowLabelTerminator(line, label_start, terminators)) |term| {
+        const label = std.mem.trim(u8, line[label_start..term.start], " \t\r\n");
+        if (label.len == 0) return null;
+        return .{
+            .start = start,
+            .end = term.end,
+            .label = stripMermaidLabelQuotes(label),
+        };
+    }
+    return null;
+}
+
+const MermaidArrowTerminator = struct {
+    start: usize,
+    end: usize,
+};
+
+fn findMermaidArrowLabelTerminator(line: []const u8, start: usize, terminators: []const []const u8) ?MermaidArrowTerminator {
+    var quote: ?u8 = null;
+    var i = start;
+    while (i < line.len) : (i += 1) {
+        const c = line[i];
+        if (quote) |q| {
+            if (c == '\\' and i + 1 < line.len) {
+                i += 1;
+            } else if (c == q) {
+                quote = null;
+            }
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            quote = c;
+            continue;
+        }
+        for (terminators) |terminator| {
+            if (std.mem.startsWith(u8, line[i..], terminator)) {
+                return .{ .start = i, .end = i + terminator.len };
+            }
         }
     }
     return null;
+}
+
+fn startsMermaidEdgeOperator(line: []const u8, pos: usize) bool {
+    if (pos >= line.len) return false;
+    const rest = line[pos..];
+    return std.mem.startsWith(u8, rest, "--") or
+        std.mem.startsWith(u8, rest, "==") or
+        std.mem.startsWith(u8, rest, "-.");
 }
 
 fn mermaidEdgeLabelBeforeArrow(line: []const u8, arrow_start: *usize) ?[]const u8 {
@@ -1725,7 +1808,7 @@ fn mermaidEdgeLabelBeforeArrow(line: []const u8, arrow_start: *usize) ?[]const u
         if (line[open - 1] == '|') {
             const label = std.mem.trim(u8, line[open..close], " \t\r\n");
             arrow_start.* = open - 1;
-            return if (label.len == 0) null else label;
+            return if (label.len == 0) null else stripMermaidLabelQuotes(label);
         }
     }
     return null;
@@ -1740,14 +1823,14 @@ fn mermaidEdgeLabelAfterArrow(line: []const u8, pos: *usize) ?[]const u8 {
     if (end >= line.len) return null;
     pos.* = end + 1;
     const label = std.mem.trim(u8, line[start..end], " \t\r\n");
-    return if (label.len == 0) null else label;
+    return if (label.len == 0) null else stripMermaidLabelQuotes(label);
 }
 
 fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize, subgraph_nodes: ?*std.ArrayList(NodeId), class_defs: []const MermaidClassDef) !?NodeId {
     while (pos.* < line.len and std.ascii.isWhitespace(line[pos.*])) : (pos.* += 1) {}
     if (pos.* >= line.len) return null;
     const id_start = pos.*;
-    while (pos.* < line.len and isMermaidIdChar(line[pos.*])) : (pos.* += 1) {}
+    while (pos.* < line.len and isMermaidIdChar(line[pos.*]) and (pos.* == id_start or !startsMermaidEdgeOperator(line, pos.*))) : (pos.* += 1) {}
     if (pos.* == id_start) return null;
     const id_text = std.mem.trim(u8, line[id_start..pos.*], " \t\r\n");
     const node_id = try graph.node(id_text);
@@ -1766,7 +1849,7 @@ fn parseMermaidInlineClasses(graph: *Graph, node_id: NodeId, line: []const u8, p
     if (pos.* + 3 > line.len or !std.mem.eql(u8, line[pos.* .. pos.* + 3], ":::")) return;
     pos.* += 3;
     const start = pos.*;
-    while (pos.* < line.len and (isMermaidIdChar(line[pos.*]) or line[pos.*] == ',')) : (pos.* += 1) {}
+    while (pos.* < line.len and (isMermaidIdChar(line[pos.*]) or line[pos.*] == ',') and (pos.* == start or !startsMermaidEdgeOperator(line, pos.*))) : (pos.* += 1) {}
     const classes_text = line[start..pos.*];
     var classes = std.mem.splitScalar(u8, classes_text, ',');
     while (classes.next()) |raw_class| {
@@ -9930,6 +10013,38 @@ test "Mermaid parser handles flowchart direction nodes and labels" {
     try std.testing.expectEqualStrings("yes", graph.edges.items[1].label.?);
     try std.testing.expectEqualStrings("no", graph.edges.items[2].label.?);
     try std.testing.expectEqualStrings("dotted", attrValue(graph.edges.items[2].attrs.items, "style").?);
+}
+
+test "Mermaid parser handles labels embedded in arrows" {
+    const allocator = std.testing.allocator;
+    var graph = try parseMermaid(allocator,
+        \\flowchart LR
+        \\  A -- needs review --> B
+        \\  C -- "Some text" --> D
+        \\  N01 -.audit.-> N16
+        \\  svc.api -.db-sync.-> db.main
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), graph.edges.items.len);
+    try std.testing.expectEqualStrings("needs review", graph.edges.items[0].label.?);
+    try std.testing.expectEqualStrings("Some text", graph.edges.items[1].label.?);
+    try std.testing.expectEqualStrings("audit", graph.edges.items[2].label.?);
+    try std.testing.expectEqualStrings("db-sync", graph.edges.items[3].label.?);
+    try std.testing.expectEqualStrings("dotted", attrValue(graph.edges.items[2].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("dotted", attrValue(graph.edges.items[3].attrs.items, "style").?);
+    try std.testing.expect(graph.node_index.get(".audit") == null);
+    try std.testing.expect(graph.node_index.get(".db-sync") == null);
+    try std.testing.expect(graph.node_index.get("svc.api") != null);
+    try std.testing.expect(graph.node_index.get("db.main") != null);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "needs review") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Some text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "db-sync") != null);
 }
 
 test "input format auto detects Mermaid flowcharts without breaking DOT graphs" {
