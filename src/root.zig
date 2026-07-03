@@ -1760,6 +1760,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 1);
     alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
+    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, 20.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
     applyVirtualRealPositionsExceptGroups(graph, &virtual_levels, &final_virtual_positions, centers);
@@ -4603,6 +4604,28 @@ fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(N
             }
         }
     }
+}
+
+fn applyInterClusterSpacingWithBudget(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, cluster_gap: f64, max_extent: f64) void {
+    if (max_extent <= 0) return;
+    const before_extent = centersExtent(centers, sizes);
+    if (before_extent >= max_extent) return;
+    var backup: [256]f64 = undefined;
+    if (centers.len > backup.len) return;
+    @memcpy(backup[0..centers.len], centers);
+    applyInterClusterSpacing(graph, levels, centers, sizes, cluster_gap);
+    if (centersExtent(centers, sizes) > max_extent + 0.0001) {
+        @memcpy(centers, backup[0..centers.len]);
+    }
+}
+
+fn centersExtent(centers: []const f64, sizes: []const NodeSize) f64 {
+    var extent: f64 = 0;
+    for (centers, 0..) |center, id| {
+        if (id >= sizes.len) continue;
+        extent = @max(extent, center + sizes[id].width / 2.0);
+    }
+    return extent;
 }
 
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
@@ -12025,6 +12048,40 @@ test "inter-cluster coordinate spacing ignores same-cluster neighbors" {
 
     applyInterClusterSpacing(&graph, levels, centers, sizes, 15);
     try std.testing.expectEqual(@as(f64, 80), centers[b]);
+}
+
+test "inter-cluster spacing respects extent budget" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; }
+        \\  subgraph cluster_left { a; }
+        \\  subgraph cluster_right { b; }
+        \\}
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 1);
+    defer allocator.free(levels);
+    levels[0] = .empty;
+    defer levels[0].deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[a] = 40;
+    centers[b] = 80;
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    applyInterClusterSpacingWithBudget(&graph, levels, centers, sizes, 30, 90);
+    try std.testing.expectEqual(@as(f64, 80), centers[b]);
+    applyInterClusterSpacingWithBudget(&graph, levels, centers, sizes, 15, 200);
+    try std.testing.expect(centers[b] > 80);
 }
 
 test "layered layout uses DOT edge weight as a coordinate hint" {
