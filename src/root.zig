@@ -1422,6 +1422,8 @@ pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "Mermaid" });
     errdefer graph.deinit();
 
+    var class_defs = std.ArrayList(MermaidClassDef).empty;
+    defer class_defs.deinit(allocator);
     var saw_header = false;
     var subgraph_name: ?[]const u8 = null;
     var subgraph_label: ?[]const u8 = null;
@@ -1437,6 +1439,14 @@ pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
         }
         if (std.mem.startsWith(u8, line, "style ")) {
             try applyMermaidStyleStatement(&graph, line);
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "classDef ")) {
+            try parseMermaidClassDef(allocator, &class_defs, line);
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "class ")) {
+            try applyMermaidClassStatement(&graph, class_defs.items, line);
             continue;
         }
         if (parseMermaidSubgraphHeader(line)) |header| {
@@ -1516,6 +1526,57 @@ fn applyMermaidStyleStatement(graph: *Graph, line: []const u8) !void {
         const node_id = try graph.node(id);
         try applyMermaidStyleAttrs(graph, node_id, rest);
     }
+}
+
+const MermaidClassDef = struct {
+    name: []const u8,
+    attrs: []const u8,
+};
+
+fn parseMermaidClassDef(allocator: std.mem.Allocator, class_defs: *std.ArrayList(MermaidClassDef), line: []const u8) !void {
+    var rest = std.mem.trim(u8, line["classDef".len..], " \t\r\n");
+    if (rest.len == 0) return;
+    var split_at: usize = 0;
+    while (split_at < rest.len and !std.ascii.isWhitespace(rest[split_at])) : (split_at += 1) {}
+    if (split_at == 0 or split_at >= rest.len) return;
+    const name = rest[0..split_at];
+    const attrs = std.mem.trim(u8, rest[split_at..], " \t\r\n");
+    for (class_defs.items) |*def| {
+        if (std.mem.eql(u8, def.name, name)) {
+            def.attrs = attrs;
+            return;
+        }
+    }
+    try class_defs.append(allocator, .{ .name = name, .attrs = attrs });
+}
+
+fn applyMermaidClassStatement(graph: *Graph, class_defs: []const MermaidClassDef, line: []const u8) !void {
+    var rest = std.mem.trim(u8, line["class".len..], " \t\r\n");
+    if (rest.len == 0) return;
+    var split_at: usize = 0;
+    while (split_at < rest.len and !std.ascii.isWhitespace(rest[split_at])) : (split_at += 1) {}
+    if (split_at == 0 or split_at >= rest.len) return;
+    const ids_text = rest[0..split_at];
+    const classes_text = std.mem.trim(u8, rest[split_at..], " \t\r\n");
+    var ids = std.mem.splitScalar(u8, ids_text, ',');
+    while (ids.next()) |raw_id| {
+        const id = std.mem.trim(u8, raw_id, " \t\r\n");
+        if (id.len == 0) continue;
+        const node_id = try graph.node(id);
+        var classes = std.mem.splitScalar(u8, classes_text, ',');
+        while (classes.next()) |raw_class| {
+            const class_name = std.mem.trim(u8, raw_class, " \t\r\n");
+            const attrs = mermaidClassAttrs(class_defs, class_name) orelse continue;
+            try applyMermaidStyleAttrs(graph, node_id, attrs);
+        }
+    }
+}
+
+fn mermaidClassAttrs(class_defs: []const MermaidClassDef, name: []const u8) ?[]const u8 {
+    for (class_defs) |def| {
+        if (std.mem.eql(u8, def.name, name)) return def.attrs;
+    }
+    return null;
 }
 
 fn applyMermaidStyleAttrs(graph: *Graph, node_id: NodeId, attrs_text: []const u8) !void {
@@ -9862,6 +9923,30 @@ test "Mermaid parser applies node style directives" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#0f0\" stroke=\"#090\" stroke-width=\"3.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#111\"") != null);
+}
+
+test "Mermaid parser applies classDef and class directives" {
+    const allocator = std.testing.allocator;
+    var graph = try parseMermaid(allocator,
+        \\flowchart LR
+        \\  classDef hot fill:#f00,stroke:#000,color:#fff,stroke-width:2
+        \\  A[Alpha] --> B[Beta]
+        \\  class A hot
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("A").?;
+    try std.testing.expectEqualStrings("#f00", attrValue(graph.nodes.items[a].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#000", attrValue(graph.nodes.items[a].attrs.items, "color").?);
+    try std.testing.expectEqualStrings("#fff", attrValue(graph.nodes.items[a].attrs.items, "fontcolor").?);
+    try std.testing.expectEqualStrings("2", attrValue(graph.nodes.items[a].attrs.items, "penwidth").?);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fff\"") != null);
 }
 
 test "SVG renderer emits document" {
