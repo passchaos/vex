@@ -7063,17 +7063,10 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, r
 }
 
 fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\"", .{
-        route.start.x,
-        route.start.y,
-        route.control1.x,
-        route.control1.y,
-        route.control2.x,
-        route.control2.y,
-        route.end.x,
-        route.end.y,
-        visual.stroke,
-    });
+    try writer.print("<path d=\"", .{});
+    try writePathMove(writer, route.start);
+    try writePathCubic(writer, route.control1, route.control2, route.end);
+    try writer.print("\" stroke=\"{s}\"", .{visual.stroke});
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
 }
