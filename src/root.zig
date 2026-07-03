@@ -6798,14 +6798,8 @@ fn renderSvgStripedRectFill(writer: *Io.Writer, id_prefix: []const u8, id: usize
         else
             rect.width * segment.fraction;
         if (stripe_width <= 0) continue;
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{
-            cursor,
-            rect.y,
-            stripe_width,
-            rect.height,
-            radius,
-            segment.color,
-        });
+        try writeSvgRectOpen(writer, .{ .x = cursor, .y = rect.y, .width = stripe_width, .height = rect.height }, radius);
+        try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{segment.color});
         cursor += stripe_width;
         if (cursor >= rect.x + rect.width) break;
     }
@@ -7636,17 +7630,9 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
         try writeSvgDash(writer, visual.dash);
         try writer.writeAll("/>\n");
     } else {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-            box.x,
-            box.y,
-            box.width,
-            box.height,
-            visual.radius,
-            visual.fill,
-            visual.fill_opacity,
-            visual.stroke,
-            visual.width,
-        });
+        try writeSvgRectOpen(writer, .{ .x = box.x, .y = box.y, .width = box.width, .height = box.height }, visual.radius);
+        try writer.print(" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.fill_opacity, visual.stroke });
+        try writeSvgStrokeWidth(writer, visual.width);
         try writeSvgDash(writer, visual.dash);
         try writer.writeAll("/>\n");
     }
@@ -7697,15 +7683,8 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
     const table_dash = if (table_tag) |tag| htmlDashStyle(tag) else .none;
 
     if (!table_invisible) {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\"", .{
-            grid.x,
-            grid.y,
-            layout.width,
-            layout.height,
-            visual.radius,
-            fill,
-            if (metrics.border > 0) table_stroke else "none",
-        });
+        try writeSvgRectOpen(writer, .{ .x = grid.x, .y = grid.y, .width = layout.width, .height = layout.height }, visual.radius);
+        try writer.print(" fill=\"{s}\" stroke=\"{s}\"", .{ fill, if (metrics.border > 0) table_stroke else "none" });
         try writeSvgStrokeWidth(writer, metrics.border);
         try writeSvgDash(writer, table_dash);
         try writer.writeAll("/>\n");
@@ -7766,7 +7745,8 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             const cell_invisible = htmlStyleHas(td_tag, "invis") or htmlStyleHas(td_tag, "invisible");
             if (!table_invisible and !cell_invisible) {
                 if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
-                    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, cell_bg });
+                    try writeSvgRectOpen(writer, cell_rect, 0);
+                    try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{cell_bg});
                 }
                 if (cell_border > 0) {
                     const cell_stroke = htmlAttrValue(td_tag, "color") orelse visual.stroke;
@@ -7794,13 +7774,8 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
 
 fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCellSides, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
     const sides = maybe_sides orelse {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            stroke,
-        });
+        try writeSvgRectOpen(writer, rect, 0);
+        try writer.print(" fill=\"none\" stroke=\"{s}\"", .{stroke});
         try writeSvgStrokeWidth(writer, width);
         try writeSvgDash(writer, dash);
         try writer.writeAll("/>\n");
@@ -8541,15 +8516,8 @@ fn renderSvgCylinderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVi
 }
 
 fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius: f64) Io.Writer.Error!void {
-    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\"", .{
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        radius,
-        visual.fill,
-        visual.stroke,
-    });
+    try writeSvgRectOpen(writer, rect, radius);
+    try writer.print(" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
@@ -8632,6 +8600,20 @@ fn writeSvgNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
     }
 }
 
+fn writeSvgRectOpen(writer: *Io.Writer, rect: RectF, radius: f64) Io.Writer.Error!void {
+    try writer.writeAll("<rect x=\"");
+    try writeSvgNumber(writer, rect.x);
+    try writer.writeAll("\" y=\"");
+    try writeSvgNumber(writer, rect.y);
+    try writer.writeAll("\" width=\"");
+    try writeSvgNumber(writer, rect.width);
+    try writer.writeAll("\" height=\"");
+    try writeSvgNumber(writer, rect.height);
+    try writer.writeAll("\" rx=\"");
+    try writeSvgNumber(writer, radius);
+    try writer.writeByte('"');
+}
+
 fn writeSvgCircleOpen(writer: *Io.Writer, center: Point, radius: f64) Io.Writer.Error!void {
     try writer.writeAll("<circle cx=\"");
     try writeSvgNumber(writer, center.x);
@@ -8654,15 +8636,8 @@ fn nodeRect(layout: NodeLayout) RectF {
 fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual, options: SvgOptions, rounded: bool) Io.Writer.Error!void {
     const x = layout.center.x - layout.width / 2.0;
     const y = layout.center.y - layout.height / 2.0;
-    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\"", .{
-        x,
-        y,
-        layout.width,
-        layout.height,
-        if (rounded) 10 else visual.radius,
-        visual.fill,
-        visual.stroke,
-    });
+    try writeSvgRectOpen(writer, .{ .x = x, .y = y, .width = layout.width, .height = layout.height }, if (rounded) 10 else visual.radius);
+    try writer.print(" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
@@ -9818,12 +9793,8 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
         const max_len = displayLabelMaxLineLen(text);
         const width = @as(f64, @floatFromInt(max_len)) * font_size * 0.62 + 12.0;
         const height = block_height + 8.0;
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"4\" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n", .{
-            x - width / 2.0,
-            center_y - height / 2.0,
-            width,
-            height,
-        });
+        try writeSvgRectOpen(writer, .{ .x = x - width / 2.0, .y = center_y - height / 2.0, .width = width, .height = height }, 4);
+        try writer.writeAll(" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n");
     }
 
     try writeSvgTextOpen(writer, text_anchor, x, first_y, font_family, font_size);
@@ -12515,8 +12486,8 @@ test "SVG renderer honors HTML table cell width height fixedsize hints" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"18.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "height=\"9.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"18\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "height=\"9\"") != null);
 }
 
 test "HTML table TD PORT routes edge endpoints to cells" {
@@ -15615,7 +15586,7 @@ test "DOT record and Mrecord nodes render field separators" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">email</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">port") == null);
     try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10\"") != null);
 }
 
 test "DOT record field ports route edge endpoints to fields" {
