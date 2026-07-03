@@ -11476,6 +11476,11 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_start_x < svgNodeCenterX(svg, "b0").?);
     try std.testing.expect(svg_end_x > svgNodeCenterX(svg, "a3").?);
     try std.testing.expect(svg_end_x < svgNodeCenterX(svg, "b3").?);
+    const cross_label = std.mem.indexOf(u8, svg, "<title>a1-&gt;b3</title>") orelse return error.MissingCrossClusterEdge;
+    const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
+    const cross_edge = svg[cross_label .. cross_label + cross_end];
+    try std.testing.expect(std.mem.indexOf(u8, cross_edge, "196.5") == null);
+    try std.testing.expect(countSubstrings(cross_edge, " C ") >= 2);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
