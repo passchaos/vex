@@ -8978,30 +8978,26 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
         else
             @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
-        const p1 = Point{ .x = side_x, .y = route.start.y };
-        const p2 = Point{ .x = side_x, .y = route.end.y };
+        const rank_delta = route.end.y - route.start.y;
+        const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.18 };
+        const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.25 };
         if (routing == .polyline) {
             try writePathMove(writer, route.start);
             try writePathLine(writer, p1);
             try writePathLine(writer, p2);
             try writePathLine(writer, route.end);
         } else {
-            const curve = @min(36.0, @abs(route.start.x - side_x) * 0.5 + 12.0);
-            const c1x = if (prefer_left)
-                @max(side_x, route.start.x - curve)
-            else
-                @min(side_x, route.start.x + curve);
-            const c2x = side_x;
-            const c3x = side_x;
-            const c4x = if (prefer_left)
-                @max(side_x, route.end.x - curve)
-            else
-                @min(side_x, route.end.x + curve);
+            const start_side_dx = side_x - route.start.x;
+            const end_side_dx = side_x - route.end.x;
+            const c1x = route.start.x + start_side_dx * 0.25;
+            const c2x = route.start.x + start_side_dx * 0.65;
+            const c3x = route.end.x + end_side_dx * 0.65;
+            const c4x = route.end.x + end_side_dx * 0.25;
             const mid_y = (p1.y + p2.y) / 2.0;
             try writePathMove(writer, route.start);
-            try writePathCubic(writer, .{ .x = c1x, .y = route.start.y }, .{ .x = c2x, .y = p1.y }, p1);
+            try writePathCubic(writer, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
             try writePathCubic(writer, .{ .x = side_x, .y = mid_y }, .{ .x = side_x, .y = mid_y }, p2);
-            try writePathCubic(writer, .{ .x = c3x, .y = p2.y }, .{ .x = c4x, .y = route.end.y }, route.end);
+            try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.18 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, route.end);
         }
         return;
     }
@@ -9011,30 +9007,26 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         @max(layout.margin_y, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
     else
         @min(layout.height - layout.margin_y, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
-    const p1 = Point{ .x = route.start.x, .y = side_y };
-    const p2 = Point{ .x = route.end.x, .y = side_y };
+    const rank_delta = route.end.x - route.start.x;
+    const p1 = Point{ .x = route.start.x + rank_delta * 0.18, .y = side_y };
+    const p2 = Point{ .x = route.end.x - rank_delta * 0.25, .y = side_y };
     if (routing == .polyline) {
         try writePathMove(writer, route.start);
         try writePathLine(writer, p1);
         try writePathLine(writer, p2);
         try writePathLine(writer, route.end);
     } else {
-        const curve = @min(36.0, @abs(route.start.y - side_y) * 0.5 + 12.0);
-        const c1y = if (prefer_top)
-            @max(side_y, route.start.y - curve)
-        else
-            @min(side_y, route.start.y + curve);
-        const c2y = side_y;
-        const c3y = side_y;
-        const c4y = if (prefer_top)
-            @max(side_y, route.end.y - curve)
-        else
-            @min(side_y, route.end.y + curve);
+        const start_side_dy = side_y - route.start.y;
+        const end_side_dy = side_y - route.end.y;
+        const c1y = route.start.y + start_side_dy * 0.25;
+        const c2y = route.start.y + start_side_dy * 0.65;
+        const c3y = route.end.y + end_side_dy * 0.65;
+        const c4y = route.end.y + end_side_dy * 0.25;
         const mid_x = (p1.x + p2.x) / 2.0;
         try writePathMove(writer, route.start);
-        try writePathCubic(writer, .{ .x = route.start.x, .y = c1y }, .{ .x = p1.x, .y = c2y }, p1);
+        try writePathCubic(writer, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, .{ .x = route.start.x + rank_delta * 0.12, .y = c2y }, p1);
         try writePathCubic(writer, .{ .x = mid_x, .y = side_y }, .{ .x = mid_x, .y = side_y }, p2);
-        try writePathCubic(writer, .{ .x = p2.x, .y = c3y }, .{ .x = route.end.x, .y = c4y }, route.end);
+        try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.18, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, route.end);
     }
 }
 
@@ -14387,13 +14379,17 @@ test "SVG routes multi-rank back edges around the side" {
     var path_numbers: [32]f64 = undefined;
     const count = svgNumbersInAttribute(path, "d", path_numbers[0..]);
     try std.testing.expect(count >= 20);
-    const side_x = path_numbers[6];
-    try std.testing.expect(path_numbers[2] >= side_x);
-    try std.testing.expectEqual(side_x, path_numbers[4]);
+    const side_x = path_numbers[12];
+    try std.testing.expect(path_numbers[2] > path_numbers[4]);
+    try std.testing.expect(path_numbers[4] > path_numbers[6]);
+    try std.testing.expectEqual(side_x, path_numbers[6]);
     try std.testing.expectEqual(side_x, path_numbers[8]);
     try std.testing.expectEqual(side_x, path_numbers[10]);
-    try std.testing.expectEqual(side_x, path_numbers[12]);
-    try std.testing.expectEqual(side_x, path_numbers[14]);
+    try std.testing.expect(path_numbers[2] > side_x);
+    try std.testing.expect(path_numbers[4] > side_x);
+    try std.testing.expect(path_numbers[14] > side_x);
+    try std.testing.expect(path_numbers[18] > path_numbers[16]);
+    try std.testing.expect(path_numbers[16] > path_numbers[14]);
 }
 
 test "back-edge side channel prefers stable negative side for same column" {
