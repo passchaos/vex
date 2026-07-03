@@ -6482,12 +6482,14 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const edge_routing = svgEdgeRoutingMode(graph);
     const concentrate = graphConcentrateEnabled(graph);
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
+    const canvas_width = @ceil(layout.width);
+    const canvas_height = @ceil(layout.height);
     const content_translate = svgGraphContentTranslate(layout);
     const background_left = if (@abs(content_translate) <= 0.0001) 0.0 else -content_translate;
-    const background_right = layout.width + background_left;
+    const background_right = canvas_width + background_left;
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
-        .{ layout.width, layout.height, layout.width, layout.height },
+        .{ canvas_width, canvas_height, canvas_width, canvas_height },
     );
     try writer.print("<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate({d:.1} 0)\">\n", .{content_translate});
     try writer.writeAll("<title>");
@@ -6497,9 +6499,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         background,
         background_left,
         background_left,
-        layout.height,
+        canvas_height,
         background_right,
-        layout.height,
+        canvas_height,
         background_right,
         background_left,
     });
@@ -14358,7 +14360,7 @@ test "user cluster example stays compact and Graphviz-like" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 408.80\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8.0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"-8.0,0 -8.0,409 216.0,409 216.0,0 -8.0,0\"/>") != null);
