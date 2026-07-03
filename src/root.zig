@@ -7195,11 +7195,11 @@ fn lerpPoint(a: Point, b: Point, t: f64) Point {
 fn routeForPathMarkers(route: EdgeRoute, visual: EdgeVisual) EdgeRoute {
     var result = route;
     if (visual.marker_start != .none) {
-        result.start = shortenPointToward(route.start, route.control1, 4.2 * visual.marker_scale);
+        result.start = shortenPointToward(route.start, route.control1, 10.0 * visual.marker_scale);
         result.control1 = shortenPointToward(route.control1, route.control2, 2.0 * visual.marker_scale);
     }
     if (visual.marker_end != .none) {
-        result.end = shortenPointToward(route.end, route.control2, 4.2 * visual.marker_scale);
+        result.end = shortenPointToward(route.end, route.control2, 10.0 * visual.marker_scale);
         result.control2 = shortenPointToward(route.control2, route.control1, 2.0 * visual.marker_scale);
     }
     return result;
@@ -14592,6 +14592,7 @@ test "SVG marker path route shortens arrow endpoints" {
         .hidden = false,
     });
     try std.testing.expect(shortened.end.y < route.end.y);
+    try std.testing.expectEqual(@as(f64, 90), shortened.end.y);
     try std.testing.expectEqual(route.label.y, shortened.label.y);
 }
 
