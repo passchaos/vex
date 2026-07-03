@@ -1449,6 +1449,10 @@ pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
             try applyMermaidClassStatement(&graph, class_defs.items, line);
             continue;
         }
+        if (std.mem.startsWith(u8, line, "linkStyle ")) {
+            try applyMermaidLinkStyleStatement(&graph, line);
+            continue;
+        }
         if (parseMermaidSubgraphHeader(line)) |header| {
             if (subgraph_name) |name| {
                 try addMermaidSubgraph(&graph, name, subgraph_label orelse name, subgraph_nodes.items);
@@ -1577,6 +1581,48 @@ fn mermaidClassAttrs(class_defs: []const MermaidClassDef, name: []const u8) ?[]c
         if (std.mem.eql(u8, def.name, name)) return def.attrs;
     }
     return null;
+}
+
+fn applyMermaidLinkStyleStatement(graph: *Graph, line: []const u8) !void {
+    var rest = std.mem.trim(u8, line["linkStyle".len..], " \t\r\n");
+    if (rest.len == 0) return;
+    var split_at: usize = 0;
+    while (split_at < rest.len and !std.ascii.isWhitespace(rest[split_at])) : (split_at += 1) {}
+    if (split_at == 0 or split_at >= rest.len) return;
+    const selector_text = rest[0..split_at];
+    const attrs_text = std.mem.trim(u8, rest[split_at..], " \t\r\n");
+    if (std.ascii.eqlIgnoreCase(selector_text, "default")) {
+        for (graph.edges.items, 0..) |_, edge_index| try applyMermaidEdgeStyleAttrs(graph, edge_index, attrs_text);
+        return;
+    }
+    var selectors = std.mem.splitScalar(u8, selector_text, ',');
+    while (selectors.next()) |raw_selector| {
+        const selector = std.mem.trim(u8, raw_selector, " \t\r\n");
+        if (selector.len == 0) continue;
+        const index = std.fmt.parseInt(usize, selector, 10) catch continue;
+        if (index < graph.edges.items.len) try applyMermaidEdgeStyleAttrs(graph, index, attrs_text);
+    }
+}
+
+fn applyMermaidEdgeStyleAttrs(graph: *Graph, edge_id: EdgeId, attrs_text: []const u8) !void {
+    var attrs = std.mem.splitScalar(u8, attrs_text, ',');
+    while (attrs.next()) |raw_attr| {
+        const attr = std.mem.trim(u8, raw_attr, " \t\r\n;");
+        if (attr.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, attr, ':') orelse continue;
+        const key = std.mem.trim(u8, attr[0..colon], " \t\r\n");
+        const value = std.mem.trim(u8, attr[colon + 1 ..], " \t\r\n");
+        if (value.len == 0) continue;
+        if (std.ascii.eqlIgnoreCase(key, "stroke")) {
+            try graph.setEdgeAttr(edge_id, "color", value);
+        } else if (std.ascii.eqlIgnoreCase(key, "stroke-width")) {
+            try graph.setEdgeAttr(edge_id, "penwidth", trimMermaidCssUnit(value));
+        } else if (std.ascii.eqlIgnoreCase(key, "stroke-dasharray")) {
+            try graph.setEdgeAttr(edge_id, "style", "dashed");
+        } else if (std.ascii.eqlIgnoreCase(key, "color")) {
+            try graph.setEdgeAttr(edge_id, "fontcolor", value);
+        }
+    }
 }
 
 fn applyMermaidStyleAttrs(graph: *Graph, node_id: NodeId, attrs_text: []const u8) !void {
@@ -9947,6 +9993,29 @@ test "Mermaid parser applies classDef and class directives" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fff\"") != null);
+}
+
+test "Mermaid parser applies linkStyle directives" {
+    const allocator = std.testing.allocator;
+    var graph = try parseMermaid(allocator,
+        \\flowchart LR
+        \\  A[Alpha] --> B[Beta]
+        \\  B -.-> C[Gamma]
+        \\  linkStyle 1 stroke:#ff0,stroke-width:4,stroke-dasharray:5 5,color:#123
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
+    try std.testing.expectEqualStrings("#ff0", graph.edges.items[1].color);
+    try std.testing.expectEqualStrings("4", attrValue(graph.edges.items[1].attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("dashed", attrValue(graph.edges.items[1].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("#123", attrValue(graph.edges.items[1].attrs.items, "fontcolor").?);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#ff0\" stroke-width=\"4.0\" stroke-dasharray=\"8,5\"") != null);
 }
 
 test "SVG renderer emits document" {
