@@ -2751,9 +2751,8 @@ fn virtualBlockKeyAtRank(graph: *const Graph, ranks: []const usize, node: Virtua
 }
 
 fn crossClusterEndpointBlockKey(edge_item: Edge, ranks: []const usize, rank: usize, from_cluster: ?usize, to_cluster: ?usize) ?usize {
-    if (edge_item.ltail == null and edge_item.lhead == null) return null;
     if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
-    if (from_cluster == null and to_cluster == null) return null;
+    if (from_cluster == null and to_cluster == null and edge_item.ltail == null and edge_item.lhead == null) return null;
     const from_rank = ranks[edge_item.from];
     const to_rank = ranks[edge_item.to];
     if (from_rank + 1 >= to_rank) return null;
@@ -9091,11 +9090,11 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     const tail_clip = edgeClipEnabled(edge_item.attrs.items, "tailclip");
     const head_clip = edgeClipEnabled(edge_item.attrs.items, "headclip");
     const raw_start = if (tail_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, false) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true)
+        samePortBoundaryPoint(graph, layout, edge_item, false) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_port, rankdir, true)
     else
         from.center;
     const raw_end = if (head_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, true) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
+        samePortBoundaryPoint(graph, layout, edge_item, true) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_port, rankdir, false)
     else
         to.center;
     const compound = graphCompoundEnabled(graph);
@@ -9302,6 +9301,32 @@ fn portBoundaryPoint(node: NodeLayout, toward: Point, port: CompassPort, rankdir
         .width = node.width,
         .height = node.height,
     }, port, toward);
+}
+
+fn nodePortBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, port: CompassPort, rankdir: RankDir, leaving: bool) Point {
+    if (port != .auto) return portBoundaryPoint(layout, toward, port, rankdir, leaving);
+    if (shapeUsesEllipseBoundary(node_item.shape)) return ellipseBoundaryPoint(layout, toward);
+    return boundaryPoint(layout, toward, rankdir, leaving);
+}
+
+fn shapeUsesEllipseBoundary(shape: Shape) bool {
+    return switch (shape) {
+        .ellipse, .circle, .doublecircle, .mcircle => true,
+        else => false,
+    };
+}
+
+fn ellipseBoundaryPoint(node: NodeLayout, toward: Point) Point {
+    const dx = toward.x - node.center.x;
+    const dy = toward.y - node.center.y;
+    if (@abs(dx) <= 0.0001 and @abs(dy) <= 0.0001) return node.center;
+    const rx = @max(node.width / 2.0, 0.0001);
+    const ry = @max(node.height / 2.0, 0.0001);
+    const scale = 1.0 / std.math.sqrt((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry));
+    return .{
+        .x = node.center.x + dx * scale,
+        .y = node.center.y + dy * scale,
+    };
 }
 
 fn recordBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, record_port: ?[]const u8, port: CompassPort, leaving: bool) ?Point {
@@ -11214,6 +11239,30 @@ test "cross-cluster long-edge dummies attach to nearest endpoint block" {
     const c = try graph.node("c");
     const d = try graph.node("d");
     const edge_id = try graph.edge(a, d, .{ .ltail = "cluster_tail", .lhead = "cluster_head" });
+    _ = try graph.addCluster("cluster_tail", null, &.{a}, &.{});
+    _ = try graph.addCluster("cluster_head", null, &.{d}, &.{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 2;
+    ranks[d] = 3;
+
+    try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = a }), virtualBlockKeyAtRank(&graph, ranks, .{ .dummy = edge_id }, 1));
+    try std.testing.expectEqual(virtualBlockKey(&graph, .{ .real = d }), virtualBlockKeyAtRank(&graph, ranks, .{ .dummy = edge_id }, 2));
+}
+
+test "implicit cross-cluster long-edge dummies attach to endpoint blocks" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const d = try graph.node("d");
+    const edge_id = try graph.edge(a, d, .{});
     _ = try graph.addCluster("cluster_tail", null, &.{a}, &.{});
     _ = try graph.addCluster("cluster_head", null, &.{d}, &.{});
 
@@ -13740,6 +13789,22 @@ test "SVG auto endpoints use side anchors for same-rank edges" {
     try std.testing.expectEqual(layout.nodes[b].center.x - layout.nodes[b].width / 2.0, route.end.x);
 }
 
+test "SVG auto endpoints clip ellipse nodes by direction" {
+    const node = NodeLayout{ .center = .{ .x = 80, .y = 60 }, .width = 60, .height = 40 };
+    const toward = Point{ .x = 140, .y = 120 };
+    const point = ellipseBoundaryPoint(node, toward);
+    const rx = node.width / 2.0;
+    const ry = node.height / 2.0;
+    const normalized = ((point.x - node.center.x) * (point.x - node.center.x)) / (rx * rx) +
+        ((point.y - node.center.y) * (point.y - node.center.y)) / (ry * ry);
+
+    try std.testing.expect(@abs(normalized - 1.0) <= 0.0001);
+    try std.testing.expect(point.x > node.center.x);
+    try std.testing.expect(point.y > node.center.y);
+    try std.testing.expect(point.x < node.center.x + node.width / 2.0);
+    try std.testing.expect(point.y < node.center.y + node.height / 2.0);
+}
+
 test "layout retains rank metadata for long-edge routing" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -14103,9 +14168,18 @@ test "user cluster example stays compact and Graphviz-like" {
     var path_numbers: [32]f64 = undefined;
     const cross_count = svgPathNumbers(svg, "a1-&gt;b3", path_numbers[0..]);
     try std.testing.expect(cross_count >= 8);
+    var oracle_path_numbers: [32]f64 = undefined;
+    const oracle_cross_count = svgPathNumbers(graphviz_oracle, "a1-&gt;b3", oracle_path_numbers[0..]);
+    try std.testing.expect(oracle_cross_count >= 8);
+    const svg_translate = svgGraphvizTranslate(svg);
+    const oracle_translate = svgGraphvizTranslate(graphviz_oracle);
+    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 7.5);
     try std.testing.expect(path_numbers[2] < 100.0);
     const diagonal_count = svgPathNumbers(svg, "b2-&gt;a3", path_numbers[0..]);
     try std.testing.expect(diagonal_count >= 8);
+    const oracle_diagonal_count = svgPathNumbers(graphviz_oracle, "b2-&gt;a3", oracle_path_numbers[0..]);
+    try std.testing.expect(oracle_diagonal_count >= 8);
+    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 3.0);
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
 }
