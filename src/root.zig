@@ -4861,6 +4861,25 @@ const GroupShiftConstraint = struct {
     min_shift: f64,
 };
 
+const ClusterContainment = struct {
+    left: f64,
+    right: f64,
+};
+
+fn clusterContainmentEnvelope(cluster: Cluster, centers: []const f64, sizes: []const NodeSize, margin: f64) ?ClusterContainment {
+    var left = std.math.floatMax(f64);
+    var right: f64 = -std.math.floatMax(f64);
+    var found = false;
+    for (cluster.nodes) |node_id| {
+        if (node_id >= centers.len or node_id >= sizes.len) continue;
+        left = @min(left, centers[node_id] - sizes[node_id].width / 2.0 - margin);
+        right = @max(right, centers[node_id] + sizes[node_id].width / 2.0 + margin);
+        found = true;
+    }
+    if (!found) return null;
+    return .{ .left = left, .right = right };
+}
+
 fn satisfyCoordConstraints(centers: []f64, constraints: []const CoordConstraint) bool {
     if (centers.len == 0) return true;
     var changed = false;
@@ -12841,6 +12860,25 @@ test "group shift constraints move node sets within extent budget" {
     try std.testing.expectEqual(@as(f64, 30), centers[0]);
     try std.testing.expectEqual(@as(f64, 50), centers[1]);
     try std.testing.expectEqual(@as(f64, 80), centers[2]);
+}
+
+test "cluster containment envelope includes Graphviz-style margin" {
+    var node_ids = [_]NodeId{ 0, 1 };
+    const cluster = Cluster{
+        .id = 0,
+        .name = "cluster",
+        .label = "cluster",
+        .nodes = node_ids[0..],
+    };
+    const centers = [_]f64{ 50, 80 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 30, .height = 10 },
+    };
+
+    const envelope = clusterContainmentEnvelope(cluster, centers[0..], sizes[0..], 8.0).?;
+    try std.testing.expectEqual(@as(f64, 32), envelope.left);
+    try std.testing.expectEqual(@as(f64, 103), envelope.right);
 }
 
 test "center shifting respects extent budget" {
