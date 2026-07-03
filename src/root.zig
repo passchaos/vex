@@ -1471,7 +1471,7 @@ pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
             }
             continue;
         }
-        try parseMermaidStatement(&graph, line, if (subgraph_name != null) &subgraph_nodes else null);
+        try parseMermaidStatement(&graph, line, if (subgraph_name != null) &subgraph_nodes else null, class_defs.items);
     }
     if (subgraph_name) |name| {
         try addMermaidSubgraph(&graph, name, subgraph_label orelse name, subgraph_nodes.items);
@@ -1682,16 +1682,16 @@ fn addMermaidSubgraph(graph: *Graph, name: []const u8, label: []const u8, nodes:
     _ = try graph.addCluster(name, null, nodes, &attrs);
 }
 
-fn parseMermaidStatement(graph: *Graph, line: []const u8, subgraph_nodes: ?*std.ArrayList(NodeId)) !void {
+fn parseMermaidStatement(graph: *Graph, line: []const u8, subgraph_nodes: ?*std.ArrayList(NodeId), class_defs: []const MermaidClassDef) !void {
     var pos: usize = 0;
-    var current = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes) orelse return;
+    var current = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes, class_defs) orelse return;
     while (findMermaidArrow(line, pos)) |arrow| {
         pos = arrow.start;
         const edge_label = mermaidEdgeLabelBeforeArrow(line, &pos);
         const arrow_text = line[arrow.start..arrow.end];
         pos = arrow.end;
         const label_after_arrow = mermaidEdgeLabelAfterArrow(line, &pos);
-        const target = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes) orelse break;
+        const target = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes, class_defs) orelse break;
         const edge_id = try graph.edge(current, target, .{ .label = edge_label orelse label_after_arrow });
         try applyMermaidEdgeStyle(graph, edge_id, arrow_text);
         current = target;
@@ -1743,7 +1743,7 @@ fn mermaidEdgeLabelAfterArrow(line: []const u8, pos: *usize) ?[]const u8 {
     return if (label.len == 0) null else label;
 }
 
-fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize, subgraph_nodes: ?*std.ArrayList(NodeId)) !?NodeId {
+fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize, subgraph_nodes: ?*std.ArrayList(NodeId), class_defs: []const MermaidClassDef) !?NodeId {
     while (pos.* < line.len and std.ascii.isWhitespace(line[pos.*])) : (pos.* += 1) {}
     if (pos.* >= line.len) return null;
     const id_start = pos.*;
@@ -1753,12 +1753,27 @@ fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize, subgraph_no
     const node_id = try graph.node(id_text);
     if (subgraph_nodes) |nodes| try appendUniqueMermaidNode(graph.allocator, nodes, node_id);
     try parseMermaidNodeSuffix(graph, node_id, line, pos);
+    try parseMermaidInlineClasses(graph, node_id, line, pos, class_defs);
     return node_id;
 }
 
 fn appendUniqueMermaidNode(allocator: std.mem.Allocator, nodes: *std.ArrayList(NodeId), node_id: NodeId) !void {
     if (containsNode(nodes.items, node_id)) return;
     try nodes.append(allocator, node_id);
+}
+
+fn parseMermaidInlineClasses(graph: *Graph, node_id: NodeId, line: []const u8, pos: *usize, class_defs: []const MermaidClassDef) !void {
+    if (pos.* + 3 > line.len or !std.mem.eql(u8, line[pos.* .. pos.* + 3], ":::")) return;
+    pos.* += 3;
+    const start = pos.*;
+    while (pos.* < line.len and (isMermaidIdChar(line[pos.*]) or line[pos.*] == ',')) : (pos.* += 1) {}
+    const classes_text = line[start..pos.*];
+    var classes = std.mem.splitScalar(u8, classes_text, ',');
+    while (classes.next()) |raw_class| {
+        const class_name = std.mem.trim(u8, raw_class, " \t\r\n");
+        const attrs = mermaidClassAttrs(class_defs, class_name) orelse continue;
+        try applyMermaidStyleAttrs(graph, node_id, attrs);
+    }
 }
 
 fn isMermaidIdChar(c: u8) bool {
@@ -9993,6 +10008,27 @@ test "Mermaid parser applies classDef and class directives" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fff\"") != null);
+}
+
+test "Mermaid parser applies inline class directives" {
+    const allocator = std.testing.allocator;
+    var graph = try parseMermaid(allocator,
+        \\flowchart LR
+        \\  classDef hot fill:#f00,stroke:#000,color:#fff,stroke-width:2
+        \\  A[Alpha]:::hot --> B[Beta]
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("A").?;
+    try std.testing.expectEqualStrings("#f00", attrValue(graph.nodes.items[a].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#000", attrValue(graph.nodes.items[a].attrs.items, "color").?);
+    try std.testing.expectEqualStrings("#fff", attrValue(graph.nodes.items[a].attrs.items, "fontcolor").?);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2.0\"") != null);
 }
 
 test "Mermaid parser applies linkStyle directives" {
