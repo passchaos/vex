@@ -7302,15 +7302,32 @@ fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
     return svgNumberAfter(fragment, " width=\"");
 }
 
+fn svgClusterRectHeight(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    if (svgPolygonBBoxHeight(fragment)) |height| return height;
+    return svgNumberAfter(fragment, " height=\"");
+}
+
 fn svgClusterRectX(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
     if (svgPolygonBBoxX(fragment)) |x| return x;
     return svgNumberAfter(fragment, " x=\"");
 }
 
+fn svgClusterRectY(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    if (svgPolygonBBoxY(fragment)) |y| return y;
+    return svgNumberAfter(fragment, " y=\"");
+}
+
 fn svgClusterScreenX(svg: []const u8, title: []const u8) ?f64 {
     const x = svgClusterRectX(svg, title) orelse return null;
     return x + svgGraphvizTranslate(svg).x;
+}
+
+fn svgClusterScreenY(svg: []const u8, title: []const u8) ?f64 {
+    const y = svgClusterRectY(svg, title) orelse return null;
+    return y + svgGraphvizTranslate(svg).y;
 }
 
 fn svgPolygonBBoxX(fragment: []const u8) ?f64 {
@@ -7321,6 +7338,16 @@ fn svgPolygonBBoxX(fragment: []const u8) ?f64 {
     var index: usize = 0;
     while (index + 1 < count) : (index += 2) min_x = @min(min_x, point_numbers[index]);
     return if (min_x == std.math.floatMax(f64)) null else min_x;
+}
+
+fn svgPolygonBBoxY(fragment: []const u8) ?f64 {
+    var point_numbers: [64]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_y = std.math.floatMax(f64);
+    var index: usize = 1;
+    while (index < count) : (index += 2) min_y = @min(min_y, point_numbers[index]);
+    return if (min_y == std.math.floatMax(f64)) null else min_y;
 }
 
 fn svgPolygonBBoxWidth(fragment: []const u8) ?f64 {
@@ -7337,6 +7364,22 @@ fn svgPolygonBBoxWidth(fragment: []const u8) ?f64 {
     }
     if (min_x == std.math.floatMax(f64)) return null;
     return max_x - min_x;
+}
+
+fn svgPolygonBBoxHeight(fragment: []const u8) ?f64 {
+    var point_numbers: [64]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_y = std.math.floatMax(f64);
+    var max_y: f64 = -std.math.floatMax(f64);
+    var index: usize = 1;
+    while (index < count) : (index += 2) {
+        const y = point_numbers[index];
+        min_y = @min(min_y, y);
+        max_y = @max(max_y, y);
+    }
+    if (min_y == std.math.floatMax(f64)) return null;
+    return max_y - min_y;
 }
 
 fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
@@ -7360,9 +7403,35 @@ fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     return (min_x + max_x) / 2.0;
 }
 
+fn svgNodeCenterY(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    if (svgNumberAfter(fragment, " cy=\"")) |cy| return cy;
+    if (svgNumberAfter(fragment, " y=\"")) |y| {
+        if (svgNumberAfter(fragment, " height=\"")) |height| return y + height / 2.0;
+    }
+    var point_numbers: [64]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_y = std.math.floatMax(f64);
+    var max_y: f64 = -std.math.floatMax(f64);
+    var index: usize = 1;
+    while (index < count) : (index += 2) {
+        const y = point_numbers[index];
+        min_y = @min(min_y, y);
+        max_y = @max(max_y, y);
+    }
+    if (min_y == std.math.floatMax(f64)) return null;
+    return (min_y + max_y) / 2.0;
+}
+
 fn svgNodeScreenCenterX(svg: []const u8, title: []const u8) ?f64 {
     const x = svgNodeCenterX(svg, title) orelse return null;
     return x + svgGraphvizTranslate(svg).x;
+}
+
+fn svgNodeScreenCenterY(svg: []const u8, title: []const u8) ?f64 {
+    const y = svgNodeCenterY(svg, title) orelse return null;
+    return y + svgGraphvizTranslate(svg).y;
 }
 
 fn svgNumbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
@@ -7394,6 +7463,11 @@ fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, e
         .start = .{ .x = numbers[0], .y = numbers[1] },
         .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
     };
+}
+
+fn svgScreenPoint(svg: []const u8, point: Point) Point {
+    const translate = svgGraphvizTranslate(svg);
+    return .{ .x = point.x + translate.x, .y = point.y + translate.y };
 }
 
 fn renderedEdgePathCount(svg: []const u8) usize {
@@ -10462,8 +10536,12 @@ test "SVG cluster geometry parser handles Graphviz polygon clusters" {
 
     try std.testing.expectEqual(@as(f64, 8.0), svgClusterRectX(svg, "cluster_0").?);
     try std.testing.expectEqual(@as(f64, 90.0), svgClusterRectWidth(svg, "cluster_0").?);
+    try std.testing.expectApproxEqAbs(@as(f64, -357.01), svgClusterRectY(svg, "cluster_0").?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 292.8), svgClusterRectHeight(svg, "cluster_0").?, 0.001);
     try std.testing.expectEqual(@as(f64, 12.0), svgClusterScreenX(svg, "cluster_0").?);
+    try std.testing.expectApproxEqAbs(@as(f64, 48.0), svgClusterScreenY(svg, "cluster_0").?, 0.001);
     try std.testing.expectEqual(@as(f64, 67.0), svgNodeScreenCenterX(svg, "a0").?);
+    try std.testing.expectApproxEqAbs(@as(f64, 98.8), svgNodeScreenCenterY(svg, "a0").?, 0.001);
 }
 
 test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" {
@@ -14417,6 +14495,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 1.0);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 4.0);
+    try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_0").? - svgClusterScreenY(graphviz_oracle, "cluster_0").?) <= 1.5);
+    try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_0").? - svgClusterRectHeight(graphviz_oracle, "cluster_0").?) <= 1.5);
+    try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_1").? - svgClusterScreenY(graphviz_oracle, "cluster_1").?) <= 1.5);
+    try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_1").? - svgClusterRectHeight(graphviz_oracle, "cluster_1").?) <= 1.5);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
     const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_start_x > svgNodeCenterX(svg, "a0").?);
@@ -14434,6 +14516,12 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 2.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a0").? - svgNodeScreenCenterY(graphviz_oracle, "a0").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a1").? - svgNodeScreenCenterY(graphviz_oracle, "a1").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a2").? - svgNodeScreenCenterY(graphviz_oracle, "a2").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a3").? - svgNodeScreenCenterY(graphviz_oracle, "a3").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 3.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 2.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
@@ -14453,6 +14541,14 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_translate = svgGraphvizTranslate(graphviz_oracle);
     try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 7.5);
     try std.testing.expect(path_numbers[2] < 100.0);
+    const cross_points = svgPathStartEnd(svg, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
+    const oracle_cross_points = svgPathStartEnd(graphviz_oracle, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
+    const cross_start = svgScreenPoint(svg, cross_points.start);
+    const oracle_cross_start = svgScreenPoint(graphviz_oracle, oracle_cross_points.start);
+    const cross_end_point = svgScreenPoint(svg, cross_points.end);
+    const oracle_cross_end = svgScreenPoint(graphviz_oracle, oracle_cross_points.end);
+    try std.testing.expect(distanceBetween(cross_start, oracle_cross_start) <= 8.0);
+    try std.testing.expect(distanceBetween(cross_end_point, oracle_cross_end) <= 3.0);
     const diagonal_count = svgPathNumbers(svg, "b2-&gt;a3", path_numbers[0..]);
     try std.testing.expect(diagonal_count >= 8);
     const oracle_diagonal_count = svgPathNumbers(graphviz_oracle, "b2-&gt;a3", oracle_path_numbers[0..]);
@@ -14460,6 +14556,14 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 3.0);
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
+    const diagonal_points = svgPathStartEnd(svg, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
+    const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 3.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 8.5);
+    const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
+    const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 9.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 9.0);
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
