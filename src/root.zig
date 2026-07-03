@@ -6793,10 +6793,10 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
     const d = @min(@min(rect.width, rect.height) / 3.0, 18);
-    try writeSvgLine(writer, rect.x, rect.y + d, rect.x + d, rect.y, visual);
-    try writeSvgLine(writer, rect.x + rect.width - d, rect.y, rect.x + rect.width, rect.y + d, visual);
-    try writeSvgLine(writer, rect.x + rect.width, rect.y + rect.height - d, rect.x + rect.width - d, rect.y + rect.height, visual);
-    try writeSvgLine(writer, rect.x + d, rect.y + rect.height, rect.x, rect.y + rect.height - d, visual);
+    try writeSvgPolylineLine(writer, rect.x, rect.y + d, rect.x + d, rect.y, visual);
+    try writeSvgPolylineLine(writer, rect.x + rect.width - d, rect.y, rect.x + rect.width, rect.y + d, visual);
+    try writeSvgPolylineLine(writer, rect.x + rect.width, rect.y + rect.height - d, rect.x + rect.width - d, rect.y + rect.height, visual);
+    try writeSvgPolylineLine(writer, rect.x + d, rect.y + rect.height, rect.x, rect.y + rect.height - d, visual);
 }
 
 fn renderSvgCircleDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -7053,6 +7053,19 @@ fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height:
 
 fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
     try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        x1,
+        y1,
+        x2,
+        y2,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn writeSvgPolylineLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<polyline points=\"{d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
         x1,
         y1,
         x2,
@@ -10827,8 +10840,8 @@ test "SVG renderer draws Msquare with Graphviz-like corner marks" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
-    try std.testing.expect(std.mem.indexOf(u8, svg, " L ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=") != null);
+    try std.testing.expect(countSubstrings(svg, "<polyline points=") >= 4);
 }
 
 test "SVG renderer honors additional Graphviz arrow marker shapes" {
@@ -12360,6 +12373,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline points=\"91.5,379.3 103.5,367.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
