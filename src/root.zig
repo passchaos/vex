@@ -4857,6 +4857,11 @@ const CoordConstraint = struct {
     min_gap: f64,
 };
 
+const GroupShiftConstraint = struct {
+    nodes: []const NodeId,
+    min_shift: f64,
+};
+
 fn satisfyCoordConstraints(centers: []f64, constraints: []const CoordConstraint) bool {
     if (centers.len == 0) return true;
     var changed = false;
@@ -4873,6 +4878,21 @@ fn satisfyCoordConstraints(centers: []f64, constraints: []const CoordConstraint)
             }
         }
         if (!pass_changed) return changed;
+    }
+    return changed;
+}
+
+fn applyGroupShiftConstraints(centers: []f64, constraints: []const GroupShiftConstraint, max_extent: f64, sizes: []const NodeSize) bool {
+    if (max_extent <= 0) return false;
+    var changed = false;
+    for (constraints) |constraint| {
+        if (constraint.min_shift <= 0) continue;
+        const shift = @min(constraint.min_shift, @max(0.0, max_extent - centersExtent(centers, sizes)));
+        if (shift <= 0) continue;
+        for (constraint.nodes) |node_id| {
+            if (node_id < centers.len) centers[node_id] += shift;
+        }
+        changed = true;
     }
     return changed;
 }
@@ -12776,6 +12796,24 @@ test "coordinate constraints propagate minimum gaps" {
     try std.testing.expectEqual(@as(f64, 30), centers[1]);
     try std.testing.expectEqual(@as(f64, 45), centers[2]);
     try std.testing.expect(!satisfyCoordConstraints(centers[0..], constraints[0..]));
+}
+
+test "group shift constraints move node sets within extent budget" {
+    var centers = [_]f64{ 20, 40, 80 };
+    const sizes = [_]NodeSize{
+        .{ .width = 10, .height = 10 },
+        .{ .width = 10, .height = 10 },
+        .{ .width = 10, .height = 10 },
+    };
+    const group = [_]NodeId{ 0, 1 };
+    const constraints = [_]GroupShiftConstraint{
+        .{ .nodes = group[0..], .min_shift = 12 },
+    };
+
+    try std.testing.expect(applyGroupShiftConstraints(centers[0..], constraints[0..], 95, sizes[0..]));
+    try std.testing.expectEqual(@as(f64, 30), centers[0]);
+    try std.testing.expectEqual(@as(f64, 50), centers[1]);
+    try std.testing.expectEqual(@as(f64, 80), centers[2]);
 }
 
 test "center shifting respects extent budget" {
