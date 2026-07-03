@@ -4125,6 +4125,81 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
     };
 }
 
+const HtmlTableGrid = struct {
+    x: f64,
+    y: f64,
+    cell_w: f64,
+    cell_h: f64,
+    cell_spacing: f64,
+};
+
+fn htmlTableGrid(label: []const u8, layout: NodeLayout) ?HtmlTableGrid {
+    const metrics = htmlTableMetrics(label) orelse return null;
+    const x = layout.center.x - layout.width / 2.0;
+    const y = layout.center.y - layout.height / 2.0;
+    const total_spacing_x = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1));
+    const total_spacing_y = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1));
+    return .{
+        .x = x,
+        .y = y,
+        .cell_w = @max(1, (layout.width - total_spacing_x) / @as(f64, @floatFromInt(metrics.cols))),
+        .cell_h = @max(1, (layout.height - total_spacing_y) / @as(f64, @floatFromInt(metrics.rows))),
+        .cell_spacing = metrics.cell_spacing,
+    };
+}
+
+fn htmlTableCellRect(label: []const u8, layout: NodeLayout, port: []const u8) ?RectF {
+    const grid = htmlTableGrid(label, layout) orelse return null;
+    var row_pos: usize = 0;
+    var row_index: usize = 0;
+    var occupied: [32]usize = @splat(0);
+    while (findHtmlTag(label, "tr", row_pos)) |tr_start| : (row_index += 1) {
+        if (row_index > 0) {
+            for (&occupied) |*remaining| {
+                if (remaining.* > 0) remaining.* -= 1;
+            }
+        }
+        const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
+        const content_start = tr_start + tr_open_end + 1;
+        const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
+        const row = label[content_start..tr_close];
+        var cell_pos: usize = 0;
+        var col_index: usize = 0;
+        while (findHtmlTag(row, "td", cell_pos)) |td_start| : (col_index += 1) {
+            col_index = nextFreeHtmlColumn(&occupied, col_index);
+            const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
+            const td_tag = row[td_start + 1 .. td_start + td_open_end];
+            const cell_start = td_start + td_open_end + 1;
+            const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
+            const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
+            const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
+            const rect = htmlGridCellRect(grid, row_index, col_index, rowspan, colspan);
+            var span_i: usize = 0;
+            while (span_i < colspan and col_index + span_i < occupied.len) : (span_i += 1) {
+                occupied[col_index + span_i] = @max(occupied[col_index + span_i], rowspan);
+            }
+            if (htmlAttrValue(td_tag, "port")) |cell_port| {
+                if (std.mem.eql(u8, cell_port, port)) return rect;
+            }
+            cell_pos = td_close + 1;
+            col_index += colspan - 1;
+        }
+        row_pos = tr_close + 1;
+    }
+    return null;
+}
+
+fn htmlGridCellRect(grid: HtmlTableGrid, row_index: usize, col_index: usize, rowspan: usize, colspan: usize) RectF {
+    const span_f: f64 = @floatFromInt(colspan);
+    const row_span_f: f64 = @floatFromInt(rowspan);
+    return .{
+        .x = grid.x + grid.cell_spacing + @as(f64, @floatFromInt(col_index)) * (grid.cell_w + grid.cell_spacing),
+        .y = grid.y + grid.cell_spacing + @as(f64, @floatFromInt(row_index)) * (grid.cell_h + grid.cell_spacing),
+        .width = grid.cell_w * span_f + grid.cell_spacing * @as(f64, @floatFromInt(colspan - 1)),
+        .height = grid.cell_h * row_span_f + grid.cell_spacing * @as(f64, @floatFromInt(rowspan - 1)),
+    };
+}
+
 fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
     const value = htmlAttrValue(tag, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
@@ -6615,17 +6690,12 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
 
 fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const metrics = htmlTableMetrics(label) orelse return;
-    const x = layout.center.x - layout.width / 2.0;
-    const y = layout.center.y - layout.height / 2.0;
-    const total_spacing_x = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1));
-    const total_spacing_y = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1));
-    const cell_w = @max(1, (layout.width - total_spacing_x) / @as(f64, @floatFromInt(metrics.cols)));
-    const cell_h = @max(1, (layout.height - total_spacing_y) / @as(f64, @floatFromInt(metrics.rows)));
+    const grid = htmlTableGrid(label, layout) orelse return;
     const fill = metrics.bg_color orelse visual.fill;
 
     try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-        x,
-        y,
+        grid.x,
+        grid.y,
         layout.width,
         layout.height,
         visual.radius,
@@ -6657,12 +6727,7 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
             const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
             const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
-            const span_f: f64 = @floatFromInt(colspan);
-            const row_span_f: f64 = @floatFromInt(rowspan);
-            const cell_x = x + metrics.cell_spacing + @as(f64, @floatFromInt(col_index)) * (cell_w + metrics.cell_spacing);
-            const cell_y = y + metrics.cell_spacing + @as(f64, @floatFromInt(row_index)) * (cell_h + metrics.cell_spacing);
-            const spanned_w = cell_w * span_f + metrics.cell_spacing * @as(f64, @floatFromInt(colspan - 1));
-            const spanned_h = cell_h * row_span_f + metrics.cell_spacing * @as(f64, @floatFromInt(rowspan - 1));
+            const cell_rect = htmlGridCellRect(grid, row_index, col_index, rowspan, colspan);
             var span_i: usize = 0;
             while (span_i < colspan and col_index + span_i < occupied.len) : (span_i += 1) {
                 occupied[col_index + span_i] = @max(occupied[col_index + span_i], rowspan);
@@ -6670,10 +6735,10 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             const cell_border: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellborder", @intFromFloat(metrics.cell_border)));
             const cell_padding: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellpadding", @intFromFloat(metrics.cell_padding)));
             if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, cell_bg });
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, cell_bg });
             }
             if (cell_border > 0) {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_x, cell_y, spanned_w, spanned_h, visual.stroke, cell_border });
+                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, visual.stroke, cell_border });
             }
             const cell = row[cell_start..td_close];
             const align_attr = htmlAttrValue(td_tag, "align");
@@ -6682,21 +6747,21 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             else
                 "middle";
             const text_x = if (std.mem.eql(u8, text_anchor, "start"))
-                cell_x + cell_padding
+                cell_rect.x + cell_padding
             else if (std.mem.eql(u8, text_anchor, "end"))
-                cell_x + spanned_w - cell_padding
+                cell_rect.x + cell_rect.width - cell_padding
             else
-                cell_x + spanned_w / 2.0;
+                cell_rect.x + cell_rect.width / 2.0;
             const valign_attr = htmlAttrValue(td_tag, "valign");
             const text_y = if (valign_attr) |value|
                 if (std.ascii.eqlIgnoreCase(value, "top"))
-                    cell_y + cell_padding + visual.font_size * 0.5
+                    cell_rect.y + cell_padding + visual.font_size * 0.5
                 else if (std.ascii.eqlIgnoreCase(value, "bottom"))
-                    cell_y + spanned_h - cell_padding - visual.font_size * 0.5
+                    cell_rect.y + cell_rect.height - cell_padding - visual.font_size * 0.5
                 else
-                    cell_y + spanned_h / 2.0
+                    cell_rect.y + cell_rect.height / 2.0
             else
-                cell_y + spanned_h / 2.0;
+                cell_rect.y + cell_rect.height / 2.0;
             try renderSvgTextBlockWithAnchor(
                 writer,
                 cell,
@@ -8197,11 +8262,11 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     const tail_clip = edgeClipEnabled(edge_item.attrs.items, "tailclip");
     const head_clip = edgeClipEnabled(edge_item.attrs.items, "headclip");
     const raw_start = if (tail_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, false) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true)
+        samePortBoundaryPoint(graph, layout, edge_item, false) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse portBoundaryPoint(from, to.center, edge_item.tail_port, rankdir, true)
     else
         from.center;
     const raw_end = if (head_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, true) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
+        samePortBoundaryPoint(graph, layout, edge_item, true) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse portBoundaryPoint(to, from.center, edge_item.head_port, rankdir, false)
     else
         to.center;
     const compound = graphCompoundEnabled(graph);
@@ -8481,6 +8546,12 @@ fn findRecordPortRect(node: RecordAst, port: []const u8, rect: RectF) ?RectF {
         };
     }
     return null;
+}
+
+fn htmlTableBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, record_port: ?[]const u8, compass: CompassPort) ?Point {
+    const port = record_port orelse return null;
+    const cell_rect = htmlTableCellRect(node_item.label, layout, port) orelse return null;
+    return pointForPort(cell_rect, compass, toward);
 }
 
 fn offsetPoint(point: Point, rankdir: RankDir, offset: f64) Point {
@@ -10942,6 +11013,38 @@ test "SVG renderer honors per-cell HTML table padding border and valign" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"0.0\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
+}
+
+test "HTML table TD PORT routes edge endpoints to cells" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  html [shape=plain,label=<
+        \\    <TABLE CELLBORDER="1" CELLSPACING="2" CELLPADDING="4">
+        \\      <TR><TD PORT="left">L</TD><TD PORT="right">R</TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\  target [shape=box];
+        \\  html:right:e -> target:w;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("right", graph.edges.items[0].tail_record_port.?);
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const html = graph.node_index.get("html").?;
+    const cell = htmlTableCellRect(graph.nodes.items[html].label, layout.nodes[html], "right") orelse return error.MissingHtmlPort;
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
+    try std.testing.expectEqual(cell.x + cell.width, route.start.x);
+    try std.testing.expect(route.start.y >= cell.y);
+    try std.testing.expect(route.start.y <= cell.y + cell.height);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">R</tspan>") != null);
 }
 
 test "SVG renderer honors graph label and bgcolor attributes" {
