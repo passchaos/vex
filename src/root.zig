@@ -6920,9 +6920,10 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
             const segment_route = edgeRouteForEdgeWithColorOffset(route, rankdir, color_offset);
             const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
             const path_route = routeForPathMarkers(segment_route, segment_visual);
-            try writer.writeAll("<path d=\"");
+            try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{segment.color});
             try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing);
-            try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ segment.color, visual.width });
+            try writer.writeByte('"');
+            try writeSvgStrokeWidth(writer, visual.width);
             try writeSvgDash(writer, visual.dash);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
@@ -6932,9 +6933,10 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     }
 
     const path_route = routeForPathMarkers(route, visual);
-    try writer.writeAll("<path d=\"");
+    try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{visual.stroke});
     try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing);
-    try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
+    try writer.writeByte('"');
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
@@ -7268,7 +7270,7 @@ fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, e
 fn renderedEdgePathCount(svg: []const u8) usize {
     const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
     const end_rel = std.mem.indexOf(u8, svg[start..], "\n<g class=\"nodes\"") orelse return 0;
-    return countSubstrings(svg[start .. start + end_rel], "<path d=\"M ");
+    return countSubstrings(svg[start .. start + end_rel], "<path fill=\"none\" stroke=");
 }
 
 fn graphConcentrateEnabled(graph: *const Graph) bool {
@@ -10285,7 +10287,8 @@ test "Mermaid parser applies linkStyle directives" {
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#ff0\" stroke-width=\"4.0\" stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#ff0\" d=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "\" stroke-width=\"4.0\" stroke-dasharray=\"8,5\"") != null);
 }
 
 test "SVG renderer emits document" {
@@ -12678,9 +12681,9 @@ test "SVG renderer honors Graphviz edge color lists" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"red:blue:green\"") == null);
-    try std.testing.expect(countSubstrings(svg, "stroke=\"red\" stroke-width") >= 1);
-    try std.testing.expect(countSubstrings(svg, "stroke=\"blue\" stroke-width") >= 1);
-    try std.testing.expect(countSubstrings(svg, "stroke=\"green\" stroke-width") >= 1);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"red\" d=\"") >= 1);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"blue\" d=\"") >= 1);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"green\" d=\"") >= 1);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0-head)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-0-tail)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"red\"") != null);
@@ -14261,11 +14264,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0-&gt;a1</title>\n<path") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0-&gt;a1</title>\n<path fill=\"none\" stroke=\"black\" d=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"91.5,379.3 103.5,367.3\"/>") != null);
