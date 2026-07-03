@@ -5580,8 +5580,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         for (graph.edges.items) |edge_item| {
             if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(edge_item);
-            if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, visual.stroke, visual.marker_scale);
-            if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, visual.stroke, visual.marker_scale);
+            if (visual.marker_end != .none) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), visual.marker_scale);
+            if (visual.marker_start != .none) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), visual.marker_scale);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -5599,21 +5599,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (edge_wrap == .none) try writeSvgEdgeTitle(writer, graph, edge_item);
         if (edge_item.from == edge_item.to) {
             const route = selfLoopRoute(layout.nodes[edge_item.from]);
-            try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                route.start.x,
-                route.start.y,
-                route.control1.x,
-                route.control1.y,
-                route.control2.x,
-                route.control2.y,
-                route.end.x,
-                route.end.y,
-                visual.stroke,
-                visual.width,
-            });
-            try writeSvgDash(writer, visual.dash);
-            try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
-            try writer.writeAll("/>\n");
+            try renderSvgSelfLoopPaths(writer, graph.directed, edge_item, route, visual);
             if (edge_item.label) |label| {
                 try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
             }
@@ -5625,13 +5611,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 
         const offset = parallelEdgeOffset(graph, edge_item.id);
         const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
-        const path_route = routeForPathMarkers(route, visual);
-        try writer.writeAll("<path d=\"");
-        try writeEdgePath(writer, layout, edge_item, layout.rankdir, offset, path_route, edge_routing);
-        try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
-        try writeSvgDash(writer, visual.dash);
-        try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
-        try writer.writeAll("/>\n");
+        try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual);
         if (edge_item.label) |label| {
             try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
         }
@@ -5974,6 +5954,107 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRout
             .hidden = false,
         });
     }
+}
+
+fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual) Io.Writer.Error!void {
+    if (edgeColorList(edge_item)) |colors| {
+        const spacing = @max(4.0, visual.width + 3.0);
+        for (colors.segments[0..colors.len], 0..) |segment, index| {
+            const color_offset = colorListOffset(colors.len, index, spacing);
+            const path_route = routeForPathMarkers(edgeRouteForEdgeWithColorOffset(route, rankdir, color_offset), edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len));
+            try writer.writeAll("<path d=\"");
+            try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing);
+            try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ segment.color, visual.width });
+            try writeSvgDash(writer, visual.dash);
+            try writeSvgMarkerAttrs(writer, directed, edge_item.id, edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len));
+            try writer.writeAll("/>\n");
+        }
+        return;
+    }
+
+    const path_route = routeForPathMarkers(route, visual);
+    try writer.writeAll("<path d=\"");
+    try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing);
+    try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
+    try writeSvgDash(writer, visual.dash);
+    try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+    if (edgeColorList(edge_item)) |colors| {
+        const spacing = @max(4.0, visual.width + 3.0);
+        for (colors.segments[0..colors.len], 0..) |segment, index| {
+            const color_offset = colorListOffset(colors.len, index, spacing);
+            const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
+            const shifted = offsetEdgeRoute(route, .TB, color_offset);
+            try writeSvgSelfLoopPath(writer, shifted, segment_visual);
+            try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
+            try writer.writeAll("/>\n");
+        }
+        return;
+    }
+
+    try writeSvgSelfLoopPath(writer, route, visual);
+    try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
+    try writer.writeAll("/>\n");
+}
+
+fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        route.start.x,
+        route.start.y,
+        route.control1.x,
+        route.control1.y,
+        route.control2.x,
+        route.control2.y,
+        route.end.x,
+        route.end.y,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+}
+
+fn edgeColorList(edge_item: Edge) ?ColorList {
+    const color = attrValue(edge_item.attrs.items, "color") orelse edge_item.color;
+    return parseColorList(color);
+}
+
+fn edgeMarkerColor(edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
+    const colors = edgeColorList(edge_item) orelse return visual.stroke;
+    if (head) return colors.segments[0].color;
+    if (colors.len >= 2) return colors.segments[1].color;
+    return colors.segments[0].color;
+}
+
+fn edgeVisualForSegment(edge_item: Edge, visual: EdgeVisual, color: []const u8, index: usize, color_count: usize) EdgeVisual {
+    var result = visual;
+    result.stroke = color;
+    if (index != 0) result.marker_end = .none;
+    if (index != @min(color_count - 1, 1)) result.marker_start = .none;
+    if (result.marker_start != .none) result.stroke = edgeMarkerColor(edge_item, visual, false);
+    if (result.marker_end != .none) result.stroke = edgeMarkerColor(edge_item, visual, true);
+    return result;
+}
+
+fn colorListOffset(count: usize, index: usize, spacing: f64) f64 {
+    if (count <= 1) return 0;
+    return (@as(f64, @floatFromInt(index)) - @as(f64, @floatFromInt(count - 1)) / 2.0) * spacing;
+}
+
+fn edgeRouteForEdgeWithColorOffset(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
+    return offsetEdgeRoute(route, rankdir, offset);
+}
+
+fn offsetEdgeRoute(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
+    return .{
+        .start = offsetPoint(route.start, rankdir, offset),
+        .control1 = offsetPoint(route.control1, rankdir, offset),
+        .control2 = offsetPoint(route.control2, rankdir, offset),
+        .end = offsetPoint(route.end, rankdir, offset),
+        .label = route.label,
+    };
 }
 
 fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -7401,8 +7482,10 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     const dir = attrValue(edge_item.attrs.items, "dir");
     const head_enabled = markerEnabledByDir(dir, true);
     const tail_enabled = markerEnabledByDir(dir, false);
+    const raw_stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color;
+    const stroke = if (parseColorList(raw_stroke)) |colors| colors.segments[0].color else raw_stroke;
     return .{
-        .stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color,
+        .stroke = stroke,
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
@@ -11048,6 +11131,34 @@ test "SVG renderer honors common Graphviz arrow marker attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-2-head)\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-3-tail)\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-3-head)\"") == null);
+}
+
+test "SVG renderer honors Graphviz edge color lists" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a -> b [color="red:blue:green", dir=both, arrowhead=vee, arrowtail=dot, label="multi"];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("red:blue:green", graph.edges.items[0].color);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"red:blue:green\"") == null);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"red\" stroke-width") >= 1);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"blue\" stroke-width") >= 1);
+    try std.testing.expect(countSubstrings(svg, "stroke=\"green\" stroke-width") >= 1);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0-head)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-0-tail)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"red\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"blue\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "multi") != null);
 }
 
 test "SVG renderer uses Graphviz-like normal arrow marker proportions" {
