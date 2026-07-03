@@ -4610,6 +4610,39 @@ fn centerLevelOnNeighborSpans(graph: *const Graph, ranks: []const usize, level: 
     }
 }
 
+fn alignLevelsToNeighborSpansIfHelpful(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (levels.len <= 1) return;
+    var rank = levels.len;
+    while (rank > 0) {
+        rank -= 1;
+        alignLevelToNeighborSpansIfHelpful(graph, levels[rank].items, ranks, centers, sizes, gap, false);
+    }
+    rank = 0;
+    while (rank < levels.len) : (rank += 1) {
+        alignLevelToNeighborSpansIfHelpful(graph, levels[rank].items, ranks, centers, sizes, gap, true);
+    }
+}
+
+fn alignLevelToNeighborSpansIfHelpful(graph: *const Graph, level: []const NodeId, ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64, use_parents: bool) void {
+    if (level.len == 0 or level.len > 128) return;
+    const before_stress = coordinateEdgeStress(graph, ranks, centers);
+    const before_extent = levelExtent(level, centers, sizes);
+    var backup: [128]f64 = undefined;
+    for (level, 0..) |node_id, index| backup[index] = centers[node_id];
+
+    for (level) |node_id| {
+        const target = neighborSpanCenter(graph, ranks, centers, sizes, node_id, use_parents) orelse continue;
+        centers[node_id] = target;
+    }
+    compactLevelCenters(level, centers, sizes, gap);
+
+    const after_stress = coordinateEdgeStress(graph, ranks, centers);
+    const after_extent = levelExtent(level, centers, sizes);
+    if (after_stress > before_stress + 0.0001 or after_extent > before_extent + 0.0001) {
+        for (level, 0..) |node_id, index| centers[node_id] = backup[index];
+    }
+}
+
 fn neighborSpanCenter(graph: *const Graph, ranks: []const usize, centers: []const f64, sizes: []const NodeSize, node_id: NodeId, use_parents: bool) ?f64 {
     if (node_id >= ranks.len or node_id >= centers.len or node_id >= sizes.len) return null;
     var min_left = std.math.floatMax(f64);
@@ -8369,6 +8402,70 @@ test "coordinate refinement centers nodes on adjacent neighbor spans" {
     try std.testing.expectEqual(@as(f64, 110), target);
     centerLevelOnNeighborSpans(&graph, ranks, &.{parent}, centers, sizes, false, 1.0);
     try std.testing.expectEqual(target, centers[parent]);
+}
+
+test "guarded span alignment accepts lower-stress layer move" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const p = try graph.node("p");
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    _ = try graph.edge(p, a, .{ .weight = 4 });
+    _ = try graph.edge(p, b, .{ .weight = 4 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+
+    var centers = [_]f64{ 50, 120, 160 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+    };
+    const level = [_]NodeId{ a, b };
+    const before = coordinateEdgeStress(&graph, ranks, centers[0..]);
+    alignLevelToNeighborSpansIfHelpful(&graph, level[0..], ranks, centers[0..], sizes[0..], 10, true);
+    const after = coordinateEdgeStress(&graph, ranks, centers[0..]);
+    try std.testing.expect(after < before);
+}
+
+test "guarded span alignment rejects wider layer move" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const p0 = try graph.node("p0");
+    const p1 = try graph.node("p1");
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    _ = try graph.edge(p0, a, .{ .weight = 1 });
+    _ = try graph.edge(p1, b, .{ .weight = 1 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p0] = 0;
+    ranks[p1] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+
+    var centers = [_]f64{ 0, 200, 40, 70 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+    };
+    const level = [_]NodeId{ a, b };
+    const before_a = centers[a];
+    const before_b = centers[b];
+    alignLevelToNeighborSpansIfHelpful(&graph, level[0..], ranks, centers[0..], sizes[0..], 10, true);
+    try std.testing.expectEqual(before_a, centers[a]);
+    try std.testing.expectEqual(before_b, centers[b]);
 }
 
 test "level center compaction balances forward and backward pushes" {
