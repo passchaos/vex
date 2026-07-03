@@ -14574,6 +14574,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(oracle_cross_count >= 8);
     const svg_translate = svgGraphvizTranslate(svg);
     const oracle_translate = svgGraphvizTranslate(graphviz_oracle);
+    try std.testing.expect(svg_translate.y == 0);
+    try std.testing.expect(oracle_translate.y > 400.0);
     try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 7.5);
     try std.testing.expect(path_numbers[2] < 100.0);
     const cross_points = svgPathStartEnd(svg, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
