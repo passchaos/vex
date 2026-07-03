@@ -7389,6 +7389,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     if (visual.hidden) return;
     try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.name);
+    try writer.writeByte('\n');
     const rect = RectF{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
     if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
@@ -14224,6 +14225,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
     const cluster_1_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_1</title>") orelse return error.MissingCluster1;
     try std.testing.expect(cluster_0_group_pos < cluster_1_group_pos);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>cluster_0</title>\n<polygon") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
