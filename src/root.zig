@@ -8390,14 +8390,14 @@ fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: 
 }
 
 fn writeSvgPolylineLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<polyline points=\"{d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<polyline fill=\"none\" stroke=\"{s}\" points=\"{d:.1},{d:.1} {d:.1},{d:.1}\"", .{
+        visual.stroke,
         x1,
         y1,
         x2,
         y2,
-        visual.stroke,
-        visual.width,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
@@ -12715,7 +12715,7 @@ test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"none\" stroke=\"black\" points=") != null);
-    try std.testing.expect(countSubstrings(svg, "<polyline points=") >= 4);
+    try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"black\" points=") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, svg, " fill=\"none\" stroke=\"black\"") != null);
 }
 
@@ -12734,7 +12734,7 @@ test "SVG renderer draws Msquare with Graphviz-like corner marks" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"none\" stroke=\"black\" points=") != null);
-    try std.testing.expect(countSubstrings(svg, "<polyline points=") >= 4);
+    try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"black\" points=") >= 4);
 }
 
 test "SVG renderer honors additional Graphviz arrow marker shapes" {
@@ -14261,7 +14261,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline points=\"91.5,379.3 103.5,367.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"91.5,379.3 103.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon fill=\"none\" stroke=\"black\" points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
