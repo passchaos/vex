@@ -6510,76 +6510,119 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     }
 
     try renderSvgClusters(writer, graph, layout);
+    try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate);
+    try writer.writeAll("</g>\n</svg>\n");
+}
+
+fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
+    if (graph.nodes.items.len > 512 or graph.edges.items.len > 1024) {
+        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+        return;
+    }
+
+    var node_written_buf: [512]bool = undefined;
+    var edge_written_buf: [1024]bool = undefined;
+    const node_written = node_written_buf[0..graph.nodes.items.len];
+    const edge_written = edge_written_buf[0..graph.edges.items.len];
+    @memset(node_written, false);
+    @memset(edge_written, false);
+
+    for (graph.nodes.items) |node_item| {
+        if (!node_written[node_item.id]) {
+            try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+            node_written[node_item.id] = true;
+        }
+        for (graph.edges.items) |edge_item| {
+            if (edge_item.from != node_item.id or edge_item.id >= edge_written.len or edge_written[edge_item.id]) continue;
+            if (edge_item.to < node_written.len and !node_written[edge_item.to]) {
+                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to]);
+                node_written[edge_item.to] = true;
+            }
+            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+            edge_written[edge_item.id] = true;
+        }
+    }
 
     for (graph.edges.items) |edge_item| {
-        if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
-        const visual = resolveEdgeVisual(edge_item);
-        if (visual.hidden) continue;
-        try writeSvgEdgeComment(writer, graph, edge_item);
-        try writer.print("<g id=\"edge{d}\" class=\"edge\">\n", .{edge_item.id + 1});
-        const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
-        if (edge_wrap == .none) {
-            try writeSvgEdgeTitle(writer, graph, edge_item);
-            try writer.writeByte('\n');
-        }
-        if (edge_item.from == edge_item.to) {
-            const route = selfLoopRoute(layout.nodes[edge_item.from]);
-            try renderSvgSelfLoopPaths(writer, graph.directed, edge_item, route, visual);
-            if (edge_item.label) |label| {
-                try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
-            }
-            try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
-            try writeSvgInteractiveClose(writer, edge_wrap);
-            try writer.writeAll("</g>\n");
-            continue;
-        }
+        if (edge_item.id < edge_written.len and edge_written[edge_item.id]) continue;
+        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+    }
+    for (graph.nodes.items) |node_item| {
+        if (node_item.id < node_written.len and node_written[node_item.id]) continue;
+        try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+    }
+}
 
-        const offset = parallelEdgeOffset(graph, edge_item.id);
-        const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
-        try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual);
+fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
+    if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
+    const visual = resolveEdgeVisual(edge_item);
+    if (visual.hidden) return;
+    try writeSvgEdgeComment(writer, graph, edge_item);
+    try writer.print("<g id=\"edge{d}\" class=\"edge\">\n", .{edge_item.id + 1});
+    const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
+    if (edge_wrap == .none) {
+        try writeSvgEdgeTitle(writer, graph, edge_item);
+        try writer.writeByte('\n');
+    }
+    if (edge_item.from == edge_item.to) {
+        const route = selfLoopRoute(layout.nodes[edge_item.from]);
+        try renderSvgSelfLoopPaths(writer, graph.directed, edge_item, route, visual);
         if (edge_item.label) |label| {
-            try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+            try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
         }
         try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
         try writeSvgInteractiveClose(writer, edge_wrap);
         try writer.writeAll("</g>\n");
+        return;
     }
-    for (graph.nodes.items) |node_item| {
-        var visual = resolveNodeVisual(node_item);
-        if (visual.hidden) continue;
-        const l = layout.nodes[node_item.id];
-        try writeSvgComment(writer, node_item.name);
-        try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
-        const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
-        if (node_wrap == .none) {
-            try writeSvgTitle(writer, node_item.name);
-            try writer.writeByte('\n');
-        }
-        var fill_buf: [96]u8 = undefined;
-        if (stripedNodeFillEligible(node_item.shape)) {
-            if (try renderSvgStripedRectFill(writer, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
-                visual.fill = "none";
-            } else {
-                try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
-            }
+
+    const offset = parallelEdgeOffset(graph, edge_item.id);
+    const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
+    try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual);
+    if (edge_item.label) |label| {
+        try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+    }
+    try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
+    try writeSvgInteractiveClose(writer, edge_wrap);
+    try writer.writeAll("</g>\n");
+}
+
+fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node) Io.Writer.Error!void {
+    _ = graph;
+    var visual = resolveNodeVisual(node_item);
+    if (visual.hidden) return;
+    const l = layout.nodes[node_item.id];
+    try writeSvgComment(writer, node_item.name);
+    try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
+    const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
+    if (node_wrap == .none) {
+        try writeSvgTitle(writer, node_item.name);
+        try writer.writeByte('\n');
+    }
+    var fill_buf: [96]u8 = undefined;
+    if (stripedNodeFillEligible(node_item.shape)) {
+        if (try renderSvgStripedRectFill(writer, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
+            visual.fill = "none";
         } else {
             try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
         }
-        if (htmlTableMetrics(node_item.label) != null) {
-            try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
-            try writeSvgInteractiveClose(writer, node_wrap);
-            try writer.writeAll("</g>\n");
-            continue;
-        }
-        try renderSvgNodeShape(writer, node_item, l, visual, options);
-        if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
-            try renderSvgNodeLabel(writer, node_item, l, visual);
-        }
-        try renderSvgNodeXLabel(writer, node_item, l, visual);
+    } else {
+        try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+    }
+    if (htmlTableMetrics(node_item.label) != null) {
+        try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
         try writeSvgInteractiveClose(writer, node_wrap);
         try writer.writeAll("</g>\n");
+        return;
     }
-    try writer.writeAll("</g>\n</svg>\n");
+    try renderSvgNodeShape(writer, node_item, l, visual, options);
+    if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
+        try renderSvgNodeLabel(writer, node_item, l, visual);
+    }
+    try renderSvgNodeXLabel(writer, node_item, l, visual);
+    try writeSvgInteractiveClose(writer, node_wrap);
+    try writer.writeAll("</g>\n");
 }
 
 fn svgNeedsMarkerDefs(graph: *const Graph, concentrate: bool) bool {
@@ -14274,6 +14317,14 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0-&gt;a1</title>\n<path fill=\"none\" stroke=\"black\" d=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"black\" stroke=\"black\" points=\"47.5,141.3 51.0,151.3 54.5,141.3 47.5,141.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
+    const node1_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") orelse return error.MissingNode1;
+    const node2_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node2\" class=\"node\">") orelse return error.MissingNode2;
+    const edge1_group_pos = std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") orelse return error.MissingEdge1;
+    const node8_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node8\" class=\"node\">") orelse return error.MissingNode8;
+    const edge9_group_pos = std.mem.indexOf(u8, svg, "<g id=\"edge9\" class=\"edge\">") orelse return error.MissingEdge9;
+    try std.testing.expect(node1_group_pos < node2_group_pos);
+    try std.testing.expect(node2_group_pos < edge1_group_pos);
+    try std.testing.expect(node8_group_pos < edge9_group_pos);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
