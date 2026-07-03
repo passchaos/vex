@@ -4866,35 +4866,38 @@ const ClusterContainment = struct {
     right: f64,
 };
 
-fn solveClusterBoundary(allocator: std.mem.Allocator, cluster: Cluster, centers: []const f64, sizes: []const NodeSize, margin: f64) !?ClusterContainment {
+fn solveClusterBoundary(cluster: Cluster, centers: []const f64, sizes: []const NodeSize, margin: f64) ?ClusterContainment {
     if (cluster.nodes.len == 0) return null;
+    if (centers.len + 2 > 256 or cluster.nodes.len * 2 > 512) return null;
     const boundary_left = centers.len;
     const boundary_right = centers.len + 1;
-    var vars = try allocator.alloc(f64, centers.len + 2);
-    defer allocator.free(vars);
+    var vars_buf: [256]f64 = undefined;
+    const vars = vars_buf[0 .. centers.len + 2];
     @memcpy(vars[0..centers.len], centers);
     vars[boundary_left] = 0;
     vars[boundary_right] = 0;
 
-    var constraints = std.ArrayList(CoordConstraint).empty;
-    defer constraints.deinit(allocator);
+    var constraints_buf: [512]CoordConstraint = undefined;
+    var constraint_count: usize = 0;
     var found = false;
     for (cluster.nodes) |node_id| {
         if (node_id >= centers.len or node_id >= sizes.len) continue;
         found = true;
-        try constraints.append(allocator, .{
+        constraints_buf[constraint_count] = .{
             .left = boundary_left,
             .right = node_id,
             .min_gap = sizes[node_id].width / 2.0 + margin,
-        });
-        try constraints.append(allocator, .{
+        };
+        constraint_count += 1;
+        constraints_buf[constraint_count] = .{
             .left = node_id,
             .right = boundary_right,
             .min_gap = sizes[node_id].width / 2.0 + margin,
-        });
+        };
+        constraint_count += 1;
     }
     if (!found) return null;
-    _ = satisfyCoordConstraints(vars, constraints.items);
+    _ = satisfyCoordConstraints(vars, constraints_buf[0..constraint_count]);
     return .{ .left = vars[boundary_left], .right = vars[boundary_right] };
 }
 
@@ -12914,7 +12917,6 @@ test "cluster containment envelope includes Graphviz-style margin" {
 }
 
 test "cluster boundary solver models Graphviz ln rn containment" {
-    const allocator = std.testing.allocator;
     var node_ids = [_]NodeId{ 0, 1 };
     const cluster = Cluster{
         .id = 0,
@@ -12928,7 +12930,7 @@ test "cluster boundary solver models Graphviz ln rn containment" {
         .{ .width = 30, .height = 10 },
     };
 
-    const boundary = (try solveClusterBoundary(allocator, cluster, centers[0..], sizes[0..], 8.0)).?;
+    const boundary = solveClusterBoundary(cluster, centers[0..], sizes[0..], 8.0).?;
     try std.testing.expect(boundary.left <= centers[0] - sizes[0].width / 2.0 - 8.0);
     try std.testing.expect(boundary.right >= centers[1] + sizes[1].width / 2.0 + 8.0);
     try std.testing.expect(boundary.right - boundary.left >= 71.0);
