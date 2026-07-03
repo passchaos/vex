@@ -6533,8 +6533,16 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
             try renderSvgNodeGroup(writer, graph, layout, options, node_item);
             node_written[node_item.id] = true;
         }
+        var outgoing: [1024]EdgeId = undefined;
+        var outgoing_len: usize = 0;
         for (graph.edges.items) |edge_item| {
             if (edge_item.from != node_item.id or edge_item.id >= edge_written.len or edge_written[edge_item.id]) continue;
+            outgoing[outgoing_len] = edge_item.id;
+            outgoing_len += 1;
+        }
+        sortEdgesByTarget(graph, outgoing[0..outgoing_len]);
+        for (outgoing[0..outgoing_len]) |edge_id| {
+            const edge_item = graph.edges.items[edge_id];
             if (edge_item.to < node_written.len and !node_written[edge_item.to]) {
                 try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to]);
                 node_written[edge_item.to] = true;
@@ -6552,6 +6560,17 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
         if (node_item.id < node_written.len and node_written[node_item.id]) continue;
         try renderSvgNodeGroup(writer, graph, layout, options, node_item);
     }
+}
+
+fn sortEdgesByTarget(graph: *const Graph, edge_ids: []EdgeId) void {
+    std.mem.sort(EdgeId, edge_ids, graph, lessThanEdgeTarget);
+}
+
+fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
+    const a = graph.edges.items[a_id];
+    const b = graph.edges.items[b_id];
+    if (a.to == b.to) return a.id < b.id;
+    return a.to < b.to;
 }
 
 fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
@@ -14322,9 +14341,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const edge1_group_pos = std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") orelse return error.MissingEdge1;
     const node8_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node8\" class=\"node\">") orelse return error.MissingNode8;
     const edge9_group_pos = std.mem.indexOf(u8, svg, "<g id=\"edge9\" class=\"edge\">") orelse return error.MissingEdge9;
+    const edge10_group_pos = std.mem.indexOf(u8, svg, "<g id=\"edge10\" class=\"edge\">") orelse return error.MissingEdge10;
+    const edge6_group_pos = std.mem.indexOf(u8, svg, "<g id=\"edge6\" class=\"edge\">") orelse return error.MissingEdge6;
     try std.testing.expect(node1_group_pos < node2_group_pos);
     try std.testing.expect(node2_group_pos < edge1_group_pos);
     try std.testing.expect(node8_group_pos < edge9_group_pos);
+    try std.testing.expect(edge10_group_pos < edge6_group_pos);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
