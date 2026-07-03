@@ -7227,6 +7227,34 @@ fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
     return count;
 }
 
+fn pathDataCommandCount(path_data: []const u8, command: u8) usize {
+    var count: usize = 0;
+    for (path_data) |c| {
+        if (c == command) count += 1;
+    }
+    return count;
+}
+
+fn svgPathCommandCount(svg: []const u8, command: u8) usize {
+    var count: usize = 0;
+    var search_start: usize = 0;
+    while (std.mem.indexOf(u8, svg[search_start..], " d=\"")) |rel| {
+        const value_start = search_start + rel + " d=\"".len;
+        const value_end_rel = std.mem.indexOfScalar(u8, svg[value_start..], '"') orelse break;
+        count += pathDataCommandCount(svg[value_start .. value_start + value_end_rel], command);
+        search_start = value_start + value_end_rel + 1;
+    }
+    return count;
+}
+
+fn svgCubicSegmentCount(fragment: []const u8) usize {
+    if (svgPathCommandCount(fragment, 'C') == 0) return 0;
+    var numbers: [128]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "d", numbers[0..]);
+    if (count < 8) return 0;
+    return (count - 2) / 6;
+}
+
 fn svgNumberAfter(fragment: []const u8, marker: []const u8) ?f64 {
     const start = std.mem.indexOf(u8, fragment, marker) orelse return null;
     const value_start = start + marker.len;
@@ -8841,7 +8869,8 @@ fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
 
 fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting) Io.Writer.Error!void {
     if (routing == .line) {
-        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y, direct_route.end.x, direct_route.end.y });
+        try writePathMove(writer, direct_route.start);
+        try writePathLine(writer, direct_route.end);
         return;
     }
     if (routing == .ortho) {
@@ -8858,50 +8887,35 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         const mid = longEdgeWaypoint(layout, edge_item, rankdir, offset, 0, waypoint_count);
         const first = smoothSegmentControls(direct_route.start, mid, rankdir);
         const second = smoothSegmentControls(mid, direct_route.end, rankdir);
-        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
-            direct_route.start.x,
-            direct_route.start.y,
-            first.c1.x,
-            first.c1.y,
-            second.c2.x,
-            second.c2.y,
-            direct_route.end.x,
-            direct_route.end.y,
-        });
+        try writePathMove(writer, direct_route.start);
+        try writePathCubic(writer, first.c1, second.c2, direct_route.end);
         return;
     }
     if (waypoint_count == 0) {
         if (routing == .polyline) {
-            try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y, direct_route.end.x, direct_route.end.y });
+            try writePathMove(writer, direct_route.start);
+            try writePathLine(writer, direct_route.end);
             return;
         }
-        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
-            direct_route.start.x,
-            direct_route.start.y,
-            direct_route.control1.x,
-            direct_route.control1.y,
-            direct_route.control2.x,
-            direct_route.control2.y,
-            direct_route.end.x,
-            direct_route.end.y,
-        });
+        try writePathMove(writer, direct_route.start);
+        try writePathCubic(writer, direct_route.control1, direct_route.control2, direct_route.end);
         return;
     }
 
-    try writer.print("M {d:.1} {d:.1}", .{ direct_route.start.x, direct_route.start.y });
+    try writePathMove(writer, direct_route.start);
     var current = direct_route.start;
     var i: usize = 0;
     while (i < waypoint_count) : (i += 1) {
         const next = longEdgeWaypoint(layout, edge_item, rankdir, offset, i, waypoint_count);
         if (routing == .polyline) {
-            try writer.print(" L {d:.1} {d:.1}", .{ next.x, next.y });
+            try writePathLine(writer, next);
         } else {
             try writeSmoothSegment(writer, current, next, rankdir);
         }
         current = next;
     }
     if (routing == .polyline) {
-        try writer.print(" L {d:.1} {d:.1}", .{ direct_route.end.x, direct_route.end.y });
+        try writePathLine(writer, direct_route.end);
     } else {
         try writeSmoothSegment(writer, current, direct_route.end, rankdir);
     }
@@ -8910,28 +8924,16 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
 fn writeOrthoEdgePath(writer: *Io.Writer, start: Point, end: Point, rankdir: RankDir) Io.Writer.Error!void {
     if (rankdir == .LR or rankdir == .RL) {
         const mid_x = (start.x + end.x) / 2.0;
-        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
-            start.x,
-            start.y,
-            mid_x,
-            start.y,
-            mid_x,
-            end.y,
-            end.x,
-            end.y,
-        });
+        try writePathMove(writer, start);
+        try writePathLine(writer, .{ .x = mid_x, .y = start.y });
+        try writePathLine(writer, .{ .x = mid_x, .y = end.y });
+        try writePathLine(writer, end);
     } else {
         const mid_y = (start.y + end.y) / 2.0;
-        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
-            start.x,
-            start.y,
-            start.x,
-            mid_y,
-            end.x,
-            mid_y,
-            end.x,
-            end.y,
-        });
+        try writePathMove(writer, start);
+        try writePathLine(writer, .{ .x = start.x, .y = mid_y });
+        try writePathLine(writer, .{ .x = end.x, .y = mid_y });
+        try writePathLine(writer, end);
     }
 }
 
@@ -8954,9 +8956,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const p1 = Point{ .x = side_x, .y = route.start.y };
         const p2 = Point{ .x = side_x, .y = route.end.y };
         if (routing == .polyline) {
-            try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
-                route.start.x, route.start.y, p1.x, p1.y, p2.x, p2.y, route.end.x, route.end.y,
-            });
+            try writePathMove(writer, route.start);
+            try writePathLine(writer, p1);
+            try writePathLine(writer, p2);
+            try writePathLine(writer, route.end);
         } else {
             const curve = @min(36.0, @abs(route.start.x - side_x) * 0.5 + 12.0);
             const c1x = if (prefer_left)
@@ -8970,18 +8973,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             else
                 @min(side_x, route.end.x + curve);
             const mid_y = (p1.y + p2.y) / 2.0;
-            try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
-                route.start.x, route.start.y,
-                c1x,           route.start.y,
-                c2x,           p1.y,
-                p1.x,          p1.y,
-                side_x,        mid_y,
-                side_x,        mid_y,
-                p2.x,          p2.y,
-                c3x,           p2.y,
-                c4x,           route.end.y,
-                route.end.x,   route.end.y,
-            });
+            try writePathMove(writer, route.start);
+            try writePathCubic(writer, .{ .x = c1x, .y = route.start.y }, .{ .x = c2x, .y = p1.y }, p1);
+            try writePathCubic(writer, .{ .x = side_x, .y = mid_y }, .{ .x = side_x, .y = mid_y }, p2);
+            try writePathCubic(writer, .{ .x = c3x, .y = p2.y }, .{ .x = c4x, .y = route.end.y }, route.end);
         }
         return;
     }
@@ -8994,9 +8989,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
     const p1 = Point{ .x = route.start.x, .y = side_y };
     const p2 = Point{ .x = route.end.x, .y = side_y };
     if (routing == .polyline) {
-        try writer.print("M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}", .{
-            route.start.x, route.start.y, p1.x, p1.y, p2.x, p2.y, route.end.x, route.end.y,
-        });
+        try writePathMove(writer, route.start);
+        try writePathLine(writer, p1);
+        try writePathLine(writer, p2);
+        try writePathLine(writer, route.end);
     } else {
         const curve = @min(36.0, @abs(route.start.y - side_y) * 0.5 + 12.0);
         const c1y = if (prefer_top)
@@ -9010,18 +9006,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         else
             @min(side_y, route.end.y + curve);
         const mid_x = (p1.x + p2.x) / 2.0;
-        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
-            route.start.x, route.start.y,
-            route.start.x, c1y,
-            p1.x,          c2y,
-            p1.x,          p1.y,
-            mid_x,         side_y,
-            mid_x,         side_y,
-            p2.x,          p2.y,
-            p2.x,          c3y,
-            route.end.x,   c4y,
-            route.end.x,   route.end.y,
-        });
+        try writePathMove(writer, route.start);
+        try writePathCubic(writer, .{ .x = route.start.x, .y = c1y }, .{ .x = p1.x, .y = c2y }, p1);
+        try writePathCubic(writer, .{ .x = mid_x, .y = side_y }, .{ .x = mid_x, .y = side_y }, p2);
+        try writePathCubic(writer, .{ .x = p2.x, .y = c3y }, .{ .x = route.end.x, .y = c4y }, route.end);
     }
 }
 
@@ -9198,9 +9186,21 @@ fn splineCurveAmount(rankdir: RankDir, dx: f64, dy: f64, min_curve: f64, max_cur
     return @min(axis_delta * 0.5, @max(min_curve, preferred));
 }
 
+fn writePathMove(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
+    try writer.print("M{d:.1},{d:.1}", .{ point.x, point.y });
+}
+
+fn writePathLine(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
+    try writer.print("L{d:.1},{d:.1}", .{ point.x, point.y });
+}
+
+fn writePathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.print("C{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}", .{ c1.x, c1.y, c2.x, c2.y, end.x, end.y });
+}
+
 fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankDir) Io.Writer.Error!void {
     const controls = smoothSegmentControls(from, to, rankdir);
-    try writer.print(" C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{ controls.c1.x, controls.c1.y, controls.c2.x, controls.c2.y, to.x, to.y });
+    try writePathCubic(writer, controls.c1, controls.c2, to);
 }
 
 fn smoothSegmentControls(from: Point, to: Point, rankdir: RankDir) EdgeControls {
@@ -11939,7 +11939,7 @@ test "SVG renderer emits curved clipped edges and multiline text spans" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+    try std.testing.expect(svgPathCommandCount(svg, 'C') != 0);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker id=\"arrow-0-head\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "dy=\"17.5\"") != null);
@@ -14174,7 +14174,7 @@ test "SVG routes skip-rank edges through intermediate waypoints" {
     const path_start = std.mem.lastIndexOf(u8, before_label, "<path") orelse return error.MissingLongPath;
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingLongPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
-    try std.testing.expect(countSubstrings(path, " C ") >= 3);
+    try std.testing.expect(svgCubicSegmentCount(path) >= 3);
 }
 
 test "SVG clamps outward long-edge waypoints for forward cluster cross edges" {
@@ -14205,7 +14205,7 @@ test "SVG clamps outward long-edge waypoints for forward cluster cross edges" {
     try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved);
     const path = try aw.toOwnedSlice();
     defer allocator.free(path);
-    try std.testing.expect(countSubstrings(path, " C ") == 1);
+    try std.testing.expect(pathDataCommandCount(path, 'C') == 1);
     try std.testing.expect(std.mem.indexOf(u8, path, "196.5") == null);
 }
 
@@ -14230,9 +14230,9 @@ test "SVG routes multi-rank back edges around the side" {
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingBackPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
     try std.testing.expect(isBackEdge(&layout, graph.edges.items[3]));
-    try std.testing.expect(countSubstrings(path, " C ") == 3);
-    try std.testing.expect(countSubstrings(path, " L ") == 0);
-    try std.testing.expect(std.mem.indexOf(u8, path, " C ") != null);
+    try std.testing.expect(svgCubicSegmentCount(path) == 3);
+    try std.testing.expect(svgPathCommandCount(path, 'L') == 0);
+    try std.testing.expect(svgPathCommandCount(path, 'C') != 0);
     try std.testing.expect(route.start.y > route.end.y);
     var path_numbers: [32]f64 = undefined;
     const count = svgNumbersInAttribute(path, "d", path_numbers[0..]);
@@ -14319,8 +14319,8 @@ fn expectBackEdgeSidePath(svg: []const u8) !void {
     const path_start = std.mem.lastIndexOf(u8, before_label, "<path") orelse return error.MissingBackPath;
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingBackPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
-    try std.testing.expect(countSubstrings(path, " C ") == 3);
-    try std.testing.expect(countSubstrings(path, " L ") == 0);
+    try std.testing.expect(svgCubicSegmentCount(path) == 3);
+    try std.testing.expect(svgPathCommandCount(path, 'L') == 0);
 }
 
 test "user cluster example stays compact and Graphviz-like" {
@@ -14440,7 +14440,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
     const cross_edge = svg[cross_label .. cross_label + cross_end];
     try std.testing.expect(std.mem.indexOf(u8, cross_edge, "196.5") == null);
-    try std.testing.expect(countSubstrings(cross_edge, " C ") == 1);
+    try std.testing.expect(svgCubicSegmentCount(cross_edge) == 1);
     var path_numbers: [32]f64 = undefined;
     const cross_count = svgPathNumbers(svg, "a1-&gt;b3", path_numbers[0..]);
     try std.testing.expect(cross_count >= 8);
@@ -14461,9 +14461,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
-    try std.testing.expect(countSubstrings(back_edge, " C ") == 3);
-    try std.testing.expect(countSubstrings(back_edge, " L ") == 0);
-    try std.testing.expect(std.mem.indexOf(u8, back_edge, "C 16.0 ") != null);
+    try std.testing.expect(svgCubicSegmentCount(back_edge) == 3);
+    try std.testing.expect(svgPathCommandCount(back_edge, 'L') == 0);
+    var back_numbers: [32]f64 = undefined;
+    const back_count = svgNumbersInAttribute(back_edge, "d", back_numbers[0..]);
+    try std.testing.expect(back_count >= 20);
+    try std.testing.expect(@abs(back_numbers[6] - 16.0) <= 0.1);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
@@ -14479,8 +14482,8 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer ortho_layout.deinit();
     const ortho_svg = try renderSvgAlloc(allocator, &ortho, &ortho_layout, .{});
     defer allocator.free(ortho_svg);
-    try std.testing.expect(std.mem.indexOf(u8, ortho_svg, " C ") == null);
-    try std.testing.expect(countSubstrings(ortho_svg, " L ") >= 3);
+    try std.testing.expect(svgPathCommandCount(ortho_svg, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(ortho_svg, 'L') >= 3);
 
     var line = try parseDot(allocator,
         \\digraph G {
@@ -14493,8 +14496,8 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer line_layout.deinit();
     const line_svg = try renderSvgAlloc(allocator, &line, &line_layout, .{});
     defer allocator.free(line_svg);
-    try std.testing.expect(std.mem.indexOf(u8, line_svg, " C ") == null);
-    try std.testing.expect(countSubstrings(line_svg, " L ") >= 1);
+    try std.testing.expect(svgPathCommandCount(line_svg, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(line_svg, 'L') >= 1);
 
     var false_splines = try parseDot(allocator,
         \\digraph G {
@@ -14507,8 +14510,8 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer false_layout.deinit();
     const false_svg = try renderSvgAlloc(allocator, &false_splines, &false_layout, .{});
     defer allocator.free(false_svg);
-    try std.testing.expect(std.mem.indexOf(u8, false_svg, " C ") == null);
-    try std.testing.expect(countSubstrings(false_svg, " L ") >= 1);
+    try std.testing.expect(svgPathCommandCount(false_svg, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(false_svg, 'L') >= 1);
 
     var none = try parseDot(allocator,
         \\digraph G {
@@ -14521,8 +14524,8 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer none_layout.deinit();
     const none_svg = try renderSvgAlloc(allocator, &none, &none_layout, .{});
     defer allocator.free(none_svg);
-    try std.testing.expect(std.mem.indexOf(u8, none_svg, " C ") == null);
-    try std.testing.expect(countSubstrings(none_svg, " L ") >= 1);
+    try std.testing.expect(svgPathCommandCount(none_svg, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(none_svg, 'L') >= 1);
 }
 
 test "spline controls stay monotonic for short adjacent edges" {
@@ -15247,7 +15250,7 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
     try std.testing.expect(countSubstrings(svg, "<path") >= 12);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+    try std.testing.expect(svgPathCommandCount(svg, 'C') != 0);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Component") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Underline") != null);
 }
@@ -15287,7 +15290,7 @@ test "DOT parser and SVG renderer support Graphviz M shapes star and egg" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon") != null);
     try std.testing.expect(countSubstrings(svg, "fill=\"none\" stroke=") >= 8);
-    try std.testing.expect(std.mem.indexOf(u8, svg, " C ") != null);
+    try std.testing.expect(svgPathCommandCount(svg, 'C') != 0);
 }
 
 test "Graphviz M shapes use compact default sizing" {
@@ -15515,7 +15518,7 @@ test "DOT nested record groups alternate field orientation" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">email</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">status</text>") != null);
-    try std.testing.expect(countSubstrings(svg, " L ") >= 4);
+    try std.testing.expect(svgPathCommandCount(svg, 'L') >= 4);
 }
 
 test "DOT compound edges clip to cluster boundaries" {
