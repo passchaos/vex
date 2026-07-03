@@ -7398,22 +7398,22 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
         try resolveSvgGradientFill(writer, "vex-cluster-fill", index + 1, cluster.attrs.items, rect, &visual.fill, &fill_buf);
     }
     if (visual.radius <= 0.001) {
-        try writer.print("<polygon points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-            box.x,
-            box.y,
-            box.x + box.width,
-            box.y,
-            box.x + box.width,
-            box.y + box.height,
-            box.x,
-            box.y + box.height,
-            box.x,
-            box.y,
+        try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\"", .{
             visual.fill,
-            visual.fill_opacity,
             visual.stroke,
-            visual.width,
+            box.x,
+            box.y,
+            box.x + box.width,
+            box.y,
+            box.x + box.width,
+            box.y + box.height,
+            box.x,
+            box.y + box.height,
+            box.x,
+            box.y,
         });
+        try writeSvgFillOpacity(writer, visual.fill_opacity);
+        try writeSvgStrokeWidth(writer, visual.width);
         try writeSvgDash(writer, visual.dash);
         try writer.writeAll("/>\n");
     } else {
@@ -7460,6 +7460,16 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     try writeXmlEscaped(writer, cluster.label);
     try writer.writeAll("</text>\n");
     try writer.writeAll("</g>\n");
+}
+
+fn writeSvgFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!void {
+    if (std.mem.eql(u8, opacity, "1.0") or std.mem.eql(u8, opacity, "1") or std.mem.eql(u8, opacity, "1.00")) return;
+    try writer.print(" fill-opacity=\"{s}\"", .{opacity});
+}
+
+fn writeSvgStrokeWidth(writer: *Io.Writer, width: f64) Io.Writer.Error!void {
+    if (@abs(width - 1.0) <= 0.0001) return;
+    try writer.print(" stroke-width=\"{d:.1}\"", .{width});
 }
 
 fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -14232,7 +14242,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline points=\"91.5,379.3 103.5,367.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"") != null);
@@ -14570,7 +14580,7 @@ test "cluster fill follows Graphviz style filled color semantics" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"lightgrey\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" fill-opacity=\"1.0\" stroke=\"blue\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"blue\"") != null);
 }
 
 test "cluster labels honor labelloc and labeljust" {
