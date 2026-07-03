@@ -1770,6 +1770,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
     shiftCentersRightWithinBudget(centers, axis_sizes, 4.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
+    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, 20.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -11623,12 +11624,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 47.0);
-    try std.testing.expect(svg_b0_x >= 137.0);
-    try std.testing.expect(svg_b0_x - svg_a0_x >= 90.0);
+    try std.testing.expect(svg_b0_x >= 145.0);
+    try std.testing.expect(svg_b0_x - svg_a0_x >= 98.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
-    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 8.0);
+    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 16.0);
     const cross_label = std.mem.indexOf(u8, svg, "<title>a1-&gt;b3</title>") orelse return error.MissingCrossClusterEdge;
     const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
     const cross_edge = svg[cross_label .. cross_label + cross_end];
