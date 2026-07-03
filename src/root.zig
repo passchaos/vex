@@ -8786,11 +8786,14 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
                 @max(side_x, route.end.x - curve)
             else
                 @min(side_x, route.end.x + curve);
-            try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
+            const mid_y = (p1.y + p2.y) / 2.0;
+            try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
                 route.start.x, route.start.y,
                 c1x,           route.start.y,
                 c2x,           p1.y,
                 p1.x,          p1.y,
+                side_x,        mid_y,
+                side_x,        mid_y,
                 p2.x,          p2.y,
                 c3x,           p2.y,
                 c4x,           route.end.y,
@@ -8823,11 +8826,14 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             @max(side_y, route.end.y - curve)
         else
             @min(side_y, route.end.y + curve);
-        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
+        const mid_x = (p1.x + p2.x) / 2.0;
+        try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
             route.start.x, route.start.y,
             route.start.x, c1y,
             p1.x,          c2y,
             p1.x,          p1.y,
+            mid_x,         side_y,
+            mid_x,         side_y,
             p2.x,          p2.y,
             p2.x,          c3y,
             route.end.x,   c4y,
@@ -13984,18 +13990,20 @@ test "SVG routes multi-rank back edges around the side" {
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingBackPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
     try std.testing.expect(isBackEdge(&layout, graph.edges.items[3]));
-    try std.testing.expect(countSubstrings(path, " C ") == 2);
-    try std.testing.expect(countSubstrings(path, " L ") == 1);
+    try std.testing.expect(countSubstrings(path, " C ") == 3);
+    try std.testing.expect(countSubstrings(path, " L ") == 0);
     try std.testing.expect(std.mem.indexOf(u8, path, " C ") != null);
     try std.testing.expect(route.start.y > route.end.y);
     var path_numbers: [32]f64 = undefined;
     const count = svgNumbersInAttribute(path, "d", path_numbers[0..]);
-    try std.testing.expect(count >= 14);
+    try std.testing.expect(count >= 20);
     const side_x = path_numbers[6];
     try std.testing.expect(path_numbers[2] >= side_x);
     try std.testing.expectEqual(side_x, path_numbers[4]);
     try std.testing.expectEqual(side_x, path_numbers[8]);
     try std.testing.expectEqual(side_x, path_numbers[10]);
+    try std.testing.expectEqual(side_x, path_numbers[12]);
+    try std.testing.expectEqual(side_x, path_numbers[14]);
 }
 
 test "back-edge side channel prefers stable negative side for same column" {
@@ -14071,8 +14079,8 @@ fn expectBackEdgeSidePath(svg: []const u8) !void {
     const path_start = std.mem.lastIndexOf(u8, before_label, "<path") orelse return error.MissingBackPath;
     const path_end_rel = std.mem.indexOf(u8, svg[path_start..], "/>") orelse return error.MissingBackPathEnd;
     const path = svg[path_start .. path_start + path_end_rel];
-    try std.testing.expect(countSubstrings(path, " C ") == 2);
-    try std.testing.expect(countSubstrings(path, " L ") == 1);
+    try std.testing.expect(countSubstrings(path, " C ") == 3);
+    try std.testing.expect(countSubstrings(path, " L ") == 0);
 }
 
 test "user cluster example stays compact and Graphviz-like" {
@@ -14130,7 +14138,6 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     try std.testing.expect(svg_cluster_0_w >= 86.0);
     try std.testing.expect(svg_cluster_0_w <= 90.0);
@@ -14182,6 +14189,12 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 3.0);
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
+    const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
+    const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
+    const back_edge = svg[back_label .. back_label + back_end];
+    try std.testing.expect(countSubstrings(back_edge, " C ") == 3);
+    try std.testing.expect(countSubstrings(back_edge, " L ") == 0);
+    try std.testing.expect(std.mem.indexOf(u8, back_edge, "C 16.0 ") != null);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
