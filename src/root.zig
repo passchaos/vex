@@ -2243,20 +2243,63 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
             var level = &virtual_levels.levels[rank];
             if (level.items.len < 2 or level.items.len > 64) continue;
             var i: usize = 0;
-            while (i + 1 < level.items.len) : (i += 1) {
-                if (virtualSwapCrossesClusterBlock(graph, ranks, rank, level.items[i], level.items[i + 1])) continue;
+            while (i + 1 < level.items.len) {
+                if (virtualSwapCrossesClusterBlock(graph, ranks, rank, level.items[i], level.items[i + 1])) {
+                    i += 1;
+                    continue;
+                }
+                const pair_before = adjacentVirtualPairCrossings(graph, virtual_levels, ranks, rank, i, i + 1);
+                const pair_after = adjacentVirtualPairCrossings(graph, virtual_levels, ranks, rank, i + 1, i);
                 const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
                 std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
                 const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
-                if (after < before) {
+                if (after < before or (after == before and pair_after < pair_before)) {
                     changed = true;
+                    if (i > 0) {
+                        i -= 1;
+                    } else {
+                        i += 1;
+                    }
                 } else {
                     std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
+                    i += 1;
                 }
             }
         }
         if (!changed) break;
     }
+}
+
+fn adjacentVirtualPairCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize, left_index: usize, right_index: usize) usize {
+    if (rank >= virtual_levels.levels.len) return 0;
+    const level = virtual_levels.levels[rank].items;
+    if (left_index >= level.len or right_index >= level.len) return 0;
+    const left = level[left_index];
+    const right = level[right_index];
+    var crossings: usize = 0;
+    if (rank > 0) crossings += adjacentVirtualPairCrossingsWithFixedLayer(graph, virtual_levels.levels[rank - 1].items, ranks, rank, left, right, true);
+    if (rank + 1 < virtual_levels.levels.len) crossings += adjacentVirtualPairCrossingsWithFixedLayer(graph, virtual_levels.levels[rank + 1].items, ranks, rank, left, right, false);
+    return crossings;
+}
+
+fn adjacentVirtualPairCrossingsWithFixedLayer(graph: *const Graph, fixed_layer: []const VirtualNode, ranks: []const usize, rank: usize, left: VirtualNode, right: VirtualNode, use_parents: bool) usize {
+    var crossings: usize = 0;
+    for (fixed_layer, 0..) |left_neighbor, left_pos| {
+        if (!virtualNodesAdjacentAcrossLayer(graph, ranks, left, rank, left_neighbor, use_parents)) continue;
+        for (fixed_layer, 0..) |right_neighbor, right_pos| {
+            if (!virtualNodesAdjacentAcrossLayer(graph, ranks, right, rank, right_neighbor, use_parents)) continue;
+            if (left_pos > right_pos) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn virtualNodesAdjacentAcrossLayer(graph: *const Graph, ranks: []const usize, node: VirtualNode, rank: usize, neighbor: VirtualNode, use_parents: bool) bool {
+    for (graph.edges.items) |edge_item| {
+        const adjacent = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse continue;
+        if (std.meta.eql(adjacent, neighbor)) return true;
+    }
+    return false;
 }
 
 fn virtualSwapCrossesClusterBlock(graph: *const Graph, ranks: []const usize, rank: usize, a: VirtualNode, b: VirtualNode) bool {
@@ -4184,19 +4227,63 @@ fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId),
         for (0..levels.len) |rank| {
             if (levels[rank].items.len < 2 or levels[rank].items.len > 24) continue;
             var i: usize = 0;
-            while (i + 1 < levels[rank].items.len) : (i += 1) {
+            while (i + 1 < levels[rank].items.len) {
+                const pair_before = adjacentPairCrossings(graph, levels, ranks, rank, i, i + 1);
+                const pair_after = adjacentPairCrossings(graph, levels, ranks, rank, i + 1, i);
                 const before = crossingScoreAroundLevel(graph, levels, ranks, rank);
                 std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
                 const after = crossingScoreAroundLevel(graph, levels, ranks, rank);
-                if (after < before) {
+                if (after < before or (after == before and pair_after < pair_before)) {
                     changed = true;
+                    if (i > 0) {
+                        i -= 1;
+                    } else {
+                        i += 1;
+                    }
                 } else {
                     std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
+                    i += 1;
                 }
             }
         }
         if (!changed) break;
     }
+}
+
+fn adjacentPairCrossings(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, rank: usize, left_index: usize, right_index: usize) usize {
+    if (rank >= levels.len) return 0;
+    const level = levels[rank].items;
+    if (left_index >= level.len or right_index >= level.len) return 0;
+    const left = level[left_index];
+    const right = level[right_index];
+    var crossings: usize = 0;
+    if (rank > 0) crossings += adjacentPairCrossingsWithFixedLayer(graph, levels[rank - 1].items, ranks, left, right, true);
+    if (rank + 1 < levels.len) crossings += adjacentPairCrossingsWithFixedLayer(graph, levels[rank + 1].items, ranks, left, right, false);
+    return crossings;
+}
+
+fn adjacentPairCrossingsWithFixedLayer(graph: *const Graph, fixed_layer: []const NodeId, ranks: []const usize, left: NodeId, right: NodeId, use_parents: bool) usize {
+    var crossings: usize = 0;
+    for (fixed_layer, 0..) |left_neighbor, left_pos| {
+        if (!nodesAdjacentAcrossLayer(graph, ranks, left, left_neighbor, use_parents)) continue;
+        for (fixed_layer, 0..) |right_neighbor, right_pos| {
+            if (!nodesAdjacentAcrossLayer(graph, ranks, right, right_neighbor, use_parents)) continue;
+            if (left_pos > right_pos) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn nodesAdjacentAcrossLayer(graph: *const Graph, ranks: []const usize, node_id: NodeId, neighbor_id: NodeId, use_parents: bool) bool {
+    if (node_id >= ranks.len or neighbor_id >= ranks.len) return false;
+    for (graph.edges.items) |edge_item| {
+        if (use_parents) {
+            if (edge_item.from == neighbor_id and edge_item.to == node_id and ranks[edge_item.from] + 1 == ranks[edge_item.to]) return true;
+        } else {
+            if (edge_item.from == node_id and edge_item.to == neighbor_id and ranks[edge_item.from] + 1 == ranks[edge_item.to]) return true;
+        }
+    }
+    return false;
 }
 
 fn crossingScoreAroundLevel(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, rank: usize) usize {
@@ -7875,6 +7962,51 @@ test "adjacent exchange reduces residual two-layer crossings" {
 
     try std.testing.expectEqual(@as(usize, 1), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
     refineAdjacentExchanges(&graph, levels, ranks, 2);
+    try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
+}
+
+test "adjacent exchange bubbles successful swaps backward in one pass" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const x = try graph.node("x");
+    const y = try graph.node("y");
+    const z = try graph.node("z");
+    _ = try graph.edge(a, x, .{});
+    _ = try graph.edge(b, y, .{});
+    _ = try graph.edge(c, z, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 0;
+    ranks[x] = 1;
+    ranks[y] = 1;
+    ranks[z] = 1;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 2);
+    defer allocator.free(levels);
+    levels[0] = .empty;
+    levels[1] = .empty;
+    defer {
+        levels[0].deinit(allocator);
+        levels[1].deinit(allocator);
+    }
+
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+    try levels[0].append(allocator, c);
+    try levels[1].append(allocator, z);
+    try levels[1].append(allocator, y);
+    try levels[1].append(allocator, x);
+
+    try std.testing.expectEqual(@as(usize, 3), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
+    refineAdjacentExchanges(&graph, levels, ranks, 1);
     try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
 }
 
