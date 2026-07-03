@@ -5214,13 +5214,28 @@ fn compactLevelCentersSymmetric(level: []const NodeId, centers: []f64, sizes: []
 }
 
 fn compactLevelCentersForward(level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
-    var prev = level[0];
-    centers[prev] = @max(centers[prev], sizes[prev].width / 2.0);
-    for (level[1..]) |id| {
-        const min_center = centers[prev] + sizes[prev].width / 2.0 + gap + sizes[id].width / 2.0;
-        centers[id] = @max(centers[id], min_center);
-        prev = id;
+    if (level.len == 0) return;
+    const first = level[0];
+    centers[first] = @max(centers[first], sizes[first].width / 2.0);
+    var constraints_buf: [128]CoordConstraint = undefined;
+    if (level.len - 1 > constraints_buf.len) {
+        var prev = first;
+        for (level[1..]) |id| {
+            const min_center = centers[prev] + sizes[prev].width / 2.0 + gap + sizes[id].width / 2.0;
+            centers[id] = @max(centers[id], min_center);
+            prev = id;
+        }
+        return;
     }
+    for (level[1..], 0..) |id, index| {
+        const prev = level[index];
+        constraints_buf[index] = .{
+            .left = prev,
+            .right = id,
+            .min_gap = sizes[prev].width / 2.0 + gap + sizes[id].width / 2.0,
+        };
+    }
+    _ = satisfyCoordConstraints(centers, constraints_buf[0 .. level.len - 1]);
 }
 
 fn compactCenterSliceForward(level: []const NodeId, sizes: []const NodeSize, gap: f64, slice: []f64) void {
