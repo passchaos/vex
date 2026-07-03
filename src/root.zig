@@ -4580,8 +4580,9 @@ fn alignGroupedCenters(graph: *const Graph, levels: []const std.ArrayList(NodeId
     for (levels) |level| compactLevelCenters(level.items, centers, sizes, gap);
 }
 
-fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, extra_gap: f64) void {
-    if (extra_gap <= 0 or graph.clusters.items.len == 0) return;
+fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, cluster_gap: f64) void {
+    if (cluster_gap <= 0 or graph.clusters.items.len == 0) return;
+    const cluster_pad_x: f64 = 12.0;
     for (levels) |level| {
         if (level.items.len <= 1) continue;
         var i: usize = 1;
@@ -4592,7 +4593,9 @@ fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(N
             const right_cluster = clusterIndexContainingNode(graph, right);
             if (left_cluster == null and right_cluster == null) continue;
             if (left_cluster != null and right_cluster != null and left_cluster.? == right_cluster.?) continue;
-            const min_center = centers[left] + sizes[left].width / 2.0 + extra_gap + sizes[right].width / 2.0;
+            const left_pad = if (left_cluster != null) cluster_pad_x else 0.0;
+            const right_pad = if (right_cluster != null) cluster_pad_x else 0.0;
+            const min_center = centers[left] + sizes[left].width / 2.0 + left_pad + cluster_gap + right_pad + sizes[right].width / 2.0;
             if (centers[right] < min_center) {
                 const delta = min_center - centers[right];
                 var j = i;
@@ -11947,7 +11950,7 @@ test "inter-cluster coordinate spacing separates adjacent cluster columns" {
     for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
 
     applyInterClusterSpacing(&graph, levels, centers, sizes, 15);
-    try std.testing.expect(centers[b] - centers[a] >= 35);
+    try std.testing.expect(centers[b] - centers[a] >= 59);
 }
 
 test "inter-cluster coordinate spacing ignores same-cluster neighbors" {
