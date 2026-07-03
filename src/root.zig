@@ -1415,6 +1415,7 @@ pub const EdgeWaypoints = struct {
 
 pub const Layout = struct {
     allocator: std.mem.Allocator,
+    rankdir: RankDir,
     nodes: []NodeLayout,
     clusters: []ClusterLayout,
     edge_waypoints: []EdgeWaypoints,
@@ -1436,6 +1437,88 @@ pub const Layout = struct {
         self.allocator.free(self.rank_depths);
         self.allocator.free(self.rank_heights);
         self.* = undefined;
+    }
+};
+
+const LayoutAxes = struct {
+    rankdir: RankDir,
+
+    fn init(rankdir: RankDir) LayoutAxes {
+        return .{ .rankdir = rankdir };
+    }
+
+    fn horizontalRanks(self: LayoutAxes) bool {
+        return self.rankdir == .LR or self.rankdir == .RL;
+    }
+
+    fn reversedRanks(self: LayoutAxes) bool {
+        return self.rankdir == .BT or self.rankdir == .RL;
+    }
+
+    fn orientSize(self: LayoutAxes, size: NodeSize) NodeSize {
+        return switch (self.rankdir) {
+            .TB, .BT => size,
+            .LR, .RL => .{ .width = size.height, .height = size.width },
+        };
+    }
+
+    fn orientPoint(self: LayoutAxes, along: f64, depth: f64, total_depth: f64, margin_x: f64, margin_y: f64) Point {
+        return switch (self.rankdir) {
+            .TB => .{ .x = margin_x + along, .y = margin_y + depth },
+            .BT => .{ .x = margin_x + along, .y = total_depth + margin_y * 2.0 - (margin_y + depth) },
+            .LR => .{ .x = margin_x + depth, .y = margin_y + along },
+            .RL => .{ .x = total_depth + margin_x * 2.0 - (margin_x + depth), .y = margin_y + along },
+        };
+    }
+
+    fn alongMargin(self: LayoutAxes, options: LayoutOptions) f64 {
+        return if (self.horizontalRanks()) options.margin_y else options.margin;
+    }
+
+    fn depthMargin(self: LayoutAxes, options: LayoutOptions) f64 {
+        return if (self.horizontalRanks()) options.margin else options.margin_y;
+    }
+
+    fn layoutWidth(self: LayoutAxes, base_along: f64, base_depth: f64) f64 {
+        return if (self.horizontalRanks()) base_depth else base_along;
+    }
+
+    fn layoutHeight(self: LayoutAxes, base_along: f64, base_depth: f64) f64 {
+        return if (self.horizontalRanks()) base_along else base_depth;
+    }
+
+    fn pointAlong(self: LayoutAxes, point: Point) f64 {
+        return switch (self.rankdir) {
+            .TB, .BT => point.x,
+            .LR, .RL => point.y,
+        };
+    }
+
+    fn orientWaypoint(self: LayoutAxes, along_screen: f64, depth: f64, layout: *const Layout) Point {
+        return switch (self.rankdir) {
+            .TB => .{ .x = along_screen, .y = layout.margin_y + depth },
+            .BT => .{ .x = along_screen, .y = layout.height - (layout.margin_y + depth) },
+            .LR => .{ .x = layout.margin_x + depth, .y = along_screen },
+            .RL => .{ .x = layout.width - (layout.margin_x + depth), .y = along_screen },
+        };
+    }
+
+    fn offsetPoint(self: LayoutAxes, point: Point, offset: f64) Point {
+        return switch (self.rankdir) {
+            .TB, .BT => .{ .x = point.x + offset, .y = point.y },
+            .LR, .RL => .{ .x = point.x, .y = point.y + offset },
+        };
+    }
+
+    fn rankAxisDelta(self: LayoutAxes, dx: f64, dy: f64) f64 {
+        return if (self.horizontalRanks()) @abs(dx) else @abs(dy);
+    }
+
+    fn nodeAlongHalfSize(self: LayoutAxes, node: NodeLayout) f64 {
+        return switch (self.rankdir) {
+            .TB, .BT => node.width / 2.0,
+            .LR, .RL => node.height / 2.0,
+        };
     }
 };
 
@@ -1554,6 +1637,7 @@ fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoin
 
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
     const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    const axes = LayoutAxes.init(graph.rankdir);
     const n = graph.nodes.items.len;
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
@@ -1573,6 +1657,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         errdefer allocator.free(empty_rank_heights);
         return .{
             .allocator = allocator,
+            .rankdir = axes.rankdir,
             .nodes = nodes,
             .clusters = cluster_layouts,
             .edge_waypoints = edge_waypoints,
@@ -1654,7 +1739,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 
     const axis_sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(axis_sizes);
-    for (sizes, 0..) |size, id| axis_sizes[id] = orientSizeForLayout(size, graph.rankdir);
+    for (sizes, 0..) |size, id| axis_sizes[id] = axes.orientSize(size);
     const centers = try allocator.alloc(f64, n);
     defer allocator.free(centers);
     @memset(centers, 0);
@@ -1715,19 +1800,20 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     for (graph.nodes.items, 0..) |_, id| {
         const rank = ranks[id];
         const depth = rank_depths[rank] + rank_heights[rank] / 2.0;
-        const center = orientPoint(graph.rankdir, centers[id], depth, total_depth, effective_options.margin, effective_options.margin_y);
+        const center = axes.orientPoint(centers[id], depth, total_depth, effective_options.margin, effective_options.margin_y);
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, nodes, cluster_layouts);
-    try computeEdgeWaypoints(allocator, graph, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
+    try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
 
-    const along_margin = if (graph.rankdir == .LR or graph.rankdir == .RL) effective_options.margin_y else effective_options.margin;
-    const depth_margin = if (graph.rankdir == .LR or graph.rankdir == .RL) effective_options.margin else effective_options.margin_y;
+    const along_margin = axes.alongMargin(effective_options);
+    const depth_margin = axes.depthMargin(effective_options);
     const base_along = total_along + along_margin * 2.0;
     const base_depth = total_depth + depth_margin * 2.0;
     return .{
         .allocator = allocator,
+        .rankdir = axes.rankdir,
         .nodes = nodes,
         .clusters = cluster_layouts,
         .edge_waypoints = edge_waypoints,
@@ -1737,8 +1823,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         .margin = effective_options.margin,
         .margin_x = effective_options.margin,
         .margin_y = effective_options.margin_y,
-        .width = if (graph.rankdir == .LR or graph.rankdir == .RL) base_depth else base_along,
-        .height = if (graph.rankdir == .LR or graph.rankdir == .RL) base_along else base_depth,
+        .width = axes.layoutWidth(base_along, base_depth),
+        .height = axes.layoutHeight(base_along, base_depth),
     };
 }
 
@@ -1767,6 +1853,7 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
     if (n == 0) {
         return .{
             .allocator = allocator,
+            .rankdir = graph.rankdir,
             .nodes = nodes,
             .clusters = cluster_layouts,
             .edge_waypoints = edge_waypoints,
@@ -1850,6 +1937,7 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
     computeClusterLayouts(graph, nodes, cluster_layouts);
     return .{
         .allocator = allocator,
+        .rankdir = graph.rankdir,
         .nodes = nodes,
         .clusters = cluster_layouts,
         .edge_waypoints = edge_waypoints,
@@ -2536,10 +2624,7 @@ fn nodeMargin(attrs: []const Attr, fallback: f64) NodeMargin {
 }
 
 fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
-    return switch (rankdir) {
-        .TB, .BT => size,
-        .LR, .RL => .{ .width = size.height, .height = size.width },
-    };
+    return LayoutAxes.init(rankdir).orientSize(size);
 }
 
 fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
@@ -4072,6 +4157,7 @@ fn longEdgeDummyCenter(edge_item: Edge, ranks: []const usize, centers: []const f
 fn computeEdgeWaypoints(
     allocator: std.mem.Allocator,
     graph: *const Graph,
+    axes: LayoutAxes,
     nodes: []const NodeLayout,
     ranks: []const usize,
     rank_depths: []const f64,
@@ -4101,12 +4187,12 @@ fn computeEdgeWaypoints(
             i += 1;
         }) {
             const along = virtualDummyAlong(virtual_levels, virtual_positions, edge_item.id, rank) orelse
-                longEdgeDummyAlongFromNodes(nodes, ranks, edge_item, graph.rankdir, rank) orelse
+                longEdgeDummyAlongFromNodes(nodes, ranks, edge_item, axes.rankdir, rank) orelse
                 continue;
             const depth = rankDepthCenterFrom(rank_depths, rank_heights, rank);
             points[i] = .{
                 .rank = rank,
-                .point = orientPoint(graph.rankdir, along, depth, total_depth, margin_x, margin_y),
+                .point = axes.orientPoint(along, depth, total_depth, margin_x, margin_y),
             };
         }
         edge_waypoints[edge_item.id] = .{ .points = points };
@@ -4183,12 +4269,7 @@ fn normalizeCenters(centers: []f64, sizes: []const NodeSize) void {
 }
 
 fn orientPoint(rankdir: RankDir, along: f64, depth: f64, total_depth: f64, margin_x: f64, margin_y: f64) Point {
-    return switch (rankdir) {
-        .TB => .{ .x = margin_x + along, .y = margin_y + depth },
-        .BT => .{ .x = margin_x + along, .y = total_depth + margin_y * 2.0 - (margin_y + depth) },
-        .LR => .{ .x = margin_x + depth, .y = margin_y + along },
-        .RL => .{ .x = total_depth + margin_x * 2.0 - (margin_x + depth), .y = margin_y + along },
-    };
+    return LayoutAxes.init(rankdir).orientPoint(along, depth, total_depth, margin_x, margin_y);
 }
 
 pub const OutputFormat = enum {
@@ -4351,9 +4432,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         }
 
         const offset = parallelEdgeOffset(graph, edge_item.id);
-        const route = edgeRouteForEdge(graph, layout, edge_item, graph.rankdir, offset);
+        const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
         try writer.writeAll("<path d=\"");
-        try writeEdgePath(writer, layout, edge_item, graph.rankdir, offset, route, edge_routing);
+        try writeEdgePath(writer, layout, edge_item, layout.rankdir, offset, route, edge_routing);
         try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
         try writeSvgDash(writer, visual.dash);
         try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
@@ -6026,15 +6107,16 @@ fn longEdgeWaypointCount(layout: *const Layout, edge_item: Edge) usize {
 }
 
 fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, index: usize, count: usize) Point {
+    const axes = LayoutAxes.init(rankdir);
     const from_rank = layout.ranks[edge_item.from];
     const to_rank = layout.ranks[edge_item.to];
     const increasing = to_rank > from_rank;
     const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
-    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| return offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), rankdir, offset);
+    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| return axes.offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), offset);
     const along = longEdgeDummyAlongFromLayout(layout, edge_item, rankdir, rank) orelse interpolatedWaypointAlong(layout, edge_item, rankdir, index, count);
     const depth = rankDepthCenter(layout, rank);
-    const point = orientWaypoint(rankdir, along, depth, layout);
-    return offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), rankdir, offset);
+    const point = axes.orientWaypoint(along, depth, layout);
+    return axes.offsetPoint(avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point), offset);
 }
 
 fn avoidNodeAtRankForWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, rank: usize, point: Point) Point {
@@ -6093,8 +6175,9 @@ fn longEdgeDummyAlongFromLayout(layout: *const Layout, edge_item: Edge, rankdir:
     if (rank <= from_rank or rank >= to_rank) return null;
     const span = @as(f64, @floatFromInt(to_rank - from_rank));
     const t = @as(f64, @floatFromInt(rank - from_rank)) / span;
-    const from_along = pointAlongAxis(layout.nodes[edge_item.from].center, rankdir);
-    const to_along = pointAlongAxis(layout.nodes[edge_item.to].center, rankdir);
+    const axes = LayoutAxes.init(rankdir);
+    const from_along = axes.pointAlong(layout.nodes[edge_item.from].center);
+    const to_along = axes.pointAlong(layout.nodes[edge_item.to].center);
     return from_along + (to_along - from_along) * t;
 }
 
@@ -6102,14 +6185,12 @@ fn interpolatedWaypointAlong(layout: *const Layout, edge_item: Edge, rankdir: Ra
     const t = @as(f64, @floatFromInt(index + 1)) / @as(f64, @floatFromInt(count + 1));
     const from_center = layout.nodes[edge_item.from].center;
     const to_center = layout.nodes[edge_item.to].center;
-    return pointAlongAxis(from_center, rankdir) + (pointAlongAxis(to_center, rankdir) - pointAlongAxis(from_center, rankdir)) * t;
+    const axes = LayoutAxes.init(rankdir);
+    return axes.pointAlong(from_center) + (axes.pointAlong(to_center) - axes.pointAlong(from_center)) * t;
 }
 
 fn pointAlongAxis(point: Point, rankdir: RankDir) f64 {
-    return switch (rankdir) {
-        .TB, .BT => point.x,
-        .LR, .RL => point.y,
-    };
+    return LayoutAxes.init(rankdir).pointAlong(point);
 }
 
 fn rankDepthCenter(layout: *const Layout, rank: usize) f64 {
@@ -6123,16 +6204,11 @@ fn rankDepthCenterFrom(rank_depths: []const f64, rank_heights: []const f64, rank
 }
 
 fn orientWaypoint(rankdir: RankDir, along_screen: f64, depth: f64, layout: *const Layout) Point {
-    return switch (rankdir) {
-        .TB => .{ .x = along_screen, .y = layout.margin_y + depth },
-        .BT => .{ .x = along_screen, .y = layout.height - (layout.margin_y + depth) },
-        .LR => .{ .x = layout.margin_x + depth, .y = along_screen },
-        .RL => .{ .x = layout.width - (layout.margin_x + depth), .y = along_screen },
-    };
+    return LayoutAxes.init(rankdir).orientWaypoint(along_screen, depth, layout);
 }
 
 fn splineCurveAmount(rankdir: RankDir, dx: f64, dy: f64, min_curve: f64, max_curve: f64) f64 {
-    const axis_delta = if (rankdir == .LR or rankdir == .RL) @abs(dx) else @abs(dy);
+    const axis_delta = LayoutAxes.init(rankdir).rankAxisDelta(dx, dy);
     if (axis_delta <= 0.001) return 0;
     const preferred = @min(max_curve, axis_delta * 0.45);
     return @min(axis_delta * 0.5, @max(min_curve, preferred));
@@ -6261,7 +6337,7 @@ fn samePortBoundaryPoint(graph: *const Graph, layout: *const Layout, edge_item: 
         .x = anchor.center.x + sum.x,
         .y = anchor.center.y + sum.y,
     };
-    return boundaryPoint(anchor, toward, graph.rankdir, !head);
+    return boundaryPoint(anchor, toward, layout.rankdir, !head);
 }
 
 fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, offset: f64) EdgeRoute {
@@ -6468,10 +6544,7 @@ fn findRecordPortRect(node: RecordAst, port: []const u8, rect: RectF) ?RectF {
 }
 
 fn offsetPoint(point: Point, rankdir: RankDir, offset: f64) Point {
-    return switch (rankdir) {
-        .TB, .BT => .{ .x = point.x + offset, .y = point.y },
-        .LR, .RL => .{ .x = point.x, .y = point.y + offset },
-    };
+    return LayoutAxes.init(rankdir).offsetPoint(point, offset);
 }
 
 fn selfLoopRoute(node: NodeLayout) EdgeRoute {
@@ -6985,7 +7058,37 @@ test "layoutGraph default keeps Sugiyama rankdir as layout input" {
 
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
+    try std.testing.expectEqual(RankDir.LR, layout.rankdir);
     try expectRankDirection(&graph, &layout, .LR);
+}
+
+test "layout stores rankdir snapshot for routing after graph mutation" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a -> b [label="ab"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const edge_item = graph.edges.items[0];
+    const route_before = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    try std.testing.expectEqual(RankDir.LR, layout.rankdir);
+
+    graph.rankdir = .TB;
+    const route_after = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    try std.testing.expectEqual(route_before.start.x, route_after.start.x);
+    try std.testing.expectEqual(route_before.start.y, route_after.start.y);
+    try std.testing.expectEqual(route_before.end.x, route_after.end.x);
+    try std.testing.expectEqual(route_before.end.y, route_after.end.y);
+    try std.testing.expect(route_after.start.x < route_after.end.x);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">ab</tspan>") != null);
 }
 
 test "layered layout default margin is compact and overrideable" {
@@ -8101,7 +8204,7 @@ test "SVG renderer emits curved clipped edges and multiline text spans" {
 
     const a = graph.node_index.get("a").?;
     const b = graph.node_index.get("b").?;
-    const route = edgeRoute(layout.nodes[a], layout.nodes[b], graph.rankdir, 0);
+    const route = edgeRoute(layout.nodes[a], layout.nodes[b], layout.rankdir, 0);
     try std.testing.expect(route.start.x > layout.nodes[a].center.x);
     try std.testing.expect(route.end.x < layout.nodes[b].center.x);
 }
@@ -8646,7 +8749,7 @@ test "SVG renderer honors edge label font position and decoration attributes" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     const edge_item = graph.edges.items[0];
-    const route = edgeRouteForEdge(&graph, &layout, edge_item, graph.rankdir, 0);
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
     const near_tail = endpointLabelPosition(route.start, route.label, 1.0, -45, false);
     const far_tail = endpointLabelPosition(route.start, route.label, 2.0, -45, false);
     try std.testing.expect(distanceBetween(route.start, far_tail) > distanceBetween(route.start, near_tail));
@@ -8779,11 +8882,11 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
     const a = graph.node_index.get("a").?;
     const b = graph.node_index.get("b").?;
     const c = graph.node_index.get("c").?;
-    const clipped = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], graph.rankdir, 0);
+    const clipped = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
     try std.testing.expect(clipped.start.x > layout.nodes[a].center.x);
     try std.testing.expect(clipped.end.x < layout.nodes[b].center.x);
 
-    const unclipped = edgeRouteForEdge(&graph, &layout, graph.edges.items[2], graph.rankdir, 0);
+    const unclipped = edgeRouteForEdge(&graph, &layout, graph.edges.items[2], layout.rankdir, 0);
     try std.testing.expectEqual(layout.nodes[b].center.x, unclipped.start.x);
     try std.testing.expectEqual(layout.nodes[b].center.y, unclipped.start.y);
     try std.testing.expectEqual(layout.nodes[c].center.x, unclipped.end.x);
@@ -9497,7 +9600,7 @@ test "SVG auto endpoints use side anchors for same-rank edges" {
     const a = graph.node_index.get("a").?;
     const b = graph.node_index.get("b").?;
     try std.testing.expectEqual(layout.nodes[a].center.y, layout.nodes[b].center.y);
-    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], graph.rankdir, 0);
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
     try std.testing.expectEqual(layout.nodes[a].center.x + layout.nodes[a].width / 2.0, route.start.x);
     try std.testing.expectEqual(layout.nodes[b].center.x - layout.nodes[b].width / 2.0, route.end.x);
 }
@@ -9523,7 +9626,7 @@ test "layout retains rank metadata for long-edge routing" {
     try std.testing.expect(longEdgeWaypointCount(&layout, graph.edges.items[3]) == 2);
     try std.testing.expectEqual(@as(usize, 2), layout.edge_waypoints[3].points.len);
     try std.testing.expectEqual(@as(usize, 1), layout.edge_waypoints[3].points[0].rank);
-    const waypoint = longEdgeWaypoint(&layout, graph.edges.items[3], graph.rankdir, 0, 0, 2);
+    const waypoint = longEdgeWaypoint(&layout, graph.edges.items[3], layout.rankdir, 0, 0, 2);
     try std.testing.expectEqual(layout.edge_waypoints[3].points[0].point.x, waypoint.x);
     try std.testing.expectEqual(layout.edge_waypoints[3].points[0].point.y, waypoint.y);
 }
@@ -9542,7 +9645,7 @@ test "long-edge waypoints use rankdir-aware dummy along axis" {
     var tb_layout = try layoutLayered(allocator, &tb, .{});
     defer tb_layout.deinit();
     const tb_edge = tb.edges.items[3];
-    const tb_waypoint = longEdgeWaypoint(&tb_layout, tb_edge, tb.rankdir, 0, 0, 2);
+    const tb_waypoint = longEdgeWaypoint(&tb_layout, tb_edge, tb_layout.rankdir, 0, 0, 2);
     try std.testing.expectEqual(tb_layout.edge_waypoints[tb_edge.id].points[0].point.x, tb_waypoint.x);
     try std.testing.expectEqual(tb_layout.edge_waypoints[tb_edge.id].points[0].point.y, tb_waypoint.y);
 
@@ -9557,7 +9660,7 @@ test "long-edge waypoints use rankdir-aware dummy along axis" {
     var lr_layout = try layoutLayered(allocator, &lr, .{});
     defer lr_layout.deinit();
     const lr_edge = lr.edges.items[3];
-    const lr_waypoint = longEdgeWaypoint(&lr_layout, lr_edge, lr.rankdir, 0, 0, 2);
+    const lr_waypoint = longEdgeWaypoint(&lr_layout, lr_edge, lr_layout.rankdir, 0, 0, 2);
     try std.testing.expectEqual(lr_layout.edge_waypoints[lr_edge.id].points[0].point.x, lr_waypoint.x);
     try std.testing.expectEqual(lr_layout.edge_waypoints[lr_edge.id].points[0].point.y, lr_waypoint.y);
 }
@@ -9566,6 +9669,7 @@ test "long-edge waypoints avoid same-rank node boxes" {
     const allocator = std.testing.allocator;
     var layout = Layout{
         .allocator = allocator,
+        .rankdir = .TB,
         .nodes = try allocator.alloc(NodeLayout, 3),
         .clusters = try allocator.alloc(ClusterLayout, 0),
         .edge_waypoints = try allocator.alloc(EdgeWaypoints, 1),
@@ -9639,7 +9743,7 @@ test "SVG routes multi-rank back edges around the side" {
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
-    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[3], graph.rankdir, 0);
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[3], layout.rankdir, 0);
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     const label_pos = std.mem.indexOf(u8, svg, ">back</tspan>") orelse return error.MissingBackLabel;
@@ -9658,6 +9762,7 @@ test "back-edge side channel prefers stable negative side for same column" {
     const allocator = std.testing.allocator;
     var layout = Layout{
         .allocator = allocator,
+        .rankdir = .TB,
         .nodes = try allocator.alloc(NodeLayout, 2),
         .clusters = try allocator.alloc(ClusterLayout, 0),
         .edge_waypoints = try allocator.alloc(EdgeWaypoints, 0),
@@ -10511,7 +10616,7 @@ test "DOT record field ports route edge endpoints to fields" {
     defer layout.deinit();
 
     const edge_item = graph.edges.items[0];
-    const route = edgeRouteForEdge(&graph, &layout, edge_item, graph.rankdir, 0);
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
     const tail_rect = recordFieldRect(graph.nodes.items[edge_item.from].label, layout.nodes[edge_item.from], "orders").?;
     const head_rect = recordFieldRect(graph.nodes.items[edge_item.to].label, layout.nodes[edge_item.to], "id").?;
 
@@ -10549,12 +10654,12 @@ test "DOT compass ports route edge endpoints to requested sides" {
     defer layout.deinit();
 
     const first = graph.edges.items[0];
-    const first_route = edgeRouteForEdge(&graph, &layout, first, graph.rankdir, 0);
+    const first_route = edgeRouteForEdge(&graph, &layout, first, layout.rankdir, 0);
     try std.testing.expectEqual(layout.nodes[first.from].center.x + layout.nodes[first.from].width / 2.0, first_route.start.x);
     try std.testing.expectEqual(layout.nodes[first.to].center.x - layout.nodes[first.to].width / 2.0, first_route.end.x);
 
     const record_edge = graph.edges.items[1];
-    const record_route = edgeRouteForEdge(&graph, &layout, record_edge, graph.rankdir, 0);
+    const record_route = edgeRouteForEdge(&graph, &layout, record_edge, layout.rankdir, 0);
     const tail_rect = recordFieldRect(graph.nodes.items[record_edge.from].label, layout.nodes[record_edge.from], "orders").?;
     const head_rect = recordFieldRect(graph.nodes.items[record_edge.to].label, layout.nodes[record_edge.to], "id").?;
     try std.testing.expectEqual(tail_rect.x + tail_rect.width, record_route.start.x);
@@ -10613,7 +10718,7 @@ test "DOT compound edges clip to cluster boundaries" {
     try std.testing.expectEqualStrings("cluster_left", edge_item.ltail.?);
     try std.testing.expectEqualStrings("cluster_right", edge_item.lhead.?);
 
-    const route = edgeRouteForEdge(&graph, &layout, edge_item, graph.rankdir, 0);
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
     const left = clusterRect(&graph, &layout, "cluster_left").?;
     const right = clusterRect(&graph, &layout, "cluster_right").?;
     try std.testing.expect(pointOnRectBoundary(left, route.start));
@@ -10636,12 +10741,12 @@ test "DOT samehead and sametail route edges through shared ports" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
 
-    const head_a = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], graph.rankdir, 0);
-    const head_b = edgeRouteForEdge(&graph, &layout, graph.edges.items[1], graph.rankdir, 0);
+    const head_a = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
+    const head_b = edgeRouteForEdge(&graph, &layout, graph.edges.items[1], layout.rankdir, 0);
     try std.testing.expect(distanceBetween(head_a.end, head_b.end) <= 0.01);
 
-    const tail_x = edgeRouteForEdge(&graph, &layout, graph.edges.items[2], graph.rankdir, 0);
-    const tail_y = edgeRouteForEdge(&graph, &layout, graph.edges.items[3], graph.rankdir, 0);
+    const tail_x = edgeRouteForEdge(&graph, &layout, graph.edges.items[2], layout.rankdir, 0);
+    const tail_y = edgeRouteForEdge(&graph, &layout, graph.edges.items[3], layout.rankdir, 0);
     try std.testing.expect(distanceBetween(tail_x.start, tail_y.start) <= 0.01);
 }
 
