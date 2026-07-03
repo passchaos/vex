@@ -6441,7 +6441,7 @@ pub fn renderTerminal(writer: *Io.Writer, graph: *const Graph, layout: *const La
 }
 
 pub const SvgOptions = struct {
-    background: []const u8 = "#ffffff",
+    background: []const u8 = "white",
     font_family: []const u8 = default_svg_font_family,
     show_title: bool = true,
 };
@@ -14246,7 +14246,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"223pt\" height=\"409pt\" viewBox=\"0.00 0.00 223.00 408.80\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#ffffff\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
