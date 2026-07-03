@@ -4580,6 +4580,28 @@ fn alignGroupedCenters(graph: *const Graph, levels: []const std.ArrayList(NodeId
     for (levels) |level| compactLevelCenters(level.items, centers, sizes, gap);
 }
 
+fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, extra_gap: f64) void {
+    if (extra_gap <= 0 or graph.clusters.items.len == 0) return;
+    for (levels) |level| {
+        if (level.items.len <= 1) continue;
+        var i: usize = 1;
+        while (i < level.items.len) : (i += 1) {
+            const left = level.items[i - 1];
+            const right = level.items[i];
+            const left_cluster = clusterIndexContainingNode(graph, left);
+            const right_cluster = clusterIndexContainingNode(graph, right);
+            if (left_cluster == null and right_cluster == null) continue;
+            if (left_cluster != null and right_cluster != null and left_cluster.? == right_cluster.?) continue;
+            const min_center = centers[left] + sizes[left].width / 2.0 + extra_gap + sizes[right].width / 2.0;
+            if (centers[right] < min_center) {
+                const delta = min_center - centers[right];
+                var j = i;
+                while (j < level.items.len) : (j += 1) centers[level.items[j]] += delta;
+            }
+        }
+    }
+}
+
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
     var left: f64 = 0;
     for (level) |id| {
@@ -11712,6 +11734,69 @@ test "layered layout honors DOT node group alignment hints" {
         @abs(layout.nodes[m1].center.x - layout.nodes[t1].center.x),
     );
     try std.testing.expect(max_delta <= 1.0);
+}
+
+test "inter-cluster coordinate spacing separates adjacent cluster columns" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; }
+        \\  subgraph cluster_left { a; }
+        \\  subgraph cluster_right { b; }
+        \\}
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 1);
+    defer allocator.free(levels);
+    levels[0] = .empty;
+    defer levels[0].deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[a] = 40;
+    centers[b] = 80;
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    applyInterClusterSpacing(&graph, levels, centers, sizes, 15);
+    try std.testing.expect(centers[b] - centers[a] >= 35);
+}
+
+test "inter-cluster coordinate spacing ignores same-cluster neighbors" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; }
+        \\  subgraph cluster_left { a; b; }
+        \\}
+    );
+    defer graph.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 1);
+    defer allocator.free(levels);
+    levels[0] = .empty;
+    defer levels[0].deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+
+    const centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(centers);
+    centers[a] = 40;
+    centers[b] = 80;
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    applyInterClusterSpacing(&graph, levels, centers, sizes, 15);
+    try std.testing.expectEqual(@as(f64, 80), centers[b]);
 }
 
 test "layered layout uses DOT edge weight as a coordinate hint" {
