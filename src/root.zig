@@ -8254,33 +8254,23 @@ fn renderSvgEggShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual)
         const lower_rx = rx;
         var ring_visual = visual;
         if (ring > 0) ring_visual.fill = "none";
-        try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} Z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-            cx,
-            top,
-            cx + upper_rx,
-            top,
-            cx + lower_rx,
-            cy + ry * 0.22,
-            cx + lower_rx * 0.72,
-            cy + ry * 0.78,
-            cx + lower_rx * 0.42,
-            bottom,
-            cx - lower_rx * 0.42,
-            bottom,
-            cx - lower_rx * 0.72,
-            cy + ry * 0.78,
-            cx - lower_rx,
-            cy + ry * 0.22,
-            cx - upper_rx,
-            top,
-            cx,
-            top,
-            ring_visual.fill,
-            ring_visual.stroke,
-            ring_visual.width,
-        });
-        try writeSvgDash(writer, ring_visual.dash);
-        try writer.writeAll("/>\n");
+        try writeSvgClosedCubicPath(writer, .{ .x = cx, .y = top }, &.{
+            .{
+                .c1 = .{ .x = cx + upper_rx, .y = top },
+                .c2 = .{ .x = cx + lower_rx, .y = cy + ry * 0.22 },
+                .end = .{ .x = cx + lower_rx * 0.72, .y = cy + ry * 0.78 },
+            },
+            .{
+                .c1 = .{ .x = cx + lower_rx * 0.42, .y = bottom },
+                .c2 = .{ .x = cx - lower_rx * 0.42, .y = bottom },
+                .end = .{ .x = cx - lower_rx * 0.72, .y = cy + ry * 0.78 },
+            },
+            .{
+                .c1 = .{ .x = cx - lower_rx, .y = cy + ry * 0.22 },
+                .c2 = .{ .x = cx - upper_rx, .y = top },
+                .end = .{ .x = cx, .y = top },
+            },
+        }, ring_visual);
     }
 }
 
@@ -8490,6 +8480,22 @@ fn writeSvgClosedPath(writer: *Io.Writer, points: []const Point, visual: NodeVis
     try writer.print("<path d=\"", .{});
     try writePathMove(writer, points[0]);
     for (points[1..]) |point| try writePathLine(writer, point);
+    try writer.print("Z\" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
+    try writeSvgStrokeWidth(writer, visual.width);
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+const CubicSegment = struct {
+    c1: Point,
+    c2: Point,
+    end: Point,
+};
+
+fn writeSvgClosedCubicPath(writer: *Io.Writer, start: Point, segments: []const CubicSegment, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<path d=\"", .{});
+    try writePathMove(writer, start);
+    for (segments) |segment| try writePathCubic(writer, segment.c1, segment.c2, segment.end);
     try writer.print("Z\" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
