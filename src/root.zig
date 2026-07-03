@@ -6487,7 +6487,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
-    if (graph.directed) {
+    if (svgNeedsMarkerDefs(graph, concentrate)) {
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
             if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
@@ -6569,6 +6569,17 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("</g>\n");
     if (content_translate != 0) try writer.writeAll("</g>\n");
     try writer.writeAll("</g>\n</svg>\n");
+}
+
+fn svgNeedsMarkerDefs(graph: *const Graph, concentrate: bool) bool {
+    if (!graph.directed) return false;
+    for (graph.edges.items) |edge_item| {
+        if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
+        const visual = resolveEdgeVisual(edge_item);
+        if (visual.marker_end != .none and visual.marker_end != .normal) return true;
+        if (visual.marker_start != .none and visual.marker_start != .normal) return true;
+    }
+    return false;
 }
 
 fn svgGraphContentTranslate(layout: *const Layout) f64 {
@@ -14195,6 +14206,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#ffffff\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">a0</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">start</text>") != null);
