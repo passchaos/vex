@@ -5391,6 +5391,47 @@ fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
     return count;
 }
 
+fn svgNumberAfter(fragment: []const u8, marker: []const u8) ?f64 {
+    const start = std.mem.indexOf(u8, fragment, marker) orelse return null;
+    const value_start = start + marker.len;
+    const value_end_rel = std.mem.indexOfScalar(u8, fragment[value_start..], '"') orelse return null;
+    return std.fmt.parseFloat(f64, fragment[value_start .. value_start + value_end_rel]) catch null;
+}
+
+fn svgGroupFragmentByTitle(svg: []const u8, title: []const u8) ?[]const u8 {
+    var title_buf: [128]u8 = undefined;
+    const needle = std.fmt.bufPrint(&title_buf, "<title>{s}</title>", .{title}) catch return null;
+    const title_pos = std.mem.indexOf(u8, svg, needle) orelse return null;
+    const end_rel = std.mem.indexOf(u8, svg[title_pos..], "</g>") orelse return null;
+    return svg[title_pos .. title_pos + end_rel];
+}
+
+fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    return svgNumberAfter(fragment, " width=\"");
+}
+
+fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    if (svgNumberAfter(fragment, " cx=\"")) |cx| return cx;
+    if (svgNumberAfter(fragment, " x=\"")) |x| {
+        if (svgNumberAfter(fragment, " width=\"")) |width| return x + width / 2.0;
+    }
+    const points_start = std.mem.indexOf(u8, fragment, "points=\"") orelse return null;
+    var values = std.mem.tokenizeAny(u8, fragment[points_start + "points=\"".len ..], " ,\"");
+    var min_x = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    while (values.next()) |x_text| {
+        const x = std.fmt.parseFloat(f64, x_text) catch break;
+        const y_text = values.next() orelse break;
+        _ = std.fmt.parseFloat(f64, y_text) catch break;
+        min_x = @min(min_x, x);
+        max_x = @max(max_x, x);
+    }
+    if (min_x == std.math.floatMax(f64)) return null;
+    return (min_x + max_x) / 2.0;
+}
+
 fn renderedEdgePathCount(svg: []const u8) usize {
     const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
     const end_rel = std.mem.indexOf(u8, svg[start..], "\n<g class=\"nodes\"") orelse return 0;
@@ -11334,6 +11375,14 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 8.0 ") != null);
+    try std.testing.expect((svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect) <= 82.0);
+    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 82.0);
+    const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
+    const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
+    try std.testing.expect(svg_start_x > svgNodeCenterX(svg, "a0").?);
+    try std.testing.expect(svg_start_x < svgNodeCenterX(svg, "b0").?);
+    try std.testing.expect(svg_end_x > svgNodeCenterX(svg, "a3").?);
+    try std.testing.expect(svg_end_x < svgNodeCenterX(svg, "b3").?);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
