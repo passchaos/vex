@@ -1528,7 +1528,7 @@ pub const LayoutOptions = struct {
     rank_gap: f64 = 36,
     node_gap: f64 = 36,
     margin: f64 = 16,
-    margin_y: f64 = 8,
+    margin_y: f64 = 5.5,
     label_char_width: f64 = 8,
     label_line_height: f64 = 18,
     node_padding_x: f64 = 14,
@@ -8095,7 +8095,7 @@ test "layered layout default margin is compact and overrideable" {
     defer roomy.deinit();
 
     try std.testing.expectEqual(@as(f64, 16), compact.margin);
-    try std.testing.expectEqual(@as(f64, 8), compact.margin_y);
+    try std.testing.expectEqual(@as(f64, 5.5), compact.margin_y);
     try std.testing.expectEqual(@as(f64, 40), roomy.margin);
     try std.testing.expect(roomy.width > compact.width);
     try std.testing.expect(roomy.height > compact.height);
@@ -11650,7 +11650,7 @@ test "user cluster example stays compact and Graphviz-like" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     try std.testing.expect(layout.width <= 224.0);
-    try std.testing.expect(layout.height <= 414.0);
+    try std.testing.expect(layout.height <= 409.0);
     for (layout.clusters) |cluster_box| {
         try std.testing.expect(cluster_box.width <= 82.0);
         try std.testing.expect(cluster_box.height <= 294.0);
@@ -11679,6 +11679,7 @@ test "user cluster example stays compact and Graphviz-like" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "height=\"409\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
