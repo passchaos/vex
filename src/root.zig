@@ -12358,9 +12358,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_cluster_0_w >= 86.0);
     try std.testing.expect(svg_cluster_0_w <= 90.0);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 78.0);
-    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 12.5);
+    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 4.5);
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
-    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 8.0);
+    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 1.0);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 4.0);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
     const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
@@ -12375,10 +12375,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_a0_x >= 51.0);
     try std.testing.expect(svg_b0_x >= 168.0);
     try std.testing.expect(svg_b0_x - svg_a0_x >= 117.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 16.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 8.5);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 10.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 10.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 2.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
