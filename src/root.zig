@@ -2955,6 +2955,15 @@ fn mergeTightRankComponentsOnce(allocator: std.mem.Allocator, edges: []const Ran
     return true;
 }
 
+fn mergeTightRankComponents(allocator: std.mem.Allocator, edges: []const RankEdge, ranks: []usize, max_merges: usize) !usize {
+    var merges: usize = 0;
+    while (merges < max_merges) {
+        if (!try mergeTightRankComponentsOnce(allocator, edges, ranks)) break;
+        merges += 1;
+    }
+    return merges;
+}
+
 fn rankEdgesFeasible(edges: []const RankEdge, ranks: []const usize) bool {
     for (edges) |edge| {
         if (rankEdgeSlack(edge, ranks) == null) return false;
@@ -9263,6 +9272,46 @@ test "single tight component merge reduces component count" {
     defer allocator.free(rank_edges);
     try std.testing.expectEqual(@as(usize, 2), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
     try std.testing.expect(try mergeTightRankComponentsOnce(allocator, rank_edges, ranks));
+    try std.testing.expect(rankEdgesFeasible(rank_edges, ranks));
+    try std.testing.expectEqual(@as(usize, 1), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
+}
+
+test "bounded tight component merge can build a connected tight tree" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  c -> d;
+        \\  e -> f;
+        \\  b -> d;
+        \\  d -> f;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const e = graph.node_index.get("e").?;
+    const f = graph.node_index.get("f").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 3;
+    ranks[d] = 4;
+    ranks[e] = 6;
+    ranks[f] = 7;
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    try std.testing.expectEqual(@as(usize, 3), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
+    try std.testing.expectEqual(@as(usize, 2), try mergeTightRankComponents(allocator, rank_edges, ranks, 4));
     try std.testing.expect(rankEdgesFeasible(rank_edges, ranks));
     try std.testing.expectEqual(@as(usize, 1), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
 }
