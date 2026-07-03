@@ -5484,6 +5484,21 @@ fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     return (min_x + max_x) / 2.0;
 }
 
+fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return 0;
+    const d_start = std.mem.indexOf(u8, fragment, " d=\"") orelse return 0;
+    const value_start = d_start + " d=\"".len;
+    const value_end_rel = std.mem.indexOfScalar(u8, fragment[value_start..], '"') orelse return 0;
+    var values = std.mem.tokenizeAny(u8, fragment[value_start .. value_start + value_end_rel], " ,MCL");
+    var count: usize = 0;
+    while (values.next()) |number_text| {
+        if (count >= out.len) break;
+        out[count] = std.fmt.parseFloat(f64, number_text) catch continue;
+        count += 1;
+    }
+    return count;
+}
+
 fn renderedEdgePathCount(svg: []const u8) usize {
     const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
     const end_rel = std.mem.indexOf(u8, svg[start..], "\n<g class=\"nodes\"") orelse return 0;
@@ -11541,6 +11556,14 @@ test "user cluster example stays compact and Graphviz-like" {
     const cross_edge = svg[cross_label .. cross_label + cross_end];
     try std.testing.expect(std.mem.indexOf(u8, cross_edge, "196.5") == null);
     try std.testing.expect(countSubstrings(cross_edge, " C ") >= 2);
+    var path_numbers: [32]f64 = undefined;
+    const cross_count = svgPathNumbers(svg, "a1-&gt;b3", path_numbers[0..]);
+    try std.testing.expect(cross_count >= 8);
+    try std.testing.expect(path_numbers[2] < 100.0);
+    const diagonal_count = svgPathNumbers(svg, "b2-&gt;a3", path_numbers[0..]);
+    try std.testing.expect(diagonal_count >= 8);
+    try std.testing.expect(path_numbers[2] > path_numbers[4]);
+    try std.testing.expect(path_numbers[4] > path_numbers[6]);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
