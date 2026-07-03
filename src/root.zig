@@ -1423,6 +1423,10 @@ pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
     errdefer graph.deinit();
 
     var saw_header = false;
+    var subgraph_name: ?[]const u8 = null;
+    var subgraph_label: ?[]const u8 = null;
+    var subgraph_nodes = std.ArrayList(NodeId).empty;
+    defer subgraph_nodes.deinit(allocator);
     while (lines.next()) |line_raw| {
         const line = trimMermaidLine(line_raw);
         if (line.len == 0 or std.mem.startsWith(u8, line, "%%")) continue;
@@ -1431,7 +1435,28 @@ pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
             try applyMermaidDirection(&graph, line);
             continue;
         }
-        try parseMermaidStatement(&graph, line);
+        if (parseMermaidSubgraphHeader(line)) |header| {
+            if (subgraph_name) |name| {
+                try addMermaidSubgraph(&graph, name, subgraph_label orelse name, subgraph_nodes.items);
+                subgraph_nodes.clearRetainingCapacity();
+            }
+            subgraph_name = header.name;
+            subgraph_label = header.label;
+            continue;
+        }
+        if (std.mem.eql(u8, line, "end")) {
+            if (subgraph_name) |name| {
+                try addMermaidSubgraph(&graph, name, subgraph_label orelse name, subgraph_nodes.items);
+                subgraph_name = null;
+                subgraph_label = null;
+                subgraph_nodes.clearRetainingCapacity();
+            }
+            continue;
+        }
+        try parseMermaidStatement(&graph, line, if (subgraph_name != null) &subgraph_nodes else null);
+    }
+    if (subgraph_name) |name| {
+        try addMermaidSubgraph(&graph, name, subgraph_label orelse name, subgraph_nodes.items);
     }
 
     return graph;
@@ -1472,17 +1497,44 @@ fn applyMermaidDirection(graph: *Graph, line: []const u8) !void {
     }
 }
 
-fn parseMermaidStatement(graph: *Graph, line: []const u8) !void {
-    if (std.mem.startsWith(u8, line, "subgraph") or std.mem.eql(u8, line, "end")) return;
+const MermaidSubgraphHeader = struct {
+    name: []const u8,
+    label: ?[]const u8 = null,
+};
+
+fn parseMermaidSubgraphHeader(line: []const u8) ?MermaidSubgraphHeader {
+    if (!std.mem.startsWith(u8, line, "subgraph")) return null;
+    var rest = std.mem.trim(u8, line["subgraph".len..], " \t\r\n");
+    if (rest.len == 0) return .{ .name = "subgraph" };
+    if (std.mem.indexOfScalar(u8, rest, '[')) |open| {
+        if (std.mem.lastIndexOfScalar(u8, rest, ']')) |close| {
+            if (close > open) {
+                const name = std.mem.trim(u8, rest[0..open], " \t\r\n");
+                const label = stripMermaidLabelQuotes(std.mem.trim(u8, rest[open + 1 .. close], " \t\r\n"));
+                return .{ .name = if (name.len == 0) label else name, .label = label };
+            }
+        }
+    }
+    rest = stripMermaidLabelQuotes(rest);
+    return .{ .name = rest, .label = rest };
+}
+
+fn addMermaidSubgraph(graph: *Graph, name: []const u8, label: []const u8, nodes: []const NodeId) !void {
+    if (nodes.len == 0) return;
+    const attrs = [_]Attr{.{ .name = "label", .value = label }};
+    _ = try graph.addCluster(name, null, nodes, &attrs);
+}
+
+fn parseMermaidStatement(graph: *Graph, line: []const u8, subgraph_nodes: ?*std.ArrayList(NodeId)) !void {
     var pos: usize = 0;
-    var current = try parseMermaidNodeRef(graph, line, &pos) orelse return;
+    var current = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes) orelse return;
     while (findMermaidArrow(line, pos)) |arrow| {
         pos = arrow.start;
         const edge_label = mermaidEdgeLabelBeforeArrow(line, &pos);
         const arrow_text = line[arrow.start..arrow.end];
         pos = arrow.end;
         const label_after_arrow = mermaidEdgeLabelAfterArrow(line, &pos);
-        const target = try parseMermaidNodeRef(graph, line, &pos) orelse break;
+        const target = try parseMermaidNodeRef(graph, line, &pos, subgraph_nodes) orelse break;
         const edge_id = try graph.edge(current, target, .{ .label = edge_label orelse label_after_arrow });
         try applyMermaidEdgeStyle(graph, edge_id, arrow_text);
         current = target;
@@ -1534,7 +1586,7 @@ fn mermaidEdgeLabelAfterArrow(line: []const u8, pos: *usize) ?[]const u8 {
     return if (label.len == 0) null else label;
 }
 
-fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize) !?NodeId {
+fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize, subgraph_nodes: ?*std.ArrayList(NodeId)) !?NodeId {
     while (pos.* < line.len and std.ascii.isWhitespace(line[pos.*])) : (pos.* += 1) {}
     if (pos.* >= line.len) return null;
     const id_start = pos.*;
@@ -1542,8 +1594,14 @@ fn parseMermaidNodeRef(graph: *Graph, line: []const u8, pos: *usize) !?NodeId {
     if (pos.* == id_start) return null;
     const id_text = std.mem.trim(u8, line[id_start..pos.*], " \t\r\n");
     const node_id = try graph.node(id_text);
+    if (subgraph_nodes) |nodes| try appendUniqueMermaidNode(graph.allocator, nodes, node_id);
     try parseMermaidNodeSuffix(graph, node_id, line, pos);
     return node_id;
+}
+
+fn appendUniqueMermaidNode(allocator: std.mem.Allocator, nodes: *std.ArrayList(NodeId), node_id: NodeId) !void {
+    if (containsNode(nodes.items, node_id)) return;
+    try nodes.append(allocator, node_id);
 }
 
 fn isMermaidIdChar(c: u8) bool {
@@ -9706,6 +9764,31 @@ test "input format auto detects Mermaid flowcharts without breaking DOT graphs" 
     try std.testing.expectEqual(InputFormat.mermaid, detectInputFormat("flowchart TD\nA --> B"));
     try std.testing.expectEqual(InputFormat.mermaid, detectInputFormat("graph LR\nA --> B"));
     try std.testing.expectEqual(InputFormat.dot, detectInputFormat("graph G { a -- b }"));
+}
+
+test "Mermaid parser maps flowchart subgraphs to clusters" {
+    const allocator = std.testing.allocator;
+    var graph = try parseMermaid(allocator,
+        \\flowchart TD
+        \\  subgraph API[API Layer]
+        \\    A[Request] --> B[Handler]
+        \\  end
+        \\  B --> C[Response]
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.clusters.items.len);
+    try std.testing.expectEqualStrings("API", graph.clusters.items[0].name);
+    try std.testing.expectEqualStrings("API Layer", graph.clusters.items[0].label);
+    try std.testing.expectEqual(@as(usize, 2), graph.clusters.items[0].nodes.len);
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "API Layer") != null);
 }
 
 test "SVG renderer emits document" {
