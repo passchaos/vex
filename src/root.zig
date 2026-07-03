@@ -4866,6 +4866,38 @@ const ClusterContainment = struct {
     right: f64,
 };
 
+fn solveClusterBoundary(allocator: std.mem.Allocator, cluster: Cluster, centers: []const f64, sizes: []const NodeSize, margin: f64) !?ClusterContainment {
+    if (cluster.nodes.len == 0) return null;
+    const boundary_left = centers.len;
+    const boundary_right = centers.len + 1;
+    var vars = try allocator.alloc(f64, centers.len + 2);
+    defer allocator.free(vars);
+    @memcpy(vars[0..centers.len], centers);
+    vars[boundary_left] = 0;
+    vars[boundary_right] = 0;
+
+    var constraints = std.ArrayList(CoordConstraint).empty;
+    defer constraints.deinit(allocator);
+    var found = false;
+    for (cluster.nodes) |node_id| {
+        if (node_id >= centers.len or node_id >= sizes.len) continue;
+        found = true;
+        try constraints.append(allocator, .{
+            .left = boundary_left,
+            .right = node_id,
+            .min_gap = sizes[node_id].width / 2.0 + margin,
+        });
+        try constraints.append(allocator, .{
+            .left = node_id,
+            .right = boundary_right,
+            .min_gap = sizes[node_id].width / 2.0 + margin,
+        });
+    }
+    if (!found) return null;
+    _ = satisfyCoordConstraints(vars, constraints.items);
+    return .{ .left = vars[boundary_left], .right = vars[boundary_right] };
+}
+
 fn clusterContainmentEnvelope(cluster: Cluster, centers: []const f64, sizes: []const NodeSize, margin: f64) ?ClusterContainment {
     var left = std.math.floatMax(f64);
     var right: f64 = -std.math.floatMax(f64);
@@ -12879,6 +12911,27 @@ test "cluster containment envelope includes Graphviz-style margin" {
     const envelope = clusterContainmentEnvelope(cluster, centers[0..], sizes[0..], 8.0).?;
     try std.testing.expectEqual(@as(f64, 32), envelope.left);
     try std.testing.expectEqual(@as(f64, 103), envelope.right);
+}
+
+test "cluster boundary solver models Graphviz ln rn containment" {
+    const allocator = std.testing.allocator;
+    var node_ids = [_]NodeId{ 0, 1 };
+    const cluster = Cluster{
+        .id = 0,
+        .name = "cluster",
+        .label = "cluster",
+        .nodes = node_ids[0..],
+    };
+    const centers = [_]f64{ 50, 80 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 30, .height = 10 },
+    };
+
+    const boundary = (try solveClusterBoundary(allocator, cluster, centers[0..], sizes[0..], 8.0)).?;
+    try std.testing.expect(boundary.left <= centers[0] - sizes[0].width / 2.0 - 8.0);
+    try std.testing.expect(boundary.right >= centers[1] + sizes[1].width / 2.0 + 8.0);
+    try std.testing.expect(boundary.right - boundary.left >= 71.0);
 }
 
 test "center shifting respects extent budget" {
