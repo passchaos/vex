@@ -11622,6 +11622,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_end_x < svgNodeCenterX(svg, "b3").?);
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
+    try std.testing.expect(svg_a0_x >= 47.0);
+    try std.testing.expect(svg_b0_x >= 137.0);
     try std.testing.expect(svg_b0_x - svg_a0_x >= 90.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
