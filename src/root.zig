@@ -5497,14 +5497,14 @@ fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     if (svgNumberAfter(fragment, " x=\"")) |x| {
         if (svgNumberAfter(fragment, " width=\"")) |width| return x + width / 2.0;
     }
-    const points_start = std.mem.indexOf(u8, fragment, "points=\"") orelse return null;
-    var values = std.mem.tokenizeAny(u8, fragment[points_start + "points=\"".len ..], " ,\"");
+    var point_numbers: [64]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
     var min_x = std.math.floatMax(f64);
     var max_x: f64 = -std.math.floatMax(f64);
-    while (values.next()) |x_text| {
-        const x = std.fmt.parseFloat(f64, x_text) catch break;
-        const y_text = values.next() orelse break;
-        _ = std.fmt.parseFloat(f64, y_text) catch break;
+    var index: usize = 0;
+    while (index + 1 < count) : (index += 2) {
+        const x = point_numbers[index];
         min_x = @min(min_x, x);
         max_x = @max(max_x, x);
     }
@@ -5512,12 +5512,13 @@ fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     return (min_x + max_x) / 2.0;
 }
 
-fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return 0;
-    const d_start = std.mem.indexOf(u8, fragment, " d=\"") orelse return 0;
-    const value_start = d_start + " d=\"".len;
+fn svgNumbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
+    var marker_buf: [64]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return 0;
+    const attr_start = std.mem.indexOf(u8, fragment, marker) orelse return 0;
+    const value_start = attr_start + marker.len;
     const value_end_rel = std.mem.indexOfScalar(u8, fragment[value_start..], '"') orelse return 0;
-    var values = std.mem.tokenizeAny(u8, fragment[value_start .. value_start + value_end_rel], " ,MCL");
+    var values = std.mem.tokenizeAny(u8, fragment[value_start .. value_start + value_end_rel], " ,MmLlCcZz");
     var count: usize = 0;
     while (values.next()) |number_text| {
         if (count >= out.len) break;
@@ -5525,6 +5526,11 @@ fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
         count += 1;
     }
     return count;
+}
+
+fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return 0;
+    return svgNumbersInAttribute(fragment, "d", out);
 }
 
 fn renderedEdgePathCount(svg: []const u8) usize {
@@ -8078,6 +8084,24 @@ test "SVG renderer emits document" {
     const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "a -- b") != null);
+}
+
+test "SVG geometry parser reads Graphviz-style path and polygon numbers" {
+    const fragment =
+        \\<path fill="none" stroke="black" d="M63,-287.91C63,-280.62 63,-271.94 63,-263.75"/>
+        \\<polygon fill="black" points="66.5,-263.83 63,-253.83 59.5,-263.83 66.5,-263.83"/>
+    ;
+    var numbers: [16]f64 = undefined;
+    const path_count = svgNumbersInAttribute(fragment, "d", numbers[0..]);
+    try std.testing.expectEqual(@as(usize, 8), path_count);
+    try std.testing.expectEqual(@as(f64, 63), numbers[0]);
+    try std.testing.expectEqual(@as(f64, -287.91), numbers[1]);
+    try std.testing.expectEqual(@as(f64, -263.75), numbers[7]);
+
+    const point_count = svgNumbersInAttribute(fragment, "points", numbers[0..]);
+    try std.testing.expectEqual(@as(usize, 8), point_count);
+    try std.testing.expectEqual(@as(f64, 66.5), numbers[0]);
+    try std.testing.expectEqual(@as(f64, -263.83), numbers[1]);
 }
 
 test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" {
