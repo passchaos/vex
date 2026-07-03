@@ -9263,15 +9263,38 @@ fn splineCurveAmount(rankdir: RankDir, dx: f64, dy: f64, min_curve: f64, max_cur
 }
 
 fn writePathMove(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writer.print("M{d:.1},{d:.1}", .{ point.x, point.y });
+    try writer.writeByte('M');
+    try writeSvgPathPoint(writer, point);
 }
 
 fn writePathLine(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writer.print("L{d:.1},{d:.1}", .{ point.x, point.y });
+    try writer.writeByte('L');
+    try writeSvgPathPoint(writer, point);
 }
 
 fn writePathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.print("C{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}", .{ c1.x, c1.y, c2.x, c2.y, end.x, end.y });
+    try writer.writeByte('C');
+    try writeSvgPathPoint(writer, c1);
+    try writer.writeByte(' ');
+    try writeSvgPathPoint(writer, c2);
+    try writer.writeByte(' ');
+    try writeSvgPathPoint(writer, end);
+}
+
+fn writeSvgPathPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
+    try writeSvgPathNumber(writer, point.x);
+    try writer.writeByte(',');
+    try writeSvgPathNumber(writer, point.y);
+}
+
+fn writeSvgPathNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
+    const normalized = if (@abs(value) < 0.05) 0.0 else value;
+    const rounded = @round(normalized);
+    if (@abs(normalized - rounded) < 0.05) {
+        try writer.print("{d:.0}", .{rounded});
+    } else {
+        try writer.print("{d:.1}", .{normalized});
+    }
 }
 
 fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankDir) Io.Writer.Error!void {
