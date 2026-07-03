@@ -1780,6 +1780,10 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     normalizeCenters(centers, axis_sizes);
     shiftCentersRightWithinBudget(centers, axis_sizes, defaultClusterAlongShift, cluster_along_budget);
     applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    if (!graphHasExplicitEdgeWeight(graph)) {
+        alignBoundarySingletonsToIncidentSpan(graph, levels, ranks, centers, axis_sizes);
+        applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    }
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -4709,6 +4713,17 @@ fn alignLevelsToNeighborSpansIfHelpful(graph: *const Graph, levels: []const std.
     }
 }
 
+fn alignBoundarySingletonsToIncidentSpan(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize) void {
+    if (levels.len <= 1) return;
+    for (levels) |level| {
+        if (level.items.len != 1) continue;
+        const node_id = level.items[0];
+        if (clusterIndexContainingNode(graph, node_id) != null) continue;
+        const target = incidentSpanCenter(graph, ranks, centers, sizes, node_id) orelse continue;
+        centers[node_id] = target;
+    }
+}
+
 fn graphHasExplicitEdgeWeight(graph: *const Graph) bool {
     for (graph.edge_default_attrs.items) |attr| {
         if (std.ascii.eqlIgnoreCase(attr.name, "weight")) return true;
@@ -4765,6 +4780,29 @@ fn neighborSpanCenter(graph: *const Graph, ranks: []const usize, centers: []cons
         count += 1;
     }
     if (count == 0) return null;
+    return (min_left + max_right) / 2.0;
+}
+
+fn incidentSpanCenter(graph: *const Graph, ranks: []const usize, centers: []const f64, sizes: []const NodeSize, node_id: NodeId) ?f64 {
+    if (node_id >= ranks.len or node_id >= centers.len or node_id >= sizes.len) return null;
+    var min_left = std.math.floatMax(f64);
+    var max_right: f64 = -std.math.floatMax(f64);
+    var count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        const neighbor = if (edge_item.from == node_id)
+            edge_item.to
+        else if (edge_item.to == node_id)
+            edge_item.from
+        else
+            continue;
+        if (neighbor >= ranks.len or neighbor >= centers.len or neighbor >= sizes.len) continue;
+        if (ranks[neighbor] == ranks[node_id]) continue;
+        min_left = @min(min_left, centers[neighbor] - sizes[neighbor].width / 2.0);
+        max_right = @max(max_right, centers[neighbor] + sizes[neighbor].width / 2.0);
+        count += 1;
+    }
+    if (count < 2) return null;
     return (min_left + max_right) / 2.0;
 }
 
@@ -11770,6 +11808,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_start_x < svgNodeCenterX(svg, "b0").?);
     try std.testing.expect(svg_end_x > svgNodeCenterX(svg, "a3").?);
     try std.testing.expect(svg_end_x < svgNodeCenterX(svg, "b3").?);
+    try std.testing.expect(svg_start_x >= 105.0);
+    try std.testing.expect(svg_end_x >= 105.0);
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 47.0);
