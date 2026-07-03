@@ -2728,6 +2728,15 @@ fn computeClusterLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const N
     const label_pad_x: f64 = 6;
     const label_band: f64 = 18;
     const child_gap: f64 = 12;
+    var center_buf: [256]f64 = undefined;
+    var size_buf: [256]NodeSize = undefined;
+    const boundary_inputs_available = nodes.len <= center_buf.len;
+    if (boundary_inputs_available) {
+        for (nodes, 0..) |node, id| {
+            center_buf[id] = node.center.x;
+            size_buf[id] = .{ .width = node.width, .height = node.height };
+        }
+    }
     for (graph.clusters.items, 0..) |cluster, index| {
         var min_x = std.math.floatMax(f64);
         var min_y = std.math.floatMax(f64);
@@ -2751,6 +2760,12 @@ fn computeClusterLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const N
         const label_min_width = displayLabelEstimatedWidth(cluster.label, label_font_size) + label_pad_x * 2.0;
         var x = min_x - pad_x;
         var width = (max_x - min_x) + pad_x * 2.0;
+        if (boundary_inputs_available) {
+            if (solveClusterBoundary(cluster, center_buf[0..nodes.len], size_buf[0..nodes.len], pad_x)) |boundary| {
+                x = boundary.left;
+                width = boundary.right - boundary.left;
+            }
+        }
         const height = (max_y - min_y) + pad_y * 2.0 + label_band;
         if (width < label_min_width) {
             const extra = label_min_width - width;
@@ -4869,20 +4884,24 @@ const ClusterContainment = struct {
 fn solveClusterBoundary(cluster: Cluster, centers: []const f64, sizes: []const NodeSize, margin: f64) ?ClusterContainment {
     if (cluster.nodes.len == 0) return null;
     if (centers.len + 2 > 256 or cluster.nodes.len * 2 > 512) return null;
+    var initial_left = std.math.floatMax(f64);
+    for (cluster.nodes) |node_id| {
+        if (node_id >= centers.len or node_id >= sizes.len) continue;
+        initial_left = @min(initial_left, centers[node_id] - sizes[node_id].width / 2.0 - margin);
+    }
+    if (initial_left == std.math.floatMax(f64)) return null;
     const boundary_left = centers.len;
     const boundary_right = centers.len + 1;
     var vars_buf: [256]f64 = undefined;
     const vars = vars_buf[0 .. centers.len + 2];
     @memcpy(vars[0..centers.len], centers);
-    vars[boundary_left] = 0;
-    vars[boundary_right] = 0;
+    vars[boundary_left] = initial_left;
+    vars[boundary_right] = initial_left;
 
     var constraints_buf: [512]CoordConstraint = undefined;
     var constraint_count: usize = 0;
-    var found = false;
     for (cluster.nodes) |node_id| {
         if (node_id >= centers.len or node_id >= sizes.len) continue;
-        found = true;
         constraints_buf[constraint_count] = .{
             .left = boundary_left,
             .right = node_id,
@@ -4896,7 +4915,6 @@ fn solveClusterBoundary(cluster: Cluster, centers: []const f64, sizes: []const N
         };
         constraint_count += 1;
     }
-    if (!found) return null;
     _ = satisfyCoordConstraints(vars, constraints_buf[0..constraint_count]);
     return .{ .left = vars[boundary_left], .right = vars[boundary_right] };
 }
