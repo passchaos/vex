@@ -1778,6 +1778,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
+    applyBackEdgeChannelCenterConstraints(graph, ranks, centers, axis_sizes, cluster_along_budget);
     shiftCentersRightWithinBudget(centers, axis_sizes, defaultClusterAlongShift, cluster_along_budget);
     applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
     if (!graphHasExplicitEdgeWeight(graph)) {
@@ -4788,6 +4789,39 @@ fn shiftCentersRightWithinBudget(centers: []f64, sizes: []const NodeSize, desire
     if (extent >= max_extent) return;
     const shift = @min(desired_shift, max_extent - extent);
     for (centers) |*center| center.* += shift;
+}
+
+fn applyBackEdgeChannelCenterConstraints(graph: *const Graph, ranks: []const usize, centers: []f64, sizes: []const NodeSize, max_extent: f64) void {
+    if (graph.clusters.items.len == 0 or max_extent <= 0) return;
+    const side_gap: f64 = 28.0;
+    const min_clearance: f64 = 31.0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        if (edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
+        if (ranks[edge_item.to] >= ranks[edge_item.from]) continue;
+        const from_cluster = clusterIndexContainingNode(graph, edge_item.from) orelse continue;
+        const to_cluster = clusterIndexContainingNode(graph, edge_item.to) orelse continue;
+        if (from_cluster != to_cluster) continue;
+        const from_left = centers[edge_item.from] - sizes[edge_item.from].width / 2.0;
+        const to_left = centers[edge_item.to] - sizes[edge_item.to].width / 2.0;
+        const overlap_width = sizes[edge_item.from].width / 2.0 + sizes[edge_item.to].width / 2.0;
+        const prefer_negative = if (@abs(centers[edge_item.from] - centers[edge_item.to]) <= overlap_width + 2.0) true else centers[edge_item.from] <= centers[edge_item.to];
+        if (!prefer_negative) continue;
+        const side_along = @max(0.0, @min(from_left, to_left) - side_gap);
+        const desired_center = side_along + min_clearance;
+        const current_min = @min(centers[edge_item.from], centers[edge_item.to]);
+        if (current_min >= desired_center) continue;
+        const shift = @min(desired_center - current_min, @max(0.0, max_extent - centersExtent(centers, sizes)));
+        if (shift <= 0) continue;
+        shiftClusterCenters(graph, from_cluster, centers, shift);
+    }
+}
+
+fn shiftClusterCenters(graph: *const Graph, cluster_index: usize, centers: []f64, shift: f64) void {
+    if (cluster_index >= graph.clusters.items.len or shift == 0) return;
+    for (graph.clusters.items[cluster_index].nodes) |node_id| {
+        if (node_id < centers.len) centers[node_id] += shift;
+    }
 }
 
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
@@ -12005,12 +12039,12 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_start_x < svgNodeCenterX(svg, "b0").?);
     try std.testing.expect(svg_end_x > svgNodeCenterX(svg, "a3").?);
     try std.testing.expect(svg_end_x < svgNodeCenterX(svg, "b3").?);
-    try std.testing.expect(svg_start_x >= 105.0);
-    try std.testing.expect(svg_end_x >= 105.0);
+    try std.testing.expect(svg_start_x >= 109.0);
+    try std.testing.expect(svg_end_x >= 109.0);
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
-    try std.testing.expect(svg_a0_x >= 47.0);
-    try std.testing.expect(svg_b0_x >= 164.0);
+    try std.testing.expect(svg_a0_x >= 51.0);
+    try std.testing.expect(svg_b0_x >= 168.0);
     try std.testing.expect(svg_b0_x - svg_a0_x >= 117.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
