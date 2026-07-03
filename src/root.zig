@@ -1824,7 +1824,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
     @memcpy(layout_ranks, ranks);
-    computeClusterLayouts(graph, nodes, cluster_layouts);
+    computeClusterLayouts(graph, axes, nodes, cluster_layouts);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
 
@@ -1955,7 +1955,7 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
     }
-    computeClusterLayouts(graph, nodes, cluster_layouts);
+    computeClusterLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
     return .{
         .allocator = allocator,
         .rankdir = graph.rankdir,
@@ -2721,7 +2721,7 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
     return LayoutAxes.init(rankdir).orientSize(size);
 }
 
-fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
+fn computeClusterLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
     const pad_x: f64 = 12;
     const pad_y: f64 = 12;
     const label_pad_x: f64 = 6;
@@ -2793,10 +2793,10 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
         parent.height = max_y - min_y;
     }
 
-    expandClusterLayoutsForBackEdges(graph, nodes, clusters);
+    expandClusterLayoutsForBackEdges(graph, axes, nodes, clusters);
 }
 
-fn expandClusterLayoutsForBackEdges(graph: *const Graph, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
+fn expandClusterLayoutsForBackEdges(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []ClusterLayout) void {
     const side_gap: f64 = 28.0;
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= nodes.len or edge_item.to >= nodes.len) continue;
@@ -2805,23 +2805,56 @@ fn expandClusterLayoutsForBackEdges(graph: *const Graph, nodes: []const NodeLayo
         if (from_cluster != to_cluster or from_cluster >= clusters.len) continue;
         const from = nodes[edge_item.from];
         const to = nodes[edge_item.to];
-        if (from.center.y <= to.center.y) continue;
-        var cluster_box = &clusters[from_cluster];
+        if (!edgeRunsBackwardOnRankAxis(axes, from.center, to.center)) continue;
+        const cluster_box = &clusters[from_cluster];
         if (cluster_box.width <= 0 or cluster_box.height <= 0) continue;
-        const overlap_width = from.width / 2.0 + to.width / 2.0;
-        const prefer_left = if (@abs(from.center.x - to.center.x) <= overlap_width + 2.0) true else from.center.x <= to.center.x;
-        if (prefer_left) {
-            const side_x = @max(0.0, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap);
-            if (side_x < cluster_box.x) {
+        const from_along = axes.pointAlong(from.center);
+        const to_along = axes.pointAlong(to.center);
+        const overlap_width = axes.nodeAlongHalfSize(from) + axes.nodeAlongHalfSize(to);
+        const prefer_negative = if (@abs(from_along - to_along) <= overlap_width + 2.0) true else from_along <= to_along;
+        const side_along = if (prefer_negative)
+            @max(0.0, @min(from_along - axes.nodeAlongHalfSize(from), to_along - axes.nodeAlongHalfSize(to)) - side_gap)
+        else
+            @max(from_along + axes.nodeAlongHalfSize(from), to_along + axes.nodeAlongHalfSize(to)) + side_gap;
+        expandClusterAlongSide(axes, cluster_box, side_along, prefer_negative);
+    }
+}
+
+fn edgeRunsBackwardOnRankAxis(axes: LayoutAxes, from: Point, to: Point) bool {
+    return switch (axes.rankdir) {
+        .TB => from.y > to.y,
+        .BT => from.y < to.y,
+        .LR => from.x > to.x,
+        .RL => from.x < to.x,
+    };
+}
+
+fn expandClusterAlongSide(axes: LayoutAxes, cluster_box: *ClusterLayout, side_along: f64, prefer_negative: bool) void {
+    switch (axes.rankdir) {
+        .TB, .BT => {
+            if (prefer_negative) {
+                if (side_along < cluster_box.x) {
+                    const old_right = cluster_box.x + cluster_box.width;
+                    cluster_box.x = side_along;
+                    cluster_box.width = old_right - side_along;
+                }
+            } else {
                 const old_right = cluster_box.x + cluster_box.width;
-                cluster_box.x = side_x;
-                cluster_box.width = old_right - side_x;
+                if (side_along > old_right) cluster_box.width = side_along - cluster_box.x;
             }
-        } else {
-            const side_x = @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap;
-            const old_right = cluster_box.x + cluster_box.width;
-            if (side_x > old_right) cluster_box.width = side_x - cluster_box.x;
-        }
+        },
+        .LR, .RL => {
+            if (prefer_negative) {
+                if (side_along < cluster_box.y) {
+                    const old_bottom = cluster_box.y + cluster_box.height;
+                    cluster_box.y = side_along;
+                    cluster_box.height = old_bottom - side_along;
+                }
+            } else {
+                const old_bottom = cluster_box.y + cluster_box.height;
+                if (side_along > old_bottom) cluster_box.height = side_along - cluster_box.y;
+            }
+        },
     }
 }
 
@@ -9596,6 +9629,28 @@ test "cluster bbox includes same-cluster back-edge side channel" {
 
     try std.testing.expect(cluster.x <= 1.0);
     try std.testing.expect(layout.nodes[a0].center.x - cluster.x >= 46.0);
+}
+
+test "rankdir LR back-edge channel expands cluster along y axis" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+
+    const a0 = try graph.node("a0");
+    const a3 = try graph.node("a3");
+    _ = try graph.edge(a3, a0, .{});
+    _ = try graph.addCluster("cluster_loop", null, &.{ a0, a3 }, &.{});
+
+    const nodes = [_]NodeLayout{
+        .{ .center = .{ .x = 40, .y = 50 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 220, .y = 50 }, .width = 54, .height = 36 },
+    };
+    var clusters = [_]ClusterLayout{.{ .id = 0, .x = 10, .y = 32, .width = 250, .height = 42 }};
+
+    expandClusterLayoutsForBackEdges(&graph, LayoutAxes.init(.LR), nodes[0..], clusters[0..]);
+
+    try std.testing.expect(clusters[0].y < 32.0);
+    try std.testing.expect(clusters[0].height > 42.0);
 }
 
 test "virtual position compaction honors node gap" {
