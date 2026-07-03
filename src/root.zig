@@ -3031,7 +3031,10 @@ fn buildTightRankTree(allocator: std.mem.Allocator, edges: []const RankEdge, ran
         }
     }
 
-    if (tail != ranks.len) return null;
+    if (tail != ranks.len) {
+        tree.deinit();
+        return null;
+    }
     try computeTightTreeIntervals(&tree);
     return tree;
 }
@@ -3259,6 +3262,130 @@ fn selectLeavingRankTreeEdge(tree: *const RankTightTree, edges: []const RankEdge
         }
     }
     return best_index;
+}
+
+fn enteringEdgeCrossesLeavingCut(tree: *const RankTightTree, edges: []const RankEdge, leaving_index: usize, candidate: RankEdge) bool {
+    if (leaving_index >= edges.len) return false;
+    if (candidate.from >= tree.low.len or candidate.to >= tree.low.len) return false;
+    const leaving = edges[leaving_index];
+    const child = tightTreeChildForEdge(tree, leaving) orelse return false;
+    const from_in_child = tree.inSubtree(candidate.from, child);
+    const to_in_child = tree.inSubtree(candidate.to, child);
+    if (from_in_child == to_in_child) return false;
+
+    return if (child == leaving.to)
+        from_in_child and !to_in_child
+    else
+        !from_in_child and to_in_child;
+}
+
+fn selectEnteringRankTreeEdge(tree: *const RankTightTree, edges: []const RankEdge, ranks: []const usize, leaving_index: usize) ?usize {
+    var best_index: ?usize = null;
+    var best_slack: usize = std.math.maxInt(usize);
+    var best_weight: f64 = 0;
+    for (edges, 0..) |edge, edge_index| {
+        if (edge_index < tree.in_tree.len and tree.in_tree[edge_index]) continue;
+        if (!enteringEdgeCrossesLeavingCut(tree, edges, leaving_index, edge)) continue;
+        const slack = rankEdgeSlack(edge, ranks) orelse continue;
+        if (best_index == null or slack < best_slack or (slack == best_slack and edge.weight > best_weight)) {
+            best_index = edge_index;
+            best_slack = slack;
+            best_weight = edge.weight;
+        }
+    }
+    return best_index;
+}
+
+fn shiftRankTreeSubtree(tree: *const RankTightTree, ranks: []usize, subtree_root: NodeId, delta: isize) bool {
+    if (subtree_root >= tree.low.len or tree.low.len > ranks.len) return false;
+    if (delta < 0) {
+        const amount: usize = @intCast(-delta);
+        for (ranks, 0..) |rank, node_id| {
+            if (tree.inSubtree(node_id, subtree_root) and rank < amount) return false;
+        }
+        for (ranks, 0..) |*rank, node_id| {
+            if (tree.inSubtree(node_id, subtree_root)) rank.* -= amount;
+        }
+        return true;
+    }
+    const amount: usize = @intCast(delta);
+    for (ranks, 0..) |*rank, node_id| {
+        if (tree.inSubtree(node_id, subtree_root)) rank.* += amount;
+    }
+    return true;
+}
+
+fn rebuildRankTightTreeParents(tree: *RankTightTree, edges: []const RankEdge) !void {
+    const node_count = tree.parent.len;
+    if (node_count == 0) return;
+    @memset(tree.parent, null);
+    @memset(tree.parent_edge, null);
+    @memset(tree.depth, 0);
+
+    const visited = try tree.allocator.alloc(bool, node_count);
+    defer tree.allocator.free(visited);
+    @memset(visited, false);
+    const queue = try tree.allocator.alloc(NodeId, node_count);
+    defer tree.allocator.free(queue);
+
+    var head: usize = 0;
+    var tail: usize = 0;
+    visited[tree.root] = true;
+    queue[tail] = tree.root;
+    tail += 1;
+    while (head < tail) : (head += 1) {
+        const node_id = queue[head];
+        for (edges, 0..) |edge, edge_index| {
+            if (edge_index >= tree.in_tree.len or !tree.in_tree[edge_index]) continue;
+            const neighbor = if (edge.from == node_id and edge.to < visited.len and !visited[edge.to])
+                edge.to
+            else if (edge.to == node_id and edge.from < visited.len and !visited[edge.from])
+                edge.from
+            else
+                continue;
+            visited[neighbor] = true;
+            tree.parent[neighbor] = node_id;
+            tree.parent_edge[neighbor] = edge_index;
+            tree.depth[neighbor] = tree.depth[node_id] + 1;
+            queue[tail] = neighbor;
+            tail += 1;
+        }
+    }
+    if (tail != node_count) return error.DisconnectedTightTree;
+    try computeTightTreeIntervals(tree);
+}
+
+fn pivotRankTightTree(tree: *RankTightTree, edges: []const RankEdge, ranks: []usize, leaving_index: usize, entering_index: usize) !bool {
+    if (leaving_index >= edges.len or entering_index >= edges.len) return false;
+    if (leaving_index >= tree.in_tree.len or entering_index >= tree.in_tree.len) return false;
+    if (!tree.in_tree[leaving_index] or tree.in_tree[entering_index]) return false;
+    if (!enteringEdgeCrossesLeavingCut(tree, edges, leaving_index, edges[entering_index])) return false;
+    const child = tightTreeChildForEdge(tree, edges[leaving_index]) orelse return false;
+    const slack = rankEdgeSlack(edges[entering_index], ranks) orelse return false;
+    const delta: isize = if (tree.inSubtree(edges[entering_index].to, child))
+        -@as(isize, @intCast(slack))
+    else
+        @as(isize, @intCast(slack));
+
+    const rank_backup = try tree.allocator.dupe(usize, ranks);
+    defer tree.allocator.free(rank_backup);
+    const tree_backup = try tree.allocator.dupe(bool, tree.in_tree);
+    defer tree.allocator.free(tree_backup);
+
+    if (!shiftRankTreeSubtree(tree, ranks, child, delta)) return false;
+    if (!rankEdgesFeasible(edges, ranks)) {
+        @memcpy(ranks, rank_backup);
+        return false;
+    }
+    tree.in_tree[leaving_index] = false;
+    tree.in_tree[entering_index] = true;
+    rebuildRankTightTreeParents(tree, edges) catch |err| {
+        @memcpy(ranks, rank_backup);
+        @memcpy(tree.in_tree, tree_backup);
+        try computeTightTreeIntervals(tree);
+        return err;
+    };
+    return true;
 }
 
 fn rankEdgesFeasible(edges: []const RankEdge, ranks: []const usize) bool {
@@ -9708,6 +9835,96 @@ test "rank tight tree cut values identify negative leaving edge" {
     try std.testing.expect(rankTreeEdgeCutValue(&tree, rank_edges, 1).? < 0);
     const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
     try std.testing.expectEqual(@as(EdgeId, 1), rank_edges[leaving].edge_id);
+}
+
+test "rank tight tree selects entering edge across leaving cut" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> x [weight=1];
+        \\  x -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const x = graph.node_index.get("x").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 1;
+    ranks[x] = 2;
+    ranks[d] = 3;
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return error.MissingTightTree;
+    defer tree.deinit();
+
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse return error.MissingEnteringEdge;
+    try std.testing.expectEqual(@as(EdgeId, 1), rank_edges[leaving].edge_id);
+    try std.testing.expectEqual(@as(EdgeId, 4), rank_edges[entering].edge_id);
+    try std.testing.expectEqual(@as(usize, 1), rankEdgeSlack(rank_edges[entering], ranks).?);
+}
+
+test "rank tight tree pivot tightens entering edge and lowers cost" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> x [weight=1];
+        \\  x -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const x = graph.node_index.get("x").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 1;
+    ranks[x] = 2;
+    ranks[d] = 3;
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return error.MissingTightTree;
+    defer tree.deinit();
+
+    const before_cost = rankEdgesCost(rank_edges, ranks);
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse return error.MissingEnteringEdge;
+    try std.testing.expect(try pivotRankTightTree(&tree, rank_edges, ranks, leaving, entering));
+
+    try std.testing.expect(rankEdgesFeasible(rank_edges, ranks));
+    try std.testing.expect(rankEdgeTight(rank_edges[entering], ranks));
+    try std.testing.expect(!tree.in_tree[leaving]);
+    try std.testing.expect(tree.in_tree[entering]);
+    try std.testing.expect(tree.inSubtree(c, a));
+    try std.testing.expect(rankEdgesCost(rank_edges, ranks) < before_cost);
 }
 
 test "rank local search finds best feasible node rank" {
