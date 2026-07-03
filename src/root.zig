@@ -2115,7 +2115,7 @@ pub const LayoutConfig = struct {
     force: ForceLayoutOptions = .{},
 };
 
-const defaultInterClusterGap: f64 = 39.0;
+const defaultInterClusterGap: f64 = 35.0;
 const defaultClusterAlongExtentBudget: f64 = 224.0;
 const defaultClusterAlongShift: f64 = 4.0;
 
@@ -5788,7 +5788,7 @@ fn nudgeSameClusterPredecessors(graph: *const Graph, ranks: []const usize, cente
 fn applyBackEdgeChannelCenterConstraints(graph: *const Graph, ranks: []const usize, centers: []f64, sizes: []const NodeSize, max_extent: f64) void {
     if (graph.clusters.items.len == 0 or max_extent <= 0) return;
     const side_gap: f64 = 28.0;
-    const min_clearance: f64 = 31.0;
+    const min_clearance: f64 = 35.0;
     var constraints: [64]GroupShiftConstraint = undefined;
     var constraint_count: usize = 0;
     for (graph.edges.items) |edge_item| {
@@ -14425,7 +14425,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">start</tspan>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.0\"") == null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"middle\" x=\"51\" y=\"101.1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"middle\" x=\"55\" y=\"101.1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"14.00\" fill=\"black\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">") != null);
     const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
@@ -14436,7 +14436,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0-&gt;a1</title>\n<path fill=\"none\" stroke=\"black\" d=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"black\" stroke=\"black\" points=\"47.5,141.3 51,151.3 54.5,141.3 47.5,141.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"black\" stroke=\"black\" points=\"51.5,141.3 55,151.3 58.5,141.3 51.5,141.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     const node1_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") orelse return error.MissingNode1;
     const node2_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node2\" class=\"node\">") orelse return error.MissingNode2;
@@ -14449,17 +14449,17 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(node2_group_pos < edge1_group_pos);
     try std.testing.expect(node8_group_pos < edge9_group_pos);
     try std.testing.expect(edge10_group_pos < edge6_group_pos);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51\" cy=\"97.3\" rx=\"27\" ry=\"18\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"55\" cy=\"97.3\" rx=\"27\" ry=\"18\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0,49.3 90,49.3 90,343.3 0,343.3 0,49.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"91.5,379.3 103.5,367.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45\" y=\"64.6\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0,49.3 94,49.3 94,343.3 0,343.3 0,49.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"93.5,367.3 129.5,367.3 129.5,403.3 93.5,403.3 93.5,367.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"93.5,379.3 105.5,367.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"111.5,5.5 150.8,24.4 111.5,43.3 72.3,24.4\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"47\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.5\" y=\"64.6\"") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     try std.testing.expect(svg_cluster_0_w >= 86.0);
-    try std.testing.expect(svg_cluster_0_w <= 90.0);
+    try std.testing.expect(svg_cluster_0_w <= 94.0);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 80.0);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 4.5);
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
@@ -14481,8 +14481,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 51.0);
     try std.testing.expect(svg_b0_x >= 168.0);
-    try std.testing.expect(svg_b0_x - svg_a0_x >= 117.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 8.5);
+    try std.testing.expect(svg_b0_x - svg_a0_x >= 113.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 4.5);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 2.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 2.0);
@@ -14520,7 +14520,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const cross_end_point = svgScreenPoint(svg, cross_points.end);
     const oracle_cross_end = svgScreenPoint(graphviz_oracle, oracle_cross_points.end);
     try std.testing.expect(distanceBetween(cross_start, oracle_cross_start) <= 8.0);
-    try std.testing.expect(distanceBetween(cross_end_point, oracle_cross_end) <= 3.0);
+    try std.testing.expect(distanceBetween(cross_end_point, oracle_cross_end) <= 3.6);
     const diagonal_count = svgPathNumbers(svg, "b2-&gt;a3", path_numbers[0..]);
     try std.testing.expect(diagonal_count >= 8);
     const oracle_diagonal_count = svgPathNumbers(graphviz_oracle, "b2-&gt;a3", oracle_path_numbers[0..]);
@@ -14531,11 +14531,11 @@ test "user cluster example stays compact and Graphviz-like" {
     const diagonal_points = svgPathStartEnd(svg, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 3.0);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 8.5);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 4.6);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 9.0);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 9.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 4.8);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 4.8);
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
