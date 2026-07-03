@@ -11297,7 +11297,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(layout.width <= 224.0);
     try std.testing.expect(layout.height <= 414.0);
     for (layout.clusters) |cluster_box| {
-        try std.testing.expect(cluster_box.width <= 104.0);
+        try std.testing.expect(cluster_box.width <= 94.0);
         try std.testing.expect(cluster_box.height <= 294.0);
     }
 
@@ -11309,12 +11309,18 @@ test "user cluster example stays compact and Graphviz-like" {
     const b1 = graph.node_index.get("b1").?;
     const b2 = graph.node_index.get("b2").?;
     const b3 = graph.node_index.get("b3").?;
+    const start = graph.node_index.get("start").?;
+    const end = graph.node_index.get("end").?;
     try std.testing.expect(@abs(layout.nodes[a0].center.x - layout.nodes[a1].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[a1].center.x - layout.nodes[a2].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[a2].center.x - layout.nodes[a3].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[b0].center.x - layout.nodes[b1].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[b1].center.x - layout.nodes[b2].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[b2].center.x - layout.nodes[b3].center.x) <= 1.0);
+    try std.testing.expect(layout.nodes[start].center.x > layout.nodes[a0].center.x);
+    try std.testing.expect(layout.nodes[start].center.x < layout.nodes[b0].center.x);
+    try std.testing.expect(layout.nodes[end].center.x > layout.nodes[a3].center.x);
+    try std.testing.expect(layout.nodes[end].center.x < layout.nodes[b3].center.x);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
