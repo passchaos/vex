@@ -6221,18 +6221,20 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
-                    layout.center.x - layout.width / 2.0 + inset,
-                    layout.center.y - layout.height / 2.0 + inset,
-                    @max(1, layout.width - inset * 2.0),
-                    @max(1, layout.height - inset * 2.0),
-                    @max(0, visual.radius - inset / 2.0),
-                    if (ring == 0) visual.fill else "none",
-                    visual.stroke,
-                    visual.width,
-                });
-                try writeSvgDash(writer, visual.dash);
-                try writer.writeAll("/>\n");
+                const rect = RectF{
+                    .x = layout.center.x - layout.width / 2.0 + inset,
+                    .y = layout.center.y - layout.height / 2.0 + inset,
+                    .width = @max(1, layout.width - inset * 2.0),
+                    .height = @max(1, layout.height - inset * 2.0),
+                };
+                const radius = @max(0, visual.radius - inset / 2.0);
+                var ring_visual = visual;
+                if (ring > 0) ring_visual.fill = "none";
+                if (node_item.shape == .msquare and radius <= 0.001) {
+                    try renderSvgRectPolygon(writer, rect, ring_visual);
+                } else {
+                    try renderSvgBoxShape(writer, rect, ring_visual, radius);
+                }
             }
             if (node_item.shape == .msquare) try renderSvgCornerDiagonals(writer, layout, visual);
         },
@@ -6904,6 +6906,26 @@ fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius
         rect.width,
         rect.height,
         radius,
+        visual.fill,
+        visual.stroke,
+        visual.width,
+    });
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<polygon points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+        rect.x,
+        rect.y,
         visual.fill,
         visual.stroke,
         visual.width,
@@ -10686,6 +10708,7 @@ test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=") != null);
     try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L ") != null);
 }
@@ -12236,6 +12259,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
