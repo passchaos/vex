@@ -6291,10 +6291,14 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
     const cy = layout.center.y;
     const hw = layout.width / 2.0;
     const hh = layout.height / 2.0;
-    try writeSvgLine(writer, cx - hw * 0.52, cy, cx, cy - hh * 0.52, visual);
-    try writeSvgLine(writer, cx, cy - hh * 0.52, cx + hw * 0.52, cy, visual);
-    try writeSvgLine(writer, cx + hw * 0.52, cy, cx, cy + hh * 0.52, visual);
-    try writeSvgLine(writer, cx, cy + hh * 0.52, cx - hw * 0.52, cy, visual);
+    const inner_x = hw * 0.72;
+    const inner_y = hh * 0.72;
+    const short_y = hh * 0.28;
+    const short_x = hw * 0.28;
+    try writeSvgLine(writer, cx - inner_x, cy - short_y, cx - inner_x, cy + short_y, visual);
+    try writeSvgLine(writer, cx - short_x, cy + inner_y, cx + short_x, cy + inner_y, visual);
+    try writeSvgLine(writer, cx + inner_x, cy + short_y, cx + inner_x, cy - short_y, visual);
+    try writeSvgLine(writer, cx + short_x, cy - inner_y, cx - short_x, cy - inner_y, visual);
 }
 
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -10136,6 +10140,24 @@ test "SVG renderer uses Graphviz-like normal arrow marker proportions" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1.2 1.4 L 9.2 5 L 1.2 8.6 z") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "refX=\"9.2\"") != null);
+}
+
+test "SVG renderer draws Mdiamond with Graphviz-like internal marks" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  start [shape=Mdiamond];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " L ") != null);
 }
 
 test "SVG renderer honors additional Graphviz arrow marker shapes" {
