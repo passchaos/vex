@@ -2912,6 +2912,32 @@ fn selectEnteringRankEdge(edges: []const RankEdge, ranks: []const usize, compone
     return best_index;
 }
 
+fn shiftRankComponent(ranks: []usize, component_labels: []const usize, component: usize, delta: isize) bool {
+    if (component_labels.len < ranks.len) return false;
+    if (delta < 0) {
+        const amount: usize = @intCast(-delta);
+        for (ranks, 0..) |rank, node_id| {
+            if (component_labels[node_id] == component and rank < amount) return false;
+        }
+        for (ranks, 0..) |*rank, node_id| {
+            if (component_labels[node_id] == component) rank.* -= amount;
+        }
+        return true;
+    }
+    const amount: usize = @intCast(delta);
+    for (ranks, 0..) |*rank, node_id| {
+        if (component_labels[node_id] == component) rank.* += amount;
+    }
+    return true;
+}
+
+fn tightenEnteringEdgeByShiftingHeadComponent(edge: RankEdge, ranks: []usize, component_labels: []const usize) bool {
+    if (edge.to >= component_labels.len) return false;
+    const slack = rankEdgeSlack(edge, ranks) orelse return false;
+    if (slack == 0) return true;
+    return shiftRankComponent(ranks, component_labels, component_labels[edge.to], -@as(isize, @intCast(slack)));
+}
+
 fn rankEdgesFeasible(edges: []const RankEdge, ranks: []const usize) bool {
     for (edges) |edge| {
         if (rankEdgeSlack(edge, ranks) == null) return false;
@@ -9149,6 +9175,45 @@ test "select entering rank edge chooses minimum slack then highest weight" {
 
     const entering = selectEnteringRankEdge(rank_edges, ranks, labels) orelse return error.MissingEnteringEdge;
     try std.testing.expectEqual(@as(EdgeId, 3), rank_edges[entering].edge_id);
+}
+
+test "rank component shifting can tighten an entering edge" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  c -> d;
+        \\  b -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 3;
+    ranks[d] = 4;
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    const labels = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(labels);
+    try std.testing.expectEqual(@as(usize, 2), labelTightRankEdgeComponents(allocator, rank_edges, ranks, labels));
+
+    try std.testing.expectEqual(@as(usize, 2), rankEdgeSlack(rank_edges[2], ranks).?);
+    try std.testing.expect(tightenEnteringEdgeByShiftingHeadComponent(rank_edges[2], ranks, labels));
+    try std.testing.expect(rankEdgeTight(rank_edges[2], ranks));
+    try std.testing.expectEqual(@as(usize, 1), ranks[c]);
+    try std.testing.expectEqual(@as(usize, 2), ranks[d]);
 }
 
 test "rank local search finds best feasible node rank" {
