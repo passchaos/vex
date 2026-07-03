@@ -4212,6 +4212,32 @@ fn htmlGridCellRect(grid: HtmlTableGrid, row_index: usize, col_index: usize, row
     };
 }
 
+const HtmlCellSides = struct {
+    left: bool = false,
+    top: bool = false,
+    right: bool = false,
+    bottom: bool = false,
+
+    fn any(self: HtmlCellSides) bool {
+        return self.left or self.top or self.right or self.bottom;
+    }
+};
+
+fn htmlCellSides(tag: []const u8) ?HtmlCellSides {
+    const value = htmlAttrValue(tag, "sides") orelse return null;
+    var result = HtmlCellSides{};
+    for (value) |c| {
+        switch (std.ascii.toLower(c)) {
+            'l' => result.left = true,
+            't' => result.top = true,
+            'r' => result.right = true,
+            'b' => result.bottom = true,
+            else => {},
+        }
+    }
+    return if (result.any()) result else null;
+}
+
 fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
     const value = htmlAttrValue(tag, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
@@ -6750,7 +6776,7 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
                 try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, cell_bg });
             }
             if (cell_border > 0) {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, visual.stroke, cell_border });
+                try renderSvgHtmlCellBorder(writer, cell_rect, htmlCellSides(td_tag), visual.stroke, cell_border);
             }
             const cell = row[cell_start..td_close];
             const align_attr = htmlAttrValue(td_tag, "align");
@@ -6791,6 +6817,36 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
         }
         row_pos = tr_close + 1;
     }
+}
+
+fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCellSides, stroke: []const u8, width: f64) Io.Writer.Error!void {
+    const sides = maybe_sides orelse {
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            stroke,
+            width,
+        });
+        return;
+    };
+
+    if (sides.top) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x + rect.width, rect.y, stroke, width);
+    if (sides.right) try writeSvgBorderLine(writer, rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, stroke, width);
+    if (sides.bottom) try writeSvgBorderLine(writer, rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height, stroke, width);
+    if (sides.left) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x, rect.y + rect.height, stroke, width);
+}
+
+fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, stroke: []const u8, width: f64) Io.Writer.Error!void {
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+        x1,
+        y1,
+        x2,
+        y2,
+        stroke,
+        width,
+    });
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
@@ -11041,6 +11097,30 @@ test "SVG renderer honors per-cell HTML table padding border and valign" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"0.0\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
+}
+
+test "SVG renderer honors HTML table cell sides attribute" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=plain,label=<
+        \\    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        \\      <TR><TD SIDES="ltr">Top</TD><TD SIDES="b">Bottom</TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"") != null);
+    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
 }
