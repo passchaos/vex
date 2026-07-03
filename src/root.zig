@@ -2729,7 +2729,8 @@ fn computeClusterLayouts(graph: *const Graph, nodes: []const NodeLayout, cluster
             clusters[index] = .{ .id = cluster.id, .x = 0, .y = 0, .width = 0, .height = 0 };
             continue;
         }
-        const label_min_width = @as(f64, @floatFromInt(labelMaxLineLen(cluster.label))) * 8.0 + pad_x * 2.0;
+        const label_font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0);
+        const label_min_width = @as(f64, @floatFromInt(displayLabelMaxLineLen(cluster.label))) * label_font_size * 0.50 + pad_x * 2.0;
         var x = min_x - pad_x;
         var width = (max_x - min_x) + pad_x * 2.0;
         const height = (max_y - min_y) + pad_y * 2.0 + label_band;
@@ -11495,7 +11496,7 @@ test "cluster layout uses compact padding while fitting labels" {
     const a = graph.node_index.get("a").?;
     const node = layout.nodes[a];
     try std.testing.expect(cluster_box.width >= node.width + 24.0);
-    try std.testing.expect(cluster_box.width <= 104.0);
+    try std.testing.expect(cluster_box.width <= 96.0);
     try std.testing.expect(cluster_box.height >= node.height + 42.0);
     try std.testing.expect(cluster_box.height <= node.height + 48.0);
 }
