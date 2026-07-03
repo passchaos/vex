@@ -2679,8 +2679,15 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         else => {},
     }
     if (htmlTableMetrics(node_item.label)) |table| {
-        width = @max(width, @as(f64, @floatFromInt(table.cols * @max(table.max_cell_len, 1))) * options.label_char_width * font_scale + table.cell_padding * 2.0 * @as(f64, @floatFromInt(table.cols)) + table.cell_spacing * @as(f64, @floatFromInt(table.cols + 1)));
-        height = @max(height, @as(f64, @floatFromInt(table.rows)) * options.label_line_height * 1.6 * font_scale + table.cell_padding * 2.0 * @as(f64, @floatFromInt(table.rows)) + table.cell_spacing * @as(f64, @floatFromInt(table.rows + 1)));
+        const table_width = htmlTablePreferredWidth(table, options.label_char_width * font_scale);
+        const table_height = htmlTablePreferredHeight(table, options.label_line_height * 1.6 * font_scale);
+        if (node_item.shape == .plaintext and htmlTableHasExplicitSize(table)) {
+            width = table_width;
+            height = table_height;
+        } else {
+            width = @max(width, table_width);
+            height = @max(height, table_height);
+        }
     }
     applyNodeSizeAttrs(node_item, &width, &height);
     return .{ .width = width, .height = height };
@@ -4077,6 +4084,8 @@ const HtmlTableMetrics = struct {
     cell_padding: f64 = 6.0,
     cell_spacing: f64 = 0.0,
     bg_color: ?[]const u8 = null,
+    col_widths: [32]f64 = @splat(0),
+    row_heights: [32]f64 = @splat(0),
 };
 
 fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
@@ -4089,6 +4098,8 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
     var max_cols: usize = 0;
     var max_cell_len: usize = 1;
     var occupied: [32]usize = @splat(0);
+    var col_widths: [32]f64 = @splat(0);
+    var row_heights: [32]f64 = @splat(0);
     while (findHtmlTag(label, "tr", pos)) |tr_start| {
         if (rows > 0) {
             for (&occupied) |*remaining| {
@@ -4111,6 +4122,7 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
             max_cell_len = @max(max_cell_len, displayLabelMaxLineLen(cell));
             const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
             const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
+            applyHtmlCellSizeHints(td_tag, rows, cols, rowspan, colspan, &row_heights, &col_widths);
             var span_i: usize = 0;
             while (span_i < colspan and cols + span_i < occupied.len) : (span_i += 1) {
                 occupied[cols + span_i] = @max(occupied[cols + span_i], rowspan);
@@ -4134,14 +4146,42 @@ fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
         .cell_padding = @floatFromInt(htmlIntAttr(table_tag, "cellpadding", 6)),
         .cell_spacing = @floatFromInt(htmlIntAttr(table_tag, "cellspacing", 0)),
         .bg_color = htmlAttrValue(table_tag, "bgcolor"),
+        .col_widths = col_widths,
+        .row_heights = row_heights,
     };
+}
+
+fn htmlTablePreferredWidth(metrics: HtmlTableMetrics, fallback_cell_width: f64) f64 {
+    var total = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1));
+    for (metrics.col_widths[0..metrics.cols]) |width| {
+        total += if (width > 0) width else @as(f64, @floatFromInt(@max(metrics.max_cell_len, 1))) * fallback_cell_width + metrics.cell_padding * 2.0;
+    }
+    return @max(1, total);
+}
+
+fn htmlTablePreferredHeight(metrics: HtmlTableMetrics, fallback_cell_height: f64) f64 {
+    var total = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1));
+    for (metrics.row_heights[0..metrics.rows]) |height| {
+        total += if (height > 0) height else fallback_cell_height + metrics.cell_padding * 2.0;
+    }
+    return @max(1, total);
+}
+
+fn htmlTableHasExplicitSize(metrics: HtmlTableMetrics) bool {
+    for (metrics.col_widths[0..metrics.cols]) |width| {
+        if (width > 0) return true;
+    }
+    for (metrics.row_heights[0..metrics.rows]) |height| {
+        if (height > 0) return true;
+    }
+    return false;
 }
 
 const HtmlTableGrid = struct {
     x: f64,
     y: f64,
-    cell_w: f64,
-    cell_h: f64,
+    col_widths: [32]f64,
+    row_heights: [32]f64,
     cell_spacing: f64,
 };
 
@@ -4149,13 +4189,17 @@ fn htmlTableGrid(label: []const u8, layout: NodeLayout) ?HtmlTableGrid {
     const metrics = htmlTableMetrics(label) orelse return null;
     const x = layout.center.x - layout.width / 2.0;
     const y = layout.center.y - layout.height / 2.0;
-    const total_spacing_x = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1));
-    const total_spacing_y = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1));
+    var col_widths = metrics.col_widths;
+    var row_heights = metrics.row_heights;
+    const inner_w = @max(1, layout.width - metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1)));
+    const inner_h = @max(1, layout.height - metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1)));
+    distributeHtmlGridSizes(col_widths[0..metrics.cols], inner_w);
+    distributeHtmlGridSizes(row_heights[0..metrics.rows], inner_h);
     return .{
         .x = x,
         .y = y,
-        .cell_w = @max(1, (layout.width - total_spacing_x) / @as(f64, @floatFromInt(metrics.cols))),
-        .cell_h = @max(1, (layout.height - total_spacing_y) / @as(f64, @floatFromInt(metrics.rows))),
+        .col_widths = col_widths,
+        .row_heights = row_heights,
         .cell_spacing = metrics.cell_spacing,
     };
 }
@@ -4202,14 +4246,78 @@ fn htmlTableCellRect(label: []const u8, layout: NodeLayout, port: []const u8) ?R
 }
 
 fn htmlGridCellRect(grid: HtmlTableGrid, row_index: usize, col_index: usize, rowspan: usize, colspan: usize) RectF {
-    const span_f: f64 = @floatFromInt(colspan);
-    const row_span_f: f64 = @floatFromInt(rowspan);
+    var x = grid.x + grid.cell_spacing;
+    var col: usize = 0;
+    while (col < col_index and col < grid.col_widths.len) : (col += 1) {
+        x += grid.col_widths[col] + grid.cell_spacing;
+    }
+    var y = grid.y + grid.cell_spacing;
+    var row: usize = 0;
+    while (row < row_index and row < grid.row_heights.len) : (row += 1) {
+        y += grid.row_heights[row] + grid.cell_spacing;
+    }
+    var width: f64 = 0;
+    var span_col: usize = 0;
+    while (span_col < colspan and col_index + span_col < grid.col_widths.len) : (span_col += 1) {
+        if (span_col > 0) width += grid.cell_spacing;
+        width += grid.col_widths[col_index + span_col];
+    }
+    var height: f64 = 0;
+    var span_row: usize = 0;
+    while (span_row < rowspan and row_index + span_row < grid.row_heights.len) : (span_row += 1) {
+        if (span_row > 0) height += grid.cell_spacing;
+        height += grid.row_heights[row_index + span_row];
+    }
     return .{
-        .x = grid.x + grid.cell_spacing + @as(f64, @floatFromInt(col_index)) * (grid.cell_w + grid.cell_spacing),
-        .y = grid.y + grid.cell_spacing + @as(f64, @floatFromInt(row_index)) * (grid.cell_h + grid.cell_spacing),
-        .width = grid.cell_w * span_f + grid.cell_spacing * @as(f64, @floatFromInt(colspan - 1)),
-        .height = grid.cell_h * row_span_f + grid.cell_spacing * @as(f64, @floatFromInt(rowspan - 1)),
+        .x = x,
+        .y = y,
+        .width = @max(1, width),
+        .height = @max(1, height),
     };
+}
+
+fn applyHtmlCellSizeHints(tag: []const u8, row_index: usize, col_index: usize, rowspan: usize, colspan: usize, row_heights: *[32]f64, col_widths: *[32]f64) void {
+    if (htmlAttrFloat(tag, "width")) |width| {
+        const per_col = width / @as(f64, @floatFromInt(@max(colspan, 1)));
+        var i: usize = 0;
+        while (i < colspan and col_index + i < col_widths.len) : (i += 1) {
+            col_widths[col_index + i] = @max(col_widths[col_index + i], per_col);
+        }
+    }
+    if (htmlAttrFloat(tag, "height")) |height| {
+        const per_row = height / @as(f64, @floatFromInt(@max(rowspan, 1)));
+        var i: usize = 0;
+        while (i < rowspan and row_index + i < row_heights.len) : (i += 1) {
+            row_heights[row_index + i] = @max(row_heights[row_index + i], per_row);
+        }
+    }
+}
+
+fn distributeHtmlGridSizes(values: []f64, target_total: f64) void {
+    if (values.len == 0) return;
+    var used: f64 = 0;
+    var flexible: usize = 0;
+    for (values) |value| {
+        if (value > 0) {
+            used += value;
+        } else {
+            flexible += 1;
+        }
+    }
+    const remaining = @max(0, target_total - used);
+    const fallback = if (flexible > 0)
+        remaining / @as(f64, @floatFromInt(flexible))
+    else if (used < target_total)
+        (target_total - used) / @as(f64, @floatFromInt(values.len))
+    else
+        0;
+    for (values) |*value| {
+        if (value.* > 0) {
+            if (flexible == 0 and fallback > 0) value.* += fallback;
+        } else {
+            value.* = @max(1, fallback);
+        }
+    }
 }
 
 const HtmlCellSides = struct {
@@ -4256,6 +4364,12 @@ fn htmlStyleHas(tag: []const u8, needle: []const u8) bool {
 fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
     const value = htmlAttrValue(tag, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
+}
+
+fn htmlAttrFloat(tag: []const u8, name: []const u8) ?f64 {
+    const value = htmlAttrValue(tag, name) orelse return null;
+    const parsed = std.fmt.parseFloat(f64, value) catch return null;
+    return if (parsed > 0) parsed else null;
 }
 
 fn nextFreeHtmlColumn(occupied: *const [32]usize, start: usize) usize {
@@ -11146,6 +11260,36 @@ test "SVG renderer honors HTML table cell sides attribute" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "Hidden") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
+}
+
+test "SVG renderer honors HTML table cell width height fixedsize hints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  html [shape=plain,label=<
+        \\    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="0">
+        \\      <TR><TD WIDTH="9" HEIGHT="9" FIXEDSIZE="true" PORT="a"></TD><TD WIDTH="18" HEIGHT="9" FIXEDSIZE="true" PORT="b"></TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const html = graph.node_index.get("html").?;
+    const a = htmlTableCellRect(graph.nodes.items[html].label, layout.nodes[html], "a") orelse return error.MissingHtmlPort;
+    const b = htmlTableCellRect(graph.nodes.items[html].label, layout.nodes[html], "b") orelse return error.MissingHtmlPort;
+
+    try std.testing.expect(b.width > a.width);
+    try std.testing.expect(@abs(b.width - a.width * 2.0) < 0.01);
+    try std.testing.expect(@abs(a.height - 9.0) < 0.01);
+    try std.testing.expect(@abs(b.height - 9.0) < 0.01);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"18.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "height=\"9.0\"") != null);
 }
 
 test "HTML table TD PORT routes edge endpoints to cells" {
