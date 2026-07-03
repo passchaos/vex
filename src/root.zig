@@ -2917,10 +2917,13 @@ fn improveRanksByNetworkSimplex(allocator: std.mem.Allocator, graph: *const Grap
     var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return 0;
     defer tree.deinit();
 
-    var pivots: usize = 0;
-    while (pivots < max_pivots) {
+    var improving_pivots: usize = 0;
+    var attempts: usize = 0;
+    var stall_count: usize = 0;
+    while (attempts < max_pivots) {
         const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse break;
         const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse break;
+        const entering_slack = rankEdgeSlack(rank_edges[entering], ranks) orelse break;
 
         const rank_backup = try allocator.dupe(usize, ranks);
         defer allocator.free(rank_backup);
@@ -2929,6 +2932,7 @@ fn improveRanksByNetworkSimplex(allocator: std.mem.Allocator, graph: *const Grap
         const before_cost = rankEdgesCost(rank_edges, ranks);
 
         const pivoted = try pivotRankTightTree(&tree, rank_edges, ranks, leaving, entering);
+        attempts += 1;
         if (!pivoted or !rankEdgesFeasible(rank_edges, ranks) or !rankAssignmentFeasible(graph, ranks, acyclic_edge) or !rankConstraintsSatisfied(graph, ranks)) {
             @memcpy(ranks, rank_backup);
             @memcpy(tree.in_tree, tree_backup);
@@ -2938,14 +2942,20 @@ fn improveRanksByNetworkSimplex(allocator: std.mem.Allocator, graph: *const Grap
 
         const after_cost = rankEdgesCost(rank_edges, ranks);
         if (after_cost >= before_cost) {
+            if (entering_slack == 0 and @abs(after_cost - before_cost) <= 0.0001) {
+                stall_count += 1;
+                if (stall_count > ranks.len) break;
+                continue;
+            }
             @memcpy(ranks, rank_backup);
             @memcpy(tree.in_tree, tree_backup);
             try rebuildRankTightTreeParents(&tree, rank_edges);
             break;
         }
-        pivots += 1;
+        stall_count = 0;
+        improving_pivots += 1;
     }
-    return pivots;
+    return improving_pivots;
 }
 
 fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
@@ -10085,6 +10095,48 @@ test "bounded network simplex rank pass leaves optimal tight tree unchanged" {
 
     try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4));
     try std.testing.expectEqualSlices(usize, before, ranks);
+}
+
+test "bounded network simplex rank pass bounds degenerate zero-slack pivots" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 1;
+    ranks[d] = 2;
+    const before = try allocator.dupe(usize, ranks);
+    defer allocator.free(before);
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return error.MissingTightTree;
+    defer tree.deinit();
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse return error.MissingEnteringEdge;
+    try std.testing.expectEqual(@as(usize, 0), rankEdgeSlack(rank_edges[entering], ranks).?);
+
+    try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 8));
+    try std.testing.expectEqualSlices(usize, before, ranks);
+    try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
 }
 
 test "rank local search preserves explicit same-rank constraints" {
