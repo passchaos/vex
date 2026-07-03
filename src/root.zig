@@ -2321,6 +2321,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         alignBoundarySingletonsToIncidentSpan(graph, levels, ranks, centers, axis_sizes);
         applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
     }
+    applyCrossClusterDiagonalNudges(graph, ranks, centers, axis_sizes, cluster_along_budget);
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -5751,6 +5752,37 @@ fn shiftCentersRightWithinBudget(centers: []f64, sizes: []const NodeSize, desire
     if (extent >= max_extent) return;
     const shift = @min(desired_shift, max_extent - extent);
     for (centers) |*center| center.* += shift;
+}
+
+fn applyCrossClusterDiagonalNudges(graph: *const Graph, ranks: []const usize, centers: []f64, sizes: []const NodeSize, max_extent: f64) void {
+    if (graph.clusters.items.len == 0 or max_extent <= 0) return;
+    const full_shift: f64 = 1.0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        if (edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
+        if (ranks[edge_item.from] + 1 != ranks[edge_item.to]) continue;
+        const from_cluster = clusterIndexContainingNode(graph, edge_item.from) orelse continue;
+        const to_cluster = clusterIndexContainingNode(graph, edge_item.to) orelse continue;
+        if (from_cluster == to_cluster) continue;
+        if (centers[edge_item.from] <= centers[edge_item.to]) continue;
+
+        const available = @max(0.0, max_extent - centersExtent(centers, sizes));
+        const shift = @min(full_shift, available);
+        if (shift <= 0) return;
+        centers[edge_item.from] += shift;
+        nudgeSameClusterPredecessors(graph, ranks, centers, edge_item.from, from_cluster, shift * 0.4);
+    }
+}
+
+fn nudgeSameClusterPredecessors(graph: *const Graph, ranks: []const usize, centers: []f64, node_id: NodeId, cluster_index: usize, shift: f64) void {
+    if (node_id >= ranks.len or shift <= 0) return;
+    const rank = ranks[node_id];
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.to != node_id or edge_item.from >= ranks.len or edge_item.from >= centers.len) continue;
+        if (ranks[edge_item.from] + 1 != rank) continue;
+        if ((clusterIndexContainingNode(graph, edge_item.from) orelse continue) != cluster_index) continue;
+        centers[edge_item.from] += shift;
+    }
 }
 
 fn applyBackEdgeChannelCenterConstraints(graph: *const Graph, ranks: []const usize, centers: []f64, sizes: []const NodeSize, max_extent: f64) void {
@@ -14296,9 +14328,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(layout.nodes[a0].center.x - layout.nodes[a1].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[a1].center.x - layout.nodes[a2].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[a2].center.x - layout.nodes[a3].center.x) <= 1.0);
-    try std.testing.expect(@abs(layout.nodes[b0].center.x - layout.nodes[b1].center.x) <= 1.0);
-    try std.testing.expect(@abs(layout.nodes[b1].center.x - layout.nodes[b2].center.x) <= 1.0);
-    try std.testing.expect(@abs(layout.nodes[b2].center.x - layout.nodes[b3].center.x) <= 1.0);
+    try std.testing.expect(layout.nodes[b1].center.x > layout.nodes[b0].center.x);
+    try std.testing.expect(layout.nodes[b2].center.x > layout.nodes[b1].center.x);
+    try std.testing.expect(@abs(layout.nodes[b3].center.x - layout.nodes[b0].center.x) <= 1.0);
     try std.testing.expect(layout.nodes[start].center.x > layout.nodes[a0].center.x);
     try std.testing.expect(layout.nodes[start].center.x < layout.nodes[b0].center.x);
     try std.testing.expect(layout.nodes[end].center.x > layout.nodes[a3].center.x);
@@ -14306,10 +14338,10 @@ test "user cluster example stays compact and Graphviz-like" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"223pt\" height=\"409pt\" viewBox=\"0.00 0.00 223.00 408.80\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 408.80\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8.0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"-8.0,0 -8.0,409 215.0,409 215.0,0 -8.0,0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"-8.0,0 -8.0,409 216.0,409 216.0,0 -8.0,0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"content\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
@@ -14354,11 +14386,11 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"91.5,379.3 103.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.5\" y=\"64.6\"") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     try std.testing.expect(svg_cluster_0_w >= 86.0);
     try std.testing.expect(svg_cluster_0_w <= 90.0);
-    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 78.0);
+    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 80.0);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 4.5);
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 1.0);
