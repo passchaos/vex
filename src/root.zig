@@ -7667,15 +7667,15 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             var ring: usize = 0;
             while (ring < visual.peripheries) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
-                try writer.print("<ellipse cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                try writer.print("<ellipse fill=\"{s}\" stroke=\"{s}\" cx=\"{d:.1}\" cy=\"{d:.1}\" rx=\"{d:.1}\" ry=\"{d:.1}\"", .{
+                    if (ring == 0) visual.fill else "none",
+                    visual.stroke,
                     shape_layout.center.x,
                     shape_layout.center.y,
                     @max(1, shape_layout.width / 2.0 - inset),
                     @max(1, shape_layout.height / 2.0 - inset),
-                    if (ring == 0) visual.fill else "none",
-                    visual.stroke,
-                    visual.width,
                 });
+                try writeSvgStrokeWidth(writer, visual.width);
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
@@ -11980,8 +11980,23 @@ test "SVG renderer uses Graphviz default pen widths" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(countSubstrings(svg, "stroke-width=\"1.0\"") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.8\"") == null);
+
+    var explicit = try parseDot(allocator,
+        \\digraph G {
+        \\  node [penwidth=3];
+        \\  a -> b [penwidth=4];
+        \\  subgraph cluster_c { graph [penwidth=2]; c; }
+        \\}
+    );
+    defer explicit.deinit();
+    var explicit_layout = try layoutLayered(allocator, &explicit, .{});
+    defer explicit_layout.deinit();
+    const explicit_svg = try renderSvgAlloc(allocator, &explicit, &explicit_layout, .{});
+    defer allocator.free(explicit_svg);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"3.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"4.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"2.0\"") != null);
 }
 
 test "SVG renderer normalizes simple HTML-like labels without affecting plain angle text" {
@@ -14240,6 +14255,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title><ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
