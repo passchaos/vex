@@ -6506,6 +6506,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
         const visual = resolveEdgeVisual(edge_item);
         if (visual.hidden) continue;
+        try writeSvgEdgeComment(writer, graph, edge_item);
         try writer.print("<g id=\"edge{d}\" class=\"edge\">\n", .{edge_item.id + 1});
         const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
         if (edge_wrap == .none) try writeSvgEdgeTitle(writer, graph, edge_item);
@@ -6537,6 +6538,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         var visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
+        try writeSvgComment(writer, node_item.name);
         try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
         const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
         if (node_wrap == .none) try writeSvgTitle(writer, node_item.name);
@@ -6599,6 +6601,31 @@ fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
         0x27 => try writer.writeAll("&apos;"),
         else => try writer.writeByte(c),
     };
+}
+
+fn writeSvgCommentEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    for (text) |c| switch (c) {
+        '-' => try writer.writeAll("&#45;"),
+        '&' => try writer.writeAll("&amp;"),
+        '<' => try writer.writeAll("&lt;"),
+        '>' => try writer.writeAll("&gt;"),
+        else => try writer.writeByte(c),
+    };
+}
+
+fn writeSvgComment(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    try writer.writeAll("<!-- ");
+    try writeSvgCommentEscaped(writer, text);
+    try writer.writeAll(" -->\n");
+}
+
+fn writeSvgEdgeComment(writer: *Io.Writer, graph: *const Graph, edge_item: Edge) Io.Writer.Error!void {
+    if (edge_item.from >= graph.nodes.items.len or edge_item.to >= graph.nodes.items.len) return;
+    try writer.writeAll("<!-- ");
+    try writeSvgCommentEscaped(writer, graph.nodes.items[edge_item.from].name);
+    try writer.writeAll(if (graph.directed) "&#45;&gt;" else "&#45;&#45;");
+    try writeSvgCommentEscaped(writer, graph.nodes.items[edge_item.to].name);
+    try writer.writeAll(" -->\n");
 }
 
 const SvgInteractiveWrap = enum {
@@ -14181,6 +14208,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
     const cluster_1_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_1</title>") orelse return error.MissingCluster1;
     try std.testing.expect(cluster_0_group_pos < cluster_1_group_pos);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0 -->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
