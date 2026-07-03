@@ -6922,9 +6922,9 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
     if (rankdir == .TB or rankdir == .BT) {
         const prefer_left = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
         const side_x = if (prefer_left)
-            @max(8.0, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
+            @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
         else
-            @min(layout.width - 8.0, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
+            @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
         const p1 = Point{ .x = side_x, .y = route.start.y };
         const p2 = Point{ .x = side_x, .y = route.end.y };
         if (routing == .polyline) {
@@ -6953,9 +6953,9 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
 
     const prefer_top = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
     const side_y = if (prefer_top)
-        @max(8.0, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
+        @max(layout.margin_y, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
     else
-        @min(layout.height - 8.0, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
+        @min(layout.height - layout.margin_y, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
     const p1 = Point{ .x = route.start.x, .y = side_y };
     const p2 = Point{ .x = route.end.x, .y = side_y };
     if (routing == .polyline) {
@@ -11611,7 +11611,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, " L 8.0 ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect) <= 82.0);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 82.0);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
