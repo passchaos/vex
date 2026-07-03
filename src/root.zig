@@ -2637,7 +2637,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             height = diameter;
         },
         .mdiamond => {
-            width = @max(36.0, text_width + options.node_padding_x * 2.4 + margin.x * 2.0);
+            width = @max(36.0, text_width + options.node_padding_x * 2.75 + margin.x * 2.0);
             height = @max(36.0, text_height + options.node_padding_y * 2.2 + margin.y * 2.0);
         },
         .diamond => {
@@ -12260,6 +12260,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, " L 16.0 ") != null);
