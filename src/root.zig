@@ -7069,7 +7069,7 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, r
 }
 
 fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<path d=\"M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}\" stroke=\"{s}\"", .{
         route.start.x,
         route.start.y,
         route.control1.x,
@@ -7079,8 +7079,8 @@ fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual
         route.end.x,
         route.end.y,
         visual.stroke,
-        visual.width,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
 }
 
@@ -7682,7 +7682,9 @@ fn writeSvgFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!
 
 fn writeSvgStrokeWidth(writer: *Io.Writer, width: f64) Io.Writer.Error!void {
     if (@abs(width - 1.0) <= 0.0001) return;
-    try writer.print(" stroke-width=\"{d:.1}\"", .{width});
+    try writer.writeAll(" stroke-width=\"");
+    try writeSvgNumber(writer, width);
+    try writer.writeByte('"');
 }
 
 fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -7695,7 +7697,7 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
     const table_dash = if (table_tag) |tag| htmlDashStyle(tag) else .none;
 
     if (!table_invisible) {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\"", .{
             grid.x,
             grid.y,
             layout.width,
@@ -7703,8 +7705,8 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             visual.radius,
             fill,
             if (metrics.border > 0) table_stroke else "none",
-            metrics.border,
         });
+        try writeSvgStrokeWidth(writer, metrics.border);
         try writeSvgDash(writer, table_dash);
         try writer.writeAll("/>\n");
     }
@@ -7792,14 +7794,14 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
 
 fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCellSides, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
     const sides = maybe_sides orelse {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
             rect.x,
             rect.y,
             rect.width,
             rect.height,
             stroke,
-            width,
         });
+        try writeSvgStrokeWidth(writer, width);
         try writeSvgDash(writer, dash);
         try writer.writeAll("/>\n");
         return;
@@ -7812,14 +7814,14 @@ fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCe
 }
 
 fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
         x1,
         y1,
         x2,
         y2,
         stroke,
-        width,
     });
+    try writeSvgStrokeWidth(writer, width);
     try writeSvgDash(writer, dash);
     try writer.writeAll("/>\n");
 }
@@ -7829,11 +7831,12 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
     switch (node_item.shape) {
         .point => {
             try writeSvgCircleOpen(writer, shape_layout.center, @min(shape_layout.width, shape_layout.height) / 2.0);
-            try writer.print(" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+            try writer.print(" fill=\"{s}\" stroke=\"{s}\"", .{
                 visual.stroke,
                 visual.stroke,
-                visual.width,
             });
+            try writeSvgStrokeWidth(writer, visual.width);
+            try writer.writeAll("/>\n");
         },
         .box, .square, .msquare => {
             var ring: usize = 0;
@@ -7862,11 +7865,11 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
             while (ring < ring_count) : (ring += 1) {
                 const inset = @as(f64, @floatFromInt(ring)) * 5.0;
                 try writeSvgCircleOpen(writer, shape_layout.center, @max(1, @min(shape_layout.width, shape_layout.height) / 2.0 - inset));
-                try writer.print(" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+                try writer.print(" fill=\"{s}\" stroke=\"{s}\"", .{
                     if (ring == 0) visual.fill else "none",
                     visual.stroke,
-                    visual.width,
                 });
+                try writeSvgStrokeWidth(writer, visual.width);
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
@@ -8538,7 +8541,7 @@ fn renderSvgCylinderShape(writer: *Io.Writer, layout: NodeLayout, visual: NodeVi
 }
 
 fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius: f64) Io.Writer.Error!void {
-    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\"", .{
         rect.x,
         rect.y,
         rect.width,
@@ -8546,8 +8549,8 @@ fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius
         radius,
         visual.fill,
         visual.stroke,
-        visual.width,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
@@ -8573,7 +8576,7 @@ fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.
 }
 
 fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
         x + width,
         y,
         x,
@@ -8583,21 +8586,21 @@ fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height:
         x + width,
         y + height,
         visual.stroke,
-        visual.width,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
 
 fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
         x1,
         y1,
         x2,
         y2,
         visual.stroke,
-        visual.width,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
@@ -8651,7 +8654,7 @@ fn nodeRect(layout: NodeLayout) RectF {
 fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual, options: SvgOptions, rounded: bool) Io.Writer.Error!void {
     const x = layout.center.x - layout.width / 2.0;
     const y = layout.center.y - layout.height / 2.0;
-    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
+    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\"", .{
         x,
         y,
         layout.width,
@@ -8659,8 +8662,8 @@ fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout
         if (rounded) 10 else visual.radius,
         visual.fill,
         visual.stroke,
-        visual.width,
     });
+    try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 
@@ -10488,7 +10491,7 @@ test "Mermaid parser applies node style directives" {
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#0f0\" stroke=\"#090\" stroke-width=\"3.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#0f0\" stroke=\"#090\" stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#111\"") != null);
 }
 
@@ -10512,7 +10515,7 @@ test "Mermaid parser applies classDef and class directives" {
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fff\"") != null);
 }
 
@@ -10534,7 +10537,7 @@ test "Mermaid parser applies inline class directives" {
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f00\" stroke=\"#000\" stroke-width=\"2\"") != null);
 }
 
 test "Mermaid parser applies linkStyle directives" {
@@ -10558,7 +10561,7 @@ test "Mermaid parser applies linkStyle directives" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#ff0\" d=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "\" stroke-width=\"4.0\" stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "\" stroke-width=\"4\" stroke-dasharray=\"8,5\"") != null);
 }
 
 test "SVG renderer emits document" {
@@ -12130,10 +12133,10 @@ test "SVG renderer honors common Graphviz visual attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#1d4ed8\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#1e3a8a\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"4.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"4\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0-head)\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "loop") != null);
 
@@ -12162,7 +12165,7 @@ test "SVG renderer honors bold style and node peripheries" {
     try std.testing.expect(countSubstrings(svg, "<circle") >= 2);
     try std.testing.expect(countSubstrings(svg, "<rect") >= 3);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.6\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
 }
 
@@ -12278,9 +12281,9 @@ test "SVG renderer uses Graphviz default pen widths" {
     defer explicit_layout.deinit();
     const explicit_svg = try renderSvgAlloc(allocator, &explicit, &explicit_layout, .{});
     defer allocator.free(explicit_svg);
-    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"3.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"4.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"2\"") != null);
 }
 
 test "SVG renderer normalizes simple HTML-like labels without affecting plain angle text" {
@@ -12380,10 +12383,10 @@ test "SVG renderer honors simple HTML table visual attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"#2563eb\" stroke-width=\"2.0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\" stroke-width=\"2.0\" stroke-dasharray=\"8,5\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\" stroke-width=\"2.0\" stroke-dasharray=\"2,5\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"#2563eb\" stroke-width=\"2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\" stroke-width=\"2\" stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\" stroke-width=\"2\" stroke-dasharray=\"2,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">B</tspan>") != null);
 }
