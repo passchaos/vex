@@ -4741,6 +4741,8 @@ fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(N
     const cluster_pad_x: f64 = 12.0;
     for (levels) |level| {
         if (level.items.len <= 1) continue;
+        var constraints: [128]CoordConstraint = undefined;
+        var constraint_count: usize = 0;
         var i: usize = 1;
         while (i < level.items.len) : (i += 1) {
             const left = level.items[i - 1];
@@ -4751,12 +4753,37 @@ fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(N
             if (left_cluster != null and right_cluster != null and left_cluster.? == right_cluster.?) continue;
             const left_pad = if (left_cluster != null) cluster_pad_x else 0.0;
             const right_pad = if (right_cluster != null) cluster_pad_x else 0.0;
-            const min_center = centers[left] + sizes[left].width / 2.0 + left_pad + cluster_gap + right_pad + sizes[right].width / 2.0;
-            if (centers[right] < min_center) {
-                const delta = min_center - centers[right];
-                var j = i;
-                while (j < level.items.len) : (j += 1) centers[level.items[j]] += delta;
+            if (constraint_count >= constraints.len) {
+                applyInterClusterSpacingFallback(graph, level.items, centers, sizes, cluster_gap, cluster_pad_x);
+                return;
             }
+            constraints[constraint_count] = .{
+                .left = left,
+                .right = right,
+                .min_gap = sizes[left].width / 2.0 + left_pad + cluster_gap + right_pad + sizes[right].width / 2.0,
+            };
+            constraint_count += 1;
+        }
+        _ = satisfyCoordConstraints(centers, constraints[0..constraint_count]);
+    }
+}
+
+fn applyInterClusterSpacingFallback(graph: *const Graph, level: []const NodeId, centers: []f64, sizes: []const NodeSize, cluster_gap: f64, cluster_pad_x: f64) void {
+    var i: usize = 1;
+    while (i < level.len) : (i += 1) {
+        const left = level[i - 1];
+        const right = level[i];
+        const left_cluster = clusterIndexContainingNode(graph, left);
+        const right_cluster = clusterIndexContainingNode(graph, right);
+        if (left_cluster == null and right_cluster == null) continue;
+        if (left_cluster != null and right_cluster != null and left_cluster.? == right_cluster.?) continue;
+        const left_pad = if (left_cluster != null) cluster_pad_x else 0.0;
+        const right_pad = if (right_cluster != null) cluster_pad_x else 0.0;
+        const min_center = centers[left] + sizes[left].width / 2.0 + left_pad + cluster_gap + right_pad + sizes[right].width / 2.0;
+        if (centers[right] < min_center) {
+            const delta = min_center - centers[right];
+            var j = i;
+            while (j < level.len) : (j += 1) centers[level[j]] += delta;
         }
     }
 }
