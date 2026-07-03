@@ -5198,8 +5198,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 
         const offset = parallelEdgeOffset(graph, edge_item.id);
         const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
+        const path_route = routeForPathMarkers(route, visual);
         try writer.writeAll("<path d=\"");
-        try writeEdgePath(writer, layout, edge_item, layout.rankdir, offset, route, edge_routing);
+        try writeEdgePath(writer, layout, edge_item, layout.rankdir, offset, path_route, edge_routing);
         try writer.print("\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{ visual.stroke, visual.width });
         try writeSvgDash(writer, visual.dash);
         try writeSvgMarkerAttrs(writer, graph.directed, edge_item.id, visual);
@@ -5399,6 +5400,32 @@ fn lerpPoint(a: Point, b: Point, t: f64) Point {
     return .{
         .x = a.x + (b.x - a.x) * t,
         .y = a.y + (b.y - a.y) * t,
+    };
+}
+
+fn routeForPathMarkers(route: EdgeRoute, visual: EdgeVisual) EdgeRoute {
+    var result = route;
+    if (visual.marker_start != .none) {
+        result.start = shortenPointToward(route.start, route.control1, 6.0 * visual.marker_scale);
+        result.control1 = shortenPointToward(route.control1, route.control2, 2.0 * visual.marker_scale);
+    }
+    if (visual.marker_end != .none) {
+        result.end = shortenPointToward(route.end, route.control2, 6.0 * visual.marker_scale);
+        result.control2 = shortenPointToward(route.control2, route.control1, 2.0 * visual.marker_scale);
+    }
+    return result;
+}
+
+fn shortenPointToward(point: Point, toward: Point, amount: f64) Point {
+    if (amount <= 0) return point;
+    const dx = toward.x - point.x;
+    const dy = toward.y - point.y;
+    const len = std.math.hypot(dx, dy);
+    if (len <= 0.001) return point;
+    const shift = @min(amount, len * 0.5);
+    return .{
+        .x = point.x + dx / len * shift,
+        .y = point.y + dy / len * shift,
     };
 }
 
@@ -11552,6 +11579,44 @@ test "spline controls follow diagonal edges" {
     try std.testing.expect(route.control1.x > route.control2.x);
     try std.testing.expect(route.control2.x > route.end.x);
     try std.testing.expect(route.control1.y < route.control2.y);
+}
+
+test "SVG marker path route shortens arrow endpoints" {
+    const route = EdgeRoute{
+        .start = .{ .x = 0, .y = 0 },
+        .control1 = .{ .x = 0, .y = 30 },
+        .control2 = .{ .x = 0, .y = 70 },
+        .end = .{ .x = 0, .y = 100 },
+        .label = .{ .x = 0, .y = 50 },
+    };
+    const none = routeForPathMarkers(route, .{
+        .stroke = "black",
+        .font_color = "black",
+        .font_family = default_svg_font_family,
+        .font_size = 14,
+        .width = 1,
+        .dash = .none,
+        .marker_start = .none,
+        .marker_end = .none,
+        .marker_scale = 1,
+        .hidden = false,
+    });
+    try std.testing.expectEqual(route.end.y, none.end.y);
+
+    const shortened = routeForPathMarkers(route, .{
+        .stroke = "black",
+        .font_color = "black",
+        .font_family = default_svg_font_family,
+        .font_size = 14,
+        .width = 1,
+        .dash = .none,
+        .marker_start = .none,
+        .marker_end = .normal,
+        .marker_scale = 1,
+        .hidden = false,
+    });
+    try std.testing.expect(shortened.end.y < route.end.y);
+    try std.testing.expectEqual(route.label.y, shortened.label.y);
 }
 
 test "DOT parser propagates edge constraint and minlen controls" {
