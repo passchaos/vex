@@ -6696,7 +6696,7 @@ fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
 fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, color: []const u8, scale: f64) Io.Writer.Error!void {
     if (scale <= 0) return;
     const marker_size = 7.0 * scale;
-    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, marker_size, marker_size });
+    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"{d:.1}\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, markerRefX(shape), marker_size, marker_size });
     if (std.mem.eql(u8, suffix, "tail")) try writer.writeAll("-start-reverse");
     try writer.writeAll("\">");
     switch (shape) {
@@ -6714,6 +6714,13 @@ fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, sh
         .empty => try writer.print("<path d=\"M 0.8 0.8 L 9.2 5 L 0.8 9.2 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
     }
     try writer.writeAll("</marker>\n");
+}
+
+fn markerRefX(shape: MarkerShape) f64 {
+    return switch (shape) {
+        .normal => 9.2,
+        else => 9.0,
+    };
 }
 
 fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visual: EdgeVisual) Io.Writer.Error!void {
@@ -10037,6 +10044,7 @@ test "SVG renderer uses Graphviz-like normal arrow marker proportions" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1.2 1.4 L 9.2 5 L 1.2 8.6 z") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "refX=\"9.2\"") != null);
 }
 
 test "SVG renderer honors additional Graphviz arrow marker shapes" {
