@@ -2730,11 +2730,15 @@ fn computeClusterLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const N
     const child_gap: f64 = 12;
     var center_buf: [256]f64 = undefined;
     var size_buf: [256]NodeSize = undefined;
+    var center_y_buf: [256]f64 = undefined;
+    var size_y_buf: [256]NodeSize = undefined;
     const boundary_inputs_available = nodes.len <= center_buf.len;
     if (boundary_inputs_available) {
         for (nodes, 0..) |node, id| {
             center_buf[id] = node.center.x;
             size_buf[id] = .{ .width = node.width, .height = node.height };
+            center_y_buf[id] = node.center.y;
+            size_y_buf[id] = .{ .width = node.height, .height = node.width };
         }
     }
     for (graph.clusters.items, 0..) |cluster, index| {
@@ -2766,13 +2770,19 @@ fn computeClusterLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const N
                 width = boundary.right - boundary.left;
             }
         }
-        const height = (max_y - min_y) + pad_y * 2.0 + label_band;
+        var y = min_y - pad_y - label_band;
+        var height = (max_y - min_y) + pad_y * 2.0 + label_band;
+        if (boundary_inputs_available) {
+            if (solveClusterBoundary(cluster, center_y_buf[0..nodes.len], size_y_buf[0..nodes.len], pad_y)) |boundary| {
+                y = boundary.left - label_band;
+                height = boundary.right - boundary.left + label_band;
+            }
+        }
         if (width < label_min_width) {
             const extra = label_min_width - width;
             x -= extra / 2.0;
             width = label_min_width;
         }
-        const y = min_y - pad_y - label_band;
         clusters[index] = .{
             .id = cluster.id,
             .x = @max(0, x),
