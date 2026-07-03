@@ -8672,22 +8672,8 @@ fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: 
 
         if (index > 0) {
             switch (node.orientation) {
-                .horizontal => try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-                    child_rect.x,
-                    rect.y,
-                    child_rect.x,
-                    rect.y + rect.height,
-                    visual.stroke,
-                    visual.width,
-                }),
-                .vertical => try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-                    rect.x,
-                    child_rect.y,
-                    rect.x + rect.width,
-                    child_rect.y,
-                    visual.stroke,
-                    visual.width,
-                }),
+                .horizontal => try writeSvgLine(writer, child_rect.x, rect.y, child_rect.x, rect.y + rect.height, visual),
+                .vertical => try writeSvgLine(writer, rect.x, child_rect.y, rect.x + rect.width, child_rect.y, visual),
             }
         }
         try renderRecordFields(writer, child, child_rect, visual, options);
