@@ -5530,6 +5530,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const edge_routing = svgEdgeRoutingMode(graph);
     const concentrate = graphConcentrateEnabled(graph);
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
+    const content_translate = svgGraphContentTranslate(layout);
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{d:.0}\" height=\"{d:.0}\" viewBox=\"0 0 {d:.0} {d:.0}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
@@ -5575,6 +5576,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</defs>\n");
     }
 
+    if (content_translate != 0) try writer.print("<g class=\"content\" transform=\"translate({d:.1} 0)\">\n", .{content_translate});
     try renderSvgClusters(writer, graph, layout);
 
     try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
@@ -5650,7 +5652,23 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgInteractiveClose(writer, node_wrap);
         try writer.writeAll("</g>\n");
     }
-    try writer.writeAll("</g>\n</g>\n</svg>\n");
+    try writer.writeAll("</g>\n");
+    if (content_translate != 0) try writer.writeAll("</g>\n");
+    try writer.writeAll("</g>\n</svg>\n");
+}
+
+fn svgGraphContentTranslate(layout: *const Layout) f64 {
+    if (layout.clusters.len == 0) return 0;
+    var min_x = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    for (layout.clusters) |cluster_box| {
+        if (cluster_box.width <= 0 or cluster_box.height <= 0) continue;
+        min_x = @min(min_x, cluster_box.x);
+        max_x = @max(max_x, cluster_box.x + cluster_box.width);
+    }
+    if (min_x == std.math.floatMax(f64) or max_x <= min_x) return 0;
+    const shift = ((layout.width - max_x) - min_x) / 2.0;
+    return if (@abs(shift) < 0.05) 0 else shift;
 }
 
 pub fn renderSvgAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout: *const Layout, options: SvgOptions) ![]u8 {
@@ -5876,7 +5894,7 @@ const SvgTranslate = struct {
 };
 
 fn svgGraphvizTranslate(svg: []const u8) SvgTranslate {
-    const marker = " translate(";
+    const marker = "translate(";
     const start = std.mem.indexOf(u8, svg, marker) orelse return .{};
     const value_start = start + marker.len;
     const value_end_rel = std.mem.indexOfScalar(u8, svg[value_start..], ')') orelse return .{};
@@ -12340,9 +12358,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_cluster_0_w >= 86.0);
     try std.testing.expect(svg_cluster_0_w <= 90.0);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 78.0);
-    try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 12.5);
+    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 12.5);
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
-    try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 8.0);
+    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 8.0);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 4.0);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
     const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
@@ -12357,10 +12375,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_a0_x >= 51.0);
     try std.testing.expect(svg_b0_x >= 168.0);
     try std.testing.expect(svg_b0_x - svg_a0_x >= 117.0);
-    try std.testing.expect(@abs(svg_a0_x - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 16.0);
-    try std.testing.expect(@abs(svg_b0_x - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
-    try std.testing.expect(@abs(svg_start_x - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 10.0);
-    try std.testing.expect(@abs(svg_end_x - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 10.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 16.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 10.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 10.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
