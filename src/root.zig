@@ -7464,6 +7464,14 @@ fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, e
     };
 }
 
+fn svgEdgeArrowTip(svg: []const u8, title: []const u8) ?Point {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    var numbers: [32]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", numbers[0..]);
+    if (count < 4) return null;
+    return .{ .x = numbers[2], .y = numbers[3] };
+}
+
 fn svgScreenPoint(svg: []const u8, point: Point) Point {
     const translate = svgGraphvizTranslate(svg);
     return .{ .x = point.x + translate.x, .y = point.y + translate.y };
@@ -9322,12 +9330,15 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     const to = layout.nodes[edge_item.to];
     const tail_clip = edgeClipEnabled(edge_item.attrs.items, "tailclip");
     const head_clip = edgeClipEnabled(edge_item.attrs.items, "headclip");
+    const back_toward = backEdgeEllipseToward(graph, layout, edge_item, rankdir);
+    const start_toward = if (back_toward) |toward| toward.start else to.center;
+    const end_toward = if (back_toward) |toward| toward.end else from.center;
     const raw_start = if (tail_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, false) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_record_port, edge_item.tail_port, true) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.from], from, to.center, edge_item.tail_port, rankdir, true)
+        samePortBoundaryPoint(graph, layout, edge_item, false) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_record_port, edge_item.tail_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_record_port, edge_item.tail_port, true) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_port, rankdir, true)
     else
         from.center;
     const raw_end = if (head_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, true) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_record_port, edge_item.head_port, false) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.to], to, from.center, edge_item.head_port, rankdir, false)
+        samePortBoundaryPoint(graph, layout, edge_item, true) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_record_port, edge_item.head_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_record_port, edge_item.head_port, false) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_port, rankdir, false)
     else
         to.center;
     const compound = graphCompoundEnabled(graph);
@@ -9340,6 +9351,36 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     else
         raw_end;
     return edgeRouteFromEndpoints(start, end, rankdir, offset);
+}
+
+const BackEdgeToward = struct {
+    start: Point,
+    end: Point,
+};
+
+fn backEdgeEllipseToward(graph: *const Graph, layout: *const Layout, edge_item: Edge, rankdir: RankDir) ?BackEdgeToward {
+    if (!isBackEdge(layout, edge_item)) return null;
+    if (edge_item.from >= graph.nodes.items.len or edge_item.to >= graph.nodes.items.len) return null;
+    if (edge_item.tail_port != .auto or edge_item.head_port != .auto) return null;
+    if (edge_item.tail_record_port != null or edge_item.head_record_port != null) return null;
+    if (!shapeUsesEllipseBoundary(graph.nodes.items[edge_item.from].shape)) return null;
+    if (!shapeUsesEllipseBoundary(graph.nodes.items[edge_item.to].shape)) return null;
+
+    const from = layout.nodes[edge_item.from];
+    const to = layout.nodes[edge_item.to];
+    const side_sign: f64 = if (backEdgeUsesNegativeSide(layout, edge_item, rankdir)) -1.0 else 1.0;
+    const side_offset: f64 = 10.0 * side_sign;
+    const rank_offset: f64 = 18.0;
+    return switch (rankdir) {
+        .TB, .BT => .{
+            .start = .{ .x = from.center.x + side_offset, .y = from.center.y + std.math.sign(to.center.y - from.center.y) * rank_offset },
+            .end = .{ .x = to.center.x + side_offset, .y = to.center.y + std.math.sign(from.center.y - to.center.y) * rank_offset },
+        },
+        .LR, .RL => .{
+            .start = .{ .x = from.center.x + std.math.sign(to.center.x - from.center.x) * rank_offset, .y = from.center.y + side_offset },
+            .end = .{ .x = to.center.x + std.math.sign(from.center.x - to.center.x) * rank_offset, .y = to.center.y + side_offset },
+        },
+    };
 }
 
 fn graphCompoundEnabled(graph: *const Graph) bool {
@@ -14574,6 +14615,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_count = svgNumbersInAttribute(back_edge, "d", back_numbers[0..]);
     try std.testing.expect(back_count >= 20);
     try std.testing.expect(@abs(back_numbers[6] - 16.0) <= 0.1);
+    const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
+    const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
+    const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
+    const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 3.0);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
