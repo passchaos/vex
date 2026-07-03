@@ -4238,6 +4238,21 @@ fn htmlCellSides(tag: []const u8) ?HtmlCellSides {
     return if (result.any()) result else null;
 }
 
+fn htmlTableOpenTag(label: []const u8) ?[]const u8 {
+    const table_start = findHtmlTag(label, "table", 0) orelse return null;
+    const table_open_end = std.mem.indexOfScalar(u8, label[table_start..], '>') orelse return null;
+    return label[table_start + 1 .. table_start + table_open_end];
+}
+
+fn htmlStyleHas(tag: []const u8, needle: []const u8) bool {
+    const style = htmlAttrValue(tag, "style") orelse return false;
+    var parts = std.mem.tokenizeAny(u8, style, ", ");
+    while (parts.next()) |part| {
+        if (std.ascii.eqlIgnoreCase(part, needle)) return true;
+    }
+    return false;
+}
+
 fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
     const value = htmlAttrValue(tag, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
@@ -6730,17 +6745,21 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
     const metrics = htmlTableMetrics(label) orelse return;
     const grid = htmlTableGrid(label, layout) orelse return;
     const fill = metrics.bg_color orelse visual.fill;
+    const table_tag = htmlTableOpenTag(label);
+    const table_invisible = if (table_tag) |tag| htmlStyleHas(tag, "invis") or htmlStyleHas(tag, "invisible") else false;
 
-    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
-        grid.x,
-        grid.y,
-        layout.width,
-        layout.height,
-        visual.radius,
-        fill,
-        if (metrics.border > 0) visual.stroke else "none",
-        metrics.border,
-    });
+    if (!table_invisible) {
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+            grid.x,
+            grid.y,
+            layout.width,
+            layout.height,
+            visual.radius,
+            fill,
+            if (metrics.border > 0) visual.stroke else "none",
+            metrics.border,
+        });
+    }
 
     var row_pos: usize = 0;
     var row_index: usize = 0;
@@ -6772,12 +6791,6 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
             }
             const cell_border: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellborder", @intFromFloat(metrics.cell_border)));
             const cell_padding: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellpadding", @intFromFloat(metrics.cell_padding)));
-            if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
-                try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, cell_bg });
-            }
-            if (cell_border > 0) {
-                try renderSvgHtmlCellBorder(writer, cell_rect, htmlCellSides(td_tag), visual.stroke, cell_border);
-            }
             const cell = row[cell_start..td_close];
             const align_attr = htmlAttrValue(td_tag, "align");
             const text_anchor: []const u8 = if (align_attr) |value|
@@ -6800,18 +6813,27 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
                     cell_rect.y + cell_rect.height / 2.0
             else
                 cell_rect.y + cell_rect.height / 2.0;
-            try renderSvgTextBlockWithAnchor(
-                writer,
-                cell,
-                text_x,
-                text_y,
-                visual.font_size,
-                visual.font_color,
-                visual.font_family,
-                false,
-                true,
-                text_anchor,
-            );
+            const cell_invisible = htmlStyleHas(td_tag, "invis") or htmlStyleHas(td_tag, "invisible");
+            if (!table_invisible and !cell_invisible) {
+                if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
+                    try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, cell_bg });
+                }
+                if (cell_border > 0) {
+                    try renderSvgHtmlCellBorder(writer, cell_rect, htmlCellSides(td_tag), visual.stroke, cell_border);
+                }
+                try renderSvgTextBlockWithAnchor(
+                    writer,
+                    cell,
+                    text_x,
+                    text_y,
+                    visual.font_size,
+                    visual.font_color,
+                    visual.font_family,
+                    false,
+                    true,
+                    text_anchor,
+                );
+            }
             cell_pos = td_close + 1;
             col_index += colspan - 1;
         }
@@ -11107,7 +11129,7 @@ test "SVG renderer honors HTML table cell sides attribute" {
         \\digraph G {
         \\  html [shape=plain,label=<
         \\    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
-        \\      <TR><TD SIDES="ltr">Top</TD><TD SIDES="b">Bottom</TD></TR>
+        \\      <TR><TD STYLE="invis">Hidden</TD><TD SIDES="ltr">Top</TD><TD SIDES="b">Bottom</TD></TR>
         \\    </TABLE>
         \\  >];
         \\}
@@ -11121,6 +11143,7 @@ test "SVG renderer honors HTML table cell sides attribute" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"") != null);
     try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Hidden") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
 }
