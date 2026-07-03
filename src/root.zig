@@ -7009,10 +7009,16 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             });
         } else {
             const curve = @min(36.0, @abs(route.start.x - side_x) * 0.5 + 12.0);
-            const c1x = if (prefer_left) route.start.x - curve else route.start.x + curve;
-            const c2x = if (prefer_left) side_x + curve else side_x - curve;
-            const c3x = if (prefer_left) side_x + curve else side_x - curve;
-            const c4x = if (prefer_left) route.end.x - curve else route.end.x + curve;
+            const c1x = if (prefer_left)
+                @max(side_x, route.start.x - curve)
+            else
+                @min(side_x, route.start.x + curve);
+            const c2x = side_x;
+            const c3x = side_x;
+            const c4x = if (prefer_left)
+                @max(side_x, route.end.x - curve)
+            else
+                @min(side_x, route.end.x + curve);
             try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
                 route.start.x, route.start.y,
                 c1x,           route.start.y,
@@ -7040,10 +7046,16 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         });
     } else {
         const curve = @min(36.0, @abs(route.start.y - side_y) * 0.5 + 12.0);
-        const c1y = if (prefer_top) route.start.y - curve else route.start.y + curve;
-        const c2y = if (prefer_top) side_y + curve else side_y - curve;
-        const c3y = if (prefer_top) side_y + curve else side_y - curve;
-        const c4y = if (prefer_top) route.end.y - curve else route.end.y + curve;
+        const c1y = if (prefer_top)
+            @max(side_y, route.start.y - curve)
+        else
+            @min(side_y, route.start.y + curve);
+        const c2y = side_y;
+        const c3y = side_y;
+        const c4y = if (prefer_top)
+            @max(side_y, route.end.y - curve)
+        else
+            @min(side_y, route.end.y + curve);
         try writer.print("M {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1} L {d:.1} {d:.1} C {d:.1} {d:.1}, {d:.1} {d:.1}, {d:.1} {d:.1}", .{
             route.start.x, route.start.y,
             route.start.x, c1y,
@@ -11649,6 +11661,14 @@ test "SVG routes multi-rank back edges around the side" {
     try std.testing.expect(countSubstrings(path, " L ") == 1);
     try std.testing.expect(std.mem.indexOf(u8, path, " C ") != null);
     try std.testing.expect(route.start.y > route.end.y);
+    var path_numbers: [32]f64 = undefined;
+    const count = svgNumbersInAttribute(path, "d", path_numbers[0..]);
+    try std.testing.expect(count >= 14);
+    const side_x = path_numbers[6];
+    try std.testing.expect(path_numbers[2] >= side_x);
+    try std.testing.expectEqual(side_x, path_numbers[4]);
+    try std.testing.expectEqual(side_x, path_numbers[8]);
+    try std.testing.expectEqual(side_x, path_numbers[10]);
 }
 
 test "back-edge side channel prefers stable negative side for same column" {
