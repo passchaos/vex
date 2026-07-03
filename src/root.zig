@@ -9581,6 +9581,7 @@ fn nodePortBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, por
     if (port != .auto) return portBoundaryPoint(layout, toward, port, rankdir, leaving);
     if (shapeUsesEllipseBoundary(node_item.shape)) return ellipseBoundaryPoint(layout, toward);
     if (shapeUsesDiamondBoundary(node_item.shape)) return diamondBoundaryPoint(layout, toward);
+    if (shapeUsesRectBoundary(node_item.shape)) return rectBoundaryPoint(layout, toward);
     return boundaryPoint(layout, toward, rankdir, leaving);
 }
 
@@ -9598,6 +9599,13 @@ fn shapeUsesDiamondBoundary(shape: Shape) bool {
     };
 }
 
+fn shapeUsesRectBoundary(shape: Shape) bool {
+    return switch (shape) {
+        .box, .square, .msquare => true,
+        else => false,
+    };
+}
+
 fn ellipseBoundaryPoint(node: NodeLayout, toward: Point) Point {
     const dx = toward.x - node.center.x;
     const dy = toward.y - node.center.y;
@@ -9609,6 +9617,16 @@ fn ellipseBoundaryPoint(node: NodeLayout, toward: Point) Point {
         .x = node.center.x + dx * scale,
         .y = node.center.y + dy * scale,
     };
+}
+
+fn rectBoundaryPoint(node: NodeLayout, toward: Point) Point {
+    const rect = RectF{
+        .x = node.center.x - node.width / 2.0,
+        .y = node.center.y - node.height / 2.0,
+        .width = node.width,
+        .height = node.height,
+    };
+    return intersectRectBoundary(rect, node.center, toward) orelse pointForPort(rect, .auto, toward);
 }
 
 fn diamondBoundaryPoint(node: NodeLayout, toward: Point) Point {
@@ -14650,6 +14668,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const start_b0_points = svgPathStartEnd(svg, "start-&gt;b0") orelse return error.MissingStartEdge;
     const oracle_start_b0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;b0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_b0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_b0_points.start)) <= 3.0);
+    const a3_end_points = svgPathStartEnd(svg, "a3-&gt;end") orelse return error.MissingEndEdge;
+    const oracle_a3_end_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;end") orelse return error.MissingEndEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, a3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_a3_end_points.end)) <= 3.0);
+    const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
+    const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
