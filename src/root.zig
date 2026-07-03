@@ -1769,6 +1769,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
+    shiftCentersRightWithinBudget(centers, axis_sizes, 4.0, 224.0 - axes.alongMargin(effective_options) * 2.0);
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -4626,6 +4627,14 @@ fn centersExtent(centers: []const f64, sizes: []const NodeSize) f64 {
         extent = @max(extent, center + sizes[id].width / 2.0);
     }
     return extent;
+}
+
+fn shiftCentersRightWithinBudget(centers: []f64, sizes: []const NodeSize, desired_shift: f64, max_extent: f64) void {
+    if (desired_shift <= 0 or max_extent <= 0) return;
+    const extent = centersExtent(centers, sizes);
+    if (extent >= max_extent) return;
+    const shift = @min(desired_shift, max_extent - extent);
+    for (centers) |*center| center.* += shift;
 }
 
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
@@ -12106,6 +12115,22 @@ test "inter-cluster spacing respects extent budget" {
     try std.testing.expectEqual(@as(f64, 80), centers[b]);
     applyInterClusterSpacingWithBudget(&graph, levels, centers, sizes, 15, 200);
     try std.testing.expect(centers[b] > 80);
+}
+
+test "center shifting respects extent budget" {
+    var centers = [_]f64{ 10, 30 };
+    const sizes = [_]NodeSize{
+        .{ .width = 10, .height = 10 },
+        .{ .width = 10, .height = 10 },
+    };
+
+    shiftCentersRightWithinBudget(centers[0..], sizes[0..], 4, 40);
+    try std.testing.expectEqual(@as(f64, 14), centers[0]);
+    try std.testing.expectEqual(@as(f64, 34), centers[1]);
+
+    shiftCentersRightWithinBudget(centers[0..], sizes[0..], 10, 42);
+    try std.testing.expectEqual(@as(f64, 17), centers[0]);
+    try std.testing.expectEqual(@as(f64, 37), centers[1]);
 }
 
 test "layered layout uses DOT edge weight as a coordinate hint" {
