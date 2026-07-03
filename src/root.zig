@@ -7003,12 +7003,22 @@ const ClusterVisual = struct {
 fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) Io.Writer.Error!void {
     if (graph.clusters.items.len == 0) return;
     try writer.writeAll("<g class=\"clusters\">\n");
-    var index = graph.clusters.items.len;
-    while (index > 0) {
-        index -= 1;
-        try renderSvgClusterBox(writer, graph.clusters.items[index], layout, index);
-    }
+    try renderSvgClusterTree(writer, graph, layout, null);
     try writer.writeAll("</g>\n");
+}
+
+fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent_name: ?[]const u8) Io.Writer.Error!void {
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (!clusterParentMatches(cluster.parent_name, parent_name)) continue;
+        try renderSvgClusterBox(writer, cluster, layout, index);
+        try renderSvgClusterTree(writer, graph, layout, cluster.name);
+    }
+}
+
+fn clusterParentMatches(actual: ?[]const u8, expected: ?[]const u8) bool {
+    if (actual == null and expected == null) return true;
+    if (actual == null or expected == null) return false;
+    return std.mem.eql(u8, actual.?, expected.?);
 }
 
 fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layout, index: usize) Io.Writer.Error!void {
@@ -13621,6 +13631,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"clust1\" class=\"cluster\">") != null);
+    const cluster_0_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_0</title>") orelse return error.MissingCluster0;
+    const cluster_1_group_pos = std.mem.indexOf(u8, svg, "<title>cluster_1</title>") orelse return error.MissingCluster1;
+    try std.testing.expect(cluster_0_group_pos < cluster_1_group_pos);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
