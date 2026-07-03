@@ -6509,7 +6509,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgEdgeComment(writer, graph, edge_item);
         try writer.print("<g id=\"edge{d}\" class=\"edge\">\n", .{edge_item.id + 1});
         const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
-        if (edge_wrap == .none) try writeSvgEdgeTitle(writer, graph, edge_item);
+        if (edge_wrap == .none) {
+            try writeSvgEdgeTitle(writer, graph, edge_item);
+            try writer.writeByte('\n');
+        }
         if (edge_item.from == edge_item.to) {
             const route = selfLoopRoute(layout.nodes[edge_item.from]);
             try renderSvgSelfLoopPaths(writer, graph.directed, edge_item, route, visual);
@@ -6541,7 +6544,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgComment(writer, node_item.name);
         try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
         const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
-        if (node_wrap == .none) try writeSvgTitle(writer, node_item.name);
+        if (node_wrap == .none) {
+            try writeSvgTitle(writer, node_item.name);
+            try writer.writeByte('\n');
+        }
         var fill_buf: [96]u8 = undefined;
         if (stripedNodeFillEligible(node_item.shape)) {
             if (try renderSvgStripedRectFill(writer, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
@@ -14255,14 +14261,15 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0-&gt;a1</title>\n<path") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title><ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"51.0\" cy=\"97.3\" rx=\"27.0\" ry=\"18.0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0.0,49.3 90.0,49.3 90.0,343.3 0.0,343.3 0.0,49.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title><polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"91.5,367.3 127.5,367.3 127.5,403.3 91.5,403.3 91.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"91.5,379.3 103.5,367.3\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title><polygon fill=\"none\" stroke=\"black\" points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"109.5,5.5 148.8,24.4 109.5,43.3 70.3,24.4\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"45.0\" y=\"64.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.0\" y=\"64.6\"") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
