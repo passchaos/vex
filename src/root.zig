@@ -1712,6 +1712,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     applyRankConstraints(graph, ranks);
     tightenRanksTowardSinks(graph, ranks, acyclic_edge);
     improveRanksByLocalSearch(graph, ranks, acyclic_edge, 2);
+    _ = try improveRanksByNetworkSimplex(allocator, graph, ranks, acyclic_edge, n * 2);
     applyRankConstraints(graph, ranks);
 
     var max_rank: usize = 0;
@@ -2743,6 +2744,38 @@ fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
     }
 }
 
+fn rankConstraintsSatisfied(graph: *const Graph, ranks: []const usize) bool {
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    for (graph.rank_constraints.items) |constraint| {
+        switch (constraint.kind) {
+            .same => {
+                if (constraint.node_ids.len == 0) continue;
+                var target: ?usize = null;
+                for (constraint.node_ids) |id| {
+                    if (id >= ranks.len) continue;
+                    if (target) |rank| {
+                        if (ranks[id] != rank) return false;
+                    } else {
+                        target = ranks[id];
+                    }
+                }
+            },
+            .min, .source => {
+                for (constraint.node_ids) |id| {
+                    if (id < ranks.len and ranks[id] != 0) return false;
+                }
+            },
+            .max, .sink => {
+                for (constraint.node_ids) |id| {
+                    if (id < ranks.len and ranks[id] != max_rank) return false;
+                }
+            },
+        }
+    }
+    return true;
+}
+
 fn assignRanksForCyclicComponents(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
     const state = graph.allocator.alloc(u8, ranks.len) catch return;
     defer graph.allocator.free(state);
@@ -2854,6 +2887,60 @@ fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: 
         }
         if (!changed) break;
     }
+}
+
+fn improveRanksByNetworkSimplex(allocator: std.mem.Allocator, graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, max_pivots: usize) !usize {
+    if (max_pivots == 0 or ranks.len == 0) return 0;
+    const rank_edges = try collectRankEdges(allocator, graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    if (rank_edges.len == 0) return 0;
+
+    const merge_backup = try allocator.dupe(usize, ranks);
+    defer allocator.free(merge_backup);
+    const before_merge_cost = rankEdgesCost(rank_edges, ranks);
+    _ = try mergeTightRankComponents(allocator, rank_edges, ranks, ranks.len * 2);
+    const after_merge_cost = rankEdgesCost(rank_edges, ranks);
+    if (!rankEdgesFeasible(rank_edges, ranks) or
+        !rankAssignmentFeasible(graph, ranks, acyclic_edge) or
+        !rankConstraintsSatisfied(graph, ranks) or
+        after_merge_cost > before_merge_cost)
+    {
+        @memcpy(ranks, merge_backup);
+        return 0;
+    }
+
+    var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return 0;
+    defer tree.deinit();
+
+    var pivots: usize = 0;
+    while (pivots < max_pivots) {
+        const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse break;
+        const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse break;
+
+        const rank_backup = try allocator.dupe(usize, ranks);
+        defer allocator.free(rank_backup);
+        const tree_backup = try allocator.dupe(bool, tree.in_tree);
+        defer allocator.free(tree_backup);
+        const before_cost = rankEdgesCost(rank_edges, ranks);
+
+        const pivoted = try pivotRankTightTree(&tree, rank_edges, ranks, leaving, entering);
+        if (!pivoted or !rankEdgesFeasible(rank_edges, ranks) or !rankAssignmentFeasible(graph, ranks, acyclic_edge) or !rankConstraintsSatisfied(graph, ranks)) {
+            @memcpy(ranks, rank_backup);
+            @memcpy(tree.in_tree, tree_backup);
+            try rebuildRankTightTreeParents(&tree, rank_edges);
+            break;
+        }
+
+        const after_cost = rankEdgesCost(rank_edges, ranks);
+        if (after_cost >= before_cost) {
+            @memcpy(ranks, rank_backup);
+            @memcpy(tree.in_tree, tree_backup);
+            try rebuildRankTightTreeParents(&tree, rank_edges);
+            break;
+        }
+        pivots += 1;
+    }
+    return pivots;
 }
 
 fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
@@ -9925,6 +10012,119 @@ test "rank tight tree pivot tightens entering edge and lowers cost" {
     try std.testing.expect(tree.in_tree[entering]);
     try std.testing.expect(tree.inSubtree(c, a));
     try std.testing.expect(rankEdgesCost(rank_edges, ranks) < before_cost);
+}
+
+test "bounded network simplex rank pass performs improving pivot" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> x [weight=1];
+        \\  x -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const x = graph.node_index.get("x").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 1;
+    ranks[x] = 2;
+    ranks[d] = 3;
+
+    const before = rankAssignmentCost(&graph, ranks, acyclic_edge);
+    try std.testing.expectEqual(@as(usize, 1), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4));
+    const after = rankAssignmentCost(&graph, ranks, acyclic_edge);
+    try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
+    try std.testing.expect(after < before);
+    try std.testing.expectEqual(@as(usize, 2), ranks[c]);
+}
+
+test "bounded network simplex rank pass leaves optimal tight tree unchanged" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 2;
+    ranks[d] = 3;
+    const before = try allocator.dupe(usize, ranks);
+    defer allocator.free(before);
+
+    try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4));
+    try std.testing.expectEqualSlices(usize, before, ranks);
+}
+
+test "layered layout applies bounded network simplex rank improvement" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> x [weight=1];
+        \\  x -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = graph.node_index.get("a").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    try std.testing.expect(layout.ranks[c] > layout.ranks[a]);
+    try std.testing.expectEqual(layout.ranks[d] - 1, layout.ranks[c]);
+}
+
+test "layered network simplex preserves explicit same-rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; c; d; }
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> x [weight=1];
+        \\  x -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    try std.testing.expectEqual(layout.ranks[c], layout.ranks[d]);
 }
 
 test "rank local search finds best feasible node rank" {
