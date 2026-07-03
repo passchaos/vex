@@ -2938,6 +2938,23 @@ fn tightenEnteringEdgeByShiftingHeadComponent(edge: RankEdge, ranks: []usize, co
     return shiftRankComponent(ranks, component_labels, component_labels[edge.to], -@as(isize, @intCast(slack)));
 }
 
+fn mergeTightRankComponentsOnce(allocator: std.mem.Allocator, edges: []const RankEdge, ranks: []usize) !bool {
+    const labels = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(labels);
+    const component_count = try labelTightRankEdgeComponents(allocator, edges, ranks, labels);
+    if (component_count <= 1) return false;
+    const entering_index = selectEnteringRankEdge(edges, ranks, labels) orelse return false;
+
+    const backup = try allocator.dupe(usize, ranks);
+    defer allocator.free(backup);
+    if (!tightenEnteringEdgeByShiftingHeadComponent(edges[entering_index], ranks, labels)) return false;
+    if (!rankEdgesFeasible(edges, ranks)) {
+        @memcpy(ranks, backup);
+        return false;
+    }
+    return true;
+}
+
 fn rankEdgesFeasible(edges: []const RankEdge, ranks: []const usize) bool {
     for (edges) |edge| {
         if (rankEdgeSlack(edge, ranks) == null) return false;
@@ -9214,6 +9231,40 @@ test "rank component shifting can tighten an entering edge" {
     try std.testing.expect(rankEdgeTight(rank_edges[2], ranks));
     try std.testing.expectEqual(@as(usize, 1), ranks[c]);
     try std.testing.expectEqual(@as(usize, 2), ranks[d]);
+}
+
+test "single tight component merge reduces component count" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  c -> d;
+        \\  b -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const a = graph.node_index.get("a").?;
+    const b = graph.node_index.get("b").?;
+    const c = graph.node_index.get("c").?;
+    const d = graph.node_index.get("d").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    ranks[c] = 3;
+    ranks[d] = 4;
+
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    try std.testing.expectEqual(@as(usize, 2), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
+    try std.testing.expect(try mergeTightRankComponentsOnce(allocator, rank_edges, ranks));
+    try std.testing.expect(rankEdgesFeasible(rank_edges, ranks));
+    try std.testing.expectEqual(@as(usize, 1), tightRankEdgeComponentCount(allocator, rank_edges, ranks));
 }
 
 test "rank local search finds best feasible node rank" {
