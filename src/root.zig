@@ -4824,6 +4824,32 @@ fn shiftClusterCenters(graph: *const Graph, cluster_index: usize, centers: []f64
     }
 }
 
+const CoordConstraint = struct {
+    left: NodeId,
+    right: NodeId,
+    min_gap: f64,
+};
+
+fn satisfyCoordConstraints(centers: []f64, constraints: []const CoordConstraint) bool {
+    if (centers.len == 0) return true;
+    var changed = false;
+    var pass: usize = 0;
+    while (pass < centers.len) : (pass += 1) {
+        var pass_changed = false;
+        for (constraints) |constraint| {
+            if (constraint.left >= centers.len or constraint.right >= centers.len) continue;
+            const min_right = centers[constraint.left] + constraint.min_gap;
+            if (centers[constraint.right] + 0.0001 < min_right) {
+                centers[constraint.right] = min_right;
+                pass_changed = true;
+                changed = true;
+            }
+        }
+        if (!pass_changed) return changed;
+    }
+    return changed;
+}
+
 fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, centers: []f64) f64 {
     var left: f64 = 0;
     for (level) |id| {
@@ -12694,6 +12720,20 @@ test "inter-cluster spacing respects extent budget" {
     try std.testing.expectEqual(@as(f64, 80), centers[b]);
     applyInterClusterSpacingWithBudget(&graph, levels, centers, sizes, 15, 200);
     try std.testing.expect(centers[b] > 80);
+}
+
+test "coordinate constraints propagate minimum gaps" {
+    var centers = [_]f64{ 10, 12, 13 };
+    const constraints = [_]CoordConstraint{
+        .{ .left = 0, .right = 1, .min_gap = 20 },
+        .{ .left = 1, .right = 2, .min_gap = 15 },
+    };
+
+    try std.testing.expect(satisfyCoordConstraints(centers[0..], constraints[0..]));
+    try std.testing.expectEqual(@as(f64, 10), centers[0]);
+    try std.testing.expectEqual(@as(f64, 30), centers[1]);
+    try std.testing.expectEqual(@as(f64, 45), centers[2]);
+    try std.testing.expect(!satisfyCoordConstraints(centers[0..], constraints[0..]));
 }
 
 test "center shifting respects extent budget" {
