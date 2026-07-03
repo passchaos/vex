@@ -13551,50 +13551,8 @@ fn expectBackEdgeSidePath(svg: []const u8) !void {
 
 test "user cluster example stays compact and Graphviz-like" {
     const allocator = std.testing.allocator;
-    const graphviz_oracle =
-        \\<svg xmlns="http://www.w3.org/2000/svg" width="224pt" height="409pt" viewBox="0.00 0.00 224.00 409.00">
-        \\<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 405.01)">
-        \\<g id="clust1" class="cluster">
-        \\<title>cluster_0</title>
-        \\<polygon fill="lightgrey" stroke="lightgrey" points="8,-64.21 8,-357.01 98,-357.01 98,-64.21 8,-64.21"/>
-        \\</g>
-        \\<g id="clust2" class="cluster">
-        \\<title>cluster_1</title>
-        \\<polygon fill="none" stroke="blue" points="133,-64.21 133,-357.01 208,-357.01 208,-64.21 133,-64.21"/>
-        \\</g>
-        \\<g id="node1" class="node"><title>a0</title><ellipse cx="63" cy="-306.21" rx="27" ry="18"/></g>
-        \\<g id="node5" class="node"><title>b0</title><ellipse cx="168" cy="-306.21" rx="27" ry="18"/></g>
-        \\<g id="node9" class="node"><title>start</title><polygon points="115,-401.01 75.88,-383.01 115,-365.01 154.12,-383.01 115,-401.01"/></g>
-        \\<g id="node10" class="node"><title>end</title><polygon points="133.11,-36.21 96.89,-36.21 96.89,0 133.11,0 133.11,-36.21"/></g>
-        \\</g>
-        \\</svg>
-    ;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  subgraph cluster_0 {
-        \\    style=filled;
-        \\    color=lightgrey;
-        \\    node [style=filled,color=white];
-        \\    a0 -> a1 -> a2 -> a3;
-        \\    label = "process #1";
-        \\  }
-        \\  subgraph cluster_1 {
-        \\    node [style=filled];
-        \\    b0 -> b1 -> b2 -> b3;
-        \\    label = "process #2";
-        \\    color=blue
-        \\  }
-        \\  start -> a0;
-        \\  start -> b0;
-        \\  a1 -> b3;
-        \\  b2 -> a3;
-        \\  a3 -> a0;
-        \\  a3 -> end;
-        \\  b3 -> end;
-        \\  start [shape=Mdiamond];
-        \\  end [shape=Msquare];
-        \\}
-    );
+    const graphviz_oracle = @embedFile("testdata/test000.svg");
+    var graph = try parseDot(allocator, @embedFile("testdata/test000.dot"));
     defer graph.deinit();
 
     var layout = try layoutLayered(allocator, &graph, .{});
