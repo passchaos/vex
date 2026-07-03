@@ -6501,7 +6501,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (content_translate != 0) try writer.print("<g class=\"content\" transform=\"translate({d:.1} 0)\">\n", .{content_translate});
     try renderSvgClusters(writer, graph, layout);
 
-    try writer.writeAll("<g class=\"edges\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n");
     for (graph.edges.items) |edge_item| {
         if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
         const visual = resolveEdgeVisual(edge_item);
@@ -6535,8 +6534,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgInteractiveClose(writer, edge_wrap);
         try writer.writeAll("</g>\n");
     }
-    try writer.writeAll("</g>\n<g class=\"nodes\">\n");
-
     for (graph.nodes.items) |node_item| {
         var visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
@@ -6572,7 +6569,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgInteractiveClose(writer, node_wrap);
         try writer.writeAll("</g>\n");
     }
-    try writer.writeAll("</g>\n");
     if (content_translate != 0) try writer.writeAll("</g>\n");
     try writer.writeAll("</g>\n</svg>\n");
 }
@@ -7268,9 +7264,7 @@ fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, e
 }
 
 fn renderedEdgePathCount(svg: []const u8) usize {
-    const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
-    const end_rel = std.mem.indexOf(u8, svg[start..], "\n<g class=\"nodes\"") orelse return 0;
-    return countSubstrings(svg[start .. start + end_rel], "<path fill=\"none\" stroke=");
+    return countSubstrings(svg, "class=\"edge\"") - countSubstrings(svg, "class=\"edges\"");
 }
 
 fn graphConcentrateEnabled(graph: *const Graph) bool {
@@ -14249,6 +14243,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"edges\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"nodes\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">a0</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">start</text>") != null);
