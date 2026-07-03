@@ -12042,6 +12042,24 @@ fn expectBackEdgeSidePath(svg: []const u8) !void {
 
 test "user cluster example stays compact and Graphviz-like" {
     const allocator = std.testing.allocator;
+    const graphviz_oracle =
+        \\<svg xmlns="http://www.w3.org/2000/svg" width="224pt" height="409pt" viewBox="0.00 0.00 224.00 409.00">
+        \\<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 405.01)">
+        \\<g id="clust1" class="cluster">
+        \\<title>cluster_0</title>
+        \\<polygon fill="lightgrey" stroke="lightgrey" points="8,-64.21 8,-357.01 98,-357.01 98,-64.21 8,-64.21"/>
+        \\</g>
+        \\<g id="clust2" class="cluster">
+        \\<title>cluster_1</title>
+        \\<polygon fill="none" stroke="blue" points="133,-64.21 133,-357.01 208,-357.01 208,-64.21 133,-64.21"/>
+        \\</g>
+        \\<g id="node1" class="node"><title>a0</title><ellipse cx="63" cy="-306.21" rx="27" ry="18"/></g>
+        \\<g id="node5" class="node"><title>b0</title><ellipse cx="168" cy="-306.21" rx="27" ry="18"/></g>
+        \\<g id="node9" class="node"><title>start</title><polygon points="115,-401.01 75.88,-383.01 115,-365.01 154.12,-383.01 115,-401.01"/></g>
+        \\<g id="node10" class="node"><title>end</title><polygon points="133.11,-36.21 96.89,-36.21 96.89,0 133.11,0 133.11,-36.21"/></g>
+        \\</g>
+        \\</svg>
+    ;
     var graph = try parseDot(allocator,
         \\digraph G {
         \\  subgraph cluster_0 {
@@ -12113,6 +12131,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_cluster_0_w >= 86.0);
     try std.testing.expect(svg_cluster_0_w <= 90.0);
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 78.0);
+    try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 12.0);
+    try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
+    try std.testing.expect(@abs(svgClusterRectX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 8.0);
+    try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 4.0);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
     const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_start_x > svgNodeCenterX(svg, "a0").?);
@@ -12126,6 +12148,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_a0_x >= 51.0);
     try std.testing.expect(svg_b0_x >= 168.0);
     try std.testing.expect(svg_b0_x - svg_a0_x >= 117.0);
+    try std.testing.expect(@abs(svg_a0_x - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 16.0);
+    try std.testing.expect(@abs(svg_b0_x - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
+    try std.testing.expect(@abs(svg_start_x - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 10.0);
+    try std.testing.expect(@abs(svg_end_x - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 10.0);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
