@@ -5642,12 +5642,22 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("</g>\n<g class=\"nodes\">\n");
 
     for (graph.nodes.items) |node_item| {
-        const visual = resolveNodeVisual(node_item);
+        var visual = resolveNodeVisual(node_item);
         if (visual.hidden) continue;
         const l = layout.nodes[node_item.id];
         try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
         const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
         if (node_wrap == .none) try writeSvgTitle(writer, node_item.name);
+        var fill_buf: [96]u8 = undefined;
+        if (stripedNodeFillEligible(node_item.shape)) {
+            if (try renderSvgStripedRectFill(writer, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
+                visual.fill = "none";
+            } else {
+                try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+            }
+        } else {
+            try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+        }
         if (htmlTableMetrics(node_item.label) != null) {
             try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
             try writeSvgInteractiveClose(writer, node_wrap);
@@ -5704,6 +5714,192 @@ const SvgInteractiveWrap = enum {
     anchor,
     group,
 };
+
+const ColorSegment = struct {
+    color: []const u8,
+    fraction: f64,
+    has_fraction: bool,
+};
+
+const ColorList = struct {
+    segments: [8]ColorSegment = undefined,
+    len: usize = 0,
+};
+
+fn resolveSvgGradientFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, fill: *[]const u8, buffer: *[96]u8) Io.Writer.Error!void {
+    const style = attrValue(attrs, "style");
+    if (!styleHas(style, "filled") and !styleHas(style, "radial")) return;
+    const fillcolor = attrValue(attrs, "fillcolor") orelse return;
+    const colors = parseColorList(fillcolor) orelse return;
+    if (colors.len < 2) return;
+
+    const angle = parseAttrFloat(attrs, "gradientangle", 0.0);
+    const url = std.fmt.bufPrint(buffer, "url(#{s}-{d})", .{ id_prefix, id }) catch unreachable;
+    if (styleHas(style, "radial")) {
+        try writeSvgRadialGradientDef(writer, id_prefix, id, colors.segments[0], colors.segments[1], angle);
+    } else {
+        try writeSvgLinearGradientDef(writer, id_prefix, id, rect, colors.segments[0], colors.segments[1], angle);
+    }
+    fill.* = url;
+}
+
+fn renderSvgStripedRectFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, radius: f64, fallback_fill: []const u8) Io.Writer.Error!bool {
+    if (!styleHas(attrValue(attrs, "style"), "striped")) return false;
+    const fillcolor = attrValue(attrs, "fillcolor") orelse fallback_fill;
+    const colors = parseColorList(fillcolor) orelse return false;
+    if (colors.len < 2) return false;
+
+    try writer.print("<g id=\"{s}-{d}\" class=\"striped-fill\">\n", .{ id_prefix, id });
+    var cursor = rect.x;
+    for (colors.segments[0..colors.len], 0..) |segment, index| {
+        if (segment.fraction <= 0) continue;
+        const stripe_width = if (index + 1 == colors.len)
+            rect.x + rect.width - cursor
+        else
+            rect.width * segment.fraction;
+        if (stripe_width <= 0) continue;
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{
+            cursor,
+            rect.y,
+            stripe_width,
+            rect.height,
+            radius,
+            segment.color,
+        });
+        cursor += stripe_width;
+        if (cursor >= rect.x + rect.width) break;
+    }
+    try writer.writeAll("</g>\n");
+    return true;
+}
+
+fn writeSvgLinearGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usize, rect: RectF, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
+    const line = gradientLine(rect, angle_degrees);
+    try writer.print("<defs><linearGradient id=\"{s}-{d}\" gradientUnits=\"userSpaceOnUse\" x1=\"{d:.1}\" y1=\"{d:.1}\" x2=\"{d:.1}\" y2=\"{d:.1}\">\n", .{
+        id_prefix,
+        id,
+        line.start.x,
+        line.start.y,
+        line.end.x,
+        line.end.y,
+    });
+    try writeSvgGradientStop(writer, gradientStopStartOffset(start, stop), start.color);
+    try writeSvgGradientStop(writer, gradientStopEndOffset(start, stop), stop.color);
+    try writer.writeAll("</linearGradient></defs>\n");
+}
+
+fn writeSvgRadialGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usize, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
+    const focus = radialGradientFocus(angle_degrees);
+    try writer.print("<defs><radialGradient id=\"{s}-{d}\" cx=\"50%\" cy=\"50%\" r=\"75%\" fx=\"{d:.0}%\" fy=\"{d:.0}%\">\n", .{
+        id_prefix,
+        id,
+        focus.x,
+        focus.y,
+    });
+    try writeSvgGradientStop(writer, 0.0, start.color);
+    try writeSvgGradientStop(writer, 1.0, stop.color);
+    try writer.writeAll("</radialGradient></defs>\n");
+}
+
+fn writeSvgGradientStop(writer: *Io.Writer, offset: f64, color: []const u8) Io.Writer.Error!void {
+    try writer.print("<stop offset=\"{d:.1}%\" stop-color=\"{s}\"/>\n", .{ std.math.clamp(offset, 0.0, 1.0) * 100.0, color });
+}
+
+fn stripedNodeFillEligible(shape: Shape) bool {
+    return switch (shape) {
+        .box, .square, .msquare, .record, .mrecord => true,
+        else => false,
+    };
+}
+
+fn parseColorList(value: []const u8) ?ColorList {
+    if (std.mem.indexOfScalar(u8, value, ':') == null) return null;
+    var result = ColorList{};
+    var left: f64 = 1.0;
+    var splitter = std.mem.splitScalar(u8, value, ':');
+    while (splitter.next()) |raw_part| {
+        if (result.len >= result.segments.len) break;
+        const part = std.mem.trim(u8, raw_part, " \t\r\n");
+        if (part.len == 0) continue;
+        var color = part;
+        var fraction: f64 = 0.0;
+        var has_fraction = false;
+        if (std.mem.indexOfScalar(u8, part, ';')) |semicolon| {
+            color = std.mem.trim(u8, part[0..semicolon], " \t\r\n");
+            const fraction_text = std.mem.trim(u8, part[semicolon + 1 ..], " \t\r\n");
+            if (fraction_text.len == 0) return null;
+            const parsed = std.fmt.parseFloat(f64, fraction_text) catch return null;
+            if (parsed < 0) return null;
+            fraction = @min(parsed, left);
+            left -= fraction;
+            has_fraction = true;
+        }
+        if (color.len == 0) continue;
+        result.segments[result.len] = .{ .color = color, .fraction = fraction, .has_fraction = has_fraction };
+        result.len += 1;
+        if (left <= 0.00001) {
+            left = 0;
+            break;
+        }
+    }
+    if (result.len < 2) return null;
+
+    if (left > 0) {
+        var unspecified: usize = 0;
+        for (result.segments[0..result.len]) |segment| {
+            if (!segment.has_fraction or segment.fraction <= 0) unspecified += 1;
+        }
+        if (unspecified > 0) {
+            const delta = left / @as(f64, @floatFromInt(unspecified));
+            for (result.segments[0..result.len]) |*segment| {
+                if (!segment.has_fraction or segment.fraction <= 0) segment.fraction = delta;
+            }
+        } else {
+            result.segments[result.len - 1].fraction += left;
+        }
+    }
+
+    while (result.len > 0 and result.segments[result.len - 1].fraction <= 0) result.len -= 1;
+    return if (result.len >= 2) result else null;
+}
+
+const GradientLine = struct {
+    start: Point,
+    end: Point,
+};
+
+fn gradientLine(rect: RectF, angle_degrees: f64) GradientLine {
+    const cx = rect.x + rect.width / 2.0;
+    const cy = rect.y + rect.height / 2.0;
+    const angle = degreesToRadians(angle_degrees);
+    const dx = std.math.cos(angle);
+    const dy = -std.math.sin(angle);
+    const half = @max(rect.width, rect.height);
+    return .{
+        .start = .{ .x = cx - dx * half, .y = cy - dy * half },
+        .end = .{ .x = cx + dx * half, .y = cy + dy * half },
+    };
+}
+
+fn radialGradientFocus(angle_degrees: f64) Point {
+    if (@abs(angle_degrees) <= 0.0001) return .{ .x = 50, .y = 50 };
+    const angle = degreesToRadians(angle_degrees);
+    return .{
+        .x = @round(50.0 * (1.0 + std.math.cos(angle))),
+        .y = @round(50.0 * (1.0 - std.math.sin(angle))),
+    };
+}
+
+fn gradientStopStartOffset(start: ColorSegment, stop: ColorSegment) f64 {
+    _ = stop;
+    return if (start.has_fraction) @max(0.0, start.fraction - 0.001) else 0.0;
+}
+
+fn gradientStopEndOffset(start: ColorSegment, stop: ColorSegment) f64 {
+    if (start.has_fraction) return start.fraction;
+    if (stop.has_fraction) return 1.0 - stop.fraction;
+    return 1.0;
+}
 
 fn writeSvgInteractiveOpen(writer: *Io.Writer, attrs: []const Attr) Io.Writer.Error!SvgInteractiveWrap {
     const href = attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url");
@@ -6134,10 +6330,17 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     if (index >= layout.clusters.len) return;
     const box = layout.clusters[index];
     if (box.width <= 0 or box.height <= 0) return;
-    const visual = resolveClusterVisual(cluster);
+    var visual = resolveClusterVisual(cluster);
     if (visual.hidden) return;
     try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.name);
+    const rect = RectF{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
+    if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
+        visual.fill = "none";
+    } else {
+        var fill_buf: [96]u8 = undefined;
+        try resolveSvgGradientFill(writer, "vex-cluster-fill", index + 1, cluster.attrs.items, rect, &visual.fill, &fill_buf);
+    }
     if (visual.radius <= 0.001) {
         try writer.print("<polygon points=\"{d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1} {d:.1},{d:.1}\" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
             box.x,
@@ -10228,6 +10431,64 @@ test "SVG renderer honors bold style and node peripheries" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
+}
+
+test "SVG renderer honors Graphviz fillcolor gradients" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  linear [shape=box, style=filled, fillcolor="yellow;0.3:blue", gradientangle=45];
+        \\  radial [shape=ellipse, style="filled,radial", fillcolor="white:#2563eb", gradientangle=90];
+        \\  linear -> radial;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<linearGradient id=\"vex-node-fill-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "gradientUnits=\"userSpaceOnUse\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "offset=\"29.9%\" stop-color=\"yellow\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "offset=\"30.0%\" stop-color=\"blue\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"url(#vex-node-fill-1)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<radialGradient id=\"vex-node-fill-2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fx=\"50%\" fy=\"0%\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"white\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"url(#vex-node-fill-2)\"") != null);
+}
+
+test "SVG renderer honors Graphviz striped fills on box nodes and clusters" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=box];
+        \\  a [style=striped, fillcolor="red;0.25:green;0.25:blue"];
+        \\  subgraph cluster_stripes {
+        \\    style=striped;
+        \\    fillcolor="gold;0.4:lightblue";
+        \\    b;
+        \\  }
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-node-stripes-1\" class=\"striped-fill\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"red\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"green\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"blue\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-cluster-stripes-1\" class=\"striped-fill\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"gold\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightblue\" stroke=\"none\"") != null);
 }
 
 test "SVG node rendering separates Graphviz color and fillcolor semantics" {
