@@ -5713,12 +5713,40 @@ fn svgGroupFragmentByTitle(svg: []const u8, title: []const u8) ?[]const u8 {
 
 fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    return svgNumberAfter(fragment, " width=\"");
+    if (svgNumberAfter(fragment, " width=\"")) |width| return width;
+    return svgPolygonBBoxWidth(fragment);
 }
 
 fn svgClusterRectX(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    return svgNumberAfter(fragment, " x=\"");
+    if (svgNumberAfter(fragment, " x=\"")) |x| return x;
+    return svgPolygonBBoxX(fragment);
+}
+
+fn svgPolygonBBoxX(fragment: []const u8) ?f64 {
+    var point_numbers: [64]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_x = std.math.floatMax(f64);
+    var index: usize = 0;
+    while (index + 1 < count) : (index += 2) min_x = @min(min_x, point_numbers[index]);
+    return if (min_x == std.math.floatMax(f64)) null else min_x;
+}
+
+fn svgPolygonBBoxWidth(fragment: []const u8) ?f64 {
+    var point_numbers: [64]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_x = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    var index: usize = 0;
+    while (index + 1 < count) : (index += 2) {
+        const x = point_numbers[index];
+        min_x = @min(min_x, x);
+        max_x = @max(max_x, x);
+    }
+    if (min_x == std.math.floatMax(f64)) return null;
+    return max_x - min_x;
 }
 
 fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
@@ -8383,6 +8411,20 @@ test "SVG geometry parser reads Graphviz-style path and polygon numbers" {
     try std.testing.expectEqual(@as(usize, 8), point_count);
     try std.testing.expectEqual(@as(f64, 66.5), numbers[0]);
     try std.testing.expectEqual(@as(f64, -263.83), numbers[1]);
+}
+
+test "SVG cluster geometry parser handles Graphviz polygon clusters" {
+    const svg =
+        \\<svg>
+        \\<g id="clust1" class="cluster">
+        \\<title>cluster_0</title>
+        \\<polygon fill="lightgrey" stroke="lightgrey" points="8,-64.21 8,-357.01 98,-357.01 98,-64.21 8,-64.21"/>
+        \\</g>
+        \\</svg>
+    ;
+
+    try std.testing.expectEqual(@as(f64, 8.0), svgClusterRectX(svg, "cluster_0").?);
+    try std.testing.expectEqual(@as(f64, 90.0), svgClusterRectWidth(svg, "cluster_0").?);
 }
 
 test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" {
