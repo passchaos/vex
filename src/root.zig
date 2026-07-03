@@ -7063,7 +7063,7 @@ fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankD
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const curve = splineCurveAmount(rankdir, dx, dy, 18.0, 96.0);
-    const controls = switch (rankdir) {
+    const controls = diagonalEdgeControls(from, to, rankdir, curve) orelse switch (rankdir) {
         .TB => EdgeControls{
             .c1 = .{ .x = from.x, .y = from.y + curve },
             .c2 = .{ .x = to.x, .y = to.y - curve },
@@ -7090,7 +7090,7 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const curve = splineCurveAmount(rankdir, dx, dy, 24.0, 160.0);
-    const controls: EdgeControls = switch (rankdir) {
+    const controls: EdgeControls = diagonalEdgeControls(start, end, rankdir, curve) orelse switch (rankdir) {
         .TB => .{
             .c1 = Point{ .x = start.x, .y = start.y + curve },
             .c2 = Point{ .x = end.x, .y = end.y - curve },
@@ -7118,6 +7118,19 @@ fn edgeRoute(from: NodeLayout, to: NodeLayout, rankdir: RankDir, offset: f64) Ed
         .control2 = c2,
         .end = shifted_end,
         .label = cubicPoint(shifted_start, c1, c2, shifted_end, 0.5),
+    };
+}
+
+fn diagonalEdgeControls(start: Point, end: Point, rankdir: RankDir, curve: f64) ?EdgeControls {
+    if (curve <= 0.001) return null;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const axis_delta = LayoutAxes.init(rankdir).rankAxisDelta(dx, dy);
+    const cross_delta = if (rankdir == .LR or rankdir == .RL) @abs(dy) else @abs(dx);
+    if (axis_delta <= 0.001 or cross_delta < axis_delta * 0.35) return null;
+    return .{
+        .c1 = .{ .x = start.x + dx / 3.0, .y = start.y + dy / 3.0 },
+        .c2 = .{ .x = start.x + dx * 2.0 / 3.0, .y = start.y + dy * 2.0 / 3.0 },
     };
 }
 
@@ -7191,7 +7204,7 @@ fn edgeRouteFromEndpoints(start_raw: Point, end_raw: Point, rankdir: RankDir, of
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const curve = splineCurveAmount(rankdir, dx, dy, 24.0, 160.0);
-    const controls: EdgeControls = switch (rankdir) {
+    const controls: EdgeControls = diagonalEdgeControls(start, end, rankdir, curve) orelse switch (rankdir) {
         .TB => .{
             .c1 = Point{ .x = start.x, .y = start.y + curve },
             .c2 = Point{ .x = end.x, .y = end.y - curve },
@@ -11528,6 +11541,17 @@ test "spline controls stay monotonic for short adjacent edges" {
     try std.testing.expect(lr_route.control1.x <= lr_route.control2.x);
     try std.testing.expect(lr_route.control1.x <= lr_route.end.x);
     try std.testing.expect(lr_route.control2.x >= lr_route.start.x);
+}
+
+test "spline controls follow diagonal edges" {
+    const from = NodeLayout{ .center = .{ .x = 120, .y = 120 }, .width = 30, .height = 20 };
+    const to = NodeLayout{ .center = .{ .x = 40, .y = 200 }, .width = 30, .height = 20 };
+    const route = edgeRoute(from, to, .TB, 0);
+
+    try std.testing.expect(route.control1.x < route.start.x);
+    try std.testing.expect(route.control1.x > route.control2.x);
+    try std.testing.expect(route.control2.x > route.end.x);
+    try std.testing.expect(route.control1.y < route.control2.y);
 }
 
 test "DOT parser propagates edge constraint and minlen controls" {
