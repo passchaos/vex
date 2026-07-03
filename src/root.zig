@@ -6455,7 +6455,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
         .{ layout.width, layout.height, layout.width, layout.height },
     );
-    try writer.writeAll("<g id=\"graph0\" class=\"graph\">\n");
+    try writer.writeAll("<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">\n");
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
@@ -7142,17 +7142,21 @@ const SvgTranslate = struct {
 
 fn svgGraphvizTranslate(svg: []const u8) SvgTranslate {
     const marker = "translate(";
-    const start = std.mem.indexOf(u8, svg, marker) orelse return .{};
-    const value_start = start + marker.len;
-    const value_end_rel = std.mem.indexOfScalar(u8, svg[value_start..], ')') orelse return .{};
-    const values = svg[value_start .. value_start + value_end_rel];
-    var parts = std.mem.tokenizeAny(u8, values, " ,");
-    const x_text = parts.next() orelse return .{};
-    const y_text = parts.next() orelse return .{};
-    return .{
-        .x = std.fmt.parseFloat(f64, x_text) catch 0,
-        .y = std.fmt.parseFloat(f64, y_text) catch 0,
-    };
+    var result = SvgTranslate{};
+    var search_start: usize = 0;
+    while (std.mem.indexOf(u8, svg[search_start..], marker)) |rel| {
+        const start = search_start + rel;
+        const value_start = start + marker.len;
+        const value_end_rel = std.mem.indexOfScalar(u8, svg[value_start..], ')') orelse break;
+        const values = svg[value_start .. value_start + value_end_rel];
+        var parts = std.mem.tokenizeAny(u8, values, " ,");
+        const x_text = parts.next() orelse break;
+        const y_text = parts.next() orelse break;
+        result.x += std.fmt.parseFloat(f64, x_text) catch 0;
+        result.y += std.fmt.parseFloat(f64, y_text) catch 0;
+        search_start = value_start + value_end_rel + 1;
+    }
+    return result;
 }
 
 fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
@@ -12269,7 +12273,7 @@ test "SVG renderer keeps graph name as metadata unless graph label is explicit" 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
 }
@@ -14202,7 +14206,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"223pt\" height=\"409pt\" viewBox=\"0.00 0.00 223.00 408.80\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#ffffff\" stroke=\"none\" points=\"0,0 0,409 223,409 223,0 0,0\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
