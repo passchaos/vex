@@ -5463,6 +5463,11 @@ fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
     return svgNumberAfter(fragment, " width=\"");
 }
 
+fn svgClusterRectX(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    return svgNumberAfter(fragment, " x=\"");
+}
+
 fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
     if (svgNumberAfter(fragment, " cx=\"")) |cx| return cx;
@@ -11559,6 +11564,13 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_start_x < svgNodeCenterX(svg, "b0").?);
     try std.testing.expect(svg_end_x > svgNodeCenterX(svg, "a3").?);
     try std.testing.expect(svg_end_x < svgNodeCenterX(svg, "b3").?);
+    const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
+    const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
+    try std.testing.expect(svg_b0_x - svg_a0_x >= 90.0);
+    const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
+    const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
+    const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
+    try std.testing.expect(cluster_1_x - (cluster_0_x + cluster_0_w) >= 8.0);
     const cross_label = std.mem.indexOf(u8, svg, "<title>a1-&gt;b3</title>") orelse return error.MissingCrossClusterEdge;
     const cross_end = std.mem.indexOf(u8, svg[cross_label..], "</g>") orelse return error.MissingCrossClusterEdge;
     const cross_edge = svg[cross_label .. cross_label + cross_end];
