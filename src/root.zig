@@ -8554,13 +8554,10 @@ fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height:
 }
 
 fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
-        x1,
-        y1,
-        x2,
-        y2,
-        visual.stroke,
-    });
+    try writer.print("<path d=\"", .{});
+    try writePathMove(writer, .{ .x = x1, .y = y1 });
+    try writePathLine(writer, .{ .x = x2, .y = y2 });
+    try writer.print("\" fill=\"none\" stroke=\"{s}\"", .{visual.stroke});
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
@@ -15564,7 +15561,7 @@ test "DOT record and Mrecord nodes render field separators" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">name</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">email</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">port") == null);
-    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 2);
+    try std.testing.expect(countSubstrings(svg, "<path d=\"M") >= 2);
     try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10\"") != null);
 }
 
