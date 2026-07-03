@@ -4361,6 +4361,12 @@ fn htmlStyleHas(tag: []const u8, needle: []const u8) bool {
     return false;
 }
 
+fn htmlDashStyle(tag: []const u8) DashStyle {
+    if (htmlStyleHas(tag, "dotted")) return .dotted;
+    if (htmlStyleHas(tag, "dashed")) return .dashed;
+    return .none;
+}
+
 fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
     const value = htmlAttrValue(tag, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
@@ -6861,18 +6867,22 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
     const fill = metrics.bg_color orelse visual.fill;
     const table_tag = htmlTableOpenTag(label);
     const table_invisible = if (table_tag) |tag| htmlStyleHas(tag, "invis") or htmlStyleHas(tag, "invisible") else false;
+    const table_stroke = if (table_tag) |tag| htmlAttrValue(tag, "color") orelse visual.stroke else visual.stroke;
+    const table_dash = if (table_tag) |tag| htmlDashStyle(tag) else .none;
 
     if (!table_invisible) {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"{d:.1}\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
             grid.x,
             grid.y,
             layout.width,
             layout.height,
             visual.radius,
             fill,
-            if (metrics.border > 0) visual.stroke else "none",
+            if (metrics.border > 0) table_stroke else "none",
             metrics.border,
         });
+        try writeSvgDash(writer, table_dash);
+        try writer.writeAll("/>\n");
     }
 
     var row_pos: usize = 0;
@@ -6933,7 +6943,8 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
                     try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"{s}\" stroke=\"none\"/>\n", .{ cell_rect.x, cell_rect.y, cell_rect.width, cell_rect.height, cell_bg });
                 }
                 if (cell_border > 0) {
-                    try renderSvgHtmlCellBorder(writer, cell_rect, htmlCellSides(td_tag), visual.stroke, cell_border);
+                    const cell_stroke = htmlAttrValue(td_tag, "color") orelse visual.stroke;
+                    try renderSvgHtmlCellBorder(writer, cell_rect, htmlCellSides(td_tag), cell_stroke, cell_border, htmlDashStyle(td_tag));
                 }
                 try renderSvgTextBlockWithAnchor(
                     writer,
@@ -6955,9 +6966,9 @@ fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLa
     }
 }
 
-fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCellSides, stroke: []const u8, width: f64) Io.Writer.Error!void {
+fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCellSides, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
     const sides = maybe_sides orelse {
-        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+        try writer.print("<rect x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
             rect.x,
             rect.y,
             rect.width,
@@ -6965,17 +6976,19 @@ fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCe
             stroke,
             width,
         });
+        try writeSvgDash(writer, dash);
+        try writer.writeAll("/>\n");
         return;
     };
 
-    if (sides.top) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x + rect.width, rect.y, stroke, width);
-    if (sides.right) try writeSvgBorderLine(writer, rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, stroke, width);
-    if (sides.bottom) try writeSvgBorderLine(writer, rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height, stroke, width);
-    if (sides.left) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x, rect.y + rect.height, stroke, width);
+    if (sides.top) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x + rect.width, rect.y, stroke, width, dash);
+    if (sides.right) try writeSvgBorderLine(writer, rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, stroke, width, dash);
+    if (sides.bottom) try writeSvgBorderLine(writer, rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height, stroke, width, dash);
+    if (sides.left) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x, rect.y + rect.height, stroke, width, dash);
 }
 
-fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, stroke: []const u8, width: f64) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"/>\n", .{
+fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
+    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\" stroke-width=\"{d:.1}\"", .{
         x1,
         y1,
         x2,
@@ -6983,6 +6996,8 @@ fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, st
         stroke,
         width,
     });
+    try writeSvgDash(writer, dash);
+    try writer.writeAll("/>\n");
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
@@ -11145,8 +11160,8 @@ test "SVG renderer honors simple HTML table visual attributes" {
     var graph = try parseDot(allocator,
         \\digraph G {
         \\  html [shape=plain,label=<
-        \\    <TABLE BORDER="0" CELLBORDER="2" CELLSPACING="4" CELLPADDING="9" BGCOLOR="lightgrey">
-        \\      <TR><TD>A</TD><TD>B</TD></TR>
+        \\    <TABLE BORDER="2" CELLBORDER="2" CELLSPACING="4" CELLPADDING="9" BGCOLOR="lightgrey" COLOR="#2563eb" STYLE="dashed">
+        \\      <TR><TD COLOR="#dc2626" STYLE="dotted">A</TD><TD>B</TD></TR>
         \\    </TABLE>
         \\  >];
         \\}
@@ -11158,7 +11173,9 @@ test "SVG renderer honors simple HTML table visual attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"none\" stroke-width=\"0.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"#2563eb\" stroke-width=\"2.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\" stroke-width=\"2.0\" stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\" stroke-width=\"2.0\" stroke-dasharray=\"2,5\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">B</tspan>") != null);
