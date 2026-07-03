@@ -5543,6 +5543,16 @@ fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
     return svgNumbersInAttribute(fragment, "d", out);
 }
 
+fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, end: Point } {
+    var numbers: [64]f64 = undefined;
+    const count = svgPathNumbers(svg, title, numbers[0..]);
+    if (count < 4 or count % 2 != 0) return null;
+    return .{
+        .start = .{ .x = numbers[0], .y = numbers[1] },
+        .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
+    };
+}
+
 fn renderedEdgePathCount(svg: []const u8) usize {
     const start = std.mem.indexOf(u8, svg, "<g class=\"edges\"") orelse return 0;
     const end_rel = std.mem.indexOf(u8, svg[start..], "\n<g class=\"nodes\"") orelse return 0;
@@ -7412,6 +7422,25 @@ fn pointOnRectBoundary(rect: RectF, point: Point) bool {
     const within_x = point.x >= rect.x - eps and point.x <= rect.x + rect.width + eps;
     const within_y = point.y >= rect.y - eps and point.y <= rect.y + rect.height + eps;
     return ((on_left or on_right) and within_y) or ((on_top or on_bottom) and within_x);
+}
+
+fn pointInsideRect(rect: RectF, point: Point) bool {
+    return point.x >= rect.x and point.x <= rect.x + rect.width and
+        point.y >= rect.y and point.y <= rect.y + rect.height;
+}
+
+fn pointNearRectBoundary(rect: RectF, point: Point, tolerance: f64) bool {
+    return distanceToRectBoundary(rect, point) <= tolerance and
+        point.x >= rect.x - tolerance and point.x <= rect.x + rect.width + tolerance and
+        point.y >= rect.y - tolerance and point.y <= rect.y + rect.height + tolerance;
+}
+
+fn distanceToRectBoundary(rect: RectF, point: Point) f64 {
+    const left = @abs(point.x - rect.x);
+    const right = @abs(rect.x + rect.width - point.x);
+    const top = @abs(point.y - rect.y);
+    const bottom = @abs(rect.y + rect.height - point.y);
+    return @min(@min(left, right), @min(top, bottom));
 }
 
 fn portBoundaryPoint(node: NodeLayout, toward: Point, port: CompassPort, rankdir: RankDir, leaving: bool) Point {
@@ -12628,6 +12657,12 @@ test "DOT compound edges clip to cluster boundaries" {
     const right = clusterRect(&graph, &layout, "cluster_right").?;
     try std.testing.expect(pointOnRectBoundary(left, route.start));
     try std.testing.expect(pointOnRectBoundary(right, route.end));
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const path_points = svgPathStartEnd(svg, "b-&gt;c") orelse return error.MissingCompoundPath;
+    try std.testing.expect(pointOnRectBoundary(left, path_points.start));
+    try std.testing.expect(pointNearRectBoundary(right, path_points.end, 8.0));
 }
 
 test "DOT samehead and sametail route edges through shared ports" {
