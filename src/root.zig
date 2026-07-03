@@ -11750,6 +11750,34 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer allocator.free(line_svg);
     try std.testing.expect(std.mem.indexOf(u8, line_svg, " C ") == null);
     try std.testing.expect(countSubstrings(line_svg, " L ") >= 1);
+
+    var false_splines = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=false];
+        \\  a -> b [label="false"];
+        \\}
+    );
+    defer false_splines.deinit();
+    var false_layout = try layoutLayered(allocator, &false_splines, .{});
+    defer false_layout.deinit();
+    const false_svg = try renderSvgAlloc(allocator, &false_splines, &false_layout, .{});
+    defer allocator.free(false_svg);
+    try std.testing.expect(std.mem.indexOf(u8, false_svg, " C ") == null);
+    try std.testing.expect(countSubstrings(false_svg, " L ") >= 1);
+
+    var none = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=none];
+        \\  a -> b [label="none"];
+        \\}
+    );
+    defer none.deinit();
+    var none_layout = try layoutLayered(allocator, &none, .{});
+    defer none_layout.deinit();
+    const none_svg = try renderSvgAlloc(allocator, &none, &none_layout, .{});
+    defer allocator.free(none_svg);
+    try std.testing.expect(std.mem.indexOf(u8, none_svg, " C ") == null);
+    try std.testing.expect(countSubstrings(none_svg, " L ") >= 1);
 }
 
 test "spline controls stay monotonic for short adjacent edges" {
