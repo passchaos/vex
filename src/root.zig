@@ -2818,8 +2818,13 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
                 if (rankTighteningPinned(graph, node_id)) continue;
                 const target_rank = bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id) orelse continue;
                 if (target_rank > ranks[node_id]) {
+                    const current_rank = ranks[node_id];
                     ranks[node_id] = target_rank;
-                    changed = true;
+                    if (rankConstraintsSatisfied(graph, ranks)) {
+                        changed = true;
+                    } else {
+                        ranks[node_id] = current_rank;
+                    }
                 }
             }
             if (rank == 0) break;
@@ -2879,7 +2884,7 @@ fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: 
             const before = rankAssignmentCost(graph, ranks, acyclic_edge);
             ranks[node_id] = target_rank;
             const after = rankAssignmentCost(graph, ranks, acyclic_edge);
-            if (after < before and rankAssignmentFeasible(graph, ranks, acyclic_edge)) {
+            if (after < before and rankAssignmentFeasible(graph, ranks, acyclic_edge) and rankConstraintsSatisfied(graph, ranks)) {
                 changed = true;
             } else {
                 ranks[node_id] = current_rank;
@@ -10080,6 +10085,74 @@ test "bounded network simplex rank pass leaves optimal tight tree unchanged" {
 
     try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4));
     try std.testing.expectEqualSlices(usize, before, ranks);
+}
+
+test "rank local search preserves explicit same-rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; x; y; }
+        \\  source -> x [weight=1];
+        \\  x -> sink [weight=8];
+        \\  source -> y -> mid -> sink;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const source = graph.node_index.get("source").?;
+    const x = graph.node_index.get("x").?;
+    const y = graph.node_index.get("y").?;
+    const mid = graph.node_index.get("mid").?;
+    const sink = graph.node_index.get("sink").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[source] = 0;
+    ranks[x] = 1;
+    ranks[y] = 1;
+    ranks[mid] = 2;
+    ranks[sink] = 3;
+
+    improveRanksByLocalSearch(&graph, ranks, acyclic_edge, 4);
+    try std.testing.expect(rankConstraintsSatisfied(&graph, ranks));
+    try std.testing.expectEqual(ranks[x], ranks[y]);
+}
+
+test "rank sink tightening preserves explicit same-rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; x; y; }
+        \\  source -> x [weight=1];
+        \\  x -> sink [weight=8];
+        \\  source -> y -> mid -> sink;
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const source = graph.node_index.get("source").?;
+    const x = graph.node_index.get("x").?;
+    const y = graph.node_index.get("y").?;
+    const mid = graph.node_index.get("mid").?;
+    const sink = graph.node_index.get("sink").?;
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[source] = 0;
+    ranks[x] = 1;
+    ranks[y] = 1;
+    ranks[mid] = 2;
+    ranks[sink] = 3;
+
+    tightenRanksTowardSinks(&graph, ranks, acyclic_edge);
+    try std.testing.expect(rankConstraintsSatisfied(&graph, ranks));
+    try std.testing.expectEqual(ranks[x], ranks[y]);
 }
 
 test "layered layout applies bounded network simplex rank improvement" {
