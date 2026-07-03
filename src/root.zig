@@ -1763,6 +1763,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
     applyVirtualRealPositionsExceptGroups(graph, &virtual_levels, &final_virtual_positions, centers);
+    applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
 
     var total_along: f64 = 0;
@@ -4891,6 +4892,52 @@ fn compactCenterSliceBackward(level: []const NodeId, sizes: []const NodeSize, ga
         slice[index - 1] = @min(slice[index - 1], max_center);
         index -= 1;
     }
+}
+
+fn applySymmetricCompactionIfHelpful(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    for (levels) |level| {
+        if (level.items.len <= 1 or level.items.len > 128) continue;
+        const before_stress = coordinateEdgeStress(graph, ranks, centers);
+        const before_extent = levelExtent(level.items, centers, sizes);
+        var backup: [128]f64 = undefined;
+        for (level.items, 0..) |node_id, index| backup[index] = centers[node_id];
+
+        compactLevelCentersSymmetric(level.items, centers, sizes, gap);
+        const after_stress = coordinateEdgeStress(graph, ranks, centers);
+        const after_extent = levelExtent(level.items, centers, sizes);
+        if (after_stress > before_stress + 0.0001 or after_extent > before_extent + 0.0001) {
+            for (level.items, 0..) |node_id, index| centers[node_id] = backup[index];
+        }
+    }
+}
+
+fn levelExtent(level: []const NodeId, centers: []const f64, sizes: []const NodeSize) f64 {
+    if (level.len == 0) return 0;
+    var min_left = std.math.floatMax(f64);
+    var max_right: f64 = -std.math.floatMax(f64);
+    for (level) |node_id| {
+        if (node_id >= centers.len or node_id >= sizes.len) continue;
+        min_left = @min(min_left, centers[node_id] - sizes[node_id].width / 2.0);
+        max_right = @max(max_right, centers[node_id] + sizes[node_id].width / 2.0);
+    }
+    if (min_left == std.math.floatMax(f64)) return 0;
+    return max_right - min_left;
+}
+
+fn coordinateEdgeStress(graph: *const Graph, ranks: []const usize, centers: []const f64) f64 {
+    var stress: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        if (edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
+        const from_rank = ranks[edge_item.from];
+        const to_rank = ranks[edge_item.to];
+        if (from_rank >= to_rank) continue;
+        const span = @max(to_rank - from_rank, 1);
+        const delta = centers[edge_item.to] - centers[edge_item.from];
+        stress += @max(edge_item.weight, 0.1) * (delta * delta) / @as(f64, @floatFromInt(span));
+    }
+    return stress;
 }
 
 fn normalizeCenters(centers: []f64, sizes: []const NodeSize) void {
@@ -8338,6 +8385,65 @@ test "level center compaction balances forward and backward pushes" {
     try std.testing.expect(centers[1] - centers[0] >= 30);
     try std.testing.expect(centers[2] - centers[1] >= 30);
     try std.testing.expect(centers[1] < 70);
+}
+
+test "coordinate edge stress rewards straighter edges" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    _ = try graph.edge(a, b, .{ .weight = 4 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 1;
+    var centers = [_]f64{ 20, 80 };
+    const skewed = coordinateEdgeStress(&graph, ranks, centers[0..]);
+    centers[b] = centers[a];
+    const straight = coordinateEdgeStress(&graph, ranks, centers[0..]);
+    try std.testing.expect(straight < skewed);
+}
+
+test "guarded symmetric compaction rejects wider or higher-stress changes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.node("a");
+    const b = try graph.node("b");
+    const c = try graph.node("c");
+    const p = try graph.node("p");
+    _ = try graph.edge(p, b, .{ .weight = 5 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+    ranks[c] = 1;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 2);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, p);
+    try levels[1].append(allocator, a);
+    try levels[1].append(allocator, b);
+    try levels[1].append(allocator, c);
+
+    var centers = [_]f64{ 40, 40, 70, 100 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+    };
+    const before_b = centers[b];
+    applySymmetricCompactionIfHelpful(&graph, levels, ranks, centers[0..], sizes[0..], 10);
+    try std.testing.expectEqual(before_b, centers[b]);
 }
 
 test "virtual levels include dummy nodes for skip-rank edges" {
