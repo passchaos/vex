@@ -1763,6 +1763,9 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
     applyVirtualRealPositionsExceptGroups(graph, &virtual_levels, &final_virtual_positions, centers);
+    if (!graphHasExplicitEdgeWeight(graph)) {
+        alignLevelsToNeighborSpansIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
+    }
     applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
 
@@ -4623,9 +4626,20 @@ fn alignLevelsToNeighborSpansIfHelpful(graph: *const Graph, levels: []const std.
     }
 }
 
+fn graphHasExplicitEdgeWeight(graph: *const Graph) bool {
+    for (graph.edge_default_attrs.items) |attr| {
+        if (std.ascii.eqlIgnoreCase(attr.name, "weight")) return true;
+    }
+    for (graph.edges.items) |edge_item| {
+        if (attrValue(edge_item.attrs.items, "weight") != null) return true;
+    }
+    return false;
+}
+
 fn alignLevelToNeighborSpansIfHelpful(graph: *const Graph, level: []const NodeId, ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64, use_parents: bool) void {
     if (level.len == 0 or level.len > 128) return;
     const before_stress = coordinateEdgeStress(graph, ranks, centers);
+    const before_heavy = heavyEdgeDistancePenalty(graph, ranks, centers);
     const before_extent = levelExtent(level, centers, sizes);
     var backup: [128]f64 = undefined;
     for (level, 0..) |node_id, index| backup[index] = centers[node_id];
@@ -4637,8 +4651,9 @@ fn alignLevelToNeighborSpansIfHelpful(graph: *const Graph, level: []const NodeId
     compactLevelCenters(level, centers, sizes, gap);
 
     const after_stress = coordinateEdgeStress(graph, ranks, centers);
+    const after_heavy = heavyEdgeDistancePenalty(graph, ranks, centers);
     const after_extent = levelExtent(level, centers, sizes);
-    if (after_stress > before_stress + 0.0001 or after_extent > before_extent + 0.0001) {
+    if (after_stress > before_stress + 0.0001 or after_heavy > before_heavy + 0.0001 or after_extent > before_extent + 0.0001) {
         for (level, 0..) |node_id, index| centers[node_id] = backup[index];
     }
 }
@@ -4971,6 +4986,19 @@ fn coordinateEdgeStress(graph: *const Graph, ranks: []const usize, centers: []co
         stress += @max(edge_item.weight, 0.1) * (delta * delta) / @as(f64, @floatFromInt(span));
     }
     return stress;
+}
+
+fn heavyEdgeDistancePenalty(graph: *const Graph, ranks: []const usize, centers: []const f64) f64 {
+    var penalty: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.weight <= 1.0) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        if (edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
+        if (ranks[edge_item.from] >= ranks[edge_item.to]) continue;
+        const delta = @abs(centers[edge_item.to] - centers[edge_item.from]);
+        penalty += edge_item.weight * delta;
+    }
+    return penalty;
 }
 
 fn normalizeCenters(centers: []f64, sizes: []const NodeSize) void {
@@ -8466,6 +8494,49 @@ test "guarded span alignment rejects wider layer move" {
     alignLevelToNeighborSpansIfHelpful(&graph, level[0..], ranks, centers[0..], sizes[0..], 10, true);
     try std.testing.expectEqual(before_a, centers[a]);
     try std.testing.expectEqual(before_b, centers[b]);
+}
+
+test "guarded span alignment preserves heavy edge proximity" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const left = try graph.node("left");
+    const right = try graph.node("right");
+    const child = try graph.node("child");
+    _ = try graph.edge(left, child, .{ .weight = 1 });
+    _ = try graph.edge(right, child, .{ .weight = 8 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[left] = 0;
+    ranks[right] = 0;
+    ranks[child] = 1;
+
+    var centers = [_]f64{ 40, 100, 92 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+        .{ .width = 20, .height = 10 },
+    };
+    const level = [_]NodeId{child};
+    const before = @abs(centers[child] - centers[right]);
+    alignLevelToNeighborSpansIfHelpful(&graph, level[0..], ranks, centers[0..], sizes[0..], 10, true);
+    const after = @abs(centers[child] - centers[right]);
+    try std.testing.expect(after <= before);
+}
+
+test "explicit DOT edge weights gate span alignment in layout" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  edge [weight=2];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(graphHasExplicitEdgeWeight(&graph));
 }
 
 test "level center compaction balances forward and backward pushes" {
