@@ -7104,7 +7104,7 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRout
 }
 
 fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
-    const render_route = crossClusterLeftDiagonalRoute(layout, edge_item, rankdir, route);
+    const render_route = graphvizDiamondTailRoute(crossClusterLeftDiagonalRoute(layout, edge_item, rankdir, route), rankdir, hints);
     if (edgeColorList(edge_item)) |colors| {
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
@@ -7213,6 +7213,20 @@ fn crossClusterLeftDiagonalRoute(layout: *const Layout, edge_item: Edge, rankdir
     adjusted.end = .{ .x = route.end.x + head_shift.x, .y = route.end.y + head_shift.y };
     adjusted.control1 = .{ .x = route.control1.x + head_shift.x * 0.25, .y = route.control1.y };
     adjusted.control2 = .{ .x = route.control2.x + head_shift.x * 0.70, .y = route.control2.y };
+    adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
+    return adjusted;
+}
+
+fn graphvizDiamondTailRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHints) EdgeRoute {
+    if (!hints.tail_mdiamond) return route;
+    if (rankdir != .TB and rankdir != .BT) return route;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
+    var adjusted = route;
+    const head_shift = Point{ .x = -0.4, .y = 0.0 };
+    adjusted.end = .{ .x = route.end.x + head_shift.x, .y = route.end.y };
+    adjusted.control2 = .{ .x = route.control2.x + head_shift.x * 0.75, .y = route.control2.y };
     adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
     return adjusted;
 }
@@ -15118,11 +15132,11 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 0.7, 2.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 2.3, 1.6);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 2.0, 0.8);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.3, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 3.0);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 2.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.75);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 2.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.8);
@@ -15135,7 +15149,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 2.4);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 2.7);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 2.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 2.5);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 1.9);
