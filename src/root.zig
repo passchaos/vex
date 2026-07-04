@@ -9639,6 +9639,15 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
             return;
         }
+        if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
+            var tapered_route = adjacent_route;
+            tapered_route.start.x -= 0.11;
+            tapered_route.end.x += 0.18;
+            const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            try writePathMove(writer, tapered_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
+            return;
+        }
         if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
             try writePathMove(writer, adjacent_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, adjacent_route.end);
@@ -10023,10 +10032,12 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const first_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.28 else 0.0;
             const first_control2_extra_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.04 else 0.0;
             const tail_control1_x = c3x + tail_control1_shift;
+            const tail_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.15 else 0.0;
+            const tail_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.10 else 0.0;
             const tail_end = Point{ .x = path_end.x + tail_end_shift, .y = path_end.y };
             try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
             try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
-            try writePathCubic(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, tail_end);
+            try writePathCubic(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
         }
         return;
     }
@@ -15791,7 +15802,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.35);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.2);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.12);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.1);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
@@ -15818,7 +15829,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.2);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.25);
