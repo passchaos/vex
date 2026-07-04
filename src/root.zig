@@ -7291,6 +7291,7 @@ fn graphvizDiamondTailInlineArrowRoute(route: EdgeRoute, rankdir: RankDir, hints
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var result = route;
     result.end.x += if (dx >= 0) 0.25 else -0.20;
+    if (dx >= 0) result.end.x += 0.08;
     result.end.y += if (rankdir == .TB) 0.40 else -0.40;
     if (dx < 0) result.end.y += if (rankdir == .TB) -0.08 else 0.08;
     return result;
@@ -15884,7 +15885,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.08);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.1);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.08);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.1);
