@@ -14823,7 +14823,13 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_a0_x >= 51.0);
     try std.testing.expect(svg_b0_x >= 168.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 4.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a1").? - svgNodeScreenCenterX(graphviz_oracle, "a1").?) <= 4.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 4.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a3").? - svgNodeScreenCenterX(graphviz_oracle, "a3").?) <= 4.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 4.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 3.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 1.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 4.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 1.5);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 1.5);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a0").? - svgNodeScreenCenterY(graphviz_oracle, "a0").?) <= 2.0);
