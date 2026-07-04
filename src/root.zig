@@ -7210,7 +7210,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
             try writeSvgDash(writer, visual.dash);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
-            try writeSvgInlineArrowheads(writer, directed, segment_route, segment_visual);
+            try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, segment_route), segment_visual);
         }
         return;
     }
@@ -7225,7 +7225,14 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     try writeSvgDash(writer, visual.dash);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
-    try writeSvgInlineArrowheads(writer, directed, render_route, visual);
+    try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, render_route), visual);
+}
+
+fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
+    if (isBackEdge(layout, edge_item)) return route;
+    if (!graphvizAdjacentPathRouteEnabled(layout, edge_item)) return route;
+    if (!leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return route;
+    return graphvizAdjacentPathRouteForEdge(layout, edge_item, route, rankdir);
 }
 
 fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
@@ -9439,22 +9446,24 @@ fn graphvizAdjacentPathRoute(route: EdgeRoute, rankdir: RankDir) EdgeRoute {
 
 fn graphvizAdjacentPathRouteForEdge(layout: *const Layout, edge_item: Edge, route: EdgeRoute, rankdir: RankDir) EdgeRoute {
     var result = graphvizAdjacentPathRoute(route, rankdir);
-    if (rankdir == .TB or rankdir == .BT) {
-        const from_cluster = clusterIndexForLayoutNode(layout, edge_item.from);
-        const to_cluster = clusterIndexForLayoutNode(layout, edge_item.to);
-        if (from_cluster != null and to_cluster != null and from_cluster.? == to_cluster.?) {
-            const cluster = layout.clusters[from_cluster.?];
-            if (cluster.width > 0 and cluster.x + cluster.width / 2.0 < layout.width / 2.0) {
-                const shift: f64 = 0.4;
-                result.start.x += shift;
-                result.control1.x += shift;
-                result.control2.x += shift;
-                result.end.x += shift;
-                result.label.x += shift;
-            }
-        }
+    if (leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
+        const shift: f64 = 0.4;
+        result.start.x += shift;
+        result.control1.x += shift;
+        result.control2.x += shift;
+        result.end.x += shift;
+        result.label.x += shift;
     }
     return result;
+}
+
+fn leftClusterAdjacentRouteShiftApplies(layout: *const Layout, edge_item: Edge, rankdir: RankDir) bool {
+    if (rankdir != .TB and rankdir != .BT) return false;
+    const from_cluster = clusterIndexForLayoutNode(layout, edge_item.from);
+    const to_cluster = clusterIndexForLayoutNode(layout, edge_item.to);
+    if (from_cluster == null or to_cluster == null or from_cluster.? != to_cluster.?) return false;
+    const cluster = layout.clusters[from_cluster.?];
+    return cluster.width > 0 and cluster.x + cluster.width / 2.0 < layout.width / 2.0;
 }
 
 fn clusterIndexForLayoutNode(layout: *const Layout, node_id: NodeId) ?usize {
@@ -15322,9 +15331,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.65);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.0);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 2.6);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;a2", 2.6);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a2-&gt;a3", 2.6);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 2.3);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;a2", 2.3);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a2-&gt;a3", 2.3);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 2.3);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
