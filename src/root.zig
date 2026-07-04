@@ -7260,8 +7260,20 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     const inline_route = if (back_edge)
         backEdgeInlineArrowRoute(layout, edge_item, rankdir, base_offset, render_route, routing)
     else
-        graphvizMsquareHeadInlineArrowRoute(graphvizDiamondTailInlineArrowRoute(graphvizCrossClusterLongInlineArrowRoute(layout, edge_item, rankdir, routeForInlineArrowheads(layout, edge_item, rankdir, render_route)), rankdir, hints), rankdir, hints);
+        graphvizMsquareHeadInlineArrowRoute(graphvizDiamondTailInlineArrowRoute(graphvizCrossClusterLeftInlineArrowRoute(layout, edge_item, rankdir, graphvizCrossClusterLongInlineArrowRoute(layout, edge_item, rankdir, routeForInlineArrowheads(layout, edge_item, rankdir, render_route))), rankdir, hints), rankdir, hints);
     try writeSvgInlineArrowheads(writer, directed, inline_route, visual);
+}
+
+fn graphvizCrossClusterLeftInlineArrowRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return route;
+    if (rankdir != .TB and rankdir != .BT) return route;
+    if (longEdgeWaypointCount(layout, edge_item) != 0) return route;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx >= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
+    var result = route;
+    result.end.y += if (rankdir == .TB) -0.35 else 0.35;
+    return result;
 }
 
 fn graphvizDiamondTailInlineArrowRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHints) EdgeRoute {
@@ -15690,7 +15702,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;a2", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a2-&gt;a3", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 0.1);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.15);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.2);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.3);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 0.1);
@@ -15707,6 +15719,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.12);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.4);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.15);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.2);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.3);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
