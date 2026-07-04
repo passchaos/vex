@@ -7242,6 +7242,7 @@ fn nodeLabelYOffset(node_item: Node) f64 {
     return switch (node_item.shape) {
         .mdiamond => 2.0,
         .msquare => -2.0,
+        .ellipse, .circle, .doublecircle, .mcircle => -0.4,
         else => 0.0,
     };
 }
@@ -14936,6 +14937,12 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a3").? - svgNodeScreenCenterY(graphviz_oracle, "a3").?) <= 2.0);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 3.0);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 2.0);
+    const a0_fragment = svgGroupFragmentByTitle(svg, "a0") orelse return error.MissingNodeCenter;
+    const oracle_a0_fragment = svgGroupFragmentByTitle(graphviz_oracle, "a0") orelse return error.MissingNodeCenter;
+    const b0_fragment = svgGroupFragmentByTitle(svg, "b0") orelse return error.MissingNodeCenter;
+    const oracle_b0_fragment = svgGroupFragmentByTitle(graphviz_oracle, "b0") orelse return error.MissingNodeCenter;
+    try std.testing.expect(@abs(((svgNumberAfter(a0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(svg).y) - ((svgNumberAfter(oracle_a0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(graphviz_oracle).y)) <= 1.1);
+    try std.testing.expect(@abs(((svgNumberAfter(b0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(svg).y) - ((svgNumberAfter(oracle_b0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(graphviz_oracle).y)) <= 1.1);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
