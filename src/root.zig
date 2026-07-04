@@ -7664,7 +7664,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.name);
     try writer.writeByte('\n');
-    const rect = RectF{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
+    const rect = clusterVisualRect(cluster, layout, index);
     if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
     } else {
@@ -7676,22 +7676,22 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
             visual.fill,
             visual.stroke,
         });
-        try writeSvgPoint(writer, .{ .x = box.x, .y = box.y });
+        try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y });
         try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = box.x + box.width, .y = box.y });
+        try writeSvgPoint(writer, .{ .x = rect.x + rect.width, .y = rect.y });
         try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = box.x + box.width, .y = box.y + box.height });
+        try writeSvgPoint(writer, .{ .x = rect.x + rect.width, .y = rect.y + rect.height });
         try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = box.x, .y = box.y + box.height });
+        try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y + rect.height });
         try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = box.x, .y = box.y });
+        try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y });
         try writer.writeByte('"');
         try writeSvgFillOpacity(writer, visual.fill_opacity);
         try writeSvgStrokeWidth(writer, visual.width);
         try writeSvgDash(writer, visual.dash);
         try writer.writeAll("/>\n");
     } else {
-        try writeSvgRectOpen(writer, .{ .x = box.x, .y = box.y, .width = box.width, .height = box.height }, visual.radius);
+        try writeSvgRectOpen(writer, rect, visual.radius);
         try writer.print(" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.fill_opacity, visual.stroke });
         try writeSvgStrokeWidth(writer, visual.width);
         try writeSvgDash(writer, visual.dash);
@@ -7704,22 +7704,47 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
     else
         "middle";
     const label_x = if (std.mem.eql(u8, text_anchor, "start"))
-        box.x + 12.0
+        rect.x + 12.0
     else if (std.mem.eql(u8, text_anchor, "end"))
-        box.x + box.width - 12.0
+        rect.x + rect.width - 12.0
     else
-        box.x + box.width / 2.0;
+        rect.x + rect.width / 2.0;
     const top_label_offset: f64 = 15.3;
     const label_y = if (label_loc) |value|
-        if (std.ascii.eqlIgnoreCase(value, "b")) box.y + box.height - 10.0 else box.y + top_label_offset
+        if (std.ascii.eqlIgnoreCase(value, "b")) rect.y + rect.height - 10.0 else rect.y + top_label_offset
     else
-        box.y + top_label_offset;
+        rect.y + top_label_offset;
     try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font_family, visual.font_size);
     try writeSvgTextFill(writer, visual.font_color);
     try writer.writeAll(">");
     try writeXmlEscaped(writer, cluster.label);
     try writer.writeAll("</text>\n");
     try writer.writeAll("</g>\n");
+}
+
+fn clusterVisualRect(cluster: Cluster, layout: *const Layout, index: usize) RectF {
+    const box = layout.clusters[index];
+    var rect = RectF{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
+    if (cluster.parent_name != null or layout.clusters.len <= 1) return rect;
+
+    var min_x = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    for (layout.clusters) |cluster_box| {
+        if (cluster_box.width <= 0 or cluster_box.height <= 0) continue;
+        min_x = @min(min_x, cluster_box.x);
+        max_x = @max(max_x, cluster_box.x + cluster_box.width);
+    }
+    if (min_x == std.math.floatMax(f64)) return rect;
+
+    const trim: f64 = 4.0;
+    if (@abs(rect.x - min_x) <= 0.01 and rect.width > trim) {
+        rect.x += trim;
+        rect.width -= trim;
+    }
+    if (@abs(rect.x + rect.width - max_x) <= 0.01 and rect.width > trim) {
+        rect.width -= trim;
+    }
+    return rect;
 }
 
 fn writeSvgFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!void {
@@ -14608,20 +14633,20 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(edge10_group_pos < edge6_group_pos);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0</title>\n<ellipse fill=\"white\" stroke=\"white\" cx=\"55\" cy=\"97.3\" rx=\"27\" ry=\"18\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Times,serif\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"0,49.3 94,49.3 94,343.3 0,343.3 0,49.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"lightgrey\" points=\"4,49.3 94,49.3 94,343.3 4,343.3 4,49.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>end</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"93.5,367.3 129.5,367.3 129.5,403.3 93.5,403.3 93.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polyline fill=\"none\" stroke=\"black\" points=\"93.5,379.3 105.5,367.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\" points=\"111.5,5.5 150.8,24.4 111.5,43.3 72.3,24.4\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"47\" y=\"64.6\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"168.5\" y=\"64.6\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"49\" y=\"64.6\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "x=\"166.5\" y=\"64.6\"") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     try std.testing.expect(svg_cluster_0_w >= 86.0);
-    try std.testing.expect(svg_cluster_0_w <= 94.0);
-    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 80.0);
-    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 4.5);
-    try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 4.0);
+    try std.testing.expect(svg_cluster_0_w <= 90.0);
+    try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 75.0);
+    try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 0.5);
+    try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 0.5);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 1.0);
-    try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 4.0);
+    try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 0.5);
     try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_0").? - svgClusterScreenY(graphviz_oracle, "cluster_0").?) <= 1.5);
     try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_0").? - svgClusterRectHeight(graphviz_oracle, "cluster_0").?) <= 1.5);
     try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_1").? - svgClusterScreenY(graphviz_oracle, "cluster_1").?) <= 1.5);
