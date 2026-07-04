@@ -7472,6 +7472,29 @@ fn svgEdgeArrowTip(svg: []const u8, title: []const u8) ?Point {
     return .{ .x = numbers[2], .y = numbers[3] };
 }
 
+fn svgPolylineEndpoints(svg: []const u8, title: []const u8, polyline_index: usize) ?struct { start: Point, end: Point } {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
+    var search_start: usize = 0;
+    var current_index: usize = 0;
+    while (std.mem.indexOf(u8, fragment[search_start..], "<polyline")) |rel| {
+        const polyline_start = search_start + rel;
+        const polyline_end_rel = std.mem.indexOf(u8, fragment[polyline_start..], "/>") orelse return null;
+        const polyline = fragment[polyline_start .. polyline_start + polyline_end_rel];
+        if (current_index == polyline_index) {
+            var numbers: [16]f64 = undefined;
+            const count = svgNumbersInAttribute(polyline, "points", numbers[0..]);
+            if (count < 4) return null;
+            return .{
+                .start = .{ .x = numbers[0], .y = numbers[1] },
+                .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
+            };
+        }
+        current_index += 1;
+        search_start = polyline_start + polyline_end_rel + 2;
+    }
+    return null;
+}
+
 fn expectSvgEdgeEndpointsNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
     const points = svgPathStartEnd(svg, title) orelse return error.MissingEdge;
     const oracle_points = svgPathStartEnd(oracle, title) orelse return error.MissingEdge;
@@ -14680,6 +14703,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 4.5);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 3.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 3.0);
+    const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
+    const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.end), svgScreenPoint(graphviz_oracle, oracle_start_mark.end)) <= 4.0);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
