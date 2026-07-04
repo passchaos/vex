@@ -2363,7 +2363,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
-    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.45);
+    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.50);
     shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.42);
     shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
@@ -9345,7 +9345,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
         else
             @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
-        if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) side_x -= 0.50;
+        if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) side_x -= 0.55;
         const rank_delta = route.end.y - route.start.y;
         const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.20 };
         const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.21 };
@@ -15117,13 +15117,13 @@ test "user cluster example stays compact and Graphviz-like" {
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 2.0, 2.7);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 0.7, 2.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 2.3, 1.6);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.3, 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 3.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.75);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 3.0);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 2.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.8);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.65);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
@@ -15133,7 +15133,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 2.5);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 2.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 2.7);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 2.5);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
