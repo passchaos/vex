@@ -14775,6 +14775,11 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 6.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 3.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 3.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 3.8);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 4.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 3.2);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 3.2);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
