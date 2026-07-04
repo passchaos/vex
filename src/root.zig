@@ -9086,7 +9086,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const c3x = route.end.x + end_side_dx * 0.65;
             const c4x = route.end.x + end_side_dx * 0.25;
             const mid_y = (p1.y + p2.y) / 2.0;
-            const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.28 else @abs(start_side_dx) * 0.28;
+            const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.62 else @abs(start_side_dx) * 0.62;
             try writePathMove(writer, route.start);
             try writePathCubic(writer, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
             try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = mid_y }, .{ .x = side_x + side_bulge, .y = mid_y }, p2);
@@ -9116,7 +9116,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const c3y = route.end.y + end_side_dy * 0.65;
         const c4y = route.end.y + end_side_dy * 0.25;
         const mid_x = (p1.x + p2.x) / 2.0;
-        const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.28 else @abs(start_side_dy) * 0.28;
+        const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.62 else @abs(start_side_dy) * 0.62;
         try writePathMove(writer, route.start);
         try writePathCubic(writer, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, .{ .x = route.start.x + rank_delta * 0.12, .y = c2y }, p1);
         try writePathCubic(writer, .{ .x = mid_x, .y = side_y + side_bulge }, .{ .x = mid_x, .y = side_y + side_bulge }, p2);
