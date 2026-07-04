@@ -2364,7 +2364,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
     shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.25);
-    shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.2);
+    shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.25);
     shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
