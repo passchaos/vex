@@ -7509,6 +7509,28 @@ fn graphvizCrossClusterLongRoute(layout: *const Layout, edge_item: Edge, rankdir
     return adjusted;
 }
 
+fn graphvizCrossClusterLongPathEndShift(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?Point {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    if (longEdgeWaypointCount(layout, edge_item) != 1) return null;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
+    const y_shift: f64 = if (rankdir == .TB) -0.4 else 0.4;
+    return .{ .x = -0.4, .y = y_shift };
+}
+
+fn graphvizCrossClusterLongPathStartShift(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?Point {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    if (longEdgeWaypointCount(layout, edge_item) != 1) return null;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
+    const y_shift: f64 = if (rankdir == .TB) 0.25 else -0.25;
+    return .{ .x = -0.15, .y = y_shift };
+}
+
 fn graphvizDiamondTailRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHints) EdgeRoute {
     if (!hints.tail_mdiamond) return route;
     if (rankdir != .TB and rankdir != .BT) return route;
@@ -9539,8 +9561,18 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             c2 = lerpPoint(second.c2, direct_route.control2, 0.90);
             if (direct_route.end.x > direct_route.start.x) c1.x += 0.75;
         }
-        try writePathMove(writer, direct_route.start);
-        try writePathCubic(writer, c1, c2, direct_route.end);
+        var path_start = direct_route.start;
+        if (graphvizCrossClusterLongPathStartShift(layout, edge_item, rankdir, direct_route)) |shift| {
+            path_start = .{ .x = path_start.x + shift.x, .y = path_start.y + shift.y };
+            c1 = .{ .x = c1.x + shift.x * 0.5, .y = c1.y + shift.y * 0.75 };
+        }
+        var path_end = direct_route.end;
+        if (graphvizCrossClusterLongPathEndShift(layout, edge_item, rankdir, direct_route)) |shift| {
+            c2 = .{ .x = c2.x + shift.x * 0.5, .y = c2.y + shift.y * 0.5 };
+            path_end = .{ .x = path_end.x + shift.x, .y = path_end.y + shift.y };
+        }
+        try writePathMove(writer, path_start);
+        try writePathCubic(writer, c1, c2, path_end);
         return;
     }
     if (waypoint_count == 0) {
@@ -9550,6 +9582,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         if (crossClusterDiagonalControls(layout, edge_item, rankdir, direct_route)) |controls| {
+            if (graphvizCrossClusterLeftPathRoute(layout, edge_item, rankdir, direct_route, controls)) |path| {
+                try writePathMove(writer, path.start);
+                try writePathCubic(writer, path.control1, path.control2, path.end);
+                return;
+            }
             try writePathMove(writer, direct_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
             return;
@@ -9578,6 +9615,25 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             graphvizAdjacentPathRouteForPath(layout, edge_item, direct_route, rankdir)
         else
             direct_route;
+        if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
+            var tapered_route = adjacent_route;
+            const taper: f64 = 0.36;
+            tapered_route.start.x += taper;
+            tapered_route.end.x -= taper;
+            const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            try writePathMove(writer, tapered_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
+            return;
+        }
+        if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) {
+            var tapered_route = adjacent_route;
+            tapered_route.start.x -= 0.16;
+            tapered_route.end.x += 0.28;
+            const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            try writePathMove(writer, tapered_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
+            return;
+        }
         if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
             try writePathMove(writer, adjacent_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, adjacent_route.end);
@@ -9688,6 +9744,23 @@ fn crossClusterDiagonalControls(layout: *const Layout, edge_item: Edge, rankdir:
     };
 }
 
+fn graphvizCrossClusterLeftPathRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute, controls: EdgeControls) ?EdgeRoute {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    if (longEdgeWaypointCount(layout, edge_item) != 0) return null;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx >= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
+    const y_shift: f64 = if (rankdir == .TB) 0.3 else -0.3;
+    return .{
+        .start = .{ .x = route.start.x, .y = route.start.y + y_shift },
+        .control1 = .{ .x = controls.c1.x - 0.15, .y = controls.c1.y + y_shift },
+        .control2 = .{ .x = controls.c2.x - 0.3, .y = controls.c2.y + y_shift },
+        .end = .{ .x = route.end.x, .y = route.end.y - y_shift * 0.3 },
+        .label = cubicPoint(route.start, controls.c1, controls.c2, route.end, 0.5),
+    };
+}
+
 fn alignedAdjacentControls(start: Point, end: Point, rankdir: RankDir) ?EdgeControls {
     const dx = end.x - start.x;
     const dy = end.y - start.y;
@@ -9695,6 +9768,16 @@ fn alignedAdjacentControls(start: Point, end: Point, rankdir: RankDir) ?EdgeCont
     const axis_delta = axes.rankAxisDelta(dx, dy);
     const cross_delta = if (axes.horizontalRanks()) @abs(dy) else @abs(dx);
     if (axis_delta <= 0.001 or cross_delta > 1.0) return null;
+    return .{
+        .c1 = .{ .x = start.x + dx * 0.30, .y = start.y + dy * 0.30 },
+        .c2 = .{ .x = start.x + dx * 0.66, .y = start.y + dy * 0.66 },
+    };
+}
+
+fn graphvizAdjacentTaperControls(start: Point, end: Point, rankdir: RankDir) EdgeControls {
+    _ = rankdir;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
     return .{
         .c1 = .{ .x = start.x + dx * 0.30, .y = start.y + dy * 0.30 },
         .c2 = .{ .x = start.x + dx * 0.66, .y = start.y + dy * 0.66 },
@@ -15650,7 +15733,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 2.6);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.5);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.1);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 1.6);
@@ -15727,9 +15810,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.4);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.6);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.1);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.1);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.25);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
