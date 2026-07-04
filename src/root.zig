@@ -7226,7 +7226,11 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     try writeSvgDash(writer, visual.dash);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
-    try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, render_route), visual);
+    const inline_route = if (back_edge)
+        backEdgeInlineArrowRoute(layout, edge_item, rankdir, base_offset, render_route, routing)
+    else
+        routeForInlineArrowheads(layout, edge_item, rankdir, render_route);
+    try writeSvgInlineArrowheads(writer, directed, inline_route, visual);
 }
 
 fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
@@ -7234,6 +7238,55 @@ fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: Ran
     if (!graphvizAdjacentPathRouteEnabled(layout, edge_item)) return route;
     if (!leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return route;
     return graphvizAdjacentPathRouteForEdge(layout, edge_item, route, rankdir);
+}
+
+fn backEdgeInlineArrowRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting) EdgeRoute {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return route;
+    const from = layout.nodes[edge_item.from];
+    const to = layout.nodes[edge_item.to];
+    const side_gap = @max(5.0, layout.margin * 0.3) + @abs(offset);
+    var result = route;
+
+    if (rankdir == .TB or rankdir == .BT) {
+        const prefer_left = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
+        var side_x = if (prefer_left)
+            @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
+        else
+            @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
+        if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) side_x -= 0.55;
+        const rank_delta = route.end.y - route.start.y;
+        const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.20 };
+        const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.21 };
+        if (routing == .polyline) {
+            result.control1 = p1;
+            result.control2 = p2;
+        } else {
+            const start_side_dx = side_x - route.start.x;
+            const end_side_dx = side_x - route.end.x;
+            result.control1 = .{ .x = route.start.x + start_side_dx * 0.42, .y = route.start.y + rank_delta * 0.05 };
+            result.control2 = .{ .x = route.end.x + end_side_dx * 0.60, .y = route.end.y - rank_delta * 0.10 };
+        }
+        return result;
+    }
+
+    const prefer_top = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
+    const side_y = if (prefer_top)
+        @max(layout.margin_y, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
+    else
+        @min(layout.height - layout.margin_y, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
+    const rank_delta = route.end.x - route.start.x;
+    const p1 = Point{ .x = route.start.x + rank_delta * 0.20, .y = side_y };
+    const p2 = Point{ .x = route.end.x - rank_delta * 0.21, .y = side_y };
+    if (routing == .polyline) {
+        result.control1 = p1;
+        result.control2 = p2;
+    } else {
+        const start_side_dy = side_y - route.start.y;
+        const end_side_dy = side_y - route.end.y;
+        result.control1 = .{ .x = route.start.x + rank_delta * 0.05, .y = route.start.y + start_side_dy * 0.42 };
+        result.control2 = .{ .x = route.end.x - rank_delta * 0.10, .y = route.end.y + end_side_dy * 0.60 };
+    }
+    return result;
 }
 
 fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
@@ -7819,6 +7872,22 @@ fn expectSvgEdgeArrowTipNear(svg: []const u8, oracle: []const u8, title: []const
     const tip = svgEdgeArrowTip(svg, title) orelse return error.MissingEdgeArrow;
     const oracle_tip = svgEdgeArrowTip(oracle, title) orelse return error.MissingEdgeArrow;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, tip), svgScreenPoint(oracle, oracle_tip)) <= tolerance);
+}
+
+fn expectSvgEdgeArrowPointsNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return error.MissingEdgeArrow;
+    const oracle_fragment = svgGroupFragmentByTitle(oracle, title) orelse return error.MissingEdgeArrow;
+    var numbers: [32]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", numbers[0..]);
+    var oracle_numbers: [32]f64 = undefined;
+    const oracle_count = svgNumbersInAttribute(oracle_fragment, "points", oracle_numbers[0..]);
+    if (count < 4 or count != oracle_count or count % 2 != 0) return error.MissingEdgeArrow;
+    var index: usize = 0;
+    while (index + 1 < count) : (index += 2) {
+        const point = svgScreenPoint(svg, .{ .x = numbers[index], .y = numbers[index + 1] });
+        const oracle_point = svgScreenPoint(oracle, .{ .x = oracle_numbers[index], .y = oracle_numbers[index + 1] });
+        try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+    }
 }
 
 fn expectSvgEdgeControlsNear(svg: []const u8, oracle: []const u8, title: []const u8, c1_tolerance: f64, c2_tolerance: f64) !void {
@@ -15349,6 +15418,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 2.0);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 2.1);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.start)) <= 3.0);
