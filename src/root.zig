@@ -8990,7 +8990,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         var c2 = second.c2;
         if (edgeTouchesMultipleClusters(layout, edge_item)) {
             c1 = lerpPoint(first.c1, direct_route.control1, 0.35);
-            c2 = lerpPoint(second.c2, direct_route.control2, 0.35);
+            c2 = lerpPoint(second.c2, direct_route.control2, 0.75);
         }
         try writePathMove(writer, direct_route.start);
         try writePathCubic(writer, c1, c2, direct_route.end);
