@@ -9002,6 +9002,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             try writePathLine(writer, direct_route.end);
             return;
         }
+        if (crossClusterDiagonalControls(layout, edge_item, rankdir, direct_route)) |controls| {
+            try writePathMove(writer, direct_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
+            return;
+        }
         if (alignedAdjacentControls(direct_route.start, direct_route.end, rankdir)) |controls| {
             try writePathMove(writer, direct_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
@@ -9029,6 +9034,19 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     } else {
         try writeSmoothSegment(writer, current, direct_route.end, rankdir);
     }
+}
+
+fn crossClusterDiagonalControls(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?EdgeControls {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (@abs(dx) < @abs(dy) * 0.35) return null;
+    if (dx >= 0) return null;
+    return .{
+        .c1 = lerpPoint(route.control1, .{ .x = route.start.x + dx * 0.26, .y = route.start.y + dy * 0.26 }, 0.55),
+        .c2 = lerpPoint(route.control2, .{ .x = route.start.x + dx * 0.64, .y = route.start.y + dy * 0.64 }, 0.55),
+    };
 }
 
 fn alignedAdjacentControls(start: Point, end: Point, rankdir: RankDir) ?EdgeControls {
