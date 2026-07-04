@@ -6636,7 +6636,10 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
 
     const offset = parallelEdgeOffset(graph, edge_item.id);
     const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
-    try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual);
+    const hints = EdgePathHints{
+        .tail_mdiamond = graph.nodes.items[edge_item.from].shape == .mdiamond,
+    };
+    try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
     if (edge_item.label) |label| {
         try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
     }
@@ -7011,7 +7014,7 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRout
     }
 }
 
-fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual) Io.Writer.Error!void {
+fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
     if (edgeColorList(edge_item)) |colors| {
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
@@ -7022,7 +7025,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
             const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
             const path_clip = if (back_edge) edgePathClip(segment_visual) else EdgePathClip{};
             try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{segment.color});
-            try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip);
+            try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip, hints);
             try writer.writeByte('"');
             try writeSvgStrokeWidth(writer, visual.width);
             try writeSvgDash(writer, visual.dash);
@@ -7037,7 +7040,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     const path_route = if (back_edge) route else routeForPathMarkers(route, visual);
     const path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
     try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{visual.stroke});
-    try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing, path_clip);
+    try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing, path_clip, hints);
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
@@ -7610,6 +7613,10 @@ const EdgeControls = struct {
 const EdgePathClip = struct {
     head: f64 = 0,
     tail: f64 = 0,
+};
+
+const EdgePathHints = struct {
+    tail_mdiamond: bool = false,
 };
 
 const DashStyle = enum {
@@ -8997,7 +9004,7 @@ fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
     return .curved;
 }
 
-fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip) Io.Writer.Error!void {
+fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip, hints: EdgePathHints) Io.Writer.Error!void {
     if (routing == .line) {
         try writePathMove(writer, shortenPointToward(direct_route.start, direct_route.control1, path_clip.tail));
         try writePathLine(writer, shortenPointToward(direct_route.end, direct_route.control2, path_clip.head));
@@ -9040,6 +9047,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
             return;
         }
+        if (diamondTailDiagonalControls(direct_route.start, direct_route.end, rankdir, hints)) |controls| {
+            try writePathMove(writer, direct_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
+            return;
+        }
         if (diagonalEdgeControls(direct_route.start, direct_route.end, rankdir, 1.0)) |controls| {
             try writePathMove(writer, direct_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
@@ -9072,6 +9084,18 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     } else {
         try writeSmoothSegment(writer, current, direct_route.end, rankdir);
     }
+}
+
+fn diamondTailDiagonalControls(start: Point, end: Point, rankdir: RankDir, hints: EdgePathHints) ?EdgeControls {
+    if (!hints.tail_mdiamond) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    if (@abs(dx) < @abs(dy) * 0.35) return null;
+    return .{
+        .c1 = .{ .x = start.x + dx * 0.25, .y = start.y + dy * 0.28 },
+        .c2 = .{ .x = start.x + dx * 0.67, .y = start.y + dy * 0.66 },
+    };
 }
 
 fn crossClusterDiagonalControls(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?EdgeControls {
@@ -14508,7 +14532,7 @@ test "SVG clamps outward long-edge waypoints for forward cluster cross edges" {
 
     var aw = Io.Writer.Allocating.init(allocator);
     defer aw.deinit();
-    try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved, .{});
+    try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved, .{}, .{});
     const path = try aw.toOwnedSlice();
     defer allocator.free(path);
     try std.testing.expect(pathDataCommandCount(path, 'C') == 1);
@@ -14858,8 +14882,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 5.5, 3.5);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 6.0, 4.0);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 2.8, 3.5);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 3.2, 4.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.5, 1.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 4.5);
