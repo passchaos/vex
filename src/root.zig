@@ -9147,9 +9147,10 @@ fn diamondTailDiagonalControls(start: Point, end: Point, rankdir: RankDir, hints
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return null;
+    const c2_rank: f64 = if (dx >= 0) 0.58 else 0.67;
     return .{
         .c1 = .{ .x = start.x + dx * 0.25, .y = start.y + dy * 0.28 },
-        .c2 = .{ .x = start.x + dx * 0.67, .y = start.y + dy * 0.66 },
+        .c2 = .{ .x = start.x + dx * c2_rank, .y = start.y + dy * 0.66 },
     };
 }
 
@@ -14943,7 +14944,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 2.6, 3.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 3.2, 4.0);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 3.2, 1.9);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.5, 1.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 4.5);
