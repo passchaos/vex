@@ -7472,6 +7472,13 @@ fn svgEdgeArrowTip(svg: []const u8, title: []const u8) ?Point {
     return .{ .x = numbers[2], .y = numbers[3] };
 }
 
+fn expectSvgEdgeEndpointsNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    const points = svgPathStartEnd(svg, title) orelse return error.MissingEdge;
+    const oracle_points = svgPathStartEnd(oracle, title) orelse return error.MissingEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, points.start), svgScreenPoint(oracle, oracle_points.start)) <= tolerance);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, points.end), svgScreenPoint(oracle, oracle_points.end)) <= tolerance);
+}
+
 fn svgScreenPoint(svg: []const u8, point: Point) Point {
     const translate = svgGraphvizTranslate(svg);
     return .{ .x = point.x + translate.x, .y = point.y + translate.y };
@@ -14670,6 +14677,9 @@ test "user cluster example stays compact and Graphviz-like" {
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 4.5);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 3.0);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 3.0);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
