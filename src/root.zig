@@ -7371,8 +7371,10 @@ fn crossClusterLeftDiagonalRoute(layout: *const Layout, edge_item: Edge, rankdir
 
     var adjusted = route;
     const head_shift = Point{ .x = 3.4, .y = 0.0 };
+    const tail_vertical_shift: f64 = if (rankdir == .TB) 1.4 else -1.4;
+    adjusted.start.y += tail_vertical_shift;
     adjusted.end = .{ .x = route.end.x + head_shift.x, .y = route.end.y + head_shift.y };
-    adjusted.control1 = .{ .x = route.control1.x + head_shift.x * 0.25, .y = route.control1.y };
+    adjusted.control1 = .{ .x = route.control1.x + head_shift.x * 0.25, .y = route.control1.y + tail_vertical_shift * 0.75 };
     adjusted.control2 = .{ .x = route.control2.x + head_shift.x * 0.70, .y = route.control2.y };
     adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
     return adjusted;
@@ -15395,6 +15397,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 2.6);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.8);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 1.6);
