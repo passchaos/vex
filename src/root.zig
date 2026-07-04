@@ -14953,8 +14953,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 3.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 4.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 3.0);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 3.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 3.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 4.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 3.2);
