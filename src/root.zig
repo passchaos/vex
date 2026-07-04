@@ -2365,6 +2365,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
     shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.0);
     shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.0);
+    shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
 
@@ -3442,6 +3443,17 @@ fn shiftRightClusterMembersLeftByRankForCrossClusterTb(graph: *const Graph, axes
         if (node_id >= nodes.len or node_id >= ranks.len) continue;
         const distance = @abs(@as(f64, @floatFromInt(ranks[node_id])) - mid_rank) / half_span;
         nodes[node_id].center.x -= amount * distance;
+    }
+}
+
+fn shiftClusterMemberNodesDownForCrossClusterTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, amount: f64) void {
+    if (amount <= 0 or (axes.rankdir != .TB and axes.rankdir != .BT)) return;
+    if (graph.clusters.items.len != 2 or !graphHasCrossClusterEdge(graph)) return;
+    for (graph.clusters.items) |cluster| {
+        if (cluster.parent_name != null or cluster.nodes.len == 0) return;
+        for (cluster.nodes) |node_id| {
+            if (node_id < nodes.len) nodes[node_id].center.y += amount;
+        }
     }
 }
 
