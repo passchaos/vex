@@ -9260,7 +9260,7 @@ fn crossClusterDiagonalControls(layout: *const Layout, edge_item: Edge, rankdir:
     if (@abs(dx) < @abs(dy) * 0.35) return null;
     if (dx >= 0) return null;
     return .{
-        .c1 = lerpPoint(route.control1, .{ .x = route.start.x + dx * 0.26, .y = route.start.y + dy * 0.26 }, 0.55),
+        .c1 = lerpPoint(route.control1, .{ .x = route.start.x + dx * 0.26, .y = route.start.y + dy * 0.26 }, 0.90),
         .c2 = lerpPoint(route.control2, .{ .x = route.start.x + dx * 0.64, .y = route.start.y + dy * 0.64 }, 0.55),
     };
 }
@@ -15014,7 +15014,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_diagonal_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const diagonal_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
     const oracle_diagonal_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
-    try std.testing.expect(distanceBetween(diagonal_control1, oracle_diagonal_control1) <= 3.0);
+    try std.testing.expect(distanceBetween(diagonal_control1, oracle_diagonal_control1) <= 1.5);
     try std.testing.expect(distanceBetween(diagonal_control2, oracle_diagonal_control2) <= 1.5);
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
