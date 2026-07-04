@@ -3447,7 +3447,7 @@ fn shiftRightClusterMembersLeftByRankForCrossClusterTb(graph: *const Graph, axes
 
 fn alignCrossClusterMembersGraphvizLikeTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize, clusters: []const ClusterLayout) void {
     alignLeftClusterMembersTowardVisualPaddingTb(graph, axes, nodes, clusters, 55.0, 1.50);
-    shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.47);
+    alignRightOuterClusterMembersTowardVisualPaddingTb(graph, axes, nodes, ranks, clusters, 35.0, 1.47);
 }
 
 fn alignLeftClusterMembersTowardVisualPaddingTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, clusters: []const ClusterLayout, target_padding: f64, max_shift: f64) void {
@@ -3471,6 +3471,47 @@ fn alignLeftClusterMembersTowardVisualPaddingTb(graph: *const Graph, axes: Layou
         if (node_id >= nodes.len) continue;
         const delta = std.math.clamp(target_x - nodes[node_id].center.x, -max_shift, max_shift);
         nodes[node_id].center.x += delta;
+    }
+}
+
+fn alignRightOuterClusterMembersTowardVisualPaddingTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize, clusters: []const ClusterLayout, target_padding: f64, max_shift: f64) void {
+    if (max_shift <= 0 or (axes.rankdir != .TB and axes.rankdir != .BT)) return;
+    if (graph.clusters.items.len != 2 or !graphHasCrossClusterEdge(graph)) return;
+    var right_index: ?usize = null;
+    var right_center: f64 = -std.math.floatMax(f64);
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (cluster.parent_name != null or cluster.nodes.len == 0) return;
+        if (index >= clusters.len or clusters[index].width <= 0) return;
+        const center = clusters[index].x + clusters[index].width / 2.0;
+        if (center > right_center) {
+            right_center = center;
+            right_index = index;
+        }
+    }
+
+    const index = right_index orelse return;
+    var min_rank: usize = std.math.maxInt(usize);
+    var max_rank: usize = 0;
+    for (graph.clusters.items[index].nodes) |node_id| {
+        if (node_id >= ranks.len) continue;
+        min_rank = @min(min_rank, ranks[node_id]);
+        max_rank = @max(max_rank, ranks[node_id]);
+    }
+    if (min_rank == std.math.maxInt(usize) or max_rank <= min_rank) return;
+
+    const visual_left = clusterVisualRectXForLayouts(graph, clusters, index) orelse return;
+    const target_x = visual_left + target_padding;
+    const mid_rank = (@as(f64, @floatFromInt(min_rank)) + @as(f64, @floatFromInt(max_rank))) / 2.0;
+    const half_span = @max(1.0, (@as(f64, @floatFromInt(max_rank - min_rank))) / 2.0);
+    for (graph.clusters.items[index].nodes) |node_id| {
+        if (node_id >= nodes.len or node_id >= ranks.len) continue;
+        if (ranks[node_id] == min_rank or ranks[node_id] == max_rank) {
+            const delta = std.math.clamp(target_x - nodes[node_id].center.x, -max_shift, max_shift);
+            nodes[node_id].center.x += delta;
+        } else {
+            const distance = @abs(@as(f64, @floatFromInt(ranks[node_id])) - mid_rank) / half_span;
+            nodes[node_id].center.x -= max_shift * distance;
+        }
     }
 }
 
