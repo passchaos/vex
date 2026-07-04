@@ -7237,7 +7237,12 @@ fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: Ran
     if (isBackEdge(layout, edge_item)) return route;
     if (!graphvizAdjacentPathRouteEnabled(layout, edge_item)) return route;
     if (!leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir) and !rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir) and !rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return route;
-    return graphvizAdjacentPathRouteForEdge(layout, edge_item, route, rankdir);
+    var result = graphvizAdjacentPathRouteForEdge(layout, edge_item, route, rankdir);
+    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
+        const y_shift: f64 = if (rankdir == .TB) 1.0 else -1.0;
+        result.end.y += y_shift;
+    }
+    return result;
 }
 
 fn backEdgeInlineArrowRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting) EdgeRoute {
@@ -15564,14 +15569,14 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 0.55);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 1.05);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 1.2);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 0.8);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.5);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.55);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.0);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.2);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.8);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
