@@ -8986,8 +8986,14 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         const mid = longEdgeWaypoint(layout, edge_item, rankdir, offset, 0, waypoint_count);
         const first = smoothSegmentControls(direct_route.start, mid, rankdir);
         const second = smoothSegmentControls(mid, direct_route.end, rankdir);
+        var c1 = first.c1;
+        var c2 = second.c2;
+        if (edgeTouchesMultipleClusters(layout, edge_item)) {
+            c1 = lerpPoint(first.c1, direct_route.control1, 0.35);
+            c2 = lerpPoint(second.c2, direct_route.control2, 0.35);
+        }
         try writePathMove(writer, direct_route.start);
-        try writePathCubic(writer, first.c1, second.c2, direct_route.end);
+        try writePathCubic(writer, c1, c2, direct_route.end);
         return;
     }
     if (waypoint_count == 0) {
@@ -14707,7 +14713,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_cross_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const cross_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
     const oracle_cross_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
-    try std.testing.expect(distanceBetween(cross_control1, oracle_cross_control1) <= 12.0);
+    try std.testing.expect(distanceBetween(cross_control1, oracle_cross_control1) <= 6.0);
     try std.testing.expect(distanceBetween(cross_control2, oracle_cross_control2) <= 18.0);
     const cross_points = svgPathStartEnd(svg, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
     const oracle_cross_points = svgPathStartEnd(graphviz_oracle, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
