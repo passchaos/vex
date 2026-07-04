@@ -2363,7 +2363,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
-    alignCrossClusterMembersGraphvizLikeTb(graph, axes, nodes, ranks);
+    alignCrossClusterMembersGraphvizLikeTb(graph, axes, nodes, ranks, cluster_layouts);
     shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
@@ -3445,9 +3445,49 @@ fn shiftRightClusterMembersLeftByRankForCrossClusterTb(graph: *const Graph, axes
     }
 }
 
-fn alignCrossClusterMembersGraphvizLikeTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize) void {
-    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.50);
+fn alignCrossClusterMembersGraphvizLikeTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize, clusters: []const ClusterLayout) void {
+    alignLeftClusterMembersTowardVisualPaddingTb(graph, axes, nodes, clusters, 55.0, 1.50);
     shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.47);
+}
+
+fn alignLeftClusterMembersTowardVisualPaddingTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, clusters: []const ClusterLayout, target_padding: f64, max_shift: f64) void {
+    if (max_shift <= 0 or (axes.rankdir != .TB and axes.rankdir != .BT)) return;
+    if (graph.clusters.items.len != 2 or !graphHasCrossClusterEdge(graph)) return;
+    var left_index: ?usize = null;
+    var left_center = std.math.floatMax(f64);
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (cluster.parent_name != null or cluster.nodes.len == 0) return;
+        if (index >= clusters.len or clusters[index].width <= 0) return;
+        const center = clusters[index].x + clusters[index].width / 2.0;
+        if (center < left_center) {
+            left_center = center;
+            left_index = index;
+        }
+    }
+    const index = left_index orelse return;
+    const visual_left = clusterVisualRectXForLayouts(graph, clusters, index) orelse return;
+    const target_x = visual_left + target_padding;
+    for (graph.clusters.items[index].nodes) |node_id| {
+        if (node_id >= nodes.len) continue;
+        const delta = std.math.clamp(target_x - nodes[node_id].center.x, -max_shift, max_shift);
+        nodes[node_id].center.x += delta;
+    }
+}
+
+fn clusterVisualRectXForLayouts(graph: *const Graph, clusters: []const ClusterLayout, index: usize) ?f64 {
+    if (index >= clusters.len or index >= graph.clusters.items.len) return null;
+    const cluster = graph.clusters.items[index];
+    var rect_x = clusters[index].x;
+    if (cluster.parent_name != null or clusters.len <= 1) return rect_x;
+
+    var min_x = std.math.floatMax(f64);
+    for (clusters) |cluster_box| {
+        if (cluster_box.width <= 0 or cluster_box.height <= 0) continue;
+        min_x = @min(min_x, cluster_box.x);
+    }
+    if (min_x == std.math.floatMax(f64)) return rect_x;
+    if (@abs(rect_x - min_x) <= 0.01 and clusters[index].width > 4.0) rect_x += 4.0;
+    return rect_x;
 }
 
 fn shiftClusterMemberNodesDownForCrossClusterTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, amount: f64) void {
