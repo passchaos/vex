@@ -9086,9 +9086,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const c3x = route.end.x + end_side_dx * 0.65;
             const c4x = route.end.x + end_side_dx * 0.25;
             const mid_y = (p1.y + p2.y) / 2.0;
+            const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.28 else @abs(start_side_dx) * 0.28;
             try writePathMove(writer, route.start);
             try writePathCubic(writer, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
-            try writePathCubic(writer, .{ .x = side_x, .y = mid_y }, .{ .x = side_x, .y = mid_y }, p2);
+            try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = mid_y }, .{ .x = side_x + side_bulge, .y = mid_y }, p2);
             try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.18 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, route.end);
         }
         return;
@@ -9115,9 +9116,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const c3y = route.end.y + end_side_dy * 0.65;
         const c4y = route.end.y + end_side_dy * 0.25;
         const mid_x = (p1.x + p2.x) / 2.0;
+        const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.28 else @abs(start_side_dy) * 0.28;
         try writePathMove(writer, route.start);
         try writePathCubic(writer, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, .{ .x = route.start.x + rank_delta * 0.12, .y = c2y }, p1);
-        try writePathCubic(writer, .{ .x = mid_x, .y = side_y }, .{ .x = mid_x, .y = side_y }, p2);
+        try writePathCubic(writer, .{ .x = mid_x, .y = side_y + side_bulge }, .{ .x = mid_x, .y = side_y + side_bulge }, p2);
         try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.18, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, route.end);
     }
 }
@@ -14475,8 +14477,8 @@ test "SVG routes multi-rank back edges around the side" {
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
     try std.testing.expectEqual(side_x, path_numbers[6]);
-    try std.testing.expectEqual(side_x, path_numbers[8]);
-    try std.testing.expectEqual(side_x, path_numbers[10]);
+    try std.testing.expect(path_numbers[8] < side_x);
+    try std.testing.expectEqual(path_numbers[8], path_numbers[10]);
     try std.testing.expect(path_numbers[2] > side_x);
     try std.testing.expect(path_numbers[4] > side_x);
     try std.testing.expect(path_numbers[14] > side_x);
