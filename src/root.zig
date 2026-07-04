@@ -9224,8 +9224,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         } else {
             const start_side_dx = side_x - route.start.x;
             const end_side_dx = side_x - route.end.x;
-            const c1x = route.start.x + start_side_dx * 0.25;
-            const c2x = route.start.x + start_side_dx * 0.65;
+            const c1x = route.start.x + start_side_dx * 0.42;
+            const c2x = route.start.x + start_side_dx * 0.85;
             const c3x = route.end.x + end_side_dx * 0.86;
             const c4x = route.end.x + end_side_dx * 0.60;
             const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.62 else @abs(start_side_dx) * 0.62;
@@ -9258,8 +9258,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
     } else {
         const start_side_dy = side_y - route.start.y;
         const end_side_dy = side_y - route.end.y;
-        const c1y = route.start.y + start_side_dy * 0.25;
-        const c2y = route.start.y + start_side_dy * 0.65;
+        const c1y = route.start.y + start_side_dy * 0.42;
+        const c2y = route.start.y + start_side_dy * 0.85;
         const c3y = route.end.y + end_side_dy * 0.86;
         const c4y = route.end.y + end_side_dy * 0.60;
         const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.62 else @abs(start_side_dy) * 0.62;
@@ -14907,6 +14907,12 @@ test "user cluster example stays compact and Graphviz-like" {
     var oracle_back_numbers: [32]f64 = undefined;
     const oracle_back_count = svgPathNumbers(graphviz_oracle, "a3-&gt;a0", oracle_back_numbers[0..]);
     try std.testing.expect(oracle_back_count >= 20);
+    const back_first_control1 = svgScreenPoint(svg, .{ .x = back_numbers[2], .y = back_numbers[3] });
+    const oracle_back_first_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[2], .y = oracle_back_numbers[3] });
+    const back_first_control2 = svgScreenPoint(svg, .{ .x = back_numbers[4], .y = back_numbers[5] });
+    const oracle_back_first_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[4], .y = oracle_back_numbers[5] });
+    try std.testing.expect(distanceBetween(back_first_control1, oracle_back_first_control1) <= 1.8);
+    try std.testing.expect(distanceBetween(back_first_control2, oracle_back_first_control2) <= 0.8);
     try std.testing.expect(@abs((back_numbers[6] + svg_translate.x) - (oracle_back_numbers[6] + oracle_translate.x)) <= 1.0);
     const back_mid_control = svgScreenPoint(svg, .{ .x = back_numbers[8], .y = back_numbers[9] });
     const oracle_back_mid_control = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[8], .y = oracle_back_numbers[9] });
