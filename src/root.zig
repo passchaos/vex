@@ -9922,8 +9922,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             var path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_clip.head);
             if (graphvizSameClusterBackEdgePathEndShift(layout, edge_item, rankdir, prefer_left)) |shift| path_end = .{ .x = path_end.x + shift.x, .y = path_end.y + shift.y };
             try writePathMove(writer, path_start);
-            try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
-            try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 }, p2);
+            const channel_p1 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p1.x - 1.0, .y = p1.y } else p1;
+            const channel_p2 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p2.x - 1.0, .y = p2.y } else p2;
+            try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, channel_p1);
+            try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 }, channel_p2);
             try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.155 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_end);
         }
         return;
@@ -15689,7 +15691,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.35);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 1.05);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.35);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
