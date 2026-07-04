@@ -14885,6 +14885,13 @@ fn expectBackEdgeSidePath(svg: []const u8) !void {
     try std.testing.expect(svgPathCommandCount(path, 'L') == 0);
 }
 
+fn expectLayoutNodeClusterPaddingNear(graph: *const Graph, layout: *const Layout, cluster_name: []const u8, node_id: NodeId, expected_padding: f64, tolerance: f64) !void {
+    const cluster_index = clusterIndexByName(graph, cluster_name) orelse return error.MissingClusterRect;
+    if (cluster_index >= layout.clusters.len or node_id >= layout.nodes.len) return error.MissingNodeCenter;
+    const padding = layout.nodes[node_id].center.x - layout.clusters[cluster_index].x;
+    try std.testing.expect(@abs(padding - expected_padding) <= tolerance);
+}
+
 test "user cluster example stays compact and Graphviz-like" {
     const allocator = std.testing.allocator;
     const graphviz_oracle = @embedFile("testdata/test000.svg");
@@ -14917,6 +14924,11 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(layout.nodes[start].center.x < layout.nodes[b0].center.x);
     try std.testing.expect(layout.nodes[end].center.x > layout.nodes[a3].center.x);
     try std.testing.expect(layout.nodes[end].center.x < layout.nodes[b3].center.x);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_0", a0, 55.0, 2.6);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_0", a3, 55.0, 2.6);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b0, 35.0, 2.6);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b2, 40.0, 1.0);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b3, 35.0, 2.6);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
