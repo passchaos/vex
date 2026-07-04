@@ -7256,8 +7256,23 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     const inline_route = if (back_edge)
         backEdgeInlineArrowRoute(layout, edge_item, rankdir, base_offset, render_route, routing)
     else
-        routeForInlineArrowheads(layout, edge_item, rankdir, render_route);
+        graphvizCrossClusterLongInlineArrowRoute(layout, edge_item, rankdir, routeForInlineArrowheads(layout, edge_item, rankdir, render_route));
     try writeSvgInlineArrowheads(writer, directed, inline_route, visual);
+}
+
+fn graphvizCrossClusterLongInlineArrowRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return route;
+    if (rankdir != .TB and rankdir != .BT) return route;
+    if (longEdgeWaypointCount(layout, edge_item) != 1) return route;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
+    var result = route;
+    const x_shift: f64 = -0.55;
+    const y_shift: f64 = if (rankdir == .TB) -0.55 else 0.55;
+    result.end.x += x_shift;
+    result.end.y += y_shift;
+    return result;
 }
 
 fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
@@ -15629,7 +15644,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;a2", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a2-&gt;a3", 1.8);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 0.9);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 0.1);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
@@ -15641,6 +15656,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.05);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.5);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.55);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.5);
