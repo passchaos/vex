@@ -2363,7 +2363,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
-    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.0);
+    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.25);
     shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.0);
     shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
@@ -7209,7 +7209,7 @@ fn crossClusterLeftDiagonalRoute(layout: *const Layout, edge_item: Edge, rankdir
     if (dx >= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
 
     var adjusted = route;
-    const head_shift = Point{ .x = 3.8, .y = 0.0 };
+    const head_shift = Point{ .x = 3.6, .y = 0.0 };
     adjusted.end = .{ .x = route.end.x + head_shift.x, .y = route.end.y + head_shift.y };
     adjusted.control1 = .{ .x = route.control1.x + head_shift.x * 0.25, .y = route.control1.y };
     adjusted.control2 = .{ .x = route.control2.x + head_shift.x * 0.70, .y = route.control2.y };
@@ -9283,10 +9283,11 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
 
     if (rankdir == .TB or rankdir == .BT) {
         const prefer_left = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
-        const side_x = if (prefer_left)
+        var side_x = if (prefer_left)
             @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
         else
             @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
+        if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) side_x -= 0.25;
         const rank_delta = route.end.y - route.start.y;
         const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.20 };
         const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.21 };
@@ -9419,6 +9420,18 @@ fn edgeTouchesMultipleClusters(layout: *const Layout, edge_item: Edge) bool {
     }
     if (from_cluster == null or to_cluster == null) return false;
     return from_cluster.? != to_cluster.?;
+}
+
+fn edgeTouchesSingleCluster(layout: *const Layout, edge_item: Edge) bool {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return false;
+    var from_cluster: ?usize = null;
+    var to_cluster: ?usize = null;
+    for (layout.clusters, 0..) |cluster_box, cluster_index| {
+        if (pointInsideCluster(layout.nodes[edge_item.from].center, cluster_box)) from_cluster = cluster_index;
+        if (pointInsideCluster(layout.nodes[edge_item.to].center, cluster_box)) to_cluster = cluster_index;
+    }
+    if (from_cluster == null or to_cluster == null) return false;
+    return from_cluster.? == to_cluster.?;
 }
 
 fn pointInsideCluster(point: Point, cluster_box: ClusterLayout) bool {
