@@ -7354,7 +7354,7 @@ fn graphvizMsquareHeadRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathH
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var adjusted = route;
-    const tail_shift: f64 = if (dx >= 0) 0.45 else -0.45;
+    const tail_shift: f64 = if (dx >= 0) 0.45 else -0.60;
     adjusted.start.x += tail_shift;
     adjusted.control1.x += tail_shift * 0.75;
     adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
@@ -15375,7 +15375,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 2.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 2.3);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.3);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.1);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.9);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.0);
