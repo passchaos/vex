@@ -7239,7 +7239,11 @@ fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
 }
 
 fn nodeLabelYOffset(node_item: Node) f64 {
-    return if (node_item.shape == .mdiamond) 2.0 else 0.0;
+    return switch (node_item.shape) {
+        .mdiamond => 2.0,
+        .msquare => -2.0,
+        else => 0.0,
+    };
 }
 
 fn renderSvgNodeXLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -14864,6 +14868,11 @@ test "user cluster example stays compact and Graphviz-like" {
     const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
     const oracle_start_label_y = svgNumberAfter(oracle_start_fragment, " y=\"") orelse return error.MissingStartNode;
     try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
+    const end_fragment = svgGroupFragmentByTitle(svg, "end") orelse return error.MissingEndNode;
+    const oracle_end_fragment = svgGroupFragmentByTitle(graphviz_oracle, "end") orelse return error.MissingEndNode;
+    const end_label_y = svgNumberAfter(end_fragment, " y=\"") orelse return error.MissingEndNode;
+    const oracle_end_label_y = svgNumberAfter(oracle_end_fragment, " y=\"") orelse return error.MissingEndNode;
+    try std.testing.expect(@abs((end_label_y + svgGraphvizTranslate(svg).y) - (oracle_end_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">process #1</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">process #2</text>") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
