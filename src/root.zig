@@ -7272,7 +7272,7 @@ fn graphvizCrossClusterLeftInlineArrowRoute(layout: *const Layout, edge_item: Ed
     const dy = route.end.y - route.start.y;
     if (dx >= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
     var result = route;
-    result.end.x -= 0.08;
+    result.end.x -= 0.13;
     result.end.y += if (rankdir == .TB) -0.42 else 0.42;
     const graphviz_arrow_axis_x: f64 = 8.44;
     const graphviz_arrow_axis_y: f64 = if (rankdir == .TB) -5.37 else 5.37;
@@ -15890,7 +15890,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.1);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.1);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.08);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
