@@ -8040,7 +8040,7 @@ fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, st
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
-    const shape_layout = fixedShapeLayout(node_item, layout);
+    const shape_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, layout));
     switch (node_item.shape) {
         .point => {
             try writeSvgCircleOpen(writer, shape_layout.center, @min(shape_layout.width, shape_layout.height) / 2.0);
@@ -8162,6 +8162,13 @@ fn fixedShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
         .width = @min(layout.width, width),
         .height = @min(layout.height, height),
     };
+}
+
+fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
+    if (node_item.shape != .mdiamond) return layout;
+    var result = layout;
+    result.height = @min(result.height, 36.0);
+    return result;
 }
 
 fn renderSvgPolygon(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
@@ -9868,7 +9875,7 @@ fn portBoundaryPoint(node: NodeLayout, toward: Point, port: CompassPort, rankdir
 fn nodePortBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, port: CompassPort, rankdir: RankDir, leaving: bool) Point {
     if (port != .auto) return portBoundaryPoint(layout, toward, port, rankdir, leaving);
     if (shapeUsesEllipseBoundary(node_item.shape)) return ellipseBoundaryPoint(layout, toward);
-    if (shapeUsesDiamondBoundary(node_item.shape)) return diamondBoundaryPoint(layout, toward);
+    if (shapeUsesDiamondBoundary(node_item.shape)) return diamondBoundaryPoint(visualShapeLayout(node_item, layout), toward);
     if (shapeUsesRectBoundary(node_item.shape)) return rectBoundaryPoint(layout, toward);
     return boundaryPoint(layout, toward, rankdir, leaving);
 }
@@ -14998,8 +15005,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 2.6, 3.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 3.2, 1.9);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 2.1, 2.8);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 2.4, 1.8);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.3, 1.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 3.5);
