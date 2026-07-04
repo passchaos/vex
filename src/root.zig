@@ -7018,9 +7018,11 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
             const color_offset = colorListOffset(colors.len, index, spacing);
             const segment_route = edgeRouteForEdgeWithColorOffset(route, rankdir, color_offset);
             const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
-            const path_route = routeForPathMarkers(segment_route, segment_visual);
+            const back_edge = isBackEdge(layout, edge_item);
+            const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
+            const path_clip = if (back_edge) edgePathClip(segment_visual) else EdgePathClip{};
             try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{segment.color});
-            try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing);
+            try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip);
             try writer.writeByte('"');
             try writeSvgStrokeWidth(writer, visual.width);
             try writeSvgDash(writer, visual.dash);
@@ -7031,9 +7033,11 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
         return;
     }
 
-    const path_route = routeForPathMarkers(route, visual);
+    const back_edge = isBackEdge(layout, edge_item);
+    const path_route = if (back_edge) route else routeForPathMarkers(route, visual);
+    const path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
     try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{visual.stroke});
-    try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing);
+    try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing, path_clip);
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
@@ -7194,6 +7198,13 @@ fn routeForPathMarkers(route: EdgeRoute, visual: EdgeVisual) EdgeRoute {
         result.control2 = shortenPointToward(route.control2, route.control1, 2.0 * visual.marker_scale);
     }
     return result;
+}
+
+fn edgePathClip(visual: EdgeVisual) EdgePathClip {
+    return .{
+        .tail = if (visual.marker_start != .none) 10.0 * visual.marker_scale else 0,
+        .head = if (visual.marker_end != .none) 10.0 * visual.marker_scale else 0,
+    };
 }
 
 fn shortenPointToward(point: Point, toward: Point, amount: f64) Point {
@@ -7579,6 +7590,11 @@ const EdgeRoute = struct {
 const EdgeControls = struct {
     c1: Point,
     c2: Point,
+};
+
+const EdgePathClip = struct {
+    head: f64 = 0,
+    tail: f64 = 0,
 };
 
 const DashStyle = enum {
@@ -8966,18 +8982,20 @@ fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
     return .curved;
 }
 
-fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting) Io.Writer.Error!void {
+fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip) Io.Writer.Error!void {
     if (routing == .line) {
-        try writePathMove(writer, direct_route.start);
-        try writePathLine(writer, direct_route.end);
+        try writePathMove(writer, shortenPointToward(direct_route.start, direct_route.control1, path_clip.tail));
+        try writePathLine(writer, shortenPointToward(direct_route.end, direct_route.control2, path_clip.head));
         return;
     }
     if (routing == .ortho) {
-        try writeOrthoEdgePath(writer, direct_route.start, direct_route.end, rankdir);
+        const start = shortenPointToward(direct_route.start, direct_route.control1, path_clip.tail);
+        const end = shortenPointToward(direct_route.end, direct_route.control2, path_clip.head);
+        try writeOrthoEdgePath(writer, start, end, rankdir);
         return;
     }
     if (isBackEdge(layout, edge_item)) {
-        try writeBackEdgePath(writer, layout, edge_item, rankdir, offset, direct_route, routing);
+        try writeBackEdgePath(writer, layout, edge_item, rankdir, offset, direct_route, routing, path_clip);
         return;
     }
 
@@ -9083,7 +9101,7 @@ fn isBackEdge(layout: *const Layout, edge_item: Edge) bool {
     return layout.ranks[edge_item.to] < layout.ranks[edge_item.from];
 }
 
-fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting) Io.Writer.Error!void {
+fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip) Io.Writer.Error!void {
     const from = layout.nodes[edge_item.from];
     const to = layout.nodes[edge_item.to];
     const side_gap = @max(5.0, layout.margin * 0.3) + @abs(offset);
@@ -9098,10 +9116,12 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.18 };
         const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.25 };
         if (routing == .polyline) {
-            try writePathMove(writer, route.start);
+            const path_start = shortenPointToward(route.start, p1, path_clip.tail);
+            const path_end = shortenPointToward(route.end, p2, path_clip.head);
+            try writePathMove(writer, path_start);
             try writePathLine(writer, p1);
             try writePathLine(writer, p2);
-            try writePathLine(writer, route.end);
+            try writePathLine(writer, path_end);
         } else {
             const start_side_dx = side_x - route.start.x;
             const end_side_dx = side_x - route.end.x;
@@ -9111,10 +9131,12 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const c4x = route.end.x + end_side_dx * 0.25;
             const mid_y = (p1.y + p2.y) / 2.0;
             const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.62 else @abs(start_side_dx) * 0.62;
-            try writePathMove(writer, route.start);
+            const path_start = shortenPointToward(route.start, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, path_clip.tail);
+            const path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, path_clip.head);
+            try writePathMove(writer, path_start);
             try writePathCubic(writer, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
             try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = mid_y }, .{ .x = side_x + side_bulge, .y = mid_y }, p2);
-            try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.18 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, route.end);
+            try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.18 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, path_end);
         }
         return;
     }
@@ -9128,10 +9150,12 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
     const p1 = Point{ .x = route.start.x + rank_delta * 0.18, .y = side_y };
     const p2 = Point{ .x = route.end.x - rank_delta * 0.25, .y = side_y };
     if (routing == .polyline) {
-        try writePathMove(writer, route.start);
+        const path_start = shortenPointToward(route.start, p1, path_clip.tail);
+        const path_end = shortenPointToward(route.end, p2, path_clip.head);
+        try writePathMove(writer, path_start);
         try writePathLine(writer, p1);
         try writePathLine(writer, p2);
-        try writePathLine(writer, route.end);
+        try writePathLine(writer, path_end);
     } else {
         const start_side_dy = side_y - route.start.y;
         const end_side_dy = side_y - route.end.y;
@@ -9141,10 +9165,12 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const c4y = route.end.y + end_side_dy * 0.25;
         const mid_x = (p1.x + p2.x) / 2.0;
         const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.62 else @abs(start_side_dy) * 0.62;
-        try writePathMove(writer, route.start);
+        const path_start = shortenPointToward(route.start, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, path_clip.tail);
+        const path_end = shortenPointToward(route.end, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, path_clip.head);
+        try writePathMove(writer, path_start);
         try writePathCubic(writer, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, .{ .x = route.start.x + rank_delta * 0.12, .y = c2y }, p1);
         try writePathCubic(writer, .{ .x = mid_x, .y = side_y + side_bulge }, .{ .x = mid_x, .y = side_y + side_bulge }, p2);
-        try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.18, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, route.end);
+        try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.18, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, path_end);
     }
 }
 
@@ -14462,7 +14488,7 @@ test "SVG clamps outward long-edge waypoints for forward cluster cross edges" {
 
     var aw = Io.Writer.Allocating.init(allocator);
     defer aw.deinit();
-    try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved);
+    try writeEdgePath(&aw.writer, &layout, edge_item, layout.rankdir, 0, route, .curved, .{});
     const path = try aw.toOwnedSlice();
     defer allocator.free(path);
     try std.testing.expect(pathDataCommandCount(path, 'C') == 1);
@@ -14790,6 +14816,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.end), svgScreenPoint(graphviz_oracle, oracle_back_points.end)) <= 7.0);
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 3.0);
