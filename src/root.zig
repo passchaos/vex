@@ -14892,6 +14892,14 @@ fn expectLayoutNodeClusterPaddingNear(graph: *const Graph, layout: *const Layout
     try std.testing.expect(@abs(padding - expected_padding) <= tolerance);
 }
 
+fn expectLayoutClusterMatchesSvgAnchor(graph: *const Graph, layout: *const Layout, svg: []const u8, cluster_name: []const u8, tolerance: f64) !void {
+    const cluster_index = clusterIndexByName(graph, cluster_name) orelse return error.MissingClusterRect;
+    if (cluster_index >= layout.clusters.len) return error.MissingClusterRect;
+    const layout_screen_x = clusterVisualRect(graph.clusters.items[cluster_index], layout, cluster_index).x + svgGraphvizTranslate(svg).x;
+    const svg_screen_x = svgClusterScreenX(svg, cluster_name) orelse return error.MissingClusterRect;
+    try std.testing.expect(@abs(layout_screen_x - svg_screen_x) <= tolerance);
+}
+
 test "user cluster example stays compact and Graphviz-like" {
     const allocator = std.testing.allocator;
     const graphviz_oracle = @embedFile("testdata/test000.svg");
@@ -15004,6 +15012,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 0.5);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 1.0);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 0.5);
+    try expectLayoutClusterMatchesSvgAnchor(&graph, &layout, svg, "cluster_0", 0.1);
+    try expectLayoutClusterMatchesSvgAnchor(&graph, &layout, svg, "cluster_1", 0.1);
     try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_0").? - svgClusterScreenY(graphviz_oracle, "cluster_0").?) <= 0.2);
     try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_0").? - svgClusterRectHeight(graphviz_oracle, "cluster_0").?) <= 0.2);
     try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_1").? - svgClusterScreenY(graphviz_oracle, "cluster_1").?) <= 0.2);
