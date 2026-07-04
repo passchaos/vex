@@ -2363,7 +2363,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
-    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.4);
+    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.45);
     shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.42);
     shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
@@ -9345,7 +9345,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
         else
             @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
-        if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) side_x -= 0.45;
+        if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) side_x -= 0.50;
         const rank_delta = route.end.y - route.start.y;
         const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.20 };
         const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.21 };
@@ -14980,10 +14980,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_end_x >= 109.0);
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 51.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 2.7);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a1").? - svgNodeScreenCenterX(graphviz_oracle, "a1").?) <= 2.7);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 2.7);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a3").? - svgNodeScreenCenterX(graphviz_oracle, "a3").?) <= 2.7);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 2.6);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a1").? - svgNodeScreenCenterX(graphviz_oracle, "a1").?) <= 2.6);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 2.6);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a3").? - svgNodeScreenCenterX(graphviz_oracle, "a3").?) <= 2.6);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 2.7);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 2.3);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 1.0);
@@ -15059,8 +15059,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 2.7);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 2.7);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 2.6);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 2.6);
     const adjacent_count = svgPathNumbers(svg, "a0-&gt;a1", path_numbers[0..]);
     try std.testing.expect(adjacent_count >= 8);
     const oracle_adjacent_count = svgPathNumbers(graphviz_oracle, "a0-&gt;a1", oracle_path_numbers[0..]);
@@ -15069,8 +15069,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_adjacent_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const adjacent_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
     const oracle_adjacent_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
-    try std.testing.expect(distanceBetween(adjacent_control1, oracle_adjacent_control1) <= 2.8);
-    try std.testing.expect(distanceBetween(adjacent_control2, oracle_adjacent_control2) <= 2.7);
+    try std.testing.expect(distanceBetween(adjacent_control1, oracle_adjacent_control1) <= 2.7);
+    try std.testing.expect(distanceBetween(adjacent_control2, oracle_adjacent_control2) <= 2.6);
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
@@ -15128,7 +15128,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.65);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.1);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 2.8);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 2.6);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 2.7);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
