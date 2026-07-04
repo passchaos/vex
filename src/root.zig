@@ -7340,7 +7340,7 @@ fn graphvizDiamondTailRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathH
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var adjusted = route;
-    const head_shift = Point{ .x = if (dx >= 0) -0.8 else 0.8, .y = 0.0 };
+    const head_shift = Point{ .x = if (dx >= 0) -1.0 else 1.0, .y = 0.0 };
     adjusted.end = .{ .x = route.end.x + head_shift.x, .y = route.end.y };
     adjusted.control2 = .{ .x = route.control2.x + head_shift.x * 0.75, .y = route.control2.y };
     adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
@@ -15361,12 +15361,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 0.6, 1.4);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 0.6, 1.3);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 2.0, 0.9);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 0.8, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.8, 0.8);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 2.4);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 2.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 2.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 2.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.9);
@@ -15385,8 +15385,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 1.7);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 2.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 1.5);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 1.9);
