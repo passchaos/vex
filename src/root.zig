@@ -15867,9 +15867,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.07);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.075);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.045);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.045);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.045);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.042);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.042);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.042);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.06);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.055);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06);
