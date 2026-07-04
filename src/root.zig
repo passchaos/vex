@@ -8900,13 +8900,13 @@ fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, colo
         color,
         color,
     });
-    try writeSvgPoint(writer, left);
+    try writeSvgPoint(writer, right);
     try writer.writeByte(' ');
     try writeSvgPoint(writer, tip);
     try writer.writeByte(' ');
-    try writeSvgPoint(writer, right);
-    try writer.writeByte(' ');
     try writeSvgPoint(writer, left);
+    try writer.writeByte(' ');
+    try writeSvgPoint(writer, right);
     try writer.writeAll("\"/>\n");
 }
 
@@ -14627,7 +14627,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- a0&#45;&gt;a1 -->") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge1\" class=\"edge\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>a0-&gt;a1</title>\n<path fill=\"none\" stroke=\"black\" d=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"black\" stroke=\"black\" points=\"51.5,141.3 55,151.3 58.5,141.3 51.5,141.3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"black\" stroke=\"black\" points=\"58.5,141.3 55,151.3 51.5,141.3 58.5,141.3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") != null);
     const node1_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") orelse return error.MissingNode1;
     const node2_group_pos = std.mem.indexOf(u8, svg, "<g id=\"node2\" class=\"node\">") orelse return error.MissingNode2;
