@@ -9471,7 +9471,7 @@ fn graphvizAdjacentPathRouteForEdge(layout: *const Layout, edge_item: Edge, rout
         result.label.x += shift;
     }
     if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
-        const shift: f64 = -0.4;
+        const shift: f64 = -0.6;
         result.start.x += shift;
         result.control1.x += shift;
         result.control2.x += shift;
@@ -15370,13 +15370,13 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 2.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 1.8);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 1.8);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.9);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.75);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 1.9);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 2.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.0);
-    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.9);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 1.8);
