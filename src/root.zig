@@ -14703,7 +14703,12 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_translate.y == 0);
     try std.testing.expect(oracle_translate.y > 400.0);
     try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 7.5);
-    try std.testing.expect(path_numbers[2] < 100.0);
+    const cross_control1 = svgScreenPoint(svg, .{ .x = path_numbers[2], .y = path_numbers[3] });
+    const oracle_cross_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
+    const cross_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
+    const oracle_cross_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
+    try std.testing.expect(distanceBetween(cross_control1, oracle_cross_control1) <= 12.0);
+    try std.testing.expect(distanceBetween(cross_control2, oracle_cross_control2) <= 18.0);
     const cross_points = svgPathStartEnd(svg, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
     const oracle_cross_points = svgPathStartEnd(graphviz_oracle, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
     const cross_start = svgScreenPoint(svg, cross_points.start);
