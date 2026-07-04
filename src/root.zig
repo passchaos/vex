@@ -9147,16 +9147,16 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const end_side_dx = side_x - route.end.x;
             const c1x = route.start.x + start_side_dx * 0.25;
             const c2x = route.start.x + start_side_dx * 0.65;
-            const c3x = route.end.x + end_side_dx * 0.65;
-            const c4x = route.end.x + end_side_dx * 0.25;
+            const c3x = route.end.x + end_side_dx * 0.86;
+            const c4x = route.end.x + end_side_dx * 0.60;
             const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.62 else @abs(start_side_dx) * 0.62;
             const middle_delta_y = p2.y - p1.y;
             const path_start = shortenPointToward(route.start, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, path_clip.tail);
-            const path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, path_clip.head);
+            const path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_clip.head);
             try writePathMove(writer, path_start);
             try writePathCubic(writer, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
             try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 }, p2);
-            try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.18 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, path_end);
+            try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.155 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_end);
         }
         return;
     }
@@ -9181,16 +9181,16 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const end_side_dy = side_y - route.end.y;
         const c1y = route.start.y + start_side_dy * 0.25;
         const c2y = route.start.y + start_side_dy * 0.65;
-        const c3y = route.end.y + end_side_dy * 0.65;
-        const c4y = route.end.y + end_side_dy * 0.25;
+        const c3y = route.end.y + end_side_dy * 0.86;
+        const c4y = route.end.y + end_side_dy * 0.60;
         const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.62 else @abs(start_side_dy) * 0.62;
         const middle_delta_x = p2.x - p1.x;
         const path_start = shortenPointToward(route.start, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, path_clip.tail);
-        const path_end = shortenPointToward(route.end, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, path_clip.head);
+        const path_end = shortenPointToward(route.end, .{ .x = route.end.x - rank_delta * 0.10, .y = c4y }, path_clip.head);
         try writePathMove(writer, path_start);
         try writePathCubic(writer, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, .{ .x = route.start.x + rank_delta * 0.12, .y = c2y }, p1);
         try writePathCubic(writer, .{ .x = p1.x + middle_delta_x * 0.42, .y = side_y + side_bulge }, .{ .x = p1.x + middle_delta_x * 0.57, .y = side_y + side_bulge }, p2);
-        try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.18, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, path_end);
+        try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.155, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.10, .y = c4y }, path_end);
     }
 }
 
@@ -14833,6 +14833,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_mid_control = svgScreenPoint(svg, .{ .x = back_numbers[8], .y = back_numbers[9] });
     const oracle_back_mid_control = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[8], .y = oracle_back_numbers[9] });
     try std.testing.expect(distanceBetween(back_mid_control, oracle_back_mid_control) <= 1.0);
+    const back_tail_control1 = svgScreenPoint(svg, .{ .x = back_numbers[14], .y = back_numbers[15] });
+    const oracle_back_tail_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[14], .y = oracle_back_numbers[15] });
+    const back_tail_control2 = svgScreenPoint(svg, .{ .x = back_numbers[16], .y = back_numbers[17] });
+    const oracle_back_tail_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[16], .y = oracle_back_numbers[17] });
+    try std.testing.expect(distanceBetween(back_tail_control1, oracle_back_tail_control1) <= 1.0);
+    try std.testing.expect(distanceBetween(back_tail_control2, oracle_back_tail_control2) <= 1.0);
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
