@@ -9744,6 +9744,11 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return null;
+    var path_start = route.start;
+    if (dx >= 0) {
+        path_start.x -= 0.06;
+        path_start.y += if (rankdir == .TB) 0.03 else -0.03;
+    }
     var end = route.end;
     const head_x_shift: f64 = if (dx >= 0) -0.22 else 0.22;
     end.x += head_x_shift;
@@ -9754,11 +9759,11 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.0;
     const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665 + head_x_shift * 0.5 + c2_extra_x, .y = route.start.y + adjusted_dy * 0.665 };
     return .{
-        .start = route.start,
+        .start = path_start,
         .control1 = c1,
         .control2 = c2,
         .end = end,
-        .label = cubicPoint(route.start, c1, c2, end, 0.5),
+        .label = cubicPoint(path_start, c1, c2, end, 0.5),
     };
 }
 
@@ -15856,7 +15861,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.8, 0.8);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.1);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.1);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.08);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
