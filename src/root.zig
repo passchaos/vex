@@ -9605,8 +9605,8 @@ fn alignedAdjacentControls(start: Point, end: Point, rankdir: RankDir) ?EdgeCont
     const cross_delta = if (axes.horizontalRanks()) @abs(dy) else @abs(dx);
     if (axis_delta <= 0.001 or cross_delta > 1.0) return null;
     return .{
-        .c1 = .{ .x = start.x + dx / 3.0, .y = start.y + dy / 3.0 },
-        .c2 = .{ .x = start.x + dx * 2.0 / 3.0, .y = start.y + dy * 2.0 / 3.0 },
+        .c1 = .{ .x = start.x + dx * 0.30, .y = start.y + dy * 0.30 },
+        .c2 = .{ .x = start.x + dx * 0.66, .y = start.y + dy * 0.66 },
     };
 }
 
@@ -15588,12 +15588,12 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.5);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.5);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.9);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.9);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.9);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.9);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.05);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.85);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
