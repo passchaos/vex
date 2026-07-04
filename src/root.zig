@@ -14784,6 +14784,9 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_back_count = svgPathNumbers(graphviz_oracle, "a3-&gt;a0", oracle_back_numbers[0..]);
     try std.testing.expect(oracle_back_count >= 20);
     try std.testing.expect(@abs((back_numbers[6] + svg_translate.x) - (oracle_back_numbers[6] + oracle_translate.x)) <= 1.0);
+    const back_mid_control = svgScreenPoint(svg, .{ .x = back_numbers[8], .y = back_numbers[9] });
+    const oracle_back_mid_control = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[8], .y = oracle_back_numbers[9] });
+    try std.testing.expect(distanceBetween(back_mid_control, oracle_back_mid_control) <= 12.0);
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
