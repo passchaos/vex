@@ -7533,8 +7533,19 @@ fn graphvizCrossClusterLongPathStartShift(layout: *const Layout, edge_item: Edge
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
-    const y_shift: f64 = if (rankdir == .TB) 0.25 else -0.25;
+    const y_shift: f64 = if (rankdir == .TB) 0.15 else -0.15;
     return .{ .x = -0.15, .y = y_shift };
+}
+
+fn graphvizCrossClusterLongPathControl1Shift(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?Point {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    if (longEdgeWaypointCount(layout, edge_item) != 1) return null;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
+    const y_shift: f64 = if (rankdir == .TB) 0.09 else -0.09;
+    return .{ .x = 0.07, .y = y_shift };
 }
 
 fn graphvizDiamondTailRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHints) EdgeRoute {
@@ -9571,6 +9582,9 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         if (graphvizCrossClusterLongPathStartShift(layout, edge_item, rankdir, direct_route)) |shift| {
             path_start = .{ .x = path_start.x + shift.x, .y = path_start.y + shift.y };
             c1 = .{ .x = c1.x + shift.x * 0.5, .y = c1.y + shift.y * 0.75 };
+        }
+        if (graphvizCrossClusterLongPathControl1Shift(layout, edge_item, rankdir, direct_route)) |shift| {
+            c1 = .{ .x = c1.x + shift.x, .y = c1.y + shift.y };
         }
         var path_end = direct_route.end;
         if (graphvizCrossClusterLongPathEndShift(layout, edge_item, rankdir, direct_route)) |shift| {
@@ -15835,7 +15849,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.1);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.25);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
