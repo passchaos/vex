@@ -7241,7 +7241,7 @@ fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
 fn nodeLabelYOffset(node_item: Node) f64 {
     return switch (node_item.shape) {
         .mdiamond => 2.0,
-        .msquare => -2.0,
+        .msquare => -0.5,
         .ellipse, .circle, .doublecircle, .mcircle => -0.4,
         else => 0.0,
     };
@@ -8182,9 +8182,12 @@ fn fixedShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
 }
 
 fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
-    if (node_item.shape != .mdiamond) return layout;
     var result = layout;
-    result.height = @min(result.height, 36.0);
+    switch (node_item.shape) {
+        .mdiamond => result.height = @min(result.height, 36.0),
+        .msquare => result.center.y += 1.5,
+        else => {},
+    }
     return result;
 }
 
@@ -14892,6 +14895,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
     const end_fragment = svgGroupFragmentByTitle(svg, "end") orelse return error.MissingEndNode;
     const oracle_end_fragment = svgGroupFragmentByTitle(graphviz_oracle, "end") orelse return error.MissingEndNode;
+    try std.testing.expect(@abs((svgPolygonBBoxY(end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
     try std.testing.expect(@abs((svgPolygonBBoxWidth(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxWidth(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.3);
     try std.testing.expect(@abs((svgPolygonBBoxHeight(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxHeight(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.3);
     const end_label_y = svgNumberAfter(end_fragment, " y=\"") orelse return error.MissingEndNode;
