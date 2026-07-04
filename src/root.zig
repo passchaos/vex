@@ -14928,8 +14928,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 4.8);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 4.8);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 3.8);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 3.4);
     const adjacent_count = svgPathNumbers(svg, "a0-&gt;a1", path_numbers[0..]);
     try std.testing.expect(adjacent_count >= 8);
     const oracle_adjacent_count = svgPathNumbers(graphviz_oracle, "a0-&gt;a1", oracle_path_numbers[0..]);
