@@ -9113,8 +9113,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         else
             @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
         const rank_delta = route.end.y - route.start.y;
-        const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.18 };
-        const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.25 };
+        const p1 = Point{ .x = side_x, .y = route.start.y + rank_delta * 0.20 };
+        const p2 = Point{ .x = side_x, .y = route.end.y - rank_delta * 0.21 };
         if (routing == .polyline) {
             const path_start = shortenPointToward(route.start, p1, path_clip.tail);
             const path_end = shortenPointToward(route.end, p2, path_clip.head);
@@ -9129,13 +9129,13 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const c2x = route.start.x + start_side_dx * 0.65;
             const c3x = route.end.x + end_side_dx * 0.65;
             const c4x = route.end.x + end_side_dx * 0.25;
-            const mid_y = (p1.y + p2.y) / 2.0;
             const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.62 else @abs(start_side_dx) * 0.62;
+            const middle_delta_y = p2.y - p1.y;
             const path_start = shortenPointToward(route.start, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, path_clip.tail);
             const path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, path_clip.head);
             try writePathMove(writer, path_start);
             try writePathCubic(writer, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 }, p1);
-            try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = mid_y }, .{ .x = side_x + side_bulge, .y = mid_y }, p2);
+            try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 }, p2);
             try writePathCubic(writer, .{ .x = c3x, .y = route.end.y - rank_delta * 0.18 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.06 }, path_end);
         }
         return;
@@ -9147,8 +9147,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
     else
         @min(layout.height - layout.margin_y, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
     const rank_delta = route.end.x - route.start.x;
-    const p1 = Point{ .x = route.start.x + rank_delta * 0.18, .y = side_y };
-    const p2 = Point{ .x = route.end.x - rank_delta * 0.25, .y = side_y };
+    const p1 = Point{ .x = route.start.x + rank_delta * 0.20, .y = side_y };
+    const p2 = Point{ .x = route.end.x - rank_delta * 0.21, .y = side_y };
     if (routing == .polyline) {
         const path_start = shortenPointToward(route.start, p1, path_clip.tail);
         const path_end = shortenPointToward(route.end, p2, path_clip.head);
@@ -9163,13 +9163,13 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
         const c2y = route.start.y + start_side_dy * 0.65;
         const c3y = route.end.y + end_side_dy * 0.65;
         const c4y = route.end.y + end_side_dy * 0.25;
-        const mid_x = (p1.x + p2.x) / 2.0;
         const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.62 else @abs(start_side_dy) * 0.62;
+        const middle_delta_x = p2.x - p1.x;
         const path_start = shortenPointToward(route.start, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, path_clip.tail);
         const path_end = shortenPointToward(route.end, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, path_clip.head);
         try writePathMove(writer, path_start);
         try writePathCubic(writer, .{ .x = route.start.x + rank_delta * 0.05, .y = c1y }, .{ .x = route.start.x + rank_delta * 0.12, .y = c2y }, p1);
-        try writePathCubic(writer, .{ .x = mid_x, .y = side_y + side_bulge }, .{ .x = mid_x, .y = side_y + side_bulge }, p2);
+        try writePathCubic(writer, .{ .x = p1.x + middle_delta_x * 0.42, .y = side_y + side_bulge }, .{ .x = p1.x + middle_delta_x * 0.57, .y = side_y + side_bulge }, p2);
         try writePathCubic(writer, .{ .x = route.end.x - rank_delta * 0.18, .y = c3y }, .{ .x = route.end.x - rank_delta * 0.06, .y = c4y }, path_end);
     }
 }
@@ -14812,7 +14812,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((back_numbers[6] + svg_translate.x) - (oracle_back_numbers[6] + oracle_translate.x)) <= 1.0);
     const back_mid_control = svgScreenPoint(svg, .{ .x = back_numbers[8], .y = back_numbers[9] });
     const oracle_back_mid_control = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[8], .y = oracle_back_numbers[9] });
-    try std.testing.expect(distanceBetween(back_mid_control, oracle_back_mid_control) <= 12.0);
+    try std.testing.expect(distanceBetween(back_mid_control, oracle_back_mid_control) <= 1.0);
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
