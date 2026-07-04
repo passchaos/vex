@@ -9210,9 +9210,13 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
             return;
         }
-        if (alignedAdjacentControls(direct_route.start, direct_route.end, rankdir)) |controls| {
-            try writePathMove(writer, direct_route.start);
-            try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
+        const adjacent_route = if (graphvizAdjacentPathRouteEnabled(layout, edge_item))
+            graphvizAdjacentPathRoute(direct_route, rankdir)
+        else
+            direct_route;
+        if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
+            try writePathMove(writer, adjacent_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, adjacent_route.end);
             return;
         }
         try writePathMove(writer, direct_route.start);
@@ -9276,6 +9280,37 @@ fn alignedAdjacentControls(start: Point, end: Point, rankdir: RankDir) ?EdgeCont
         .c1 = .{ .x = start.x + dx / 3.0, .y = start.y + dy / 3.0 },
         .c2 = .{ .x = start.x + dx * 2.0 / 3.0, .y = start.y + dy * 2.0 / 3.0 },
     };
+}
+
+fn graphvizAdjacentPathRoute(route: EdgeRoute, rankdir: RankDir) EdgeRoute {
+    var result = route;
+    const tail_overlap: f64 = 1.3;
+    const head_gap: f64 = 1.5;
+    switch (rankdir) {
+        .TB => {
+            result.start.y += tail_overlap;
+            result.end.y -= head_gap;
+        },
+        .BT => {
+            result.start.y -= tail_overlap;
+            result.end.y += head_gap;
+        },
+        .LR => {
+            result.start.x += tail_overlap;
+            result.end.x -= head_gap;
+        },
+        .RL => {
+            result.start.x -= tail_overlap;
+            result.end.x += head_gap;
+        },
+    }
+    return result;
+}
+
+fn graphvizAdjacentPathRouteEnabled(layout: *const Layout, edge_item: Edge) bool {
+    if (edge_item.ltail != null or edge_item.lhead != null) return false;
+    if (edgeTouchesMultipleClusters(layout, edge_item)) return false;
+    return true;
 }
 
 fn writeOrthoEdgePath(writer: *Io.Writer, start: Point, end: Point, rankdir: RankDir) Io.Writer.Error!void {
@@ -15024,8 +15059,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 3.8);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 3.4);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 2.8);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.end), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.end)) <= 2.8);
     const adjacent_count = svgPathNumbers(svg, "a0-&gt;a1", path_numbers[0..]);
     try std.testing.expect(adjacent_count >= 8);
     const oracle_adjacent_count = svgPathNumbers(graphviz_oracle, "a0-&gt;a1", oracle_path_numbers[0..]);
@@ -15034,8 +15069,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_adjacent_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const adjacent_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
     const oracle_adjacent_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
-    try std.testing.expect(distanceBetween(adjacent_control1, oracle_adjacent_control1) <= 3.3);
-    try std.testing.expect(distanceBetween(adjacent_control2, oracle_adjacent_control2) <= 3.4);
+    try std.testing.expect(distanceBetween(adjacent_control1, oracle_adjacent_control1) <= 2.9);
+    try std.testing.expect(distanceBetween(adjacent_control2, oracle_adjacent_control2) <= 2.8);
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
@@ -15087,10 +15122,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.3, 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 3.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 3.4);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.8);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 3.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.8);
-    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 3.2);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.8);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.1);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 3.4);
