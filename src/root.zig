@@ -7533,6 +7533,12 @@ fn expectSvgEdgeEndpointsNear(svg: []const u8, oracle: []const u8, title: []cons
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, points.end), svgScreenPoint(oracle, oracle_points.end)) <= tolerance);
 }
 
+fn expectSvgEdgeArrowTipNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    const tip = svgEdgeArrowTip(svg, title) orelse return error.MissingEdgeArrow;
+    const oracle_tip = svgEdgeArrowTip(oracle, title) orelse return error.MissingEdgeArrow;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, tip), svgScreenPoint(oracle, oracle_tip)) <= tolerance);
+}
+
 fn svgScreenPoint(svg: []const u8, point: Point) Point {
     const translate = svgGraphvizTranslate(svg);
     return .{ .x = point.x + translate.x, .y = point.y + translate.y };
@@ -14759,6 +14765,11 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 4.5);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 3.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 3.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 4.8);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 4.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 6.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 3.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 3.0);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
