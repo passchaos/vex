@@ -7296,6 +7296,9 @@ fn graphvizMsquareHeadInlineArrowRoute(route: EdgeRoute, rankdir: RankDir, hints
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var result = route;
     result.end.x += if (dx >= 0) -0.45 else -0.30;
+    result.end.y += if (rankdir == .TB) -0.10 else 0.10;
+    result.control2.x -= 0.20;
+    if (dx < 0) result.control2.y += if (rankdir == .TB) -0.25 else 0.25;
     return result;
 }
 
@@ -7327,7 +7330,7 @@ fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: Ran
     } else if (leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir) or rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir) or rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) {
         const y_shift: f64 = if (rankdir == .TB) 0.85 else -0.85;
         if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) result.end.x += 0.45;
-        if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) result.control2.x -= 0.4;
+        if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) result.control2.x -= 0.65;
         result.end.y += y_shift;
     }
     return result;
@@ -7363,6 +7366,8 @@ fn backEdgeInlineArrowRoute(layout: *const Layout, edge_item: Edge, rankdir: Ran
             result.end = .{ .x = result.end.x + shift.x, .y = result.end.y + shift.y };
         }
         if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
+            result.control2.x -= 0.5;
+            result.control2.y -= 0.35;
             result.end.x -= 0.45;
             result.end.y += if (rankdir == .TB) 0.5 else -0.5;
         }
@@ -9703,11 +9708,13 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return null;
     var end = route.end;
+    const head_x_shift: f64 = if (dx >= 0) -0.22 else 0.22;
+    end.x += head_x_shift;
     end.y += if (rankdir == .TB) -0.35 else 0.35;
     const adjusted_dx = end.x - route.start.x;
     const adjusted_dy = end.y - route.start.y;
     const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275, .y = route.start.y + adjusted_dy * 0.275 };
-    const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665, .y = route.start.y + adjusted_dy * 0.665 };
+    const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665 + head_x_shift * 0.5, .y = route.start.y + adjusted_dy * 0.665 };
     return .{
         .start = route.start,
         .control1 = c1,
@@ -10007,15 +10014,17 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             if (graphvizSameClusterBackEdgePathEndShift(layout, edge_item, rankdir, prefer_left)) |shift| path_end = .{ .x = path_end.x + shift.x, .y = path_end.y + shift.y };
             try writePathMove(writer, path_start);
             const channel_p1 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p1.x - 1.0, .y = p1.y } else p1;
-            const channel_p2 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p2.x - 1.0, .y = p2.y } else p2;
+            const channel_p2 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p2.x - 1.0, .y = p2.y + 0.2 } else p2;
             const tail_control1_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.72 else 0.0;
             const tail_end_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.87 else 0.0;
             const first_control1_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.5 else 0.0;
             const first_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.55 else 0.0;
             const middle_control_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.45 else 0.0;
+            const first_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.28 else 0.0;
+            const first_control2_extra_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.04 else 0.0;
             const tail_control1_x = c3x + tail_control1_shift;
             const tail_end = Point{ .x = path_end.x + tail_end_shift, .y = path_end.y };
-            try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift }, channel_p1);
+            try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
             try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
             try writePathCubic(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 }, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, tail_end);
         }
@@ -15782,8 +15791,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.35);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.3);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.35);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.2);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.1);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.start)) <= 0.1);
@@ -15804,8 +15813,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 0.8, 1.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.8, 0.8);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.3);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.3);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.15);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
@@ -15837,11 +15846,11 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.12);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.22);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.15);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.2);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.3);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
