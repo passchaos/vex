@@ -15794,7 +15794,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 2.6);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.062);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.060);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 1.6);
