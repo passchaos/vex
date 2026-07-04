@@ -7015,11 +7015,12 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, edge_item: Edge, route: EdgeRout
 }
 
 fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
+    const render_route = crossClusterLeftDiagonalRoute(layout, edge_item, rankdir, route);
     if (edgeColorList(edge_item)) |colors| {
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
             const color_offset = colorListOffset(colors.len, index, spacing);
-            const segment_route = edgeRouteForEdgeWithColorOffset(route, rankdir, color_offset);
+            const segment_route = edgeRouteForEdgeWithColorOffset(render_route, rankdir, color_offset);
             const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
             const back_edge = isBackEdge(layout, edge_item);
             const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
@@ -7037,7 +7038,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     }
 
     const back_edge = isBackEdge(layout, edge_item);
-    const path_route = if (back_edge) route else routeForPathMarkers(route, visual);
+    const path_route = if (back_edge) render_route else routeForPathMarkers(render_route, visual);
     const path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
     try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{visual.stroke});
     try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing, path_clip, hints);
@@ -7046,7 +7047,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     try writeSvgDash(writer, visual.dash);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
-    try writeSvgInlineArrowheads(writer, directed, route, visual);
+    try writeSvgInlineArrowheads(writer, directed, render_route, visual);
 }
 
 fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
@@ -7108,6 +7109,23 @@ fn colorListOffset(count: usize, index: usize, spacing: f64) f64 {
 
 fn edgeRouteForEdgeWithColorOffset(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
     return offsetEdgeRoute(route, rankdir, offset);
+}
+
+fn crossClusterLeftDiagonalRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
+    if (!edgeTouchesMultipleClusters(layout, edge_item)) return route;
+    if (rankdir != .TB and rankdir != .BT) return route;
+    if (longEdgeWaypointCount(layout, edge_item) != 0) return route;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (dx >= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
+
+    var adjusted = route;
+    const head_shift = Point{ .x = 3.8, .y = 0.0 };
+    adjusted.end = .{ .x = route.end.x + head_shift.x, .y = route.end.y + head_shift.y };
+    adjusted.control1 = .{ .x = route.control1.x + head_shift.x * 0.25, .y = route.control1.y };
+    adjusted.control2 = .{ .x = route.control2.x + head_shift.x * 0.70, .y = route.control2.y };
+    adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
+    return adjusted;
 }
 
 fn offsetEdgeRoute(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
@@ -14821,13 +14839,13 @@ test "user cluster example stays compact and Graphviz-like" {
     const diagonal_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
     const oracle_diagonal_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
     try std.testing.expect(distanceBetween(diagonal_control1, oracle_diagonal_control1) <= 9.0);
-    try std.testing.expect(distanceBetween(diagonal_control2, oracle_diagonal_control2) <= 6.5);
+    try std.testing.expect(distanceBetween(diagonal_control2, oracle_diagonal_control2) <= 1.5);
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
     const diagonal_points = svgPathStartEnd(svg, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 3.0);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 4.6);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 1.2);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 4.8);
@@ -14891,7 +14909,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 3.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 4.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 4.0);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 6.0);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 1.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 3.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 3.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 3.8);
