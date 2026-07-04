@@ -7230,12 +7230,16 @@ fn offsetEdgeRoute(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
 fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const margin = nodeMargin(node_item.attrs.items, 0);
     const anchor = nodeLabelAnchor(node_item.attrs.items, layout, margin.x);
-    const y = nodeLabelY(node_item.attrs.items, layout, margin.y);
+    const y = nodeLabelY(node_item.attrs.items, visualShapeLayout(node_item, layout), margin.y) - nodeLabelYOffset(node_item);
     if (plainSingleLineLabel(node_item.label)) {
         try renderSvgPlainTextBlock(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, anchor.anchor);
         return;
     }
     try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, false, false, anchor.anchor);
+}
+
+fn nodeLabelYOffset(node_item: Node) f64 {
+    return if (node_item.shape == .mdiamond) 2.0 else 0.0;
 }
 
 fn renderSvgNodeXLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -14857,6 +14861,9 @@ test "user cluster example stays compact and Graphviz-like" {
     const start_fragment = svgGroupFragmentByTitle(svg, "start") orelse return error.MissingStartNode;
     const oracle_start_fragment = svgGroupFragmentByTitle(graphviz_oracle, "start") orelse return error.MissingStartNode;
     try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.2);
+    const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
+    const oracle_start_label_y = svgNumberAfter(oracle_start_fragment, " y=\"") orelse return error.MissingStartNode;
+    try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">process #1</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">process #2</text>") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
