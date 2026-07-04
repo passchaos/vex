@@ -6868,6 +6868,10 @@ fn graphvizRenderNodeLayout(graph: *const Graph, layout: *const Layout, node_ite
     var result = layout.nodes[node_item.id];
     if (layout.rankdir != .TB and layout.rankdir != .BT) return result;
     if (graph.clusters.items.len != 2 or !graphHasCrossClusterEdge(graph)) return result;
+    if (node_item.shape == .mdiamond or node_item.shape == .msquare) {
+        result.center.x -= 0.5;
+        return result;
+    }
     if (node_item.id >= layout.ranks.len) return result;
     const cluster_index = clusterIndexForLayoutNode(layout, node_item.id) orelse return result;
     if (cluster_index >= graph.clusters.items.len) return result;
@@ -15485,8 +15489,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 0.1);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 0.1);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 0.1);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 0.7);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 0.7);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 0.1);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a0", 0.1);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a3", 0.1);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b0", 0.1);
