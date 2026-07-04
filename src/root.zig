@@ -14974,9 +14974,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(layout.nodes[end].center.x < layout.nodes[b3].center.x);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_0", a0, 55.0, 2.6);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_0", a3, 55.0, 2.6);
-    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b0, 35.0, 2.6);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b0, 35.0, 2.55);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b2, 40.0, 1.0);
-    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b3, 35.0, 2.6);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b3, 35.0, 2.55);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
