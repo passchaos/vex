@@ -10052,7 +10052,10 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const first_control1_x = c1x + first_control1_shift;
             var path_start = shortenPointToward(route.start, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, path_clip.tail);
             if (graphvizSameClusterBackEdgePathStartOnlyShift(layout, edge_item, rankdir, prefer_left)) |shift| path_start = .{ .x = path_start.x + shift.x, .y = path_start.y + shift.y };
-            if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) path_start.x += 0.45;
+            if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
+                path_start.x += 0.45;
+                path_start.y += if (rankdir == .TB) 0.10 else -0.10;
+            }
             var path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_clip.head);
             if (graphvizSameClusterBackEdgePathEndShift(layout, edge_item, rankdir, prefer_left)) |shift| path_end = .{ .x = path_end.x + shift.x, .y = path_end.y + shift.y };
             try writePathMove(writer, path_start);
@@ -15838,7 +15841,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.35);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.08);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.07);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.1);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
