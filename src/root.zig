@@ -7323,8 +7323,8 @@ fn graphvizCrossClusterLongRoute(layout: *const Layout, edge_item: Edge, rankdir
     if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
 
     var adjusted = route;
-    const tail_shift: f64 = 1.4;
-    const head_shift: f64 = -1.4;
+    const tail_shift: f64 = 1.6;
+    const head_shift: f64 = -1.6;
     adjusted.start.x += tail_shift;
     adjusted.control1.x += tail_shift * 0.5;
     adjusted.end.x += head_shift;
@@ -15275,7 +15275,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const cross_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
     const oracle_cross_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
     try std.testing.expect(distanceBetween(cross_control1, oracle_cross_control1) <= 1.7);
-    try std.testing.expect(distanceBetween(cross_control2, oracle_cross_control2) <= 0.6);
+    try std.testing.expect(distanceBetween(cross_control2, oracle_cross_control2) <= 0.5);
     const cross_points = svgPathStartEnd(svg, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
     const oracle_cross_points = svgPathStartEnd(graphviz_oracle, "a1-&gt;b3") orelse return error.MissingCrossClusterEdge;
     const cross_start = svgScreenPoint(svg, cross_points.start);
@@ -15382,7 +15382,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;a2", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a2-&gt;a3", 1.8);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 1.4);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;b3", 1.2);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;a3", 0.4);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
