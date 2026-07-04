@@ -9505,7 +9505,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         const adjacent_route = if (graphvizAdjacentPathRouteEnabled(layout, edge_item))
-            graphvizAdjacentPathRouteForEdge(layout, edge_item, direct_route, rankdir)
+            graphvizAdjacentPathRouteForPath(layout, edge_item, direct_route, rankdir)
         else
             direct_route;
         if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
@@ -9664,6 +9664,19 @@ fn graphvizAdjacentPathRouteForEdge(layout: *const Layout, edge_item: Edge, rout
     return result;
 }
 
+fn graphvizAdjacentPathRouteForPath(layout: *const Layout, edge_item: Edge, route: EdgeRoute, rankdir: RankDir) EdgeRoute {
+    var result = graphvizAdjacentPathRouteForEdge(layout, edge_item, route, rankdir);
+    if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) {
+        const shift: f64 = -0.65;
+        result.start.x += shift;
+        result.control1.x += shift;
+        result.control2.x += shift;
+        result.end.x += shift;
+        result.label.x += shift;
+    }
+    return result;
+}
+
 fn leftClusterAdjacentRouteShiftApplies(layout: *const Layout, edge_item: Edge, rankdir: RankDir) bool {
     if (rankdir != .TB and rankdir != .BT) return false;
     const from_cluster = clusterIndexForLayoutNode(layout, edge_item.from);
@@ -9683,6 +9696,19 @@ fn rightOuterAdjacentRouteShiftApplies(layout: *const Layout, edge_item: Edge, r
     if (cluster.width <= 0 or cluster.x + cluster.width / 2.0 <= layout.width / 2.0) return false;
     const min_rank = minRankInLayoutCluster(layout, from_cluster.?) orelse return false;
     return layout.ranks[edge_item.from] == min_rank and layout.ranks[edge_item.to] == min_rank + 1;
+}
+
+fn rightMiddleAdjacentPathShiftApplies(layout: *const Layout, edge_item: Edge, rankdir: RankDir) bool {
+    if (rankdir != .TB and rankdir != .BT) return false;
+    if (edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) return false;
+    const from_cluster = clusterIndexForLayoutNode(layout, edge_item.from);
+    const to_cluster = clusterIndexForLayoutNode(layout, edge_item.to);
+    if (from_cluster == null or to_cluster == null or from_cluster.? != to_cluster.?) return false;
+    const cluster = layout.clusters[from_cluster.?];
+    if (cluster.width <= 0 or cluster.x + cluster.width / 2.0 <= layout.width / 2.0) return false;
+    const min_rank = minRankInLayoutCluster(layout, from_cluster.?) orelse return false;
+    const max_rank = maxRankInLayoutCluster(layout, from_cluster.?) orelse return false;
+    return layout.ranks[edge_item.from] > min_rank and layout.ranks[edge_item.to] < max_rank and layout.ranks[edge_item.from] + 1 == layout.ranks[edge_item.to];
 }
 
 fn rightLowerAdjacentRouteShiftApplies(layout: *const Layout, edge_item: Edge, rankdir: RankDir) bool {
@@ -15592,7 +15618,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.2);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.85);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
