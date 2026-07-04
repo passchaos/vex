@@ -9062,7 +9062,7 @@ fn isBackEdge(layout: *const Layout, edge_item: Edge) bool {
 fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting) Io.Writer.Error!void {
     const from = layout.nodes[edge_item.from];
     const to = layout.nodes[edge_item.to];
-    const side_gap = @max(28.0, layout.margin * 0.55) + @abs(offset);
+    const side_gap = @max(5.0, layout.margin * 0.3) + @abs(offset);
 
     if (rankdir == .TB or rankdir == .BT) {
         const prefer_left = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
@@ -14743,7 +14743,10 @@ test "user cluster example stays compact and Graphviz-like" {
     var back_numbers: [32]f64 = undefined;
     const back_count = svgNumbersInAttribute(back_edge, "d", back_numbers[0..]);
     try std.testing.expect(back_count >= 20);
-    try std.testing.expect(@abs(back_numbers[6] - 16.0) <= 0.1);
+    var oracle_back_numbers: [32]f64 = undefined;
+    const oracle_back_count = svgPathNumbers(graphviz_oracle, "a3-&gt;a0", oracle_back_numbers[0..]);
+    try std.testing.expect(oracle_back_count >= 20);
+    try std.testing.expect(@abs((back_numbers[6] + svg_translate.x) - (oracle_back_numbers[6] + oracle_translate.x)) <= 1.0);
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
