@@ -14722,6 +14722,12 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_diagonal_count = svgPathNumbers(graphviz_oracle, "b2-&gt;a3", oracle_path_numbers[0..]);
     try std.testing.expect(oracle_diagonal_count >= 8);
     try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 3.0);
+    const diagonal_control1 = svgScreenPoint(svg, .{ .x = path_numbers[2], .y = path_numbers[3] });
+    const oracle_diagonal_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
+    const diagonal_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
+    const oracle_diagonal_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[4], .y = oracle_path_numbers[5] });
+    try std.testing.expect(distanceBetween(diagonal_control1, oracle_diagonal_control1) <= 9.0);
+    try std.testing.expect(distanceBetween(diagonal_control2, oracle_diagonal_control2) <= 6.5);
     try std.testing.expect(path_numbers[2] > path_numbers[4]);
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
     const diagonal_points = svgPathStartEnd(svg, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
