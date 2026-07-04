@@ -9697,6 +9697,14 @@ fn graphvizAdjacentPathRouteForPath(layout: *const Layout, edge_item: Edge, rout
         result.end.x += shift;
         result.label.x += shift;
     }
+    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
+        const shift: f64 = 0.33;
+        result.start.x += shift;
+        result.control1.x += shift;
+        result.control2.x += shift;
+        result.end.x += shift;
+        result.label.x += shift;
+    }
     return result;
 }
 
@@ -15642,7 +15650,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.7);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.4);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.6);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
