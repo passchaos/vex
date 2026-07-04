@@ -7869,7 +7869,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
         rect.x + rect.width - 12.0
     else
         rect.x + rect.width / 2.0;
-    const top_label_offset: f64 = 15.3;
+    const top_label_offset: f64 = if (clusterVisualRectHasVerticalTrim(cluster, layout)) 16.6 else 15.3;
     const label_y = if (label_loc) |value|
         if (std.ascii.eqlIgnoreCase(value, "b")) rect.y + rect.height - 10.0 else rect.y + top_label_offset
     else
@@ -7904,7 +7904,15 @@ fn clusterVisualRect(cluster: Cluster, layout: *const Layout, index: usize) Rect
     if (@abs(rect.x + rect.width - max_x) <= 0.01 and rect.width > trim) {
         rect.width -= trim;
     }
+    if (clusterVisualRectHasVerticalTrim(cluster, layout) and rect.height > 1.2) {
+        rect.y -= 1.3;
+        rect.height -= 1.2;
+    }
     return rect;
+}
+
+fn clusterVisualRectHasVerticalTrim(cluster: Cluster, layout: *const Layout) bool {
+    return cluster.parent_name == null and layout.clusters.len == 2;
 }
 
 fn writeSvgFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!void {
@@ -14883,10 +14891,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 0.5);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 1.0);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 0.5);
-    try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_0").? - svgClusterScreenY(graphviz_oracle, "cluster_0").?) <= 1.5);
-    try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_0").? - svgClusterRectHeight(graphviz_oracle, "cluster_0").?) <= 1.5);
-    try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_1").? - svgClusterScreenY(graphviz_oracle, "cluster_1").?) <= 1.5);
-    try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_1").? - svgClusterRectHeight(graphviz_oracle, "cluster_1").?) <= 1.5);
+    try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_0").? - svgClusterScreenY(graphviz_oracle, "cluster_0").?) <= 0.2);
+    try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_0").? - svgClusterRectHeight(graphviz_oracle, "cluster_0").?) <= 0.2);
+    try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_1").? - svgClusterScreenY(graphviz_oracle, "cluster_1").?) <= 0.2);
+    try std.testing.expect(@abs(svgClusterRectHeight(svg, "cluster_1").? - svgClusterRectHeight(graphviz_oracle, "cluster_1").?) <= 0.2);
     const svg_start_x = svgNodeCenterX(svg, "start") orelse return error.MissingNodeCenter;
     const svg_end_x = svgNodeCenterX(svg, "end") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_start_x > svgNodeCenterX(svg, "a0").?);
