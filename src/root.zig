@@ -7354,7 +7354,7 @@ fn graphvizMsquareHeadRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathH
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var adjusted = route;
-    const tail_shift: f64 = if (dx >= 0) 0.4 else -0.4;
+    const tail_shift: f64 = if (dx >= 0) 0.45 else -0.45;
     adjusted.start.x += tail_shift;
     adjusted.control1.x += tail_shift * 0.75;
     adjusted.label = cubicPoint(adjusted.start, adjusted.control1, adjusted.control2, adjusted.end, 0.5);
@@ -15357,6 +15357,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_b0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_b0_points.start)) <= 3.0);
     const a3_end_points = svgPathStartEnd(svg, "a3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_a3_end_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;end") orelse return error.MissingEndEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, a3_end_points.start), svgScreenPoint(graphviz_oracle, oracle_a3_end_points.start)) <= 2.0);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, a3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_a3_end_points.end)) <= 3.0);
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
