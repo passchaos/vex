@@ -7314,6 +7314,7 @@ fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: Ran
     } else if (leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir) or rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir) or rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) {
         const y_shift: f64 = if (rankdir == .TB) 0.85 else -0.85;
         if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) result.end.x += 0.45;
+        if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) result.control2.x -= 0.4;
         result.end.y += y_shift;
     }
     return result;
@@ -15695,7 +15696,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 0.1);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 0.1);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 0.12);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 0.5);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 0.4);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.05);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.05);
@@ -15704,7 +15705,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.1);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.12);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.5);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.4);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.2);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.3);
