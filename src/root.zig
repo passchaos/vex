@@ -8204,6 +8204,7 @@ fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
             result.height = @min(result.height, 36.0);
         },
         .msquare => result.center.y += 1.5,
+        .ellipse, .circle, .doublecircle, .mcircle => result.center.y += 0.25,
         else => {},
     }
     return result;
@@ -14954,10 +14955,14 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 3.2);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 1.5);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 1.5);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a0").? - svgNodeScreenCenterY(graphviz_oracle, "a0").?) <= 2.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a1").? - svgNodeScreenCenterY(graphviz_oracle, "a1").?) <= 2.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a2").? - svgNodeScreenCenterY(graphviz_oracle, "a2").?) <= 2.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a3").? - svgNodeScreenCenterY(graphviz_oracle, "a3").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a0").? - svgNodeScreenCenterY(graphviz_oracle, "a0").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a1").? - svgNodeScreenCenterY(graphviz_oracle, "a1").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a2").? - svgNodeScreenCenterY(graphviz_oracle, "a2").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a3").? - svgNodeScreenCenterY(graphviz_oracle, "a3").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b0").? - svgNodeScreenCenterY(graphviz_oracle, "b0").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b1").? - svgNodeScreenCenterY(graphviz_oracle, "b1").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b2").? - svgNodeScreenCenterY(graphviz_oracle, "b2").?) <= 1.2);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b3").? - svgNodeScreenCenterY(graphviz_oracle, "b3").?) <= 1.2);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 3.0);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 2.0);
     const a0_fragment = svgGroupFragmentByTitle(svg, "a0") orelse return error.MissingNodeCenter;
