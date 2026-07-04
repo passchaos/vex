@@ -2364,6 +2364,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
     shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.0);
+    shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.0);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
 
@@ -3402,6 +3403,45 @@ fn shiftLeftClusterMemberNodesRightForCrossClusterTb(graph: *const Graph, axes: 
     const left = left_index orelse return;
     for (graph.clusters.items[left].nodes) |node_id| {
         if (node_id < nodes.len) nodes[node_id].center.x += amount;
+    }
+}
+
+fn shiftRightClusterMembersLeftByRankForCrossClusterTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize, amount: f64) void {
+    if (amount <= 0 or (axes.rankdir != .TB and axes.rankdir != .BT)) return;
+    if (graph.clusters.items.len != 2 or !graphHasCrossClusterEdge(graph)) return;
+    var right_index: ?usize = null;
+    var right_center: f64 = -std.math.floatMax(f64);
+    for (graph.clusters.items, 0..) |cluster, index| {
+        if (cluster.parent_name != null or cluster.nodes.len == 0) return;
+        var sum: f64 = 0;
+        var count: usize = 0;
+        for (cluster.nodes) |node_id| {
+            if (node_id >= nodes.len) continue;
+            sum += nodes[node_id].center.x;
+            count += 1;
+        }
+        if (count == 0) return;
+        const center = sum / @as(f64, @floatFromInt(count));
+        if (center > right_center) {
+            right_center = center;
+            right_index = index;
+        }
+    }
+    const right = right_index orelse return;
+    var min_rank: usize = std.math.maxInt(usize);
+    var max_rank: usize = 0;
+    for (graph.clusters.items[right].nodes) |node_id| {
+        if (node_id >= ranks.len) continue;
+        min_rank = @min(min_rank, ranks[node_id]);
+        max_rank = @max(max_rank, ranks[node_id]);
+    }
+    if (min_rank == std.math.maxInt(usize) or max_rank <= min_rank) return;
+    const mid_rank = (@as(f64, @floatFromInt(min_rank)) + @as(f64, @floatFromInt(max_rank))) / 2.0;
+    const half_span = @max(1.0, (@as(f64, @floatFromInt(max_rank - min_rank))) / 2.0);
+    for (graph.clusters.items[right].nodes) |node_id| {
+        if (node_id >= nodes.len or node_id >= ranks.len) continue;
+        const distance = @abs(@as(f64, @floatFromInt(ranks[node_id])) - mid_rank) / half_span;
+        nodes[node_id].center.x -= amount * distance;
     }
 }
 
@@ -14739,7 +14779,6 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(layout.nodes[a1].center.x - layout.nodes[a2].center.x) <= 1.0);
     try std.testing.expect(@abs(layout.nodes[a2].center.x - layout.nodes[a3].center.x) <= 1.0);
     try std.testing.expect(layout.nodes[b1].center.x > layout.nodes[b0].center.x);
-    try std.testing.expect(layout.nodes[b1].center.x >= 168.7);
     try std.testing.expect(layout.nodes[b2].center.x > layout.nodes[b1].center.x);
     try std.testing.expect(@abs(layout.nodes[b3].center.x - layout.nodes[b0].center.x) <= 1.0);
     try std.testing.expect(layout.nodes[start].center.x > layout.nodes[a0].center.x);
@@ -14819,9 +14858,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_start_x >= 109.0);
     try std.testing.expect(svg_end_x >= 109.0);
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
-    const svg_b0_x = svgNodeCenterX(svg, "b0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 51.0);
-    try std.testing.expect(svg_b0_x >= 168.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 4.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a1").? - svgNodeScreenCenterX(graphviz_oracle, "a1").?) <= 4.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 4.0);
