@@ -7550,6 +7550,21 @@ fn expectSvgEdgeArrowTipNear(svg: []const u8, oracle: []const u8, title: []const
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, tip), svgScreenPoint(oracle, oracle_tip)) <= tolerance);
 }
 
+fn expectSvgEdgeControlsNear(svg: []const u8, oracle: []const u8, title: []const u8, c1_tolerance: f64, c2_tolerance: f64) !void {
+    var numbers: [32]f64 = undefined;
+    const count = svgPathNumbers(svg, title, numbers[0..]);
+    if (count < 8) return error.MissingEdgeControls;
+    var oracle_numbers: [32]f64 = undefined;
+    const oracle_count = svgPathNumbers(oracle, title, oracle_numbers[0..]);
+    if (oracle_count < 8) return error.MissingEdgeControls;
+    const control1 = svgScreenPoint(svg, .{ .x = numbers[2], .y = numbers[3] });
+    const oracle_control1 = svgScreenPoint(oracle, .{ .x = oracle_numbers[2], .y = oracle_numbers[3] });
+    const control2 = svgScreenPoint(svg, .{ .x = numbers[4], .y = numbers[5] });
+    const oracle_control2 = svgScreenPoint(oracle, .{ .x = oracle_numbers[4], .y = oracle_numbers[5] });
+    try std.testing.expect(distanceBetween(control1, oracle_control1) <= c1_tolerance);
+    try std.testing.expect(distanceBetween(control2, oracle_control2) <= c2_tolerance);
+}
+
 fn svgScreenPoint(svg: []const u8, point: Point) Point {
     const translate = svgGraphvizTranslate(svg);
     return .{ .x = point.x + translate.x, .y = point.y + translate.y };
@@ -9021,6 +9036,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         if (crossClusterDiagonalControls(layout, edge_item, rankdir, direct_route)) |controls| {
+            try writePathMove(writer, direct_route.start);
+            try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
+            return;
+        }
+        if (diagonalEdgeControls(direct_route.start, direct_route.end, rankdir, 1.0)) |controls| {
             try writePathMove(writer, direct_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
             return;
@@ -14832,6 +14852,10 @@ test "user cluster example stays compact and Graphviz-like" {
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 5.5, 3.5);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 6.0, 4.0);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 1.2, 1.0);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 1.5, 1.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 4.5);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 3.0);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 3.0);
