@@ -9491,6 +9491,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         if (edgeTouchesMultipleClusters(layout, edge_item)) {
             c1 = lerpPoint(first.c1, direct_route.control1, 0.35);
             c2 = lerpPoint(second.c2, direct_route.control2, 0.90);
+            if (direct_route.end.x > direct_route.start.x) c1.x += 0.75;
         }
         try writePathMove(writer, direct_route.start);
         try writePathCubic(writer, c1, c2, direct_route.end);
@@ -15638,7 +15639,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.7);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.85);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.6);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
