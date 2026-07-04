@@ -9446,6 +9446,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
             return;
         }
+        if (msquareHeadDiagonalPath(direct_route, rankdir, hints)) |path| {
+            try writePathMove(writer, path.start);
+            try writePathCubic(writer, path.control1, path.control2, path.end);
+            return;
+        }
         if (diamondTailDiagonalControls(direct_route.start, direct_route.end, rankdir, hints)) |controls| {
             try writePathMove(writer, direct_route.start);
             try writePathCubic(writer, controls.c1, controls.c2, direct_route.end);
@@ -9487,6 +9492,39 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     } else {
         try writeSmoothSegment(writer, current, direct_route.end, rankdir);
     }
+}
+
+fn msquareHeadDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHints) ?EdgeRoute {
+    if (!hints.head_msquare) return null;
+    if (rankdir != .TB and rankdir != .BT) return null;
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (@abs(dx) < @abs(dy) * 0.35) return null;
+
+    const y_dir: f64 = if (rankdir == .TB) 1.0 else -1.0;
+    var start = route.start;
+    var end = route.end;
+    if (dx >= 0) {
+        start.x += 1.2;
+        end.x -= 1.5;
+    } else {
+        start.x -= 1.15;
+        end.x += 0.85;
+    }
+    start.y += y_dir * 1.55;
+    end.y -= y_dir * 1.7;
+
+    const adjusted_dx = end.x - start.x;
+    const adjusted_dy = end.y - start.y;
+    const c1 = Point{ .x = start.x + adjusted_dx * 0.293, .y = start.y + adjusted_dy * 0.293 };
+    const c2 = Point{ .x = start.x + adjusted_dx * 0.663, .y = start.y + adjusted_dy * 0.663 };
+    return .{
+        .start = start,
+        .control1 = c1,
+        .control2 = c2,
+        .end = end,
+        .label = cubicPoint(start, c1, c2, end, 0.5),
+    };
 }
 
 fn diamondTailDiagonalControls(start: Point, end: Point, rankdir: RankDir, hints: EdgePathHints) ?EdgeControls {
@@ -15510,8 +15548,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.85);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 2.3);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.0);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.1);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.1);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.0);
