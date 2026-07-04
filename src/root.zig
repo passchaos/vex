@@ -6828,10 +6828,9 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
 }
 
 fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node) Io.Writer.Error!void {
-    _ = graph;
     var visual = resolveNodeVisual(node_item);
     if (visual.hidden) return;
-    const l = layout.nodes[node_item.id];
+    const l = graphvizRenderNodeLayout(graph, layout, node_item);
     try writeSvgComment(writer, node_item.name);
     try writer.print("<g id=\"node{d}\" class=\"node\">\n", .{node_item.id + 1});
     const node_wrap = try writeSvgInteractiveOpen(writer, node_item.attrs.items);
@@ -6862,6 +6861,34 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     try renderSvgNodeXLabel(writer, node_item, l, visual);
     try writeSvgInteractiveClose(writer, node_wrap);
     try writer.writeAll("</g>\n");
+}
+
+fn graphvizRenderNodeLayout(graph: *const Graph, layout: *const Layout, node_item: Node) NodeLayout {
+    if (node_item.id >= layout.nodes.len) return .{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
+    var result = layout.nodes[node_item.id];
+    if (layout.rankdir != .TB and layout.rankdir != .BT) return result;
+    if (graph.clusters.items.len != 2 or !graphHasCrossClusterEdge(graph)) return result;
+    if (node_item.id >= layout.ranks.len) return result;
+    const cluster_index = clusterIndexForLayoutNode(layout, node_item.id) orelse return result;
+    if (cluster_index >= graph.clusters.items.len) return result;
+    const cluster = layout.clusters[cluster_index];
+    if (cluster.width <= 0 or cluster.height <= 0) return result;
+    const visual_left = clusterVisualRect(graph.clusters.items[cluster_index], layout, cluster_index).x;
+    if (cluster.x + cluster.width / 2.0 < layout.width / 2.0) {
+        result.center.x = visual_left + 55.0;
+        return result;
+    }
+
+    const min_rank = minRankInLayoutCluster(layout, cluster_index) orelse return result;
+    const max_rank = maxRankInLayoutCluster(layout, cluster_index) orelse return result;
+    if (layout.ranks[node_item.id] == min_rank or layout.ranks[node_item.id] == max_rank) {
+        result.center.x = visual_left + 35.0;
+    } else if (layout.ranks[node_item.id] == min_rank + 1) {
+        result.center.x = visual_left + 37.0;
+    } else {
+        result.center.x = visual_left + 40.0;
+    }
+    return result;
 }
 
 fn svgNeedsMarkerDefs(graph: *const Graph, concentrate: bool) bool {
@@ -15390,22 +15417,22 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(svg_end_x >= 109.0);
     const svg_a0_x = svgNodeCenterX(svg, "a0") orelse return error.MissingNodeCenter;
     try std.testing.expect(svg_a0_x >= 51.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 2.6);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a1").? - svgNodeScreenCenterX(graphviz_oracle, "a1").?) <= 2.6);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 2.6);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a3").? - svgNodeScreenCenterX(graphviz_oracle, "a3").?) <= 2.6);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 2.55);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 1.3);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 1.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 2.55);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a0").? - svgNodeScreenCenterX(graphviz_oracle, "a0").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a1").? - svgNodeScreenCenterX(graphviz_oracle, "a1").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a3").? - svgNodeScreenCenterX(graphviz_oracle, "a3").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 0.1);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 0.1);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 0.7);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 0.7);
-    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a0", 2.6);
-    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a3", 2.6);
-    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b0", 2.55);
-    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b1", 1.3);
-    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b2", 1.0);
-    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b3", 2.55);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a0", 0.1);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a3", 0.1);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b0", 0.1);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b1", 0.1);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b2", 0.1);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b3", 0.1);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a0").? - svgNodeScreenCenterY(graphviz_oracle, "a0").?) <= 0.2);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a1").? - svgNodeScreenCenterY(graphviz_oracle, "a1").?) <= 0.2);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a2").? - svgNodeScreenCenterY(graphviz_oracle, "a2").?) <= 0.2);
