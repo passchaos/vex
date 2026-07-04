@@ -9328,7 +9328,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const c2x = route.start.x + start_side_dx * 0.85;
             const c3x = route.end.x + end_side_dx * 0.86;
             const c4x = route.end.x + end_side_dx * 0.60;
-            const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.62 else @abs(start_side_dx) * 0.62;
+            const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.72 else @abs(start_side_dx) * 0.72;
             const middle_delta_y = p2.y - p1.y;
             const path_start = shortenPointToward(route.start, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, path_clip.tail);
             const path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_clip.head);
@@ -9716,7 +9716,7 @@ fn backEdgeEllipseToward(graph: *const Graph, layout: *const Layout, edge_item: 
     const from = layout.nodes[edge_item.from];
     const to = layout.nodes[edge_item.to];
     const side_sign: f64 = if (backEdgeUsesNegativeSide(layout, edge_item, rankdir)) -1.0 else 1.0;
-    const side_offset: f64 = 10.0 * side_sign;
+    const side_offset: f64 = 13.0 * side_sign;
     const rank_offset: f64 = 18.0;
     return switch (rankdir) {
         .TB, .BT => .{
@@ -15051,7 +15051,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_back_first_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[2], .y = oracle_back_numbers[3] });
     const back_first_control2 = svgScreenPoint(svg, .{ .x = back_numbers[4], .y = back_numbers[5] });
     const oracle_back_first_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[4], .y = oracle_back_numbers[5] });
-    try std.testing.expect(distanceBetween(back_first_control1, oracle_back_first_control1) <= 1.8);
+    try std.testing.expect(distanceBetween(back_first_control1, oracle_back_first_control1) <= 1.3);
     try std.testing.expect(distanceBetween(back_first_control2, oracle_back_first_control2) <= 0.8);
     try std.testing.expect(@abs((back_numbers[6] + svg_translate.x) - (oracle_back_numbers[6] + oracle_translate.x)) <= 1.0);
     const back_mid_control = svgScreenPoint(svg, .{ .x = back_numbers[8], .y = back_numbers[9] });
@@ -15061,15 +15061,15 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_back_tail_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[14], .y = oracle_back_numbers[15] });
     const back_tail_control2 = svgScreenPoint(svg, .{ .x = back_numbers[16], .y = back_numbers[17] });
     const oracle_back_tail_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[16], .y = oracle_back_numbers[17] });
-    try std.testing.expect(distanceBetween(back_tail_control1, oracle_back_tail_control1) <= 1.3);
-    try std.testing.expect(distanceBetween(back_tail_control2, oracle_back_tail_control2) <= 1.3);
+    try std.testing.expect(distanceBetween(back_tail_control1, oracle_back_tail_control1) <= 0.8);
+    try std.testing.expect(distanceBetween(back_tail_control2, oracle_back_tail_control2) <= 0.8);
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 3.0);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.end), svgScreenPoint(graphviz_oracle, oracle_back_points.end)) <= 7.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 1.6);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.end), svgScreenPoint(graphviz_oracle, oracle_back_points.end)) <= 1.7);
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 3.0);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 2.0);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.start)) <= 3.0);
