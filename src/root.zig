@@ -2363,8 +2363,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     }
     @memcpy(layout_ranks, ranks);
     computeClusterLayouts(graph, axes, nodes, cluster_layouts);
-    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.50);
-    shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.47);
+    alignCrossClusterMembersGraphvizLikeTb(graph, axes, nodes, ranks);
     shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
@@ -3444,6 +3443,11 @@ fn shiftRightClusterMembersLeftByRankForCrossClusterTb(graph: *const Graph, axes
         const distance = @abs(@as(f64, @floatFromInt(ranks[node_id])) - mid_rank) / half_span;
         nodes[node_id].center.x -= amount * distance;
     }
+}
+
+fn alignCrossClusterMembersGraphvizLikeTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize) void {
+    shiftLeftClusterMemberNodesRightForCrossClusterTb(graph, axes, nodes, 1.50);
+    shiftRightClusterMembersLeftByRankForCrossClusterTb(graph, axes, nodes, ranks, 1.47);
 }
 
 fn shiftClusterMemberNodesDownForCrossClusterTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, amount: f64) void {
