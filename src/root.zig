@@ -3508,6 +3508,10 @@ fn alignRightOuterClusterMembersTowardVisualPaddingTb(graph: *const Graph, axes:
         if (ranks[node_id] == min_rank or ranks[node_id] == max_rank) {
             const delta = std.math.clamp(target_x - nodes[node_id].center.x, -max_shift, max_shift);
             nodes[node_id].center.x += delta;
+        } else if (@as(f64, @floatFromInt(ranks[node_id])) < mid_rank) {
+            const upper_target_x = visual_left + 37.0;
+            const delta = std.math.clamp(upper_target_x - nodes[node_id].center.x, -max_shift, max_shift);
+            nodes[node_id].center.x += delta;
         } else {
             const distance = @abs(@as(f64, @floatFromInt(ranks[node_id])) - mid_rank) / half_span;
             nodes[node_id].center.x -= max_shift * distance;
@@ -15016,6 +15020,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_0", a0, 55.0, 2.6);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_0", a3, 55.0, 2.6);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b0, 35.0, 2.55);
+    try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b1, 37.0, 1.3);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b2, 40.0, 1.0);
     try expectLayoutNodeClusterPaddingNear(&graph, &layout, "cluster_1", b3, 35.0, 2.55);
 
@@ -15114,7 +15119,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a2").? - svgNodeScreenCenterX(graphviz_oracle, "a2").?) <= 2.6);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "a3").? - svgNodeScreenCenterX(graphviz_oracle, "a3").?) <= 2.6);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b0").? - svgNodeScreenCenterX(graphviz_oracle, "b0").?) <= 2.6);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 2.3);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 1.3);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 1.0);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 2.6);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 1.5);
@@ -15122,6 +15127,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a0", 2.6);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a3", 2.6);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b0", 2.6);
+    try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b1", 1.3);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b2", 1.0);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_1", "b3", 2.6);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "a0").? - svgNodeScreenCenterY(graphviz_oracle, "a0").?) <= 0.2);
@@ -15259,8 +15265,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 2.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 2.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 2.7);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.75);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.6);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 2.3);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.2);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.1);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 2.7);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 2.4);
@@ -15277,7 +15283,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b3-&gt;end", 0.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;a0", 2.1);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 2.4);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 2.5);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 1.9);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
