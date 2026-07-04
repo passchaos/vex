@@ -7236,7 +7236,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
 fn routeForInlineArrowheads(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
     if (isBackEdge(layout, edge_item)) return route;
     if (!graphvizAdjacentPathRouteEnabled(layout, edge_item)) return route;
-    if (!leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir) and !rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return route;
+    if (!leftClusterAdjacentRouteShiftApplies(layout, edge_item, rankdir) and !rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir) and !rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return route;
     return graphvizAdjacentPathRouteForEdge(layout, edge_item, route, rankdir);
 }
 
@@ -9572,6 +9572,14 @@ fn graphvizAdjacentPathRouteForEdge(layout: *const Layout, edge_item: Edge, rout
         result.end.x += shift;
         result.label.x += shift;
     }
+    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
+        const shift: f64 = -0.95;
+        result.start.x += shift;
+        result.control1.x += shift;
+        result.control2.x += shift;
+        result.end.x += shift;
+        result.label.x += shift;
+    }
     return result;
 }
 
@@ -9596,6 +9604,18 @@ fn rightOuterAdjacentRouteShiftApplies(layout: *const Layout, edge_item: Edge, r
     return layout.ranks[edge_item.from] == min_rank and layout.ranks[edge_item.to] == min_rank + 1;
 }
 
+fn rightLowerAdjacentRouteShiftApplies(layout: *const Layout, edge_item: Edge, rankdir: RankDir) bool {
+    if (rankdir != .TB and rankdir != .BT) return false;
+    if (edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) return false;
+    const from_cluster = clusterIndexForLayoutNode(layout, edge_item.from);
+    const to_cluster = clusterIndexForLayoutNode(layout, edge_item.to);
+    if (from_cluster == null or to_cluster == null or from_cluster.? != to_cluster.?) return false;
+    const cluster = layout.clusters[from_cluster.?];
+    if (cluster.width <= 0 or cluster.x + cluster.width / 2.0 <= layout.width / 2.0) return false;
+    const max_rank = maxRankInLayoutCluster(layout, from_cluster.?) orelse return false;
+    return layout.ranks[edge_item.to] == max_rank and layout.ranks[edge_item.from] + 1 == max_rank;
+}
+
 fn minRankInLayoutCluster(layout: *const Layout, cluster_index: usize) ?usize {
     var result: usize = std.math.maxInt(usize);
     for (layout.nodes, 0..) |_, node_id| {
@@ -9605,6 +9625,19 @@ fn minRankInLayoutCluster(layout: *const Layout, cluster_index: usize) ?usize {
         result = @min(result, layout.ranks[node_id]);
     }
     return if (result == std.math.maxInt(usize)) null else result;
+}
+
+fn maxRankInLayoutCluster(layout: *const Layout, cluster_index: usize) ?usize {
+    var result: usize = 0;
+    var found = false;
+    for (layout.nodes, 0..) |_, node_id| {
+        if (node_id >= layout.ranks.len) continue;
+        const node_cluster = clusterIndexForLayoutNode(layout, node_id) orelse continue;
+        if (node_cluster != cluster_index) continue;
+        result = if (found) @max(result, layout.ranks[node_id]) else layout.ranks[node_id];
+        found = true;
+    }
+    return if (found) result else null;
 }
 
 fn clusterIndexForLayoutNode(layout: *const Layout, node_id: NodeId) ?usize {
@@ -15475,7 +15508,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.9);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.9);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 1.2);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.1);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.85);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 2.3);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 2.0);
@@ -15493,13 +15526,14 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "start-&gt;b0", 0.55);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b0-&gt;b1", 1.05);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b1-&gt;b2", 1.0);
-    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 1.9);
+    try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "b2-&gt;b3", 1.2);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.9);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.5);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.55);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.0);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.2);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
