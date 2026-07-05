@@ -16004,8 +16004,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 0.09);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.end), svgScreenPoint(graphviz_oracle, oracle_start_mark.end)) <= 0.09);
-    try expectPolylineSetNear(svg, graphviz_oracle, "start", 0.21);
-    try expectPolylineSetNear(svg, graphviz_oracle, "end", 0.37);
+    try expectPolylineSetNear(svg, graphviz_oracle, "start", 0.205);
+    try expectPolylineSetNear(svg, graphviz_oracle, "end", 0.367);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
