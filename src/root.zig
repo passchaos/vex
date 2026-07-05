@@ -7272,12 +7272,12 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     const dy = route.end.y - route.start.y;
     if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_precise = false, .head_right_x_shift = -0.04, .head_right_y_shift = 0.01, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
     if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_y_shift = 0.03 };
-    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_left_x_shift = 0.03, .head_left_y_shift = -0.01 };
+    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_right_x_shift = 0.02, .head_right_y_shift = 0.01, .head_left_x_shift = 0.03, .head_left_y_shift = -0.01 };
     if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_right_x_shift = -0.03, .head_left_x_shift = -0.02, .head_left_y_shift = 0.02 };
     if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 0 and dx < 0) return .{ .head_precise = true };
     if (@abs(dx) < 0.001) return .{ .head_precise = true, .head_y_shift = 0.03 };
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
-    if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true, .head_right_x_shift = -0.04 };
+    if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true, .head_right_x_shift = -0.04, .head_left_x_shift = -0.02, .head_left_y_shift = 0.01, .head_tip_x_shift = -0.01, .head_tip_y_shift = -0.02 };
     if (hints.tail_mdiamond and dx < 0) return .{ .head_precise = true };
     if (hints.head_msquare and dx >= 0) return .{ .head_precise = true, .head_left_y_shift = -0.03 };
     if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_y_shift = -0.03, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
@@ -7586,7 +7586,8 @@ fn graphvizCrossClusterLongPathControl1Shift(layout: *const Layout, edge_item: E
     const dy = route.end.y - route.start.y;
     if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
     const y_shift: f64 = if (rankdir == .TB) 0.09 else -0.09;
-    return .{ .x = 0.07, .y = y_shift };
+    const y_extra: f64 = if (rankdir == .TB) -0.01 else 0.01;
+    return .{ .x = 0.05, .y = y_shift + y_extra };
 }
 
 fn graphvizDiamondTailRoute(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHints) EdgeRoute {
@@ -10084,6 +10085,8 @@ fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visu
 const InlineArrowOptions = struct {
     head_length_scale: f64 = 1.0,
     tail_length_scale: f64 = 1.0,
+    head_tip_x_shift: f64 = 0.0,
+    head_tip_y_shift: f64 = 0.0,
     head_right_x_shift: f64 = 0.0,
     head_right_y_shift: f64 = 0.0,
     head_left_x_shift: f64 = 0.0,
@@ -10096,7 +10099,7 @@ const InlineArrowOptions = struct {
 fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual, options: InlineArrowOptions) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
     if (visual.marker_end == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .right_x_shift = options.head_right_x_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
+        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .tip_x_shift = options.head_tip_x_shift, .tip_y_shift = options.head_tip_y_shift, .right_x_shift = options.head_right_x_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
     }
     if (visual.marker_start == .normal) {
         try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, options.tail_length_scale, true, .{});
@@ -10105,6 +10108,8 @@ fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute
 
 const InlineNormalArrowPointAdjust = struct {
     y_shift: f64 = 0.0,
+    tip_x_shift: f64 = 0.0,
+    tip_y_shift: f64 = 0.0,
     right_x_shift: f64 = 0.0,
     right_y_shift: f64 = 0.0,
     left_x_shift: f64 = 0.0,
@@ -10131,7 +10136,7 @@ fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, colo
     const py = ux;
     const left = Point{ .x = base.x + px * arrow_half + adjust.left_x_shift, .y = base.y + py * arrow_half + adjust.left_y_shift + adjust.y_shift };
     const right = Point{ .x = base.x - px * arrow_half + adjust.right_x_shift, .y = base.y - py * arrow_half + adjust.right_y_shift + adjust.y_shift };
-    const adjusted_tip = Point{ .x = tip.x, .y = tip.y + adjust.y_shift };
+    const adjusted_tip = Point{ .x = tip.x + adjust.tip_x_shift, .y = tip.y + adjust.y_shift + adjust.tip_y_shift };
     try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
         color,
         color,
@@ -10272,8 +10277,11 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         }
         if (crossClusterDiagonalControls(layout, edge_item, rankdir, direct_route)) |controls| {
             if (graphvizCrossClusterLeftPathRoute(layout, edge_item, rankdir, direct_route, controls)) |path| {
-                try writePathMovePrecise(writer, path.start);
-                try writePathCubicPreciseControls(writer, path.control1, path.control2, path.end);
+                var graphviz_path = path;
+                graphviz_path.end.x -= 0.06;
+                graphviz_path.end.y += if (rankdir == .TB) -0.04 else 0.04;
+                try writePathMovePrecise(writer, graphviz_path.start);
+                try writePathCubicPrecise(writer, graphviz_path.control1, graphviz_path.control2, graphviz_path.end);
                 return;
             }
             try writePathMove(writer, direct_route.start);
@@ -10393,7 +10401,11 @@ fn msquareHeadDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
 
     const adjusted_dx = end.x - start.x;
     const adjusted_dy = end.y - start.y;
-    const c1 = Point{ .x = start.x + adjusted_dx * 0.293, .y = start.y + adjusted_dy * 0.293 };
+    var c1 = Point{ .x = start.x + adjusted_dx * 0.293, .y = start.y + adjusted_dy * 0.293 };
+    if (dx < 0) {
+        c1.x -= 0.02;
+        c1.y += y_dir * 0.01;
+    }
     const c2 = Point{ .x = start.x + adjusted_dx * 0.663, .y = start.y + adjusted_dy * 0.663 };
     return .{
         .start = start,
@@ -10774,7 +10786,11 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             } else {
                 try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
             }
-            try writePathCubicContinuation(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
+            if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
+                try writePathCubicContinuationPreciseControls(writer, .{ .x = side_x + side_bulge - 0.06, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift - 0.01 }, .{ .x = side_x + side_bulge - 0.06, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift - 0.01 }, channel_p2);
+            } else {
+                try writePathCubicContinuation(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
+            }
             if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
                 try writePathCubicContinuationPrecise(writer, .{ .x = tail_control1_x + tail_control1_extra_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift + tail_control1_extra_y }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
             } else {
@@ -11078,6 +11094,15 @@ fn writePathCubicContinuationPrecise(writer: *Io.Writer, c1: Point, c2: Point, e
     try writeSvgPathPointPrecise(writer, c2);
     try writer.writeByte(' ');
     try writeSvgPathPointPrecise(writer, end);
+}
+
+fn writePathCubicContinuationPreciseControls(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try writeSvgPathPoint(writer, end);
 }
 
 fn writeSvgPathPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
@@ -16715,7 +16740,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.023);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.021);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
