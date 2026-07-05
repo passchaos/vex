@@ -10696,8 +10696,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             var path_start = shortenPointToward(route.start, .{ .x = c1x, .y = route.start.y + rank_delta * 0.05 }, path_clip.tail);
             if (graphvizSameClusterBackEdgePathStartOnlyShift(layout, edge_item, rankdir, prefer_left)) |shift| path_start = .{ .x = path_start.x + shift.x, .y = path_start.y + shift.y };
             if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
-                path_start.x += 0.50;
-                path_start.y += if (rankdir == .TB) 0.06 else -0.06;
+                path_start.x += 0.46;
+                path_start.y += if (rankdir == .TB) 0.08 else -0.08;
             }
             var path_end = shortenPointToward(route.end, .{ .x = c4x, .y = route.end.y - rank_delta * 0.10 }, path_clip.head);
             if (graphvizSameClusterBackEdgePathEndShift(layout, edge_item, rankdir, prefer_left)) |shift| path_end = .{ .x = path_end.x + shift.x, .y = path_end.y + shift.y };
@@ -10725,7 +10725,11 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const tail_end_extra_x: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.04 else 0.0;
             const tail_end_extra_y: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.02 else 0.0;
             const tail_end = Point{ .x = path_end.x + tail_end_shift + tail_end_extra_x, .y = path_end.y + tail_end_extra_y };
-            try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
+            if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
+                try writePathCubicPreciseControls(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
+            } else {
+                try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
+            }
             try writePathCubicContinuation(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
             if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
                 try writePathCubicContinuationPrecise(writer, .{ .x = tail_control1_x + tail_control1_extra_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift + tail_control1_extra_y }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
@@ -16565,8 +16569,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_back_first_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[2], .y = oracle_back_numbers[3] });
     const back_first_control2 = svgScreenPoint(svg, .{ .x = back_numbers[4], .y = back_numbers[5] });
     const oracle_back_first_control2 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[4], .y = oracle_back_numbers[5] });
-    try std.testing.expect(distanceBetween(back_first_control1, oracle_back_first_control1) <= 0.07);
-    try std.testing.expect(distanceBetween(back_first_control2, oracle_back_first_control2) <= 0.07);
+    try std.testing.expect(distanceBetween(back_first_control1, oracle_back_first_control1) <= 0.001);
+    try std.testing.expect(distanceBetween(back_first_control2, oracle_back_first_control2) <= 0.021);
     try std.testing.expect(@abs((back_numbers[6] + svg_translate.x) - (oracle_back_numbers[6] + oracle_translate.x)) <= 0.01);
     const back_mid_control = svgScreenPoint(svg, .{ .x = back_numbers[8], .y = back_numbers[9] });
     const oracle_back_mid_control = svgScreenPoint(graphviz_oracle, .{ .x = oracle_back_numbers[8], .y = oracle_back_numbers[9] });
@@ -16579,7 +16583,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(back_tail_control2, oracle_back_tail_control2) <= 0.06);
     const back_points = svgPathStartEnd(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_points = svgPathStartEnd(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 0.07);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.start), svgScreenPoint(graphviz_oracle, oracle_back_points.start)) <= 0.001);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.end), svgScreenPoint(graphviz_oracle, oracle_back_points.end)) <= 0.04);
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
@@ -16657,7 +16661,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.057);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.042);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
