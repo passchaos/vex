@@ -10255,7 +10255,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
             controls.c2.x -= 0.06;
             try writePathMovePrecise(writer, tapered_route.start);
-            try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
+            try writePathCubicPreciseControls(writer, controls.c1, controls.c2, tapered_route.end);
             return;
         }
         if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
@@ -10265,7 +10265,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
             controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
             try writePathMovePrecise(writer, tapered_route.start);
-            try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
+            try writePathCubicPreciseControls(writer, controls.c1, controls.c2, tapered_route.end);
             return;
         }
         if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
@@ -10931,6 +10931,15 @@ fn writePathCubicPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) I
     try writeSvgPathPointPrecise(writer, c2);
     try writer.writeByte(' ');
     try writeSvgPathPointPrecise(writer, end);
+}
+
+fn writePathCubicPreciseControls(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try writeSvgPathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try writeSvgPathPoint(writer, end);
 }
 
 fn writePathCubicContinuation(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
