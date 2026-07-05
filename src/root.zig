@@ -8277,6 +8277,57 @@ fn svgAttributeValue(tag: []const u8, attr: []const u8) ?[]const u8 {
     return tag[value_start .. value_start + value_end_rel];
 }
 
+fn expectSvgEdgePathCommandSequencesEqual(svg: []const u8, oracle: []const u8) !void {
+    var title_index: usize = 0;
+    while (std.mem.indexOf(u8, oracle[title_index..], "<title>")) |rel| {
+        const title_start = title_index + rel + "<title>".len;
+        const title_end_rel = std.mem.indexOf(u8, oracle[title_start..], "</title>") orelse return error.MissingTitle;
+        const title = oracle[title_start .. title_start + title_end_rel];
+        title_index = title_start + title_end_rel + "</title>".len;
+        if (std.mem.indexOf(u8, title, "-&gt;") == null) continue;
+
+        const svg_fragment = svgGroupFragmentByTitle(svg, title) orelse return error.MissingEdge;
+        const oracle_fragment = svgGroupFragmentByTitle(oracle, title) orelse return error.MissingEdge;
+        try expectSvgPathCommandSequenceEqual(svg_fragment, oracle_fragment);
+    }
+}
+
+fn expectSvgPathCommandSequenceEqual(svg_fragment: []const u8, oracle_fragment: []const u8) !void {
+    const svg_d = svgAttributeSlice(svg_fragment, "d") orelse return error.MissingEdge;
+    const oracle_d = svgAttributeSlice(oracle_fragment, "d") orelse return error.MissingEdge;
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_command = nextSvgPathCommand(svg_d, &svg_index);
+        const oracle_command = nextSvgPathCommand(oracle_d, &oracle_index);
+        if (svg_command == null or oracle_command == null) {
+            try std.testing.expect(svg_command == null and oracle_command == null);
+            return;
+        }
+        try std.testing.expectEqual(oracle_command.?, svg_command.?);
+    }
+}
+
+fn svgAttributeSlice(fragment: []const u8, attr_name: []const u8) ?[]const u8 {
+    var marker_buf: [64]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return null;
+    const attr_start = std.mem.indexOf(u8, fragment, marker) orelse return null;
+    const value_start = attr_start + marker.len;
+    const value_end_rel = std.mem.indexOfScalar(u8, fragment[value_start..], '"') orelse return null;
+    return fragment[value_start .. value_start + value_end_rel];
+}
+
+fn nextSvgPathCommand(d: []const u8, index: *usize) ?u8 {
+    while (index.* < d.len) : (index.* += 1) {
+        const c = d[index.*];
+        if (c == 'M' or c == 'L' or c == 'C' or c == 'Q' or c == 'Z' or c == 'z') {
+            index.* += 1;
+            return c;
+        }
+    }
+    return null;
+}
+
 fn graphConcentrateEnabled(graph: *const Graph) bool {
     const value = attrValue(graph.attrs.items, "concentrate") orelse return false;
     return parseBool(value) orelse false;
@@ -15810,6 +15861,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgTitleSequenceEqual(svg, graphviz_oracle);
     try expectSvgCommentSequenceEqual(svg, graphviz_oracle);
     try expectSvgGroupSequenceEqual(svg, graphviz_oracle);
+    try expectSvgEdgePathCommandSequencesEqual(svg, graphviz_oracle);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
