@@ -10262,14 +10262,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         if (diamondTailDiagonalPath(direct_route, rankdir, hints)) |path| {
-            const dx = direct_route.end.x - direct_route.start.x;
-            if (dx >= 0) {
-                try writePathMovePrecise(writer, path.start);
-                try writePathCubicPrecise(writer, path.control1, path.control2, path.end);
-            } else {
-                try writePathMove(writer, path.start);
-                try writePathCubic(writer, path.control1, path.control2, path.end);
-            }
+            try writePathMovePrecise(writer, path.start);
+            try writePathCubicPrecise(writer, path.control1, path.control2, path.end);
             return;
         }
         if (diamondTailDiagonalControls(direct_route.start, direct_route.end, rankdir, hints)) |controls| {
@@ -10389,7 +10383,8 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
         path_start.x -= 0.06;
         path_start.y += if (rankdir == .TB) 0.03 else -0.03;
     } else {
-        path_start.x -= 0.06;
+        path_start.x -= 0.02;
+        path_start.y += if (rankdir == .TB) 0.04 else -0.04;
     }
     var end = route.end;
     const head_x_shift: f64 = if (dx >= 0) -0.22 else 0.22;
@@ -10397,8 +10392,8 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     end.y += if (rankdir == .TB) -0.35 else 0.35;
     const adjusted_dx = end.x - route.start.x;
     const adjusted_dy = end.y - route.start.y;
-    const c1_extra_x: f64 = if (dx >= 0) -0.05 else 0.0;
-    const c1_extra_y: f64 = if (dx >= 0) 0.04 else 0.0;
+    const c1_extra_x: f64 = if (dx >= 0) -0.05 else -0.01;
+    const c1_extra_y: f64 = if (dx >= 0) 0.04 else 0.04;
     const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275 + c1_extra_x, .y = route.start.y + adjusted_dy * 0.275 + c1_extra_y };
     const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.08;
     const c2_extra_y: f64 = if (dx >= 0) 0.03 else 0.0;
@@ -16592,7 +16587,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 0.06, 0.06);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.06, 0.06);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06, 0.06);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.052);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.041);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.065);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;a0", 0.045);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;b0", 0.045);
