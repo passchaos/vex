@@ -7242,7 +7242,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
             try writeSvgDash(writer, visual.dash);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
-            try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, segment_route), segment_visual);
+            try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, segment_route), segment_visual, .{});
         }
         return;
     }
@@ -7261,7 +7261,15 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
         backEdgeInlineArrowRoute(layout, edge_item, rankdir, base_offset, render_route, routing)
     else
         graphvizMsquareHeadInlineArrowRoute(graphvizDiamondTailInlineArrowRoute(graphvizCrossClusterLeftInlineArrowRoute(layout, edge_item, rankdir, graphvizCrossClusterLongInlineArrowRoute(layout, edge_item, rankdir, routeForInlineArrowheads(layout, edge_item, rankdir, render_route))), rankdir, hints), rankdir, hints);
-    try writeSvgInlineArrowheads(writer, directed, inline_route, visual);
+    try writeSvgInlineArrowheads(writer, directed, inline_route, visual, inlineArrowOptions(render_route, hints));
+}
+
+fn inlineArrowOptions(route: EdgeRoute, hints: EdgePathHints) InlineArrowOptions {
+    const dx = route.end.x - route.start.x;
+    const dy = route.end.y - route.start.y;
+    if (@abs(dx) < @abs(dy) * 0.35) return .{};
+    if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001 };
+    return .{};
 }
 
 fn graphvizCrossClusterLeftInlineArrowRoute(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) EdgeRoute {
@@ -7442,7 +7450,7 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, r
             try writeSvgSelfLoopPath(writer, shifted, segment_visual);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
-            try writeSvgInlineArrowheads(writer, directed, shifted, segment_visual);
+            try writeSvgInlineArrowheads(writer, directed, shifted, segment_visual, .{});
         }
         return;
     }
@@ -7450,7 +7458,7 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, r
     try writeSvgSelfLoopPath(writer, route, visual);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
-    try writeSvgInlineArrowheads(writer, directed, route, visual);
+    try writeSvgInlineArrowheads(writer, directed, route, visual, .{});
 }
 
 fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
@@ -9535,17 +9543,22 @@ fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visu
     if (visual.marker_end != .none and visual.marker_end != .normal) try writer.print(" marker-end=\"url(#arrow-{d}-head)\"", .{edge_id});
 }
 
-fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+const InlineArrowOptions = struct {
+    head_length_scale: f64 = 1.0,
+    tail_length_scale: f64 = 1.0,
+};
+
+fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual, options: InlineArrowOptions) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
     if (visual.marker_end == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, false);
+        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false);
     }
     if (visual.marker_start == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, true);
+        try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, options.tail_length_scale, true);
     }
 }
 
-fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, color: []const u8, scale: f64, reverse: bool) Io.Writer.Error!void {
+fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, color: []const u8, scale: f64, length_scale: f64, reverse: bool) Io.Writer.Error!void {
     var dx = tip.x - toward.x;
     var dy = tip.y - toward.y;
     if (reverse) {
@@ -9556,7 +9569,7 @@ fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, colo
     if (len <= 0.001) return;
     const ux = dx / len;
     const uy = dy / len;
-    const arrow_len = 10.0 * scale;
+    const arrow_len = 10.0 * scale * length_scale;
     const arrow_half = 3.5 * scale;
     const base = Point{ .x = tip.x - ux * arrow_len, .y = tip.y - uy * arrow_len };
     const px = -uy;
@@ -15974,7 +15987,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.052);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.035);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.072);
-    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "start-&gt;b0", 0.45);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "start-&gt;b0", 0.04);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.038);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.052);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.069);
