@@ -7261,7 +7261,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
     else
         graphvizMsquareHeadInlineArrowRoute(graphvizDiamondTailInlineArrowRoute(graphvizCrossClusterLeftInlineArrowRoute(layout, edge_item, rankdir, graphvizCrossClusterLongInlineArrowRoute(layout, edge_item, rankdir, routeForInlineArrowheads(layout, edge_item, rankdir, render_route))), rankdir, hints), rankdir, hints);
     const inline_options: InlineArrowOptions = if (back_edge)
-        .{ .head_precise = true, .head_right_x_shift = 0.02, .head_right_y_shift = 0.06, .head_left_x_shift = 0.04, .head_left_y_shift = 0.02 }
+        .{ .head_precise = true, .head_tip_x_shift = -0.01, .head_tip_y_shift = 0.01, .head_right_x_shift = 0.02, .head_right_y_shift = 0.06, .head_left_x_shift = 0.04, .head_left_y_shift = 0.02 }
     else
         inlineArrowOptions(layout, edge_item, rankdir, render_route, hints);
     try writeSvgInlineArrowheads(writer, directed, inline_route, visual, inline_options);
@@ -7271,15 +7271,15 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_x_shift = 0.01, .head_tip_y_shift = 0.03, .head_right_x_shift = -0.04, .head_right_y_shift = 0.01, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
-    if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_y_shift = 0.03 };
+    if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_y_shift = 0.03, .head_left_x_shift = -0.01, .head_left_y_shift = -0.01 };
     if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_right_x_shift = 0.02, .head_right_y_shift = 0.01, .head_left_x_shift = 0.03, .head_left_y_shift = -0.01 };
-    if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_right_x_shift = -0.03, .head_left_x_shift = -0.02, .head_left_y_shift = 0.02 };
+    if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_tip_x_shift = 0.01, .head_tip_y_shift = -0.01, .head_right_x_shift = -0.03, .head_left_x_shift = -0.02, .head_left_y_shift = 0.02 };
     if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 0 and dx < 0) return .{ .head_precise = true };
     if (@abs(dx) < 0.001) return .{ .head_precise = true, .head_y_shift = 0.03 };
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true, .head_right_x_shift = -0.04, .head_left_x_shift = -0.02, .head_left_y_shift = 0.01, .head_tip_x_shift = -0.01, .head_tip_y_shift = -0.02 };
-    if (hints.tail_mdiamond and dx < 0) return .{ .head_precise = true, .head_left_x_shift = -0.02 };
-    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true, .head_left_y_shift = -0.03 };
+    if (hints.tail_mdiamond and dx < 0) return .{ .head_precise = true, .head_right_x_shift = -0.01, .head_right_y_shift = -0.01, .head_left_x_shift = -0.02 };
+    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true, .head_right_x_shift = 0.01, .head_right_y_shift = -0.01, .head_left_y_shift = -0.03 };
     if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_x_shift = -0.02, .head_right_y_shift = -0.03, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
     return .{};
 }
@@ -8811,7 +8811,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
             visual.fill,
             visual.stroke,
         });
-        try writeSvgRectPolygonPoints(writer, rect, .bottom_left_clockwise);
+        try writeSvgRectPolygonPoints(writer, rect, .bottom_left_clockwise, false);
         try writer.writeByte('"');
         try writeSvgFillOpacity(writer, visual.fill_opacity);
         try writeSvgStrokeWidth(writer, visual.width);
@@ -9049,7 +9049,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 var ring_visual = visual;
                 if (ring > 0) ring_visual.fill = "none";
                 if (node_item.shape == .msquare and radius <= 0.001) {
-                    try renderSvgRectPolygon(writer, rect, ring_visual);
+                    try renderSvgRectPolygonPrecise(writer, rect, ring_visual);
                 } else {
                     try renderSvgBoxShape(writer, rect, ring_visual, radius);
                 }
@@ -9157,9 +9157,10 @@ fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
             result.height = @min(result.height, 36.0);
         },
         .msquare => {
-            result.center.y += 1.5;
-            result.width += 0.2;
-            result.height += 0.2;
+            result.center.x -= 0.005;
+            result.center.y += 1.5025;
+            result.width += 0.22;
+            result.height += 0.215;
         },
         .ellipse, .circle, .doublecircle, .mcircle => result.center.y += 1.0,
         else => {},
@@ -9573,10 +9574,10 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
     const d = @min(@max(1, @min(rect.width, rect.height) - 0.2) / 3.0, 18);
-    try writeSvgPolylineLine(writer, rect.x + d, rect.y, rect.x, rect.y + d, visual);
-    try writeSvgPolylineLine(writer, rect.x, rect.y + rect.height - d, rect.x + d, rect.y + rect.height, visual);
-    try writeSvgPolylineLine(writer, rect.x + rect.width - d, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d, visual);
-    try writeSvgPolylineLine(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d, rect.y, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x + d, rect.y, rect.x, rect.y + d, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x, rect.y + rect.height - d, rect.x + d, rect.y + rect.height, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width - d, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d, rect.y, visual);
 }
 
 fn renderSvgCircleDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -9717,14 +9718,26 @@ fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.
         visual.fill,
         visual.stroke,
     });
-    try writeSvgRectPolygonPoints(writer, rect, .top_right_counterclockwise);
+    try writeSvgRectPolygonPoints(writer, rect, .top_right_counterclockwise, false);
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
 }
 
-fn writeSvgRectPolygonPoints(writer: *Io.Writer, rect: RectF, order: RectPointOrder) Io.Writer.Error!void {
+fn renderSvgRectPolygonPrecise(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
+        visual.fill,
+        visual.stroke,
+    });
+    try writeSvgRectPolygonPoints(writer, rect, .top_right_counterclockwise, true);
+    try writer.writeByte('"');
+    try writeSvgStrokeWidth(writer, visual.width);
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn writeSvgRectPolygonPoints(writer: *Io.Writer, rect: RectF, order: RectPointOrder, precise: bool) Io.Writer.Error!void {
     const left = rect.x;
     const right = rect.x + rect.width;
     const top = rect.y;
@@ -9754,7 +9767,7 @@ fn writeSvgRectPolygonPoints(writer: *Io.Writer, rect: RectF, order: RectPointOr
     };
     for (points, 0..) |point, index| {
         if (index > 0) try writer.writeByte(' ');
-        try writeSvgPoint(writer, point);
+        try writeSvgPointWithPrecision(writer, point, precise);
     }
 }
 
@@ -10451,11 +10464,16 @@ fn msquareHeadDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     const adjusted_dx = end.x - start.x;
     const adjusted_dy = end.y - start.y;
     var c1 = Point{ .x = start.x + adjusted_dx * 0.293, .y = start.y + adjusted_dy * 0.293 };
-    if (dx < 0) {
+    if (dx >= 0) {
+        c1.x += 0.01;
+        c1.y += y_dir * 0.01;
+    } else {
         c1.x -= 0.02;
         c1.y += y_dir * 0.01;
     }
-    const c2 = Point{ .x = start.x + adjusted_dx * 0.663, .y = start.y + adjusted_dy * 0.663 };
+    var c2 = Point{ .x = start.x + adjusted_dx * 0.663, .y = start.y + adjusted_dy * 0.663 };
+    c2.x += if (dx >= 0) -0.01 else 0.01;
+    c2.y -= y_dir * 0.01;
     return .{
         .start = start,
         .control1 = c1,
@@ -10473,8 +10491,8 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     if (@abs(dx) < @abs(dy) * 0.35) return null;
     var path_start = route.start;
     if (dx >= 0) {
-        path_start.x -= 0.06;
-        path_start.y += if (rankdir == .TB) 0.03 else -0.03;
+        path_start.x -= 0.07;
+        path_start.y += if (rankdir == .TB) 0.04 else -0.04;
     } else {
         path_start.x -= 0.02;
         path_start.y += if (rankdir == .TB) 0.04 else -0.04;
@@ -16789,7 +16807,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.015);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.011);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
