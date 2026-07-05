@@ -8213,6 +8213,28 @@ fn expectSvgTitleSequenceEqual(svg: []const u8, oracle: []const u8) !void {
     }
 }
 
+fn expectSvgCommentSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_start = std.mem.indexOf(u8, svg[svg_index..], "<!-- ");
+        const oracle_start = std.mem.indexOf(u8, oracle[oracle_index..], "<!-- ");
+        if (svg_start == null or oracle_start == null) {
+            try std.testing.expect(svg_start == null and oracle_start == null);
+            return;
+        }
+        const svg_comment_start = svg_index + svg_start.? + "<!-- ".len;
+        const oracle_comment_start = oracle_index + oracle_start.? + "<!-- ".len;
+        const svg_comment_end_rel = std.mem.indexOf(u8, svg[svg_comment_start..], " -->") orelse return error.MissingComment;
+        const oracle_comment_end_rel = std.mem.indexOf(u8, oracle[oracle_comment_start..], " -->") orelse return error.MissingComment;
+        const svg_comment = svg[svg_comment_start .. svg_comment_start + svg_comment_end_rel];
+        const oracle_comment = oracle[oracle_comment_start .. oracle_comment_start + oracle_comment_end_rel];
+        try std.testing.expectEqualStrings(oracle_comment, svg_comment);
+        svg_index = svg_comment_start + svg_comment_end_rel + " -->".len;
+        oracle_index = oracle_comment_start + oracle_comment_end_rel + " -->".len;
+    }
+}
+
 fn graphConcentrateEnabled(graph: *const Graph) bool {
     const value = attrValue(graph.attrs.items, "concentrate") orelse return false;
     return parseBool(value) orelse false;
@@ -15735,6 +15757,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
     try expectSvgTitleSequenceEqual(svg, graphviz_oracle);
+    try expectSvgCommentSequenceEqual(svg, graphviz_oracle);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
