@@ -62,6 +62,10 @@ fixtures: compare parsed semantics, layout coordinates, and rendered output for
 representative graphs, then close gaps in the native implementation. Runtime CLI
 rendering should stay on Vex's native parser/layout/renderers.
 
+For SVG parity work, `tools/svg_residual.py generated.svg graphviz.svg` reports
+screen-space point residuals for ordered `polygon`, `polyline`, and `path`
+geometry, skipping the root background polygon by default.
+
 ## Mainstream DOT support
 
 The parser currently supports a practical, mainstream DOT subset:
