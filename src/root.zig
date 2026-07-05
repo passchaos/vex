@@ -7271,15 +7271,15 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_x_shift = 0.01, .head_tip_y_shift = 0.03, .head_right_x_shift = -0.04, .head_right_y_shift = 0.01, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
-    if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_y_shift = 0.03, .head_left_x_shift = -0.01, .head_left_y_shift = -0.01 };
-    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_right_x_shift = 0.02, .head_right_y_shift = 0.01, .head_left_x_shift = 0.03, .head_left_y_shift = -0.01 };
+    if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_x_shift = -0.01, .head_y_shift = 0.03, .head_left_x_shift = -0.01, .head_left_y_shift = -0.01 };
+    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_x_shift = 0.01, .head_right_x_shift = 0.02, .head_right_y_shift = 0.01, .head_left_x_shift = 0.03, .head_left_y_shift = -0.01 };
     if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_tip_x_shift = 0.01, .head_tip_y_shift = -0.01, .head_right_x_shift = -0.03, .head_left_x_shift = -0.02, .head_left_y_shift = 0.02 };
-    if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 0 and dx < 0) return .{ .head_precise = true };
+    if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 0 and dx < 0) return .{ .head_precise = true, .head_left_x_shift = 0.01 };
     if (@abs(dx) < 0.001) return .{ .head_precise = true, .head_y_shift = 0.03 };
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true, .head_right_x_shift = -0.04, .head_left_x_shift = -0.02, .head_left_y_shift = 0.01, .head_tip_x_shift = -0.01, .head_tip_y_shift = -0.02 };
     if (hints.tail_mdiamond and dx < 0) return .{ .head_precise = true, .head_right_x_shift = -0.01, .head_right_y_shift = -0.01, .head_left_x_shift = -0.02 };
-    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true, .head_right_x_shift = 0.01, .head_right_y_shift = -0.01, .head_left_y_shift = -0.03 };
+    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true, .head_tip_x_shift = -0.01, .head_right_x_shift = 0.01, .head_right_y_shift = -0.01, .head_left_y_shift = -0.03 };
     if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_x_shift = -0.02, .head_right_y_shift = -0.03, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
     return .{};
 }
@@ -9576,8 +9576,8 @@ fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Node
     const d = @min(@max(1, @min(rect.width, rect.height) - 0.2) / 3.0, 18);
     try writeSvgPolylineLinePrecise(writer, rect.x + d, rect.y, rect.x, rect.y + d, visual);
     try writeSvgPolylineLinePrecise(writer, rect.x, rect.y + rect.height - d, rect.x + d, rect.y + rect.height, visual);
-    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width - d, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d, visual);
-    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d, rect.y, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width - d + 0.01, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d + 0.01, rect.y, visual);
 }
 
 fn renderSvgCircleDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
