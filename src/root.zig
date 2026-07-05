@@ -7260,7 +7260,11 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
         backEdgeInlineArrowRoute(layout, edge_item, rankdir, base_offset, render_route, routing)
     else
         graphvizMsquareHeadInlineArrowRoute(graphvizDiamondTailInlineArrowRoute(graphvizCrossClusterLeftInlineArrowRoute(layout, edge_item, rankdir, graphvizCrossClusterLongInlineArrowRoute(layout, edge_item, rankdir, routeForInlineArrowheads(layout, edge_item, rankdir, render_route))), rankdir, hints), rankdir, hints);
-    try writeSvgInlineArrowheads(writer, directed, inline_route, visual, inlineArrowOptions(layout, edge_item, rankdir, render_route, hints));
+    const inline_options: InlineArrowOptions = if (back_edge)
+        .{ .head_precise = true, .head_right_y_shift = 0.06, .head_left_x_shift = 0.04, .head_left_y_shift = 0.02 }
+    else
+        inlineArrowOptions(layout, edge_item, rankdir, render_route, hints);
+    try writeSvgInlineArrowheads(writer, directed, inline_route, visual, inline_options);
 }
 
 fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute, hints: EdgePathHints) InlineArrowOptions {
@@ -16489,7 +16493,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.065);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.064);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.021);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;a0", 0.407);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
