@@ -8355,6 +8355,48 @@ fn nextSvgTextContent(svg: []const u8, index: *usize) ?[]const u8 {
     return null;
 }
 
+fn expectSvgElementSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_element = nextSvgElementName(svg, &svg_index);
+        const oracle_element = nextSvgElementName(oracle, &oracle_index);
+        if (svg_element == null or oracle_element == null) {
+            try std.testing.expect(svg_element == null and oracle_element == null);
+            return;
+        }
+        try std.testing.expectEqual(svg_element.?.closing, oracle_element.?.closing);
+        try std.testing.expectEqualStrings(oracle_element.?.name, svg_element.?.name);
+    }
+}
+
+const SvgElementName = struct {
+    closing: bool,
+    name: []const u8,
+};
+
+fn nextSvgElementName(svg: []const u8, index: *usize) ?SvgElementName {
+    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
+        const tag_start = index.* + rel;
+        index.* = tag_start + 1;
+        if (index.* >= svg.len) return null;
+        if (svg[index.*] == '!' or svg[index.*] == '?') continue;
+        const closing = svg[index.*] == '/';
+        const name_start = index.* + @intFromBool(closing);
+        var name_end = name_start;
+        while (name_end < svg.len and isSvgNameChar(svg[name_end])) : (name_end += 1) {}
+        if (name_end == name_start) continue;
+        const name = svg[name_start..name_end];
+        if (std.mem.eql(u8, name, "svg")) continue;
+        return .{ .closing = closing, .name = name };
+    }
+    return null;
+}
+
+fn isSvgNameChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == ':';
+}
+
 fn graphConcentrateEnabled(graph: *const Graph) bool {
     const value = attrValue(graph.attrs.items, "concentrate") orelse return false;
     return parseBool(value) orelse false;
@@ -15890,6 +15932,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgGroupSequenceEqual(svg, graphviz_oracle);
     try expectSvgEdgePathCommandSequencesEqual(svg, graphviz_oracle);
     try expectSvgTextSequenceEqual(svg, graphviz_oracle);
+    try expectSvgElementSequenceEqual(svg, graphviz_oracle);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
