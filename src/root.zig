@@ -10404,6 +10404,8 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     if (dx >= 0) {
         end.x -= 0.01;
         end.y += if (rankdir == .TB) 0.04 else -0.04;
+    } else {
+        end.y += if (rankdir == .TB) 0.04 else -0.04;
     }
     const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275 + c1_extra_x, .y = route.start.y + adjusted_dy * 0.275 + c1_extra_y };
     const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.08;
@@ -16620,7 +16622,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.start)) <= 0.06);
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.end), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.end)) <= 0.06);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.end), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.end)) <= 0.01);
     const start_b0_points = svgPathStartEnd(svg, "start-&gt;b0") orelse return error.MissingStartEdge;
     const oracle_start_b0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;b0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_b0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_b0_points.start)) <= 0.06);
@@ -16638,7 +16640,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 0.06, 0.06);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.06, 0.06);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06, 0.06);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.041);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.032);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.045);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;a0", 0.045);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;b0", 0.045);
