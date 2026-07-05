@@ -10262,7 +10262,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             var tapered_route = adjacent_route;
             tapered_route.start.x -= 0.11;
             tapered_route.end.x += 0.26;
-            const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
             try writePathMovePrecise(writer, tapered_route.start);
             try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
             return;
