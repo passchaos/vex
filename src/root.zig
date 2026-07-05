@@ -7915,6 +7915,23 @@ fn svgPolygonPointCount(fragment: []const u8) ?usize {
     return count / 2;
 }
 
+fn expectSvgPolygonPointsNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return error.MissingSvgPolygon;
+    const oracle_fragment = svgGroupFragmentByTitle(oracle, title) orelse return error.MissingSvgPolygon;
+    var numbers: [128]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", numbers[0..]);
+    var oracle_numbers: [128]f64 = undefined;
+    const oracle_count = svgNumbersInAttribute(oracle_fragment, "points", oracle_numbers[0..]);
+    try std.testing.expect(count >= 2 and count % 2 == 0);
+    try std.testing.expectEqual(oracle_count, count);
+    var index: usize = 0;
+    while (index + 1 < count) : (index += 2) {
+        const point = svgScreenPoint(svg, .{ .x = numbers[index], .y = numbers[index + 1] });
+        const oracle_point = svgScreenPoint(oracle, .{ .x = oracle_numbers[index], .y = oracle_numbers[index + 1] });
+        try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+    }
+}
+
 fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
     if (svgNumberAfter(fragment, " cx=\"")) |cx| return cx;
@@ -9043,9 +9060,9 @@ fn diamondPoints(layout: NodeLayout) [6]Point {
     const hh = layout.height / 2.0;
     return .{
         .{ .x = cx, .y = cy - hh },
-        .{ .x = cx + hw, .y = cy },
-        .{ .x = cx, .y = cy + hh },
         .{ .x = cx - hw, .y = cy },
+        .{ .x = cx, .y = cy + hh },
+        .{ .x = cx + hw, .y = cy },
         .{ .x = -1, .y = -1 },
         .{ .x = -1, .y = -1 },
     };
@@ -15996,6 +16013,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const start_fragment = svgGroupFragmentByTitle(svg, "start") orelse return error.MissingStartNode;
     const oracle_start_fragment = svgGroupFragmentByTitle(graphviz_oracle, "start") orelse return error.MissingStartNode;
     try std.testing.expectEqual(svgPolygonPointCount(oracle_start_fragment) orelse return error.MissingStartNode, svgPolygonPointCount(start_fragment) orelse return error.MissingStartNode);
+    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "start", 0.181);
     try std.testing.expect(@abs((svgPolygonBBoxY(start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.01);
     try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.01);
     const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
