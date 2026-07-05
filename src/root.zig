@@ -7307,9 +7307,10 @@ fn graphvizMsquareHeadInlineArrowRoute(route: EdgeRoute, rankdir: RankDir, hints
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var result = route;
-    result.end.x += if (dx >= 0) -0.45 else -0.30;
+    result.end.x += if (dx >= 0) -0.51 else -0.30;
     result.end.y += if (rankdir == .TB) -0.10 else 0.10;
     result.control2.x -= 0.20;
+    if (dx >= 0) result.control2.y -= if (rankdir == .TB) 0.08 else -0.08;
     if (dx < 0) result.control2.y += if (rankdir == .TB) -0.25 else 0.25;
     return result;
 }
@@ -15906,7 +15907,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.052);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.069);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.038);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.072);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.065);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.087);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
