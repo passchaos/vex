@@ -7272,6 +7272,7 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     const dy = route.end.y - route.start.y;
     if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_precise = false, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
     if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true };
+    if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_right_x_shift = -0.03 };
     if (@abs(dx) < 0.001) return .{ .head_precise = true, .head_y_shift = 0.03 };
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true };
@@ -10062,6 +10063,7 @@ fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visu
 const InlineArrowOptions = struct {
     head_length_scale: f64 = 1.0,
     tail_length_scale: f64 = 1.0,
+    head_right_x_shift: f64 = 0.0,
     head_right_y_shift: f64 = 0.0,
     head_left_x_shift: f64 = 0.0,
     head_left_y_shift: f64 = 0.0,
@@ -10073,7 +10075,7 @@ const InlineArrowOptions = struct {
 fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual, options: InlineArrowOptions) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
     if (visual.marker_end == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
+        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .right_x_shift = options.head_right_x_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
     }
     if (visual.marker_start == .normal) {
         try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, options.tail_length_scale, true, .{});
@@ -10082,6 +10084,7 @@ fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute
 
 const InlineNormalArrowPointAdjust = struct {
     y_shift: f64 = 0.0,
+    right_x_shift: f64 = 0.0,
     right_y_shift: f64 = 0.0,
     left_x_shift: f64 = 0.0,
     left_y_shift: f64 = 0.0,
@@ -10106,7 +10109,7 @@ fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, colo
     const px = -uy;
     const py = ux;
     const left = Point{ .x = base.x + px * arrow_half + adjust.left_x_shift, .y = base.y + py * arrow_half + adjust.left_y_shift + adjust.y_shift };
-    const right = Point{ .x = base.x - px * arrow_half, .y = base.y - py * arrow_half + adjust.right_y_shift + adjust.y_shift };
+    const right = Point{ .x = base.x - px * arrow_half + adjust.right_x_shift, .y = base.y - py * arrow_half + adjust.right_y_shift + adjust.y_shift };
     const adjusted_tip = Point{ .x = tip.x, .y = tip.y + adjust.y_shift };
     try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
         color,
@@ -16621,7 +16624,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.031);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.031);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.031);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.051);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.031);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a1-&gt;b3", 0.365);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.033);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.071);
