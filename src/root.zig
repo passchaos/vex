@@ -7271,11 +7271,14 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_precise = false, .head_right_x_shift = -0.04, .head_right_y_shift = 0.01, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
-    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true };
+    if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_y_shift = 0.03 };
+    if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_left_x_shift = 0.03, .head_left_y_shift = -0.01 };
     if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_right_x_shift = -0.03 };
+    if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 0 and dx < 0) return .{ .head_precise = true };
     if (@abs(dx) < 0.001) return .{ .head_precise = true, .head_y_shift = 0.03 };
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true, .head_right_x_shift = -0.04 };
+    if (hints.tail_mdiamond and dx < 0) return .{ .head_precise = true };
     if (hints.head_msquare and dx >= 0) return .{ .head_precise = true };
     if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_y_shift = -0.03, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
     return .{};
@@ -7289,8 +7292,8 @@ fn graphvizCrossClusterLeftInlineArrowRoute(layout: *const Layout, edge_item: Ed
     const dy = route.end.y - route.start.y;
     if (dx >= 0 or @abs(dx) < @abs(dy) * 0.35) return route;
     var result = route;
-    result.end.x -= 0.13;
-    result.end.y += if (rankdir == .TB) -0.42 else 0.42;
+    result.end.x -= 0.12;
+    result.end.y += if (rankdir == .TB) -0.38 else 0.38;
     const graphviz_arrow_axis_x: f64 = 8.44;
     const graphviz_arrow_axis_y: f64 = if (rankdir == .TB) -5.37 else 5.37;
     result.control2 = .{
@@ -7307,11 +7310,11 @@ fn graphvizDiamondTailInlineArrowRoute(route: EdgeRoute, rankdir: RankDir, hints
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return route;
     var result = route;
-    result.end.x += if (dx >= 0) 0.25 else -0.20;
+    result.end.x += if (dx >= 0) 0.25 else -0.17;
     if (dx >= 0) result.end.x += 0.08;
     result.end.y += if (rankdir == .TB) 0.40 else -0.40;
     if (dx < 0) {
-        result.end.y += if (rankdir == .TB) -0.08 else 0.08;
+        result.end.y += if (rankdir == .TB) -0.03 else 0.03;
         result.control2.x -= 0.05;
     }
     return result;
@@ -10408,8 +10411,8 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
         end.y += if (rankdir == .TB) 0.04 else -0.04;
     }
     const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275 + c1_extra_x, .y = route.start.y + adjusted_dy * 0.275 + c1_extra_y };
-    const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.08;
-    const c2_extra_y: f64 = if (dx >= 0) 0.03 else 0.0;
+    const c2_extra_x: f64 = if (dx < 0) -0.11 else 0.08;
+    const c2_extra_y: f64 = if (dx >= 0) 0.03 else 0.03;
     const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665 + head_x_shift * 0.5 + c2_extra_x, .y = route.start.y + adjusted_dy * 0.665 + c2_extra_y };
     return .{
         .start = path_start,
@@ -10737,8 +10740,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const first_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.28 else 0.0;
             const first_control2_extra_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.04 else 0.0;
             const tail_control1_x = c3x + tail_control1_shift;
-            const tail_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.15 else 0.0;
-            const tail_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.10 else 0.0;
+            const tail_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.13 else 0.0;
+            const tail_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.07 else 0.0;
             const tail_control1_extra_x: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.05 else 0.0;
             const tail_control1_extra_y: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.03 else 0.0;
             const tail_end_extra_x: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.04 else 0.0;
@@ -16690,7 +16693,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.037);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.031);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
