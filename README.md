@@ -64,7 +64,10 @@ rendering should stay on Vex's native parser/layout/renderers.
 
 For SVG parity work, `tools/svg_residual.py generated.svg graphviz.svg` reports
 screen-space point residuals for ordered `polygon`, `polyline`, and `path`
-geometry, skipping the root background polygon by default.
+geometry, skipping the root background polygon by default. Use
+`--show-lower-bound` to show the best possible residual on the current
+one-decimal coordinate grid, `--max-residual` to gate the absolute residual, and
+`--max-gap` to gate only the remaining gap above that one-decimal lower bound.
 
 ## Mainstream DOT support
 
