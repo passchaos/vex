@@ -7276,7 +7276,7 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true };
     if (hints.head_msquare and dx >= 0) return .{ .head_precise = true };
-    if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_y_shift = -0.08, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
+    if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_y_shift = -0.03, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
     return .{};
 }
 
@@ -16639,7 +16639,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b2-&gt;a3", 0.128);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.031);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.054);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
     try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.057);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
