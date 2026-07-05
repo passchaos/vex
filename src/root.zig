@@ -10251,8 +10251,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         if (msquareHeadDiagonalPath(direct_route, rankdir, hints)) |path| {
-            try writePathMove(writer, path.start);
-            try writePathCubic(writer, path.control1, path.control2, path.end);
+            try writePathMovePrecise(writer, path.start);
+            try writePathCubicPrecise(writer, path.control1, path.control2, path.end);
             return;
         }
         if (diamondTailDiagonalPath(direct_route, rankdir, hints)) |path| {
@@ -10350,14 +10350,14 @@ fn msquareHeadDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     var start = route.start;
     var end = route.end;
     if (dx >= 0) {
-        start.x += 1.2;
-        end.x -= 1.5;
+        start.x += 1.27;
+        end.x -= 1.53;
     } else {
         start.x -= 1.20;
         end.x += 0.90;
     }
     start.y += y_dir * 1.55;
-    end.y -= y_dir * 1.7;
+    end.y -= y_dir * 1.68;
 
     const adjusted_dx = end.x - start.x;
     const adjusted_dy = end.y - start.y;
@@ -16598,8 +16598,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.041);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b2-&gt;b3", 0.045);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.057);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.057);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.057);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.015);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.041);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "a3-&gt;a0", 0.04);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b3-&gt;end", 0.038);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.06);
