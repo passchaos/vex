@@ -7268,6 +7268,7 @@ fn inlineArrowOptions(route: EdgeRoute, hints: EdgePathHints) InlineArrowOptions
     const dy = route.end.y - route.start.y;
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true };
+    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true };
     if (hints.head_msquare and dx < 0) return .{ .head_right_y_shift = -0.1 };
     return .{};
 }
@@ -16547,7 +16548,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b2-&gt;b3", 0.17);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.037);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b2-&gt;a3", 0.128);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.065);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.031);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.057);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
