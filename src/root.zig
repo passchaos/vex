@@ -8084,6 +8084,19 @@ fn expectPolylineSetNear(svg: []const u8, oracle: []const u8, title: []const u8,
     }
 }
 
+fn expectPolylineSequenceNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    const count = svgPolylineCount(svg, title);
+    const oracle_count = svgPolylineCount(oracle, title);
+    try std.testing.expectEqual(oracle_count, count);
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        const polyline = svgPolylineEndpoints(svg, title, index) orelse return error.MissingPolyline;
+        const oracle_polyline = svgPolylineEndpoints(oracle, title, index) orelse return error.MissingPolyline;
+        try std.testing.expect(distanceBetween(svgScreenPoint(svg, polyline.start), svgScreenPoint(oracle, oracle_polyline.start)) <= tolerance);
+        try std.testing.expect(distanceBetween(svgScreenPoint(svg, polyline.end), svgScreenPoint(oracle, oracle_polyline.end)) <= tolerance);
+    }
+}
+
 fn expectSvgEdgeEndpointsNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
     const points = svgPathStartEnd(svg, title) orelse return error.MissingEdge;
     const oracle_points = svgPathStartEnd(oracle, title) orelse return error.MissingEdge;
@@ -9299,10 +9312,10 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
     const d = @min(@min(rect.width, rect.height) / 3.0, 18);
-    try writeSvgPolylineLine(writer, rect.x, rect.y + d, rect.x + d, rect.y, visual);
-    try writeSvgPolylineLine(writer, rect.x + rect.width - d, rect.y, rect.x + rect.width, rect.y + d, visual);
-    try writeSvgPolylineLine(writer, rect.x + rect.width, rect.y + rect.height - d, rect.x + rect.width - d, rect.y + rect.height, visual);
-    try writeSvgPolylineLine(writer, rect.x + d, rect.y + rect.height, rect.x, rect.y + rect.height - d, visual);
+    try writeSvgPolylineLine(writer, rect.x + d, rect.y, rect.x, rect.y + d, visual);
+    try writeSvgPolylineLine(writer, rect.x, rect.y + rect.height - d, rect.x + d, rect.y + rect.height, visual);
+    try writeSvgPolylineLine(writer, rect.x + rect.width - d, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d, visual);
+    try writeSvgPolylineLine(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d, rect.y, visual);
 }
 
 fn renderSvgCircleDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -16289,6 +16302,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 0.09);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.end), svgScreenPoint(graphviz_oracle, oracle_start_mark.end)) <= 0.09);
     try expectPolylineSetNear(svg, graphviz_oracle, "start", 0.205);
+    try expectPolylineSequenceNear(svg, graphviz_oracle, "end", 0.367);
     try expectPolylineSetNear(svg, graphviz_oracle, "end", 0.367);
 }
 
