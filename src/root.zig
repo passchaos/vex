@@ -7636,8 +7636,8 @@ fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
 fn nodeLabelYOffset(node_item: Node) f64 {
     return switch (node_item.shape) {
         .mdiamond => -0.35,
-        .msquare => -0.5,
-        .ellipse, .circle, .doublecircle, .mcircle => -0.3,
+        .msquare => -0.495,
+        .ellipse, .circle, .doublecircle, .mcircle => -0.305,
         else => 0.0,
     };
 }
@@ -8439,6 +8439,45 @@ fn expectSvgTextSequenceEqual(svg: []const u8, oracle: []const u8) !void {
         }
         try std.testing.expectEqualStrings(oracle_text.?, svg_text.?);
     }
+}
+
+fn expectSvgTextPositionsNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_text = nextSvgTextPosition(svg, &svg_index);
+        const oracle_text = nextSvgTextPosition(oracle, &oracle_index);
+        if (svg_text == null or oracle_text == null) {
+            try std.testing.expect(svg_text == null and oracle_text == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_text.?.text, svg_text.?.text);
+        const point = svgScreenPoint(svg, svg_text.?.point);
+        const oracle_point = svgScreenPoint(oracle, oracle_text.?.point);
+        try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+    }
+}
+
+const SvgTextPosition = struct {
+    text: []const u8,
+    point: Point,
+};
+
+fn nextSvgTextPosition(svg: []const u8, index: *usize) ?SvgTextPosition {
+    while (std.mem.indexOf(u8, svg[index.*..], "<text")) |rel| {
+        const text_start = index.* + rel;
+        const open_end_rel = std.mem.indexOfScalar(u8, svg[text_start..], '>') orelse return null;
+        const tag = svg[text_start .. text_start + open_end_rel + 1];
+        const content_start = text_start + open_end_rel + 1;
+        const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
+        index.* = content_start + close_rel + "</text>".len;
+        const content = svg[content_start .. content_start + close_rel];
+        if (std.mem.indexOfScalar(u8, content, '<') != null) continue;
+        const x = svgNumberAfter(tag, " x=\"") orelse return null;
+        const y = svgNumberAfter(tag, " y=\"") orelse return null;
+        return .{ .text = content, .point = .{ .x = x, .y = y } };
+    }
+    return null;
 }
 
 fn nextSvgTextContent(svg: []const u8, index: *usize) ?[]const u8 {
@@ -16138,6 +16177,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgGroupSequenceEqual(svg, graphviz_oracle);
     try expectSvgEdgePathCommandSequencesEqual(svg, graphviz_oracle);
     try expectSvgTextSequenceEqual(svg, graphviz_oracle);
+    try expectSvgTextPositionsNear(svg, graphviz_oracle, 0.001);
     try expectSvgElementSequenceEqual(svg, graphviz_oracle);
     try expectSvgOpeningTagsNormalizedEqual(svg, graphviz_oracle);
     try expectSvgLinesNumericNormalizedEqual(svg, graphviz_oracle);
@@ -16204,7 +16244,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.01);
     const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
     const oracle_start_label_y = svgNumberAfter(oracle_start_fragment, " y=\"") orelse return error.MissingStartNode;
-    try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.101);
+    try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.001);
     const end_fragment = svgGroupFragmentByTitle(svg, "end") orelse return error.MissingEndNode;
     const oracle_end_fragment = svgGroupFragmentByTitle(graphviz_oracle, "end") orelse return error.MissingEndNode;
     try expectSvgPolygonPointsNear(svg, graphviz_oracle, "end", 0.015);
@@ -16213,7 +16253,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((svgPolygonBBoxHeight(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxHeight(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.02);
     const end_label_y = svgNumberAfter(end_fragment, " y=\"") orelse return error.MissingEndNode;
     const oracle_end_label_y = svgNumberAfter(oracle_end_fragment, " y=\"") orelse return error.MissingEndNode;
-    try std.testing.expect(@abs((end_label_y + svgGraphvizTranslate(svg).y) - (oracle_end_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.101);
+    try std.testing.expect(@abs((end_label_y + svgGraphvizTranslate(svg).y) - (oracle_end_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.001);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">process #1</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">process #2</text>") != null);
     const svg_cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
@@ -16272,8 +16312,8 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_a0_fragment = svgGroupFragmentByTitle(graphviz_oracle, "a0") orelse return error.MissingNodeCenter;
     const b0_fragment = svgGroupFragmentByTitle(svg, "b0") orelse return error.MissingNodeCenter;
     const oracle_b0_fragment = svgGroupFragmentByTitle(graphviz_oracle, "b0") orelse return error.MissingNodeCenter;
-    try std.testing.expect(@abs(((svgNumberAfter(a0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(svg).y) - ((svgNumberAfter(oracle_a0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.101);
-    try std.testing.expect(@abs(((svgNumberAfter(b0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(svg).y) - ((svgNumberAfter(oracle_b0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.101);
+    try std.testing.expect(@abs(((svgNumberAfter(a0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(svg).y) - ((svgNumberAfter(oracle_a0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.001);
+    try std.testing.expect(@abs(((svgNumberAfter(b0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(svg).y) - ((svgNumberAfter(oracle_b0_fragment, " y=\"") orelse return error.MissingNodeCenter) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.001);
     const cluster_0_x = svgClusterRectX(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_0_w = svgClusterRectWidth(svg, "cluster_0") orelse return error.MissingClusterRect;
     const cluster_1_x = svgClusterRectX(svg, "cluster_1") orelse return error.MissingClusterRect;
