@@ -15768,9 +15768,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.11);
     const end_fragment = svgGroupFragmentByTitle(svg, "end") orelse return error.MissingEndNode;
     const oracle_end_fragment = svgGroupFragmentByTitle(graphviz_oracle, "end") orelse return error.MissingEndNode;
-    try std.testing.expect(@abs((svgPolygonBBoxY(end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
-    try std.testing.expect(@abs((svgPolygonBBoxWidth(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxWidth(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.3);
-    try std.testing.expect(@abs((svgPolygonBBoxHeight(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxHeight(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.3);
+    try std.testing.expect(@abs((svgPolygonBBoxY(end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.12);
+    try std.testing.expect(@abs((svgPolygonBBoxWidth(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxWidth(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.03);
+    try std.testing.expect(@abs((svgPolygonBBoxHeight(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxHeight(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.02);
     const end_label_y = svgNumberAfter(end_fragment, " y=\"") orelse return error.MissingEndNode;
     const oracle_end_label_y = svgNumberAfter(oracle_end_fragment, " y=\"") orelse return error.MissingEndNode;
     try std.testing.expect(@abs((end_label_y + svgGraphvizTranslate(svg).y) - (oracle_end_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.11);
@@ -15931,7 +15931,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_points.end), svgScreenPoint(graphviz_oracle, oracle_back_points.end)) <= 0.04);
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.35);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.065);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.053);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
