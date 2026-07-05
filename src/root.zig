@@ -15851,7 +15851,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_translate = svgGraphvizTranslate(graphviz_oracle);
     try std.testing.expect(svg_translate.y == 0);
     try std.testing.expect(oracle_translate.y > 400.0);
-    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 7.5);
+    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 0.05);
     const cross_control1 = svgScreenPoint(svg, .{ .x = path_numbers[2], .y = path_numbers[3] });
     const oracle_cross_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const cross_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
@@ -15870,7 +15870,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(diagonal_count >= 8);
     const oracle_diagonal_count = svgPathNumbers(graphviz_oracle, "b2-&gt;a3", oracle_path_numbers[0..]);
     try std.testing.expect(oracle_diagonal_count >= 8);
-    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 3.0);
+    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 0.05);
     const diagonal_control1 = svgScreenPoint(svg, .{ .x = path_numbers[2], .y = path_numbers[3] });
     const oracle_diagonal_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const diagonal_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
