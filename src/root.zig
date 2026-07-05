@@ -15951,9 +15951,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 3.0);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 0.1, 0.3);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 0.2, 0.3);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 0.8, 1.0);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.8, 0.8);
-    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "a3-&gt;end", 0.06, 0.06);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.06, 0.06);
+    try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06, 0.06);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.052);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.073);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;a0", 0.045);
@@ -15970,9 +15970,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.058);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "a3-&gt;a0", 0.045);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b3-&gt;end", 0.045);
-    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
-    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
-    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.0);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.06);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.06);
+    try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a0-&gt;a1", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a1-&gt;a2", 1.8);
     try expectSvgEdgeArrowTipNear(svg, graphviz_oracle, "a2-&gt;a3", 1.8);
