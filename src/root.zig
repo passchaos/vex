@@ -8111,6 +8111,35 @@ fn expectSvgEdgePathPointsNear(svg: []const u8, oracle: []const u8, title: []con
     }
 }
 
+fn expectSvgEdgeCurveSamplesNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    var numbers: [64]f64 = undefined;
+    const count = svgPathNumbers(svg, title, numbers[0..]);
+    if (count < 8 or count % 6 != 2) return error.MissingEdge;
+    var oracle_numbers: [64]f64 = undefined;
+    const oracle_count = svgPathNumbers(oracle, title, oracle_numbers[0..]);
+    if (oracle_count != count) return error.MissingEdge;
+
+    var segment_start: usize = 0;
+    while (segment_start + 7 < count) : (segment_start += 6) {
+        const p0 = svgScreenPoint(svg, .{ .x = numbers[segment_start], .y = numbers[segment_start + 1] });
+        const p1 = svgScreenPoint(svg, .{ .x = numbers[segment_start + 2], .y = numbers[segment_start + 3] });
+        const p2 = svgScreenPoint(svg, .{ .x = numbers[segment_start + 4], .y = numbers[segment_start + 5] });
+        const p3 = svgScreenPoint(svg, .{ .x = numbers[segment_start + 6], .y = numbers[segment_start + 7] });
+        const oracle_p0 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start], .y = oracle_numbers[segment_start + 1] });
+        const oracle_p1 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start + 2], .y = oracle_numbers[segment_start + 3] });
+        const oracle_p2 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start + 4], .y = oracle_numbers[segment_start + 5] });
+        const oracle_p3 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start + 6], .y = oracle_numbers[segment_start + 7] });
+
+        var sample: usize = 1;
+        while (sample <= 3) : (sample += 1) {
+            const t = @as(f64, @floatFromInt(sample)) / 4.0;
+            const point = cubicPoint(p0, p1, p2, p3, t);
+            const oracle_point = cubicPoint(oracle_p0, oracle_p1, oracle_p2, oracle_p3, t);
+            try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+        }
+    }
+}
+
 fn svgScreenPoint(svg: []const u8, point: Point) Point {
     const translate = svgGraphvizTranslate(svg);
     return .{ .x = point.x + translate.x, .y = point.y + translate.y };
@@ -15876,15 +15905,20 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 1.0, 1.0);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.052);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.073);
+    try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;a0", 0.045);
+    try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;b0", 0.045);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.042);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.042);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.042);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.06);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.053);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06);
+    try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b2-&gt;b3", 0.045);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.06);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.06);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.058);
+    try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "a3-&gt;a0", 0.045);
+    try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b3-&gt;end", 0.045);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 1.7);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b1-&gt;b2", 2.6);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b2-&gt;b3", 2.0);
