@@ -6663,9 +6663,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const canvas_width = @ceil(layout.width);
     const canvas_height = @ceil(layout.height);
     const content_translate = svgGraphContentTranslate(layout);
-    const background_inset = if (@abs(content_translate) <= 0.0001) 0.0 else content_translate / 2.0;
-    const background_left = -background_inset;
-    const background_right = canvas_width - background_inset;
+    const background_left = -content_translate;
+    const background_right = canvas_width - content_translate;
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
         .{ canvas_width, canvas_height, canvas_width, canvas_height },
@@ -7794,6 +7793,12 @@ fn svgGroupFragmentByTitle(svg: []const u8, title: []const u8) ?[]const u8 {
     var title_buf: [128]u8 = undefined;
     const needle = std.fmt.bufPrint(&title_buf, "<title>{s}</title>", .{title}) catch return null;
     const title_pos = std.mem.indexOf(u8, svg, needle) orelse return null;
+    const end_rel = std.mem.indexOf(u8, svg[title_pos..], "</g>") orelse return null;
+    return svg[title_pos .. title_pos + end_rel];
+}
+
+fn svgRootFragment(svg: []const u8) ?[]const u8 {
+    const title_pos = std.mem.indexOf(u8, svg, "<title>") orelse return null;
     const end_rel = std.mem.indexOf(u8, svg[title_pos..], "</g>") orelse return null;
     return svg[title_pos .. title_pos + end_rel];
 }
@@ -16141,7 +16146,13 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"-4,0 -4,409 220,409 220,0 -4,0\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"white\" stroke=\"none\" points=\"-8,0 -8,409 216,409 216,0 -8,0\"/>") != null);
+    const root_fragment = svgRootFragment(svg) orelse return error.MissingGraph;
+    const oracle_root_fragment = svgRootFragment(graphviz_oracle) orelse return error.MissingGraph;
+    try std.testing.expect(@abs((svgPolygonBBoxX(root_fragment) orelse return error.MissingGraph) + svgGraphvizTranslate(svg).x - ((svgPolygonBBoxX(oracle_root_fragment) orelse return error.MissingGraph) + svgGraphvizTranslate(graphviz_oracle).x)) <= 0.01);
+    try std.testing.expect(@abs((svgPolygonBBoxY(root_fragment) orelse return error.MissingGraph) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_root_fragment) orelse return error.MissingGraph) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.02);
+    try std.testing.expect(@abs((svgPolygonBBoxWidth(root_fragment) orelse return error.MissingGraph) - (svgPolygonBBoxWidth(oracle_root_fragment) orelse return error.MissingGraph)) <= 0.01);
+    try std.testing.expect(@abs((svgPolygonBBoxHeight(root_fragment) orelse return error.MissingGraph) - (svgPolygonBBoxHeight(oracle_root_fragment) orelse return error.MissingGraph)) <= 0.02);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g class=\"content\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<rect width=\"100%\" height=\"100%\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<defs>") == null);
