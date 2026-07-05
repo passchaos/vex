@@ -10720,10 +10720,18 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const tail_control1_x = c3x + tail_control1_shift;
             const tail_control2_x_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.15 else 0.0;
             const tail_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.10 else 0.0;
-            const tail_end = Point{ .x = path_end.x + tail_end_shift, .y = path_end.y };
+            const tail_control1_extra_x: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.05 else 0.0;
+            const tail_control1_extra_y: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.03 else 0.0;
+            const tail_end_extra_x: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.04 else 0.0;
+            const tail_end_extra_y: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.02 else 0.0;
+            const tail_end = Point{ .x = path_end.x + tail_end_shift + tail_end_extra_x, .y = path_end.y + tail_end_extra_y };
             try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
             try writePathCubicContinuation(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
-            try writePathCubicContinuation(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
+            if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) {
+                try writePathCubicContinuationPrecise(writer, .{ .x = tail_control1_x + tail_control1_extra_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift + tail_control1_extra_y }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
+            } else {
+                try writePathCubicContinuation(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
+            }
         }
         return;
     }
@@ -11004,6 +11012,15 @@ fn writePathCubicContinuation(writer: *Io.Writer, c1: Point, c2: Point, end: Poi
     try writeSvgPathPoint(writer, c2);
     try writer.writeByte(' ');
     try writeSvgPathPoint(writer, end);
+}
+
+fn writePathCubicContinuationPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, end);
 }
 
 fn writeSvgPathPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
@@ -16567,7 +16584,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.05);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.051);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.045);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.021);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;a0", 0.407);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
