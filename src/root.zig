@@ -10338,7 +10338,9 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     end.y += if (rankdir == .TB) -0.35 else 0.35;
     const adjusted_dx = end.x - route.start.x;
     const adjusted_dy = end.y - route.start.y;
-    const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275, .y = route.start.y + adjusted_dy * 0.275 };
+    const c1_extra_x: f64 = if (dx >= 0) -0.05 else 0.0;
+    const c1_extra_y: f64 = if (dx >= 0) 0.04 else 0.0;
+    const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275 + c1_extra_x, .y = route.start.y + adjusted_dy * 0.275 + c1_extra_y };
     const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.08;
     const c2_extra_y: f64 = if (dx >= 0) 0.03 else 0.0;
     const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665 + head_x_shift * 0.5 + c2_extra_x, .y = route.start.y + adjusted_dy * 0.665 + c2_extra_y };
