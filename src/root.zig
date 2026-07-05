@@ -15761,8 +15761,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\"") != null);
     const start_fragment = svgGroupFragmentByTitle(svg, "start") orelse return error.MissingStartNode;
     const oracle_start_fragment = svgGroupFragmentByTitle(graphviz_oracle, "start") orelse return error.MissingStartNode;
-    try std.testing.expect(@abs((svgPolygonBBoxY(start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.3);
-    try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.2);
+    try std.testing.expect(@abs((svgPolygonBBoxY(start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.01);
+    try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.01);
     const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
     const oracle_start_label_y = svgNumberAfter(oracle_start_fragment, " y=\"") orelse return error.MissingStartNode;
     try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.11);
