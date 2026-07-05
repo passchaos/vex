@@ -8478,6 +8478,20 @@ fn expectSvgOpeningTagsNormalizedEqual(svg: []const u8, oracle: []const u8) !voi
     }
 }
 
+fn expectSvgLinesNumericNormalizedEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_lines = std.mem.splitScalar(u8, svg, '\n');
+    var oracle_lines = std.mem.splitScalar(u8, oracle, '\n');
+    while (true) {
+        const svg_line = svg_lines.next();
+        const oracle_line = oracle_lines.next();
+        if (svg_line == null or oracle_line == null) {
+            try std.testing.expect(svg_line == null and oracle_line == null);
+            return;
+        }
+        try expectNumericNormalizedEqual(svg_line.?, oracle_line.?);
+    }
+}
+
 fn nextSvgOpeningTag(svg: []const u8, index: *usize) ?[]const u8 {
     while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
         const tag_start = index.* + rel;
@@ -16121,6 +16135,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgTextSequenceEqual(svg, graphviz_oracle);
     try expectSvgElementSequenceEqual(svg, graphviz_oracle);
     try expectSvgOpeningTagsNormalizedEqual(svg, graphviz_oracle);
+    try expectSvgLinesNumericNormalizedEqual(svg, graphviz_oracle);
     try std.testing.expect(std.mem.endsWith(u8, svg, "</svg>"));
     try std.testing.expect(!std.mem.endsWith(u8, svg, "</svg>\n"));
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
