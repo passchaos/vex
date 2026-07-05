@@ -8687,7 +8687,11 @@ fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
             result.center.y -= 2.4;
             result.height = @min(result.height, 36.0);
         },
-        .msquare => result.center.y += 1.5,
+        .msquare => {
+            result.center.y += 1.5;
+            result.width += 0.2;
+            result.height += 0.2;
+        },
         .ellipse, .circle, .doublecircle, .mcircle => result.center.y += 1.0,
         else => {},
     }
@@ -16000,7 +16004,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.end), svgScreenPoint(graphviz_oracle, oracle_start_mark.end)) <= 4.0);
-    try expectPolylineSetNear(svg, graphviz_oracle, "end", 0.5);
+    try expectPolylineSetNear(svg, graphviz_oracle, "end", 0.37);
 }
 
 test "SVG renderer honors DOT splines graph attribute" {
