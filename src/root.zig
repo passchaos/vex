@@ -8235,6 +8235,48 @@ fn expectSvgCommentSequenceEqual(svg: []const u8, oracle: []const u8) !void {
     }
 }
 
+fn expectSvgGroupSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_group = nextSvgGroupIdClass(svg, &svg_index);
+        const oracle_group = nextSvgGroupIdClass(oracle, &oracle_index);
+        if (svg_group == null or oracle_group == null) {
+            try std.testing.expect(svg_group == null and oracle_group == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_group.?.id, svg_group.?.id);
+        try std.testing.expectEqualStrings(oracle_group.?.class, svg_group.?.class);
+    }
+}
+
+const SvgGroupIdClass = struct {
+    id: []const u8,
+    class: []const u8,
+};
+
+fn nextSvgGroupIdClass(svg: []const u8, index: *usize) ?SvgGroupIdClass {
+    while (std.mem.indexOf(u8, svg[index.*..], "<g ")) |rel| {
+        const group_start = index.* + rel;
+        const tag_end_rel = std.mem.indexOfScalar(u8, svg[group_start..], '>') orelse return null;
+        const tag = svg[group_start .. group_start + tag_end_rel];
+        index.* = group_start + tag_end_rel + 1;
+        const id = svgAttributeValue(tag, "id") orelse continue;
+        const class = svgAttributeValue(tag, "class") orelse continue;
+        return .{ .id = id, .class = class };
+    }
+    return null;
+}
+
+fn svgAttributeValue(tag: []const u8, attr: []const u8) ?[]const u8 {
+    var marker_buf: [64]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, "{s}=\"", .{attr}) catch return null;
+    const attr_start = std.mem.indexOf(u8, tag, marker) orelse return null;
+    const value_start = attr_start + marker.len;
+    const value_end_rel = std.mem.indexOfScalar(u8, tag[value_start..], '"') orelse return null;
+    return tag[value_start .. value_start + value_end_rel];
+}
+
 fn graphConcentrateEnabled(graph: *const Graph) bool {
     const value = attrValue(graph.attrs.items, "concentrate") orelse return false;
     return parseBool(value) orelse false;
@@ -15758,6 +15800,7 @@ test "user cluster example stays compact and Graphviz-like" {
     defer allocator.free(svg);
     try expectSvgTitleSequenceEqual(svg, graphviz_oracle);
     try expectSvgCommentSequenceEqual(svg, graphviz_oracle);
+    try expectSvgGroupSequenceEqual(svg, graphviz_oracle);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
