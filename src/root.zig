@@ -8921,7 +8921,7 @@ fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
     switch (node_item.shape) {
         .mdiamond => {
             result.center.y -= 2.4;
-            result.width = @max(1, result.width - 0.2);
+            result.width = @max(1, result.width - 0.3);
             result.height = @min(result.height, 36.0);
         },
         .msquare => {
@@ -16052,7 +16052,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const start_fragment = svgGroupFragmentByTitle(svg, "start") orelse return error.MissingStartNode;
     const oracle_start_fragment = svgGroupFragmentByTitle(graphviz_oracle, "start") orelse return error.MissingStartNode;
     try std.testing.expectEqual(svgPolygonPointCount(oracle_start_fragment) orelse return error.MissingStartNode, svgPolygonPointCount(start_fragment) orelse return error.MissingStartNode);
-    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "start", 0.081);
+    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "start", 0.021);
     try std.testing.expect(@abs((svgPolygonBBoxY(start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.01);
     try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.01);
     const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
