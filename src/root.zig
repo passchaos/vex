@@ -15824,8 +15824,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b1").? - svgNodeScreenCenterY(graphviz_oracle, "b1").?) <= 0.2);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b2").? - svgNodeScreenCenterY(graphviz_oracle, "b2").?) <= 0.2);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b3").? - svgNodeScreenCenterY(graphviz_oracle, "b3").?) <= 0.2);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 3.0);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 2.0);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 0.12);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 0.12);
     const a0_fragment = svgGroupFragmentByTitle(svg, "a0") orelse return error.MissingNodeCenter;
     const oracle_a0_fragment = svgGroupFragmentByTitle(graphviz_oracle, "a0") orelse return error.MissingNodeCenter;
     const b0_fragment = svgGroupFragmentByTitle(svg, "b0") orelse return error.MissingNodeCenter;
