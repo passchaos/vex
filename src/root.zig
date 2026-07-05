@@ -10175,8 +10175,14 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         if (diamondTailDiagonalPath(direct_route, rankdir, hints)) |path| {
-            try writePathMove(writer, path.start);
-            try writePathCubic(writer, path.control1, path.control2, path.end);
+            const dx = direct_route.end.x - direct_route.start.x;
+            if (dx >= 0) {
+                try writePathMovePrecise(writer, path.start);
+                try writePathCubicPrecise(writer, path.control1, path.control2, path.end);
+            } else {
+                try writePathMove(writer, path.start);
+                try writePathCubic(writer, path.control1, path.control2, path.end);
+            }
             return;
         }
         if (diamondTailDiagonalControls(direct_route.start, direct_route.end, rankdir, hints)) |controls| {
@@ -10304,8 +10310,9 @@ fn diamondTailDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     const adjusted_dx = end.x - route.start.x;
     const adjusted_dy = end.y - route.start.y;
     const c1 = Point{ .x = route.start.x + adjusted_dx * 0.275, .y = route.start.y + adjusted_dy * 0.275 };
-    const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.0;
-    const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665 + head_x_shift * 0.5 + c2_extra_x, .y = route.start.y + adjusted_dy * 0.665 };
+    const c2_extra_x: f64 = if (dx < 0) -0.10 else 0.08;
+    const c2_extra_y: f64 = if (dx >= 0) 0.03 else 0.0;
+    const c2 = Point{ .x = route.start.x + adjusted_dx * 0.665 + head_x_shift * 0.5 + c2_extra_x, .y = route.start.y + adjusted_dy * 0.665 + c2_extra_y };
     return .{
         .start = path_start,
         .control1 = c1,
@@ -10852,6 +10859,11 @@ fn writePathMove(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
     try writeSvgPathPoint(writer, point);
 }
 
+fn writePathMovePrecise(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
+    try writer.writeByte('M');
+    try writeSvgPathPointPrecise(writer, point);
+}
+
 fn writePathLine(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
     try writer.writeByte('L');
     try writeSvgPathPoint(writer, point);
@@ -10864,6 +10876,15 @@ fn writePathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Write
     try writeSvgPathPoint(writer, c2);
     try writer.writeByte(' ');
     try writeSvgPathPoint(writer, end);
+}
+
+fn writePathCubicPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try writeSvgPathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try writeSvgPathPointPrecise(writer, end);
 }
 
 fn writePathCubicContinuation(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
@@ -10881,6 +10902,12 @@ fn writeSvgPathPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
     try writeSvgPathNumber(writer, point.y);
 }
 
+fn writeSvgPathPointPrecise(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
+    try writeSvgPathNumberPrecise(writer, point.x);
+    try writer.writeByte(',');
+    try writeSvgPathNumberPrecise(writer, point.y);
+}
+
 fn writeSvgPathNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
     const normalized = if (@abs(value) < 0.05) 0.0 else value;
     const rounded = @round(normalized);
@@ -10888,6 +10915,16 @@ fn writeSvgPathNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
         try writer.print("{d:.0}", .{rounded});
     } else {
         try writer.print("{d:.1}", .{normalized});
+    }
+}
+
+fn writeSvgPathNumberPrecise(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
+    const normalized = if (@abs(value) < 0.005) 0.0 else value;
+    const rounded = @round(normalized);
+    if (@abs(normalized - rounded) < 0.005) {
+        try writer.print("{d:.0}", .{rounded});
+    } else {
+        try writer.print("{d:.2}", .{normalized});
     }
 }
 
@@ -16444,7 +16481,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b3-&gt;end", 0.06, 0.06);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.06, 0.06);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.052);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.072);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.065);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;a0", 0.045);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "start-&gt;b0", 0.045);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a0-&gt;a1", 0.041);
