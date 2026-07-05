@@ -10244,8 +10244,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             tapered_route.start.x += taper;
             tapered_route.end.x -= taper;
             const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
-            try writePathMove(writer, tapered_route.start);
-            try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
+            try writePathMovePrecise(writer, tapered_route.start);
+            try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
             return;
         }
         if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) {
@@ -10254,8 +10254,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             tapered_route.end.x += 0.28;
             var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
             controls.c2.x -= 0.06;
-            try writePathMove(writer, tapered_route.start);
-            try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
+            try writePathMovePrecise(writer, tapered_route.start);
+            try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
             return;
         }
         if (rightOuterAdjacentRouteShiftApplies(layout, edge_item, rankdir)) {
@@ -10263,8 +10263,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             tapered_route.start.x -= 0.11;
             tapered_route.end.x += 0.26;
             const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
-            try writePathMove(writer, tapered_route.start);
-            try writePathCubic(writer, controls.c1, controls.c2, tapered_route.end);
+            try writePathMovePrecise(writer, tapered_route.start);
+            try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
             return;
         }
         if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
@@ -16533,8 +16533,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.041);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.041);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.059);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.052);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.057);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.057);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.041);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b2-&gt;b3", 0.045);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.057);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.057);
