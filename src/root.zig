@@ -9568,15 +9568,15 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
     try writeSvgPolylineLinePrecise(writer, cx - graphviz_inner_x, graphviz_top_y, cx - graphviz_inner_x, graphviz_bottom_y, visual);
     try writeSvgPolylineLineYPrecise(writer, cx - short_x, cy + inner_y + 0.02, cx + short_x, cy + inner_y + 0.02, visual);
     try writeSvgPolylineLinePrecise(writer, cx + graphviz_inner_x, graphviz_bottom_y, cx + graphviz_inner_x, graphviz_top_y, visual);
-    try writeSvgPolylineLine(writer, cx + short_x, cy - inner_y, cx - short_x, cy - inner_y, visual);
+    try writeSvgPolylineLineYPrecise(writer, cx + short_x, cy - inner_y - 0.03, cx - short_x, cy - inner_y - 0.03, visual);
 }
 
 fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
     const d = @min(@max(1, @min(rect.width, rect.height) - 0.2) / 3.0, 18);
     try writeSvgPolylineLinePrecise(writer, rect.x + d, rect.y, rect.x, rect.y + d, visual);
-    try writeSvgPolylineLinePrecise(writer, rect.x, rect.y + rect.height - d, rect.x + d, rect.y + rect.height, visual);
-    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width - d + 0.01, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x, rect.y + rect.height - d + 0.005, rect.x + d, rect.y + rect.height, visual);
+    try writeSvgPolylineLinePrecise(writer, rect.x + rect.width - d + 0.01, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d + 0.005, visual);
     try writeSvgPolylineLinePrecise(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d + 0.01, rect.y, visual);
 }
 
@@ -10381,6 +10381,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             tapered_route.end.x -= taper;
             var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
             controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
+            controls.c2.x -= 0.01;
             shiftGraphvizAdjacentPathEnd(&tapered_route.end, rankdir);
             try writePathMovePrecise(writer, tapered_route.start);
             try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
@@ -10403,6 +10404,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             tapered_route.end.x += 0.22;
             var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
             controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
+            controls.c2.x += 0.01;
             shiftGraphvizAdjacentPathEnd(&tapered_route.end, rankdir);
             try writePathMovePrecise(writer, tapered_route.start);
             try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
@@ -10474,6 +10476,7 @@ fn msquareHeadDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
     var c2 = Point{ .x = start.x + adjusted_dx * 0.663, .y = start.y + adjusted_dy * 0.663 };
     c2.x += if (dx >= 0) -0.01 else 0.01;
     c2.y -= y_dir * 0.01;
+    if (dx >= 0) start.y -= y_dir * 0.01;
     return .{
         .start = start,
         .control1 = c1,
@@ -16807,7 +16810,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.011);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.001);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
