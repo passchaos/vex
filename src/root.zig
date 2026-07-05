@@ -7270,7 +7270,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
 fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute, hints: EdgePathHints) InlineArrowOptions {
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
-    if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_precise = false, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
+    if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_precise = false, .head_right_x_shift = -0.04, .head_right_y_shift = 0.01, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
     if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true };
     if (edgeTouchesMultipleClusters(layout, edge_item) and longEdgeWaypointCount(layout, edge_item) == 1) return .{ .head_precise = true, .head_right_x_shift = -0.03 };
     if (@abs(dx) < 0.001) return .{ .head_precise = true, .head_y_shift = 0.03 };
@@ -10251,7 +10251,7 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         }
         if (crossClusterDiagonalControls(layout, edge_item, rankdir, direct_route)) |controls| {
             if (graphvizCrossClusterLeftPathRoute(layout, edge_item, rankdir, direct_route, controls)) |path| {
-                try writePathMove(writer, path.start);
+                try writePathMovePrecise(writer, path.start);
                 try writePathCubicPreciseControls(writer, path.control1, path.control2, path.end);
                 return;
             }
@@ -10446,7 +10446,7 @@ fn graphvizCrossClusterLeftPathRoute(layout: *const Layout, edge_item: Edge, ran
     const y_shift: f64 = if (rankdir == .TB) 0.3 else -0.3;
     const c2_y_adjust: f64 = if (rankdir == .TB) 0.06 else -0.06;
     return .{
-        .start = .{ .x = route.start.x, .y = route.start.y + y_shift },
+        .start = .{ .x = route.start.x + 0.07, .y = route.start.y + y_shift },
         .control1 = .{ .x = controls.c1.x - 0.20, .y = controls.c1.y + y_shift + 0.03 },
         .control2 = .{ .x = controls.c2.x - 0.3, .y = controls.c2.y + y_shift + c2_y_adjust },
         .end = .{ .x = route.end.x, .y = route.end.y - y_shift * 0.3 },
@@ -16526,7 +16526,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(diagonal_count >= 8);
     const oracle_diagonal_count = svgPathNumbers(graphviz_oracle, "b2-&gt;a3", oracle_path_numbers[0..]);
     try std.testing.expect(oracle_diagonal_count >= 8);
-    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 0.05);
+    try std.testing.expect(@abs((path_numbers[0] + svg_translate.x) - (oracle_path_numbers[0] + oracle_translate.x)) <= 0.001);
     const diagonal_control1 = svgScreenPoint(svg, .{ .x = path_numbers[2], .y = path_numbers[3] });
     const oracle_diagonal_control1 = svgScreenPoint(graphviz_oracle, .{ .x = oracle_path_numbers[2], .y = oracle_path_numbers[3] });
     const diagonal_control2 = svgScreenPoint(svg, .{ .x = path_numbers[4], .y = path_numbers[5] });
@@ -16537,9 +16537,9 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(path_numbers[4] > path_numbers[6]);
     const diagonal_points = svgPathStartEnd(svg, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
     const oracle_diagonal_points = svgPathStartEnd(graphviz_oracle, "b2-&gt;a3") orelse return error.MissingDiagonalEdge;
-    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 0.07);
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.start), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.start)) <= 0.001);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, diagonal_points.end), svgScreenPoint(graphviz_oracle, oracle_diagonal_points.end)) <= 0.07);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.042);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.023);
     const adjacent_points = svgPathStartEnd(svg, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     const oracle_adjacent_points = svgPathStartEnd(graphviz_oracle, "a0-&gt;a1") orelse return error.MissingAdjacentEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, adjacent_points.start), svgScreenPoint(graphviz_oracle, oracle_adjacent_points.start)) <= 0.05);
@@ -16652,7 +16652,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.071);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "start-&gt;b0", 0.085);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.032);
-    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.065);
+    try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.021);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.032);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b2-&gt;b3", 0.17);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.037);
