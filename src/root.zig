@@ -10360,7 +10360,7 @@ fn msquareHeadDiagonalPath(route: EdgeRoute, rankdir: RankDir, hints: EdgePathHi
         start.x += 1.27;
         end.x -= 1.53;
     } else {
-        start.x -= 1.20;
+        start.x -= 1.16;
         end.x += 0.90;
     }
     start.y += y_dir * 1.55;
@@ -16631,6 +16631,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, a3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_a3_end_points.end)) <= 0.06);
     const b3_end_points = svgPathStartEnd(svg, "b3-&gt;end") orelse return error.MissingEndEdge;
     const oracle_b3_end_points = svgPathStartEnd(graphviz_oracle, "b3-&gt;end") orelse return error.MissingEndEdge;
+    try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.start), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.start)) <= 0.01);
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, b3_end_points.end), svgScreenPoint(graphviz_oracle, oracle_b3_end_points.end)) <= 0.06);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;a0", 0.1, 0.3);
     try expectSvgEdgeControlsNear(svg, graphviz_oracle, "start-&gt;b0", 0.2, 0.3);
@@ -16651,7 +16652,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b2-&gt;a3", 0.018);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.023);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.015);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.041);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.023);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "a3-&gt;a0", 0.04);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b3-&gt;end", 0.038);
     try expectSvgEdgeEndpointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.06);
