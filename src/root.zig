@@ -8229,6 +8229,48 @@ fn expectSvgDrawablePointsNear(svg: []const u8, oracle: []const u8, tolerance: f
     }
 }
 
+fn expectSvgDrawableOneDecimalGapNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    _ = nextSvgDrawablePoints(svg, &svg_index) orelse return error.MissingSvgDrawable;
+    _ = nextSvgDrawablePoints(oracle, &oracle_index) orelse return error.MissingSvgDrawable;
+    while (true) {
+        const svg_drawable = nextSvgDrawablePoints(svg, &svg_index);
+        const oracle_drawable = nextSvgDrawablePoints(oracle, &oracle_index);
+        if (svg_drawable == null or oracle_drawable == null) {
+            try std.testing.expect(svg_drawable == null and oracle_drawable == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_drawable.?.tag, svg_drawable.?.tag);
+        try std.testing.expectEqual(oracle_drawable.?.count, svg_drawable.?.count);
+        var index: usize = 0;
+        while (index + 1 < svg_drawable.?.count) : (index += 2) {
+            const point = svgScreenPoint(svg, .{ .x = svg_drawable.?.numbers[index], .y = svg_drawable.?.numbers[index + 1] });
+            const oracle_point = svgScreenPoint(oracle, .{ .x = oracle_drawable.?.numbers[index], .y = oracle_drawable.?.numbers[index + 1] });
+            const residual = distanceBetween(point, oracle_point);
+            const lower_bound = oneDecimalPointLowerBound(oracle_point);
+            try std.testing.expect(residual - lower_bound <= tolerance);
+        }
+    }
+}
+
+fn oneDecimalPointLowerBound(point: Point) f64 {
+    const min_x: i64 = @intFromFloat(@floor(point.x * 10.0) - 2.0);
+    const max_x: i64 = @intFromFloat(@ceil(point.x * 10.0) + 2.0);
+    const min_y: i64 = @intFromFloat(@floor(point.y * 10.0) - 2.0);
+    const max_y: i64 = @intFromFloat(@ceil(point.y * 10.0) + 2.0);
+    var best = std.math.floatMax(f64);
+    var xi = min_x;
+    while (xi <= max_x) : (xi += 1) {
+        var yi = min_y;
+        while (yi <= max_y) : (yi += 1) {
+            const candidate = Point{ .x = @as(f64, @floatFromInt(xi)) / 10.0, .y = @as(f64, @floatFromInt(yi)) / 10.0 };
+            best = @min(best, distanceBetween(candidate, point));
+        }
+    }
+    return best;
+}
+
 const SvgDrawablePoints = struct {
     tag: []const u8,
     numbers: [128]f64,
@@ -16585,6 +16627,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.057);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
     try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.059);
+    try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.012);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 0.09);
