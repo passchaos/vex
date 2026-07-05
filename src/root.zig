@@ -8464,6 +8464,67 @@ fn expectSvgElementSequenceEqual(svg: []const u8, oracle: []const u8) !void {
     }
 }
 
+fn expectSvgOpeningTagsNormalizedEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_tag = nextSvgOpeningTag(svg, &svg_index);
+        const oracle_tag = nextSvgOpeningTag(oracle, &oracle_index);
+        if (svg_tag == null or oracle_tag == null) {
+            try std.testing.expect(svg_tag == null and oracle_tag == null);
+            return;
+        }
+        try expectNumericNormalizedEqual(svg_tag.?, oracle_tag.?);
+    }
+}
+
+fn nextSvgOpeningTag(svg: []const u8, index: *usize) ?[]const u8 {
+    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
+        const tag_start = index.* + rel;
+        index.* = tag_start + 1;
+        if (index.* >= svg.len) return null;
+        if (svg[index.*] == '!' or svg[index.*] == '?' or svg[index.*] == '/') continue;
+        const tag_end_rel = std.mem.indexOfScalar(u8, svg[index.*..], '>') orelse return null;
+        index.* += tag_end_rel + 1;
+        return svg[tag_start..index.*];
+    }
+    return null;
+}
+
+fn expectNumericNormalizedEqual(a: []const u8, b: []const u8) !void {
+    var ai: usize = 0;
+    var bi: usize = 0;
+    while (ai < a.len or bi < b.len) {
+        if (ai < a.len and isSvgNumberStart(a, ai) and bi < b.len and isSvgNumberStart(b, bi)) {
+            ai = skipSvgNumber(a, ai);
+            bi = skipSvgNumber(b, bi);
+            continue;
+        }
+        try std.testing.expect(ai < a.len and bi < b.len);
+        try std.testing.expectEqual(a[ai], b[bi]);
+        ai += 1;
+        bi += 1;
+    }
+}
+
+fn isSvgNumberStart(text: []const u8, index: usize) bool {
+    const c = text[index];
+    if (std.ascii.isDigit(c)) return true;
+    if ((c == '-' or c == '+') and index + 1 < text.len and std.ascii.isDigit(text[index + 1])) return true;
+    return false;
+}
+
+fn skipSvgNumber(text: []const u8, index: usize) usize {
+    var i = index;
+    if (i < text.len and (text[i] == '-' or text[i] == '+')) i += 1;
+    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+    if (i < text.len and text[i] == '.') {
+        i += 1;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+    }
+    return i;
+}
+
 const SvgElementName = struct {
     closing: bool,
     name: []const u8,
@@ -16059,6 +16120,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathCommandSequencesEqual(svg, graphviz_oracle);
     try expectSvgTextSequenceEqual(svg, graphviz_oracle);
     try expectSvgElementSequenceEqual(svg, graphviz_oracle);
+    try expectSvgOpeningTagsNormalizedEqual(svg, graphviz_oracle);
     try std.testing.expect(std.mem.endsWith(u8, svg, "</svg>"));
     try std.testing.expect(!std.mem.endsWith(u8, svg, "</svg>\n"));
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
