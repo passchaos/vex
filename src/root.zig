@@ -7270,7 +7270,7 @@ fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout,
 fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute, hints: EdgePathHints) InlineArrowOptions {
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
-    if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
+    if (rightMiddleAdjacentPathShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true, .head_tip_precise = false, .head_left_x_shift = -0.04, .head_left_y_shift = 0.05 };
     if (rightLowerAdjacentRouteShiftApplies(layout, edge_item, rankdir)) return .{ .head_precise = true };
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true };
@@ -10023,12 +10023,13 @@ const InlineArrowOptions = struct {
     head_left_x_shift: f64 = 0.0,
     head_left_y_shift: f64 = 0.0,
     head_precise: bool = false,
+    head_tip_precise: bool = true,
 };
 
 fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual, options: InlineArrowOptions) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
     if (visual.marker_end == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise });
+        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
     }
     if (visual.marker_start == .normal) {
         try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, options.tail_length_scale, true, .{});
@@ -10040,6 +10041,7 @@ const InlineNormalArrowPointAdjust = struct {
     left_x_shift: f64 = 0.0,
     left_y_shift: f64 = 0.0,
     precise: bool = false,
+    tip_precise: bool = true,
 };
 
 fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, color: []const u8, scale: f64, length_scale: f64, reverse: bool, adjust: InlineNormalArrowPointAdjust) Io.Writer.Error!void {
@@ -10066,7 +10068,7 @@ fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, colo
     });
     try writeSvgArrowPoint(writer, right, adjust.precise);
     try writer.writeByte(' ');
-    try writeSvgArrowPoint(writer, tip, adjust.precise);
+    try writeSvgArrowPoint(writer, tip, adjust.precise and adjust.tip_precise);
     try writer.writeByte(' ');
     try writeSvgArrowPoint(writer, left, adjust.precise);
     try writer.writeByte(' ');
