@@ -8791,7 +8791,8 @@ fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, st
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
-    const shape_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, layout));
+    var shape_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, layout));
+    if (node_item.shape == .msquare) shape_layout.center.y += 0.1;
     switch (node_item.shape) {
         .point => {
             try writeSvgCircleOpen(writer, shape_layout.center, @min(shape_layout.width, shape_layout.height) / 2.0);
@@ -16059,7 +16060,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.101);
     const end_fragment = svgGroupFragmentByTitle(svg, "end") orelse return error.MissingEndNode;
     const oracle_end_fragment = svgGroupFragmentByTitle(graphviz_oracle, "end") orelse return error.MissingEndNode;
-    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "end", 0.12);
+    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "end", 0.015);
     try std.testing.expect(@abs((svgPolygonBBoxY(end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.12);
     try std.testing.expect(@abs((svgPolygonBBoxWidth(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxWidth(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.03);
     try std.testing.expect(@abs((svgPolygonBBoxHeight(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxHeight(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.02);
@@ -16304,7 +16305,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.end), svgScreenPoint(graphviz_oracle, oracle_start_mark.end)) <= 0.09);
     try expectPolylineSequenceNear(svg, graphviz_oracle, "start", 0.103);
     try expectPolylineSetNear(svg, graphviz_oracle, "start", 0.205);
-    try expectPolylineSequenceNear(svg, graphviz_oracle, "end", 0.111);
+    try expectPolylineSequenceNear(svg, graphviz_oracle, "end", 0.015);
     try expectPolylineSetNear(svg, graphviz_oracle, "end", 0.367);
 }
 
