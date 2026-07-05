@@ -6727,7 +6727,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 
     try renderSvgClusters(writer, graph, layout);
     try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate);
-    try writer.writeAll("</g>\n</svg>\n");
+    try writer.writeAll("</g>\n</svg>");
 }
 
 fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
@@ -16059,6 +16059,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathCommandSequencesEqual(svg, graphviz_oracle);
     try expectSvgTextSequenceEqual(svg, graphviz_oracle);
     try expectSvgElementSequenceEqual(svg, graphviz_oracle);
+    try std.testing.expect(std.mem.endsWith(u8, svg, "</svg>"));
+    try std.testing.expect(!std.mem.endsWith(u8, svg, "</svg>\n"));
     try std.testing.expect(std.mem.indexOf(u8, svg, "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"224pt\" height=\"409pt\" viewBox=\"0.00 0.00 224.00 409.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(8 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
