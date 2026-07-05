@@ -8190,6 +8190,63 @@ fn expectSvgEdgePathPointsNear(svg: []const u8, oracle: []const u8, title: []con
     }
 }
 
+fn expectSvgDrawablePointsNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    // The root background polygon is visually identical but uses a different
+    // coordinate direction from Graphviz; the content geometry below is ordered.
+    _ = nextSvgDrawablePoints(svg, &svg_index) orelse return error.MissingSvgDrawable;
+    _ = nextSvgDrawablePoints(oracle, &oracle_index) orelse return error.MissingSvgDrawable;
+    while (true) {
+        const svg_drawable = nextSvgDrawablePoints(svg, &svg_index);
+        const oracle_drawable = nextSvgDrawablePoints(oracle, &oracle_index);
+        if (svg_drawable == null or oracle_drawable == null) {
+            try std.testing.expect(svg_drawable == null and oracle_drawable == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_drawable.?.tag, svg_drawable.?.tag);
+        try std.testing.expectEqual(oracle_drawable.?.count, svg_drawable.?.count);
+        var index: usize = 0;
+        while (index + 1 < svg_drawable.?.count) : (index += 2) {
+            const point = svgScreenPoint(svg, .{ .x = svg_drawable.?.numbers[index], .y = svg_drawable.?.numbers[index + 1] });
+            const oracle_point = svgScreenPoint(oracle, .{ .x = oracle_drawable.?.numbers[index], .y = oracle_drawable.?.numbers[index + 1] });
+            try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+        }
+    }
+}
+
+const SvgDrawablePoints = struct {
+    tag: []const u8,
+    numbers: [128]f64,
+    count: usize,
+};
+
+fn nextSvgDrawablePoints(svg: []const u8, index: *usize) ?SvgDrawablePoints {
+    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
+        const tag_start = index.* + rel;
+        index.* = tag_start + 1;
+        if (index.* >= svg.len) return null;
+        if (svg[index.*] == '!' or svg[index.*] == '?' or svg[index.*] == '/') continue;
+        const name_start = index.*;
+        while (index.* < svg.len and isSvgNameChar(svg[index.*])) : (index.* += 1) {}
+        const name = svg[name_start..index.*];
+        const tag_end_rel = std.mem.indexOfScalar(u8, svg[index.*..], '>') orelse return null;
+        const tag = svg[tag_start .. index.* + tag_end_rel + 1];
+        index.* += tag_end_rel + 1;
+
+        const attr_name: []const u8 = if (std.mem.eql(u8, name, "polygon") or std.mem.eql(u8, name, "polyline"))
+            "points"
+        else if (std.mem.eql(u8, name, "path"))
+            "d"
+        else
+            continue;
+        var result = SvgDrawablePoints{ .tag = name, .numbers = undefined, .count = 0 };
+        result.count = svgNumbersInAttribute(tag, attr_name, result.numbers[0..]);
+        if (result.count >= 2 and result.count % 2 == 0) return result;
+    }
+    return null;
+}
+
 fn expectSvgEdgeCurveSamplesNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
     var numbers: [64]f64 = undefined;
     const count = svgPathNumbers(svg, title, numbers[0..]);
@@ -16299,6 +16356,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.073);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.073);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 0.09);
