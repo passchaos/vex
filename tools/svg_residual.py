@@ -96,6 +96,12 @@ def main() -> int:
         help="show the best possible residual on a one-decimal coordinate grid",
     )
     parser.add_argument(
+        "--max-gap",
+        type=float,
+        default=None,
+        help="exit with status 1 if residual minus one-decimal lower bound exceeds this value",
+    )
+    parser.add_argument(
         "--skip-background",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -117,7 +123,7 @@ def main() -> int:
     if len(drawables) != len(oracle_drawables):
         raise SystemExit(f"drawable count mismatch: {len(drawables)} != {len(oracle_drawables)}")
 
-    rows: list[tuple[float, int, str, int, tuple[float, float], tuple[float, float], str]] = []
+    rows: list[tuple[float, int, str, int, tuple[float, float], tuple[float, float], str, float]] = []
     for drawable_index, ((tag, points, tag_text), (oracle_tag, oracle_points, _)) in enumerate(
         zip(drawables, oracle_drawables),
         start=1 if args.skip_background else 0,
@@ -131,18 +137,19 @@ def main() -> int:
             )
         for point_index, (point, oracle_point) in enumerate(zip(points, oracle_points)):
             residual = math.hypot(point[0] - oracle_point[0], point[1] - oracle_point[1])
-            rows.append((residual, drawable_index, tag, point_index, point, oracle_point, tag_text))
+            lower_bound = one_decimal_lower_bound(oracle_point)
+            rows.append((residual, drawable_index, tag, point_index, point, oracle_point, tag_text, lower_bound))
 
     rows.sort(reverse=True, key=lambda row: row[0])
     max_residual = rows[0][0] if rows else 0.0
     print(f"max_residual={max_residual:.4f} drawable_count={len(drawables)} point_count={len(rows)}")
-    for residual, drawable_index, tag, point_index, point, oracle_point, tag_text in rows[: args.top]:
+    max_gap = max((residual - lower_bound for residual, *_, lower_bound in rows), default=0.0)
+    for residual, drawable_index, tag, point_index, point, oracle_point, tag_text, lower_bound in rows[: args.top]:
         dx = point[0] - oracle_point[0]
         dy = point[1] - oracle_point[1]
-        lower_bound = one_decimal_lower_bound(oracle_point) if args.show_lower_bound else None
         lower_bound_text = (
             f" lower_bound={lower_bound:.4f} gap={residual - lower_bound:.4f}"
-            if lower_bound is not None
+            if args.show_lower_bound
             else ""
         )
         print(
@@ -155,6 +162,8 @@ def main() -> int:
         raise SystemExit(
             f"max residual {max_residual:.4f} exceeds limit {args.max_residual:.4f}"
         )
+    if args.max_gap is not None and max_gap > args.max_gap:
+        raise SystemExit(f"max lower-bound gap {max_gap:.4f} exceeds limit {args.max_gap:.4f}")
     return 0
 
 
