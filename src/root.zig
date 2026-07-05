@@ -16084,7 +16084,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.05);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.065);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.053);
-    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;a0", 0.41);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;a0", 0.407);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_a0_points.start), svgScreenPoint(graphviz_oracle, oracle_start_a0_points.start)) <= 0.06);
@@ -16140,7 +16140,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;a2", 0.022);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a2-&gt;a3", 0.022);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.052);
-    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a1-&gt;b3", 0.37);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a1-&gt;b3", 0.365);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.035);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.072);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "start-&gt;b0", 0.035);
@@ -16151,7 +16151,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.038);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b2-&gt;a3", 0.13);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.065);
-    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.22);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.073);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
