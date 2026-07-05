@@ -10252,8 +10252,8 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const tail_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.10 else 0.0;
             const tail_end = Point{ .x = path_end.x + tail_end_shift, .y = path_end.y };
             try writePathCubic(writer, .{ .x = first_control1_x, .y = route.start.y + rank_delta * 0.05 + first_control1_y_shift }, .{ .x = c2x + first_control2_x_shift, .y = route.start.y + rank_delta * 0.12 + first_control2_y_shift + first_control2_extra_y_shift }, channel_p1);
-            try writePathCubic(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
-            try writePathCubic(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
+            try writePathCubicContinuation(writer, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.42 + middle_control_y_shift }, .{ .x = side_x + side_bulge, .y = p1.y + middle_delta_y * 0.57 + middle_control_y_shift }, channel_p2);
+            try writePathCubicContinuation(writer, .{ .x = tail_control1_x, .y = route.end.y - rank_delta * 0.155 + tail_control1_y_shift }, .{ .x = c4x + tail_control2_x_shift, .y = route.end.y - rank_delta * 0.10 + tail_control2_y_shift }, tail_end);
         }
         return;
     }
@@ -10488,6 +10488,15 @@ fn writePathLine(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
 
 fn writePathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
     try writer.writeByte('C');
+    try writeSvgPathPoint(writer, c1);
+    try writer.writeByte(' ');
+    try writeSvgPathPoint(writer, c2);
+    try writer.writeByte(' ');
+    try writeSvgPathPoint(writer, end);
+}
+
+fn writePathCubicContinuation(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte(' ');
     try writeSvgPathPoint(writer, c1);
     try writer.writeByte(' ');
     try writeSvgPathPoint(writer, c2);
@@ -15990,7 +15999,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_label = std.mem.indexOf(u8, svg, "<title>a3-&gt;a0</title>") orelse return error.MissingBackEdge;
     const back_end = std.mem.indexOf(u8, svg[back_label..], "</g>") orelse return error.MissingBackEdge;
     const back_edge = svg[back_label .. back_label + back_end];
-    try std.testing.expect(svgCubicSegmentCount(back_edge) == 3);
+    try std.testing.expect(svgPathCommandCount(back_edge, 'C') == 1);
     try std.testing.expect(svgPathCommandCount(back_edge, 'L') == 0);
     var back_numbers: [32]f64 = undefined;
     const back_count = svgNumbersInAttribute(back_edge, "d", back_numbers[0..]);
