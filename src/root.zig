@@ -7279,7 +7279,7 @@ fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, 
     if (@abs(dx) < @abs(dy) * 0.35) return .{ .head_precise = true };
     if (hints.tail_mdiamond and dx >= 0) return .{ .head_length_scale = 1.001, .head_precise = true, .head_right_x_shift = -0.04 };
     if (hints.tail_mdiamond and dx < 0) return .{ .head_precise = true };
-    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true };
+    if (hints.head_msquare and dx >= 0) return .{ .head_precise = true, .head_left_y_shift = -0.03 };
     if (hints.head_msquare and dx < 0) return .{ .head_precise = true, .head_right_y_shift = -0.03, .head_left_x_shift = -0.04, .head_left_y_shift = -0.01 };
     return .{};
 }
@@ -10291,7 +10291,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             const taper: f64 = 0.36;
             tapered_route.start.x += taper;
             tapered_route.end.x -= taper;
-            const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
             shiftGraphvizAdjacentPathEnd(&tapered_route.end, rankdir);
             try writePathMovePrecise(writer, tapered_route.start);
             try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
@@ -10301,7 +10302,8 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             var tapered_route = adjacent_route;
             tapered_route.start.x -= 0.16;
             tapered_route.end.x += 0.24;
-            const controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            var controls = graphvizAdjacentTaperControls(tapered_route.start, tapered_route.end, rankdir);
+            controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
             shiftGraphvizAdjacentPathEnd(&tapered_route.end, rankdir);
             try writePathMovePrecise(writer, tapered_route.start);
             try writePathCubicPrecise(writer, controls.c1, controls.c2, tapered_route.end);
@@ -10319,10 +10321,12 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
             return;
         }
         if (alignedAdjacentControls(adjacent_route.start, adjacent_route.end, rankdir)) |controls| {
+            var precise_controls = controls;
+            precise_controls.c1.y += if (rankdir == .TB) 0.03 else -0.03;
             var path_end = adjacent_route.end;
             shiftGraphvizAdjacentPathEnd(&path_end, rankdir);
             try writePathMove(writer, adjacent_route.start);
-            try writePathCubicEndPrecise(writer, controls.c1, controls.c2, path_end);
+            try writePathCubicPrecise(writer, precise_controls.c1, precise_controls.c2, path_end);
             return;
         }
         try writePathMove(writer, direct_route.start);
@@ -16693,7 +16697,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.031);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.029);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
