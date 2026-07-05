@@ -15958,7 +15958,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b1").? - svgNodeScreenCenterX(graphviz_oracle, "b1").?) <= 0.01);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b2").? - svgNodeScreenCenterX(graphviz_oracle, "b2").?) <= 0.01);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "b3").? - svgNodeScreenCenterX(graphviz_oracle, "b3").?) <= 0.01);
-    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 0.06);
+    try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "start").? - svgNodeScreenCenterX(graphviz_oracle, "start").?) <= 0.055);
     try std.testing.expect(@abs(svgNodeScreenCenterX(svg, "end").? - svgNodeScreenCenterX(graphviz_oracle, "end").?) <= 0.01);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a0", 0.1);
     try expectSvgNodeClusterPaddingNear(svg, graphviz_oracle, "cluster_0", "a3", 0.1);
@@ -15974,8 +15974,8 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b1").? - svgNodeScreenCenterY(graphviz_oracle, "b1").?) <= 0.01);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b2").? - svgNodeScreenCenterY(graphviz_oracle, "b2").?) <= 0.01);
     try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "b3").? - svgNodeScreenCenterY(graphviz_oracle, "b3").?) <= 0.01);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 0.12);
-    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 0.12);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "start").? - svgNodeScreenCenterY(graphviz_oracle, "start").?) <= 0.11);
+    try std.testing.expect(@abs(svgNodeScreenCenterY(svg, "end").? - svgNodeScreenCenterY(graphviz_oracle, "end").?) <= 0.11);
     const a0_fragment = svgGroupFragmentByTitle(svg, "a0") orelse return error.MissingNodeCenter;
     const oracle_a0_fragment = svgGroupFragmentByTitle(graphviz_oracle, "a0") orelse return error.MissingNodeCenter;
     const b0_fragment = svgGroupFragmentByTitle(svg, "b0") orelse return error.MissingNodeCenter;
