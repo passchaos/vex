@@ -8566,15 +8566,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Cluster, layout: *const Layo
             visual.fill,
             visual.stroke,
         });
-        try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y });
-        try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = rect.x + rect.width, .y = rect.y });
-        try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = rect.x + rect.width, .y = rect.y + rect.height });
-        try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y + rect.height });
-        try writer.writeByte(' ');
-        try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y });
+        try writeSvgRectPolygonPoints(writer, rect, .bottom_left_clockwise);
         try writer.writeByte('"');
         try writeSvgFillOpacity(writer, visual.fill_opacity);
         try writeSvgStrokeWidth(writer, visual.width);
@@ -9440,24 +9432,56 @@ fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius
     try writer.writeAll("/>\n");
 }
 
+const RectPointOrder = enum {
+    top_left_clockwise,
+    bottom_left_clockwise,
+    top_right_counterclockwise,
+};
+
 fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.Writer.Error!void {
     try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
         visual.fill,
         visual.stroke,
     });
-    try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y });
-    try writer.writeByte(' ');
-    try writeSvgPoint(writer, .{ .x = rect.x + rect.width, .y = rect.y });
-    try writer.writeByte(' ');
-    try writeSvgPoint(writer, .{ .x = rect.x + rect.width, .y = rect.y + rect.height });
-    try writer.writeByte(' ');
-    try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y + rect.height });
-    try writer.writeByte(' ');
-    try writeSvgPoint(writer, .{ .x = rect.x, .y = rect.y });
+    try writeSvgRectPolygonPoints(writer, rect, .top_right_counterclockwise);
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
     try writer.writeAll("/>\n");
+}
+
+fn writeSvgRectPolygonPoints(writer: *Io.Writer, rect: RectF, order: RectPointOrder) Io.Writer.Error!void {
+    const left = rect.x;
+    const right = rect.x + rect.width;
+    const top = rect.y;
+    const bottom = rect.y + rect.height;
+    const points: [5]Point = switch (order) {
+        .top_left_clockwise => [_]Point{
+            .{ .x = left, .y = top },
+            .{ .x = right, .y = top },
+            .{ .x = right, .y = bottom },
+            .{ .x = left, .y = bottom },
+            .{ .x = left, .y = top },
+        },
+        .bottom_left_clockwise => [_]Point{
+            .{ .x = left, .y = bottom },
+            .{ .x = left, .y = top },
+            .{ .x = right, .y = top },
+            .{ .x = right, .y = bottom },
+            .{ .x = left, .y = bottom },
+        },
+        .top_right_counterclockwise => [_]Point{
+            .{ .x = right, .y = top },
+            .{ .x = left, .y = top },
+            .{ .x = left, .y = bottom },
+            .{ .x = right, .y = bottom },
+            .{ .x = right, .y = top },
+        },
+    };
+    for (points, 0..) |point, index| {
+        if (index > 0) try writer.writeByte(' ');
+        try writeSvgPoint(writer, point);
+    }
 }
 
 fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height: f64, visual: NodeVisual) Io.Writer.Error!void {
@@ -16021,6 +16045,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(@abs((start_label_y + svgGraphvizTranslate(svg).y) - (oracle_start_label_y + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.101);
     const end_fragment = svgGroupFragmentByTitle(svg, "end") orelse return error.MissingEndNode;
     const oracle_end_fragment = svgGroupFragmentByTitle(graphviz_oracle, "end") orelse return error.MissingEndNode;
+    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "end", 0.12);
     try std.testing.expect(@abs((svgPolygonBBoxY(end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_end_fragment) orelse return error.MissingEndNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.12);
     try std.testing.expect(@abs((svgPolygonBBoxWidth(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxWidth(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.03);
     try std.testing.expect(@abs((svgPolygonBBoxHeight(end_fragment) orelse return error.MissingEndNode) - (svgPolygonBBoxHeight(oracle_end_fragment) orelse return error.MissingEndNode)) <= 0.02);
@@ -16035,8 +16060,10 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect((svgClusterRectWidth(svg, "cluster_1") orelse return error.MissingClusterRect) <= 75.0);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_0").? - svgClusterScreenX(graphviz_oracle, "cluster_0").?) <= 0.01);
     try std.testing.expect(@abs(svg_cluster_0_w - svgClusterRectWidth(graphviz_oracle, "cluster_0").?) <= 0.01);
+    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "cluster_0", 0.01);
     try std.testing.expect(@abs(svgClusterScreenX(svg, "cluster_1").? - svgClusterScreenX(graphviz_oracle, "cluster_1").?) <= 0.01);
     try std.testing.expect(@abs(svgClusterRectWidth(svg, "cluster_1").? - svgClusterRectWidth(graphviz_oracle, "cluster_1").?) <= 0.01);
+    try expectSvgPolygonPointsNear(svg, graphviz_oracle, "cluster_1", 0.01);
     try expectLayoutClusterMatchesSvgAnchor(&graph, &layout, svg, "cluster_0", 0.1);
     try expectLayoutClusterMatchesSvgAnchor(&graph, &layout, svg, "cluster_1", 0.1);
     try std.testing.expect(@abs(svgClusterScreenY(svg, "cluster_0").? - svgClusterScreenY(graphviz_oracle, "cluster_0").?) <= 0.01);
