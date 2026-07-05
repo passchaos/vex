@@ -9536,9 +9536,12 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
     const inner_y = hh * 0.72;
     const short_y = hh * 0.28;
     const short_x = hw * 0.278;
-    try writeSvgPolylineLine(writer, cx - inner_x, cy - short_y, cx - inner_x, cy + short_y, visual);
+    const graphviz_inner_x = inner_x + 0.07;
+    const graphviz_top_y = cy - short_y + 0.02;
+    const graphviz_bottom_y = cy + short_y - 0.03;
+    try writeSvgPolylineLinePrecise(writer, cx - graphviz_inner_x, graphviz_top_y, cx - graphviz_inner_x, graphviz_bottom_y, visual);
     try writeSvgPolylineLine(writer, cx - short_x, cy + inner_y, cx + short_x, cy + inner_y, visual);
-    try writeSvgPolylineLine(writer, cx + inner_x, cy + short_y, cx + inner_x, cy - short_y, visual);
+    try writeSvgPolylineLinePrecise(writer, cx + graphviz_inner_x, graphviz_bottom_y, cx + graphviz_inner_x, graphviz_top_y, visual);
     try writeSvgPolylineLine(writer, cx + short_x, cy - inner_y, cx - short_x, cy - inner_y, visual);
 }
 
@@ -9792,6 +9795,21 @@ fn writeSvgPolylineLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, 
     try writeSvgPoint(writer, .{ .x = x1, .y = y1 });
     try writer.writeByte(' ');
     try writeSvgPoint(writer, .{ .x = x2, .y = y2 });
+    try writer.writeByte('"');
+    try writeSvgStrokeWidth(writer, visual.width);
+    try writeSvgDash(writer, visual.dash);
+    try writer.writeAll("/>\n");
+}
+
+fn writeSvgPolylineLinePrecise(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
+    try writer.print("<polyline fill=\"none\" stroke=\"{s}\" points=\"", .{visual.stroke});
+    try writeSvgNumberPrecise(writer, x1);
+    try writer.writeByte(',');
+    try writeSvgNumberPrecise(writer, y1);
+    try writer.writeByte(' ');
+    try writeSvgNumberPrecise(writer, x2);
+    try writer.writeByte(',');
+    try writeSvgNumberPrecise(writer, y2);
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
@@ -16697,7 +16715,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "a3-&gt;end", 0.216);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.052);
     try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.34);
-    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.029);
+    try expectSvgDrawablePointsNear(svg, graphviz_oracle, 0.023);
     try expectSvgDrawableOneDecimalGapNear(svg, graphviz_oracle, 0.002);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
