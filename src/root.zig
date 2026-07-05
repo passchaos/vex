@@ -7908,6 +7908,13 @@ fn svgPolygonBBoxHeight(fragment: []const u8) ?f64 {
     return max_y - min_y;
 }
 
+fn svgPolygonPointCount(fragment: []const u8) ?usize {
+    var point_numbers: [128]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2 or count % 2 != 0) return null;
+    return count / 2;
+}
+
 fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
     if (svgNumberAfter(fragment, " cx=\"")) |cx| return cx;
@@ -8907,11 +8914,17 @@ fn visualShapeLayout(node_item: Node, layout: NodeLayout) NodeLayout {
 fn renderSvgPolygon(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
     try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{ visual.fill, visual.stroke });
     var written: usize = 0;
+    var first_point: ?Point = null;
     for (points) |point| {
         if (point.x < 0 and point.y < 0) continue;
         if (written > 0) try writer.writeByte(' ');
+        if (first_point == null) first_point = point;
         try writeSvgPoint(writer, point);
         written += 1;
+    }
+    if (first_point) |point| {
+        if (written > 0) try writer.writeByte(' ');
+        try writeSvgPoint(writer, point);
     }
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
@@ -15982,6 +15995,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>start</title>\n<polygon fill=\"none\" stroke=\"black\"") != null);
     const start_fragment = svgGroupFragmentByTitle(svg, "start") orelse return error.MissingStartNode;
     const oracle_start_fragment = svgGroupFragmentByTitle(graphviz_oracle, "start") orelse return error.MissingStartNode;
+    try std.testing.expectEqual(svgPolygonPointCount(oracle_start_fragment) orelse return error.MissingStartNode, svgPolygonPointCount(start_fragment) orelse return error.MissingStartNode);
     try std.testing.expect(@abs((svgPolygonBBoxY(start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(svg).y - ((svgPolygonBBoxY(oracle_start_fragment) orelse return error.MissingStartNode) + svgGraphvizTranslate(graphviz_oracle).y)) <= 0.01);
     try std.testing.expect(@abs((svgPolygonBBoxHeight(start_fragment) orelse return error.MissingStartNode) - (svgPolygonBBoxHeight(oracle_start_fragment) orelse return error.MissingStartNode)) <= 0.01);
     const start_label_y = svgNumberAfter(start_fragment, " y=\"") orelse return error.MissingStartNode;
