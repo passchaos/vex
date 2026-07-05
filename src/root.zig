@@ -10074,7 +10074,7 @@ fn writeBackEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge,
             const channel_p1 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p1.x - 1.0, .y = p1.y + channel_p1_y_shift } else p1;
             const channel_p2 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) Point{ .x = p2.x - 1.0, .y = p2.y + 0.2 } else p2;
             const tail_control1_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.64 else 0.0;
-            const tail_control1_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.06 else 0.0;
+            const tail_control1_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.06 else 0.0;
             const tail_end_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.87 else 0.0;
             const first_control1_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) 0.5 else 0.0;
             const first_control2_y_shift: f64 = if (prefer_left and edgeTouchesSingleCluster(layout, edge_item)) -0.55 else 0.0;
@@ -15852,7 +15852,7 @@ test "user cluster example stays compact and Graphviz-like" {
     const back_tip = svgEdgeArrowTip(svg, "a3-&gt;a0") orelse return error.MissingBackEdge;
     const oracle_back_tip = svgEdgeArrowTip(graphviz_oracle, "a3-&gt;a0") orelse return error.MissingBackEdge;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, back_tip), svgScreenPoint(graphviz_oracle, oracle_back_tip)) <= 0.35);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.067);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.065);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;a0", 0.053);
     const start_a0_points = svgPathStartEnd(svg, "start-&gt;a0") orelse return error.MissingStartEdge;
     const oracle_start_a0_points = svgPathStartEnd(graphviz_oracle, "start-&gt;a0") orelse return error.MissingStartEdge;
