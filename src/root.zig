@@ -8081,6 +8081,40 @@ fn expectSvgEdgeArrowPointsNear(svg: []const u8, oracle: []const u8, title: []co
     }
 }
 
+fn expectSvgEdgeArrowShapeNear(svg: []const u8, oracle: []const u8, title: []const u8, metric_tolerance: f64) !void {
+    const fragment = svgGroupFragmentByTitle(svg, title) orelse return error.MissingEdgeArrow;
+    const oracle_fragment = svgGroupFragmentByTitle(oracle, title) orelse return error.MissingEdgeArrow;
+    var numbers: [32]f64 = undefined;
+    const count = svgNumbersInAttribute(fragment, "points", numbers[0..]);
+    var oracle_numbers: [32]f64 = undefined;
+    const oracle_count = svgNumbersInAttribute(oracle_fragment, "points", oracle_numbers[0..]);
+    if (count < 6 or oracle_count < 6) return error.MissingEdgeArrow;
+
+    const a = svgScreenPoint(svg, .{ .x = numbers[0], .y = numbers[1] });
+    const tip = svgScreenPoint(svg, .{ .x = numbers[2], .y = numbers[3] });
+    const b = svgScreenPoint(svg, .{ .x = numbers[4], .y = numbers[5] });
+    const oracle_a = svgScreenPoint(oracle, .{ .x = oracle_numbers[0], .y = oracle_numbers[1] });
+    const oracle_tip = svgScreenPoint(oracle, .{ .x = oracle_numbers[2], .y = oracle_numbers[3] });
+    const oracle_b = svgScreenPoint(oracle, .{ .x = oracle_numbers[4], .y = oracle_numbers[5] });
+
+    const base = Point{ .x = (a.x + b.x) / 2.0, .y = (a.y + b.y) / 2.0 };
+    const oracle_base = Point{ .x = (oracle_a.x + oracle_b.x) / 2.0, .y = (oracle_a.y + oracle_b.y) / 2.0 };
+    const area = triangleArea(a, tip, b);
+    const oracle_area = triangleArea(oracle_a, oracle_tip, oracle_b);
+    const half_base = distanceBetween(a, b) / 2.0;
+    const oracle_half_base = distanceBetween(oracle_a, oracle_b) / 2.0;
+    const axis = distanceBetween(tip, base);
+    const oracle_axis = distanceBetween(oracle_tip, oracle_base);
+
+    try std.testing.expect(@abs(area - oracle_area) <= metric_tolerance);
+    try std.testing.expect(@abs(half_base - oracle_half_base) <= metric_tolerance);
+    try std.testing.expect(@abs(axis - oracle_axis) <= metric_tolerance);
+}
+
+fn triangleArea(a: Point, b: Point, c: Point) f64 {
+    return @abs((a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2.0);
+}
+
 fn expectSvgEdgeControlsNear(svg: []const u8, oracle: []const u8, title: []const u8, c1_tolerance: f64, c2_tolerance: f64) !void {
     var numbers: [32]f64 = undefined;
     const count = svgPathNumbers(svg, title, numbers[0..]);
@@ -15940,12 +15974,15 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.052);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;a0", 0.035);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "start-&gt;b0", 0.072);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "start-&gt;b0", 0.45);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b0-&gt;b1", 0.038);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.052);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.069);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b2-&gt;b3", 0.45);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b2-&gt;a3", 0.038);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.065);
     try expectSvgEdgeArrowPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.073);
+    try expectSvgEdgeArrowShapeNear(svg, graphviz_oracle, "b3-&gt;end", 0.45);
     const start_mark = svgPolylineEndpoints(svg, "start", 0) orelse return error.MissingStartMark;
     const oracle_start_mark = svgPolylineEndpoints(graphviz_oracle, "start", 0) orelse return error.MissingStartMark;
     try std.testing.expect(distanceBetween(svgScreenPoint(svg, start_mark.start), svgScreenPoint(graphviz_oracle, oracle_start_mark.start)) <= 4.0);
