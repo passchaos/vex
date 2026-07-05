@@ -76,6 +76,12 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=20, help="number of largest residuals to print")
     parser.add_argument("--include-text", action="store_true", help="also compare text anchor positions")
     parser.add_argument(
+        "--max-residual",
+        type=float,
+        default=None,
+        help="exit with status 1 if the maximum residual exceeds this value",
+    )
+    parser.add_argument(
         "--skip-background",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -125,6 +131,10 @@ def main() -> int:
             f"oracle=({oracle_point[0]:.4f},{oracle_point[1]:.4f})"
         )
         print(f"  {tag_text[:120]}")
+    if args.max_residual is not None and max_residual > args.max_residual:
+        raise SystemExit(
+            f"max residual {max_residual:.4f} exceeds limit {args.max_residual:.4f}"
+        )
     return 0
 
 
