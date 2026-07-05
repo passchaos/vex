@@ -7559,8 +7559,8 @@ fn graphvizCrossClusterLongPathEndShift(layout: *const Layout, edge_item: Edge, 
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
-    const y_shift: f64 = if (rankdir == .TB) -0.4 else 0.4;
-    return .{ .x = -0.4, .y = y_shift };
+    const y_shift: f64 = if (rankdir == .TB) -0.41 else 0.41;
+    return .{ .x = -0.46, .y = y_shift };
 }
 
 fn graphvizCrossClusterLongPathStartShift(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?Point {
@@ -7570,8 +7570,8 @@ fn graphvizCrossClusterLongPathStartShift(layout: *const Layout, edge_item: Edge
     const dx = route.end.x - route.start.x;
     const dy = route.end.y - route.start.y;
     if (dx <= 0 or @abs(dx) < @abs(dy) * 0.35) return null;
-    const y_shift: f64 = if (rankdir == .TB) 0.15 else -0.15;
-    return .{ .x = -0.15, .y = y_shift };
+    const y_shift: f64 = if (rankdir == .TB) 0.20 else -0.20;
+    return .{ .x = -0.12, .y = y_shift };
 }
 
 fn graphvizCrossClusterLongPathControl1Shift(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute) ?Point {
@@ -10229,9 +10229,15 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
         if (graphvizCrossClusterLongPathEndShift(layout, edge_item, rankdir, direct_route)) |shift| {
             c2 = .{ .x = c2.x + shift.x * 0.5, .y = c2.y + shift.y * 0.5 };
             path_end = .{ .x = path_end.x + shift.x, .y = path_end.y + shift.y };
+            if (edgeTouchesMultipleClusters(layout, edge_item)) c2.y += if (rankdir == .TB) -0.01 else 0.01;
         }
-        try writePathMove(writer, path_start);
-        try writePathCubic(writer, c1, c2, path_end);
+        if (edgeTouchesMultipleClusters(layout, edge_item)) {
+            try writePathMovePrecise(writer, path_start);
+            try writePathCubicPrecise(writer, c1, c2, path_end);
+        } else {
+            try writePathMove(writer, path_start);
+            try writePathCubic(writer, c1, c2, path_end);
+        }
         return;
     }
     if (waypoint_count == 0) {
@@ -16597,7 +16603,7 @@ test "user cluster example stays compact and Graphviz-like" {
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b1-&gt;b2", 0.057);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b2-&gt;b3", 0.041);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "b2-&gt;b3", 0.045);
-    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.057);
+    try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a1-&gt;b3", 0.023);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "a3-&gt;end", 0.015);
     try expectSvgEdgePathPointsNear(svg, graphviz_oracle, "b3-&gt;end", 0.041);
     try expectSvgEdgeCurveSamplesNear(svg, graphviz_oracle, "a3-&gt;a0", 0.04);
