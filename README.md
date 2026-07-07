@@ -74,7 +74,7 @@ They progress from small terminal output to broader feature coverage:
 - `01_basic_terminal.zig`: directed graph construction, labels, layout, and terminal rendering.
 - `02_ascii_undirected.zig`: undirected API graph, `rankdir=LR`, and ASCII terminal fallback.
 - `03_clusters_compound.zig`: `addCluster`, graph attributes, compound edge hints, and terminal cluster panels.
-- `04_output_formats.zig`: one API graph rendered to plain/truecolor terminal, HTML `<pre>`, SVG, PNG, and PDF.
+- `04_output_formats.zig`: one API graph rendered to plain/truecolor terminal, OSC 8 hyperlinks, semantic HTML `<pre>`, SVG, PNG, and PDF.
 - `05_records_ports_svg.zig`: record labels, record ports, HTML-like table labels, and SVG output.
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, terminal preview, and SVG output.
 - `07_force_layout_terminal.zig`: force-directed layout via `.fruchterman_reingold` and terminal rendering.
@@ -110,7 +110,7 @@ The parser currently supports a practical, mainstream DOT subset:
 
 ## Output backends
 
-- `terminal`: layout-aware shell preview with box-drawn nodes, clusters, edges, arrow markers, edge labels, ASCII fallback, DOT/API color/style attributes, ANSI 256/truecolor, and HTML `<pre>` output.
+- `terminal`: layout-aware shell preview with box-drawn nodes, clusters, edges, arrow markers, edge labels, ASCII fallback, DOT/API color/style attributes, ANSI 256/truecolor, optional OSC 8 hyperlinks, and semantic HTML `<pre>` output with links, titles, and `data-vex-kind` metadata.
 - `svg`: vector output with labels and basic shapes.
 - `png`: simple built-in rasterizer for early snapshots.
 - `pdf`: compact vector output using a built-in minimal PDF writer.

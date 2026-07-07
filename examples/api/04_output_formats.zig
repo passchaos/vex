@@ -18,9 +18,16 @@ pub fn main(init: std.process.Init) !void {
     const svg = try graph.nodeWith("svg", .{ .label = "SVG", .shape = .folder, .color = "#f3e8ff" });
     const png = try graph.nodeWith("png", .{ .label = "PNG", .shape = .component, .color = "#fee2e2" });
     const pdf = try graph.nodeWith("pdf", .{ .label = "PDF", .shape = .note, .color = "#e0f2fe" });
+    try graph.setNodeAttr(terminal, "URL", "https://example.com/vex/terminal");
+    try graph.setNodeAttr(terminal, "tooltip", "terminal renderer");
+    try graph.setNodeAttr(svg, "URL", "https://example.com/vex/svg");
+    try graph.setNodeAttr(png, "URL", "https://example.com/vex/png");
+    try graph.setNodeAttr(pdf, "URL", "https://example.com/vex/pdf");
 
     _ = try graph.edge(source, layout, .{ .label = "model" });
-    _ = try graph.edge(layout, terminal, .{ .label = "box canvas" });
+    const term_edge = try graph.edge(layout, terminal, .{ .label = "box canvas" });
+    try graph.setEdgeAttr(term_edge, "URL", "https://example.com/vex/terminal-edge");
+    try graph.setEdgeAttr(term_edge, "tooltip", "layout to terminal");
     _ = try graph.edge(layout, svg, .{ .label = "vector" });
     _ = try graph.edge(layout, png, .{ .label = "raster" });
     _ = try graph.edge(layout, pdf, .{ .label = "document" });
@@ -34,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
     try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = .{ .target_width = 110 } });
     try stdout.interface.writeAll("\ntruecolor terminal:\n");
     try vex.render(&stdout.interface, &graph, &result, .terminal, .{
-        .terminal = .{ .target_width = 110, .color_mode = .truecolor },
+        .terminal = .{ .target_width = 110, .color_mode = .truecolor, .hyperlinks = true },
     });
     try stdout.interface.writeAll("\nwrote:\n");
 

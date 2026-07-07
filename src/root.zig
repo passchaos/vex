@@ -12779,10 +12779,12 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
         \\    color="#2563eb";
         \\    fillcolor="#dbeafe";
         \\    style=filled;
-        \\    a [label="<A&>", shape=box, color="#dc2626", fillcolor="#fef3c7", fontcolor="#16a34a", style="filled,bold"];
+        \\    URL="https://example.com/group";
+        \\    tooltip="cluster docs";
+        \\    a [label="<A&>", shape=box, color="#dc2626", fillcolor="#fef3c7", fontcolor="#16a34a", style="filled,bold", URL="https://example.com/a", tooltip="node docs"];
         \\    b [label="Beta", shape=box, color="#7c3aed"];
         \\  }
-        \\  a -> b [label="edge", color="#ff0000", fontcolor="#0000ff", penwidth=3];
+        \\  a -> b [label="edge", color="#ff0000", fontcolor="#0000ff", penwidth=3, URL="https://example.com/edge", tooltip="edge docs"];
         \\}
     );
     defer graph.deinit();
@@ -12808,10 +12810,20 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     });
     defer allocator.free(html);
     try std.testing.expect(std.mem.startsWith(u8, html, "<pre style=\""));
-    try std.testing.expect(std.mem.indexOf(u8, html, "<span style=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, " style=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "color:#0000ff;") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "font-weight:700;") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "&lt;A&amp;&gt;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<a href=\"https://example.com/a\" title=\"node docs\" data-vex-kind=\"node\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<a href=\"https://example.com/edge\" title=\"edge docs\" data-vex-kind=\"edge\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<a href=\"https://example.com/group\" title=\"cluster docs\" data-vex-kind=\"cluster\"") != null);
+
+    const linked = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .hyperlinks = true, .target_width = 100 },
+    });
+    defer allocator.free(linked);
+    try std.testing.expect(std.mem.indexOf(u8, linked, "\x1b]8;;https://example.com/a\x1b\\") != null);
+    try std.testing.expect(std.mem.indexOf(u8, linked, "\x1b]8;;\x1b\\") != null);
 }
 
 test "DOT parser handles mainstream node lists, string concat, and boolean attrs" {

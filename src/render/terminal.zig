@@ -13,6 +13,7 @@ pub const Options = struct {
     unicode: bool = true,
     color_mode: ColorMode = .none,
     output_format: OutputFormat = .raw,
+    hyperlinks: bool = false,
     target_width: usize = 120,
     target_height: usize = 40,
     padding: usize = 2,
@@ -89,13 +90,21 @@ const Style = struct {
     fg: Color = .default,
     bg: Color = .default,
     attrs: TextAttrs = .{},
+    link: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    kind: ?[]const u8 = null,
 
     fn isSet(self: Style) bool {
-        return self.fg.isSet() or self.bg.isSet() or self.attrs.isSet();
+        return self.fg.isSet() or self.bg.isSet() or self.attrs.isSet() or self.link != null or self.title != null or self.kind != null;
     }
 
     fn eql(a: Style, b: Style) bool {
-        return a.fg.eql(b.fg) and a.bg.eql(b.bg) and a.attrs.eql(b.attrs);
+        return a.fg.eql(b.fg) and
+            a.bg.eql(b.bg) and
+            a.attrs.eql(b.attrs) and
+            optionalEql(a.link, b.link) and
+            optionalEql(a.title, b.title) and
+            optionalEql(a.kind, b.kind);
     }
 };
 
@@ -253,8 +262,14 @@ const Canvas = struct {
             for (0..end) |x| {
                 const cell = self.cells[y * self.width + x];
                 if (options.color_mode != .none and !cell.style.eql(active)) {
+                    if (options.hyperlinks and active.link != null) try writeOsc8End(writer);
                     try writeAnsiReset(writer);
                     try writeAnsiStyle(writer, cell.style, options.color_mode);
+                    if (options.hyperlinks) try writeOsc8Start(writer, cell.style.link);
+                    active = cell.style;
+                } else if (options.color_mode == .none and options.hyperlinks and !optionalEql(cell.style.link, active.link)) {
+                    if (active.link != null) try writeOsc8End(writer);
+                    try writeOsc8Start(writer, cell.style.link);
                     active = cell.style;
                 }
                 if (cell.byte != 0) {
@@ -266,7 +281,11 @@ const Canvas = struct {
                 }
             }
             if (options.color_mode != .none and active.isSet()) {
+                if (options.hyperlinks and active.link != null) try writeOsc8End(writer);
                 try writeAnsiReset(writer);
+                active = .{};
+            } else if (options.color_mode == .none and options.hyperlinks and active.link != null) {
+                try writeOsc8End(writer);
                 active = .{};
             }
             try writer.writeByte('\n');
@@ -285,10 +304,10 @@ const Canvas = struct {
             for (0..end) |x| {
                 const cell = self.cells[y * self.width + x];
                 if (!cell.style.eql(active)) {
-                    if (span_open) try writer.writeAll("</span>");
+                    if (span_open) try closeHtmlStyledRun(writer, active);
                     active = cell.style;
                     span_open = active.isSet();
-                    if (span_open) try writeHtmlSpanOpen(writer, active);
+                    if (span_open) try writeHtmlStyledRunOpen(writer, active);
                 }
                 if (cell.byte != 0) {
                     try writeHtmlByte(writer, cell.byte);
@@ -298,7 +317,7 @@ const Canvas = struct {
                     try writeHtmlEscaped(writer, maskGlyph(cell.mask, options.unicode));
                 }
             }
-            if (span_open) try writer.writeAll("</span>");
+            if (span_open) try closeHtmlStyledRun(writer, active);
             try writer.writeByte('\n');
         }
         try writer.writeAll("</pre>\n");
@@ -696,6 +715,9 @@ fn nodeStyle(node_item: anytype) Style {
             .dim = styleHas(style, "dotted"),
             .underline = node_item.shape == .underline,
         },
+        .link = attrValue(node_item.attrs.items, "href") orelse attrValue(node_item.attrs.items, "URL") orelse attrValue(node_item.attrs.items, "url"),
+        .title = attrValue(node_item.attrs.items, "tooltip") orelse attrValue(node_item.attrs.items, "title") orelse node_item.name,
+        .kind = "node",
     };
 }
 
@@ -707,6 +729,9 @@ fn edgeStyle(edge_item: anytype) Style {
             .bold = styleHas(style, "bold") or attrFloat(edge_item.attrs.items, "penwidth", 1.0) >= 2.0,
             .dim = styleHas(style, "dotted") or styleHas(style, "dashed"),
         },
+        .link = attrValue(edge_item.attrs.items, "href") orelse attrValue(edge_item.attrs.items, "URL") orelse attrValue(edge_item.attrs.items, "url"),
+        .title = attrValue(edge_item.attrs.items, "tooltip") orelse attrValue(edge_item.attrs.items, "title"),
+        .kind = "edge",
     };
 }
 
@@ -723,7 +748,18 @@ fn clusterStyle(cluster_item: anytype) Style {
         .fg = parseColor(attrValue(cluster_item.attrs.items, "color") orelse "#64748b"),
         .bg = if (styleHas(style, "filled")) parseColor(attrValue(cluster_item.attrs.items, "fillcolor") orelse "#f8fafc") else .default,
         .attrs = .{ .bold = true },
+        .link = attrValue(cluster_item.attrs.items, "href") orelse attrValue(cluster_item.attrs.items, "URL") orelse attrValue(cluster_item.attrs.items, "url"),
+        .title = attrValue(cluster_item.attrs.items, "tooltip") orelse attrValue(cluster_item.attrs.items, "title") orelse cluster_item.label,
+        .kind = "cluster",
     };
+}
+
+fn optionalEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a) |av| {
+        if (b) |bv| return std.mem.eql(u8, av, bv);
+        return false;
+    }
+    return b == null;
 }
 
 fn attrValue(attrs: anytype, name: []const u8) ?[]const u8 {
@@ -816,8 +852,36 @@ fn rgbToAnsi256(rgb: Rgb) u8 {
     return @intCast(@as(u16, 16) + 36 * @as(u16, r) + 6 * @as(u16, g) + @as(u16, b));
 }
 
-fn writeHtmlSpanOpen(writer: *Io.Writer, style: Style) Io.Writer.Error!void {
-    try writer.writeAll("<span style=\"");
+fn writeOsc8Start(writer: *Io.Writer, link: ?[]const u8) Io.Writer.Error!void {
+    const url = link orelse return;
+    try writer.writeAll("\x1b]8;;");
+    try writer.writeAll(url);
+    try writer.writeAll("\x1b\\");
+}
+
+fn writeOsc8End(writer: *Io.Writer) Io.Writer.Error!void {
+    try writer.writeAll("\x1b]8;;\x1b\\");
+}
+
+fn writeHtmlStyledRunOpen(writer: *Io.Writer, style: Style) Io.Writer.Error!void {
+    if (style.link) |link| {
+        try writer.writeAll("<a href=\"");
+        try writeHtmlEscaped(writer, link);
+        try writer.writeByte('"');
+    } else {
+        try writer.writeAll("<span");
+    }
+    if (style.title) |title| {
+        try writer.writeAll(" title=\"");
+        try writeHtmlEscaped(writer, title);
+        try writer.writeByte('"');
+    }
+    if (style.kind) |kind| {
+        try writer.writeAll(" data-vex-kind=\"");
+        try writeHtmlEscaped(writer, kind);
+        try writer.writeByte('"');
+    }
+    try writer.writeAll(" style=\"");
     switch (style.fg) {
         .default => {},
         .rgb => |rgb| try writer.print("color:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }),
@@ -830,6 +894,10 @@ fn writeHtmlSpanOpen(writer: *Io.Writer, style: Style) Io.Writer.Error!void {
     if (style.attrs.dim) try writer.writeAll("opacity:0.72;");
     if (style.attrs.underline) try writer.writeAll("text-decoration:underline;");
     try writer.writeAll("\">");
+}
+
+fn closeHtmlStyledRun(writer: *Io.Writer, style: Style) Io.Writer.Error!void {
+    try writer.writeAll(if (style.link != null) "</a>" else "</span>");
 }
 
 fn writeHtmlByte(writer: *Io.Writer, byte: u8) Io.Writer.Error!void {
