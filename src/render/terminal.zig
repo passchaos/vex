@@ -1165,6 +1165,10 @@ fn drawHorizontal(canvas: *Canvas, y: i32, x0: i32, x1: i32) void {
 fn drawHorizontalStyled(canvas: *Canvas, y: i32, x0: i32, x1: i32, style: Style) void {
     const lo = @min(x0, x1);
     const hi = @max(x0, x1);
+    if (lo == hi) {
+        canvas.addMaskStyled(lo, y, E | W, style);
+        return;
+    }
     var x = lo;
     while (x <= hi) : (x += 1) {
         var mask: u4 = 0;
@@ -1183,6 +1187,10 @@ fn drawVertical(canvas: *Canvas, x: i32, y0: i32, y1: i32) void {
 fn drawVerticalStyled(canvas: *Canvas, x: i32, y0: i32, y1: i32, style: Style) void {
     const lo = @min(y0, y1);
     const hi = @max(y0, y1);
+    if (lo == hi) {
+        canvas.addMaskStyled(x, lo, N | S, style);
+        return;
+    }
     var y = lo;
     while (y <= hi) : (y += 1) {
         var mask: u4 = 0;

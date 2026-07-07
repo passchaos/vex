@@ -12841,6 +12841,8 @@ test "terminal renderer formats simple HTML table labels" {
     try std.testing.expect(std.mem.indexOf(u8, term, "uuid") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "status") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "enum") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "─") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "│") != null);
 }
 
 test "terminal renderer gives common shapes distinct glyphs" {
