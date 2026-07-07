@@ -249,10 +249,10 @@ const Canvas = struct {
         }
     }
 
-    fn render(self: *const Canvas, writer: *Io.Writer, options: Options) Io.Writer.Error!void {
+    fn render(self: *const Canvas, writer: *Io.Writer, options: Options, manifest: ?[]const u8) Io.Writer.Error!void {
         switch (options.output_format) {
             .raw => try self.renderRaw(writer, options),
-            .html_pre => try self.renderHtmlPre(writer, options),
+            .html_pre => try self.renderHtmlPre(writer, options, manifest),
         }
     }
 
@@ -294,10 +294,16 @@ const Canvas = struct {
         }
     }
 
-    fn renderHtmlPre(self: *const Canvas, writer: *Io.Writer, options: Options) Io.Writer.Error!void {
+    fn renderHtmlPre(self: *const Canvas, writer: *Io.Writer, options: Options, manifest: ?[]const u8) Io.Writer.Error!void {
         try writer.writeAll("<pre style=\"");
         try writer.writeAll(safeHtmlPreStyle(options.html_pre_style));
-        try writer.writeAll("\">");
+        try writer.writeByte('"');
+        if (manifest) |json| {
+            try writer.writeAll(" data-vex-manifest=\"");
+            try writeHtmlEscaped(writer, json);
+            try writer.writeByte('"');
+        }
+        try writer.writeByte('>');
         for (0..self.height) |y| {
             var end = self.width;
             while (end > 0 and self.cells[y * self.width + end - 1].empty()) : (end -= 1) {}
@@ -402,7 +408,13 @@ pub fn renderGraph(writer: *Io.Writer, graph: anytype, layout: anytype, options:
         paintNode(&canvas, node_plans[i], node_item.label);
     }
 
-    try canvas.render(writer, options);
+    var manifest: ?[]u8 = null;
+    if (options.output_format == .html_pre) {
+        manifest = try buildHtmlManifest(allocator, graph, node_plans, cluster_plans, width, height);
+    }
+    defer if (manifest) |value| allocator.free(value);
+
+    try canvas.render(writer, options, manifest);
 }
 
 const Scale = struct {
@@ -754,6 +766,117 @@ fn clusterStyle(cluster_item: anytype) Style {
         .title = attrValue(cluster_item.attrs.items, "tooltip") orelse attrValue(cluster_item.attrs.items, "title") orelse cluster_item.label,
         .kind = "cluster",
     };
+}
+
+fn buildHtmlManifest(
+    allocator: std.mem.Allocator,
+    graph: anytype,
+    node_plans: []const NodePlan,
+    cluster_plans: []const ClusterPlan,
+    width: usize,
+    height: usize,
+) ![]u8 {
+    var out = Io.Writer.Allocating.init(allocator);
+    errdefer out.deinit();
+    const writer = &out.writer;
+    try writer.writeAll("{\"graph\":");
+    try writeJsonString(writer, graph.name);
+    try writer.print(",\"width\":{d},\"height\":{d},\"nodes\":[", .{ width, height });
+    for (graph.nodes.items, 0..) |node_item, i| {
+        if (i != 0) try writer.writeByte(',');
+        try writer.writeAll("{\"id\":");
+        try writeJsonString(writer, node_item.name);
+        try writer.writeAll(",\"index\":");
+        try writer.print("{d}", .{i});
+        try writer.writeAll(",\"label\":");
+        try writeJsonString(writer, node_item.label);
+        try writeManifestRect(writer, node_plans[i].rect);
+        try writeManifestStyleFields(writer, node_plans[i].style);
+        try writer.writeByte('}');
+    }
+    try writer.writeAll("],\"edges\":[");
+    for (graph.edges.items, 0..) |edge_item, i| {
+        if (i != 0) try writer.writeByte(',');
+        try writer.writeAll("{\"id\":");
+        try writer.print("{d}", .{edge_item.id});
+        try writer.writeAll(",\"from\":");
+        try writeJsonString(writer, graph.nodes.items[edge_item.from].name);
+        try writer.writeAll(",\"to\":");
+        try writeJsonString(writer, graph.nodes.items[edge_item.to].name);
+        if (edge_item.label) |label| {
+            try writer.writeAll(",\"label\":");
+            try writeJsonString(writer, label);
+        }
+        try writeManifestRect(writer, edgeManifestRect(edge_item, node_plans));
+        try writeManifestStyleFields(writer, edgeStyle(edge_item));
+        try writer.writeByte('}');
+    }
+    try writer.writeAll("],\"clusters\":[");
+    for (graph.clusters.items, 0..) |cluster_item, i| {
+        if (i != 0) try writer.writeByte(',');
+        try writer.writeAll("{\"id\":");
+        try writeJsonString(writer, cluster_item.name);
+        try writer.writeAll(",\"index\":");
+        try writer.print("{d}", .{i});
+        try writer.writeAll(",\"label\":");
+        try writeJsonString(writer, cluster_item.label);
+        try writeManifestRect(writer, cluster_plans[i].rect);
+        try writeManifestStyleFields(writer, cluster_plans[i].style);
+        try writer.writeByte('}');
+    }
+    try writer.writeAll("]}");
+    return out.toOwnedSlice();
+}
+
+fn edgeManifestRect(edge_item: anytype, node_plans: []const NodePlan) RectI {
+    if (edge_item.from >= node_plans.len or edge_item.to >= node_plans.len) return .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    const a = node_plans[edge_item.from].rect.center();
+    const b = node_plans[edge_item.to].rect.center();
+    const x0 = @min(a.x, b.x);
+    const y0 = @min(a.y, b.y);
+    const x1 = @max(a.x, b.x);
+    const y1 = @max(a.y, b.y);
+    return .{ .x = x0, .y = y0, .w = @max(x1 - x0 + 1, 1), .h = @max(y1 - y0 + 1, 1) };
+}
+
+fn writeManifestRect(writer: *Io.Writer, rect: RectI) Io.Writer.Error!void {
+    try writer.print(",\"bbox\":{{\"x\":{d},\"y\":{d},\"w\":{d},\"h\":{d}}}", .{ rect.x, rect.y, rect.w, rect.h });
+}
+
+fn writeManifestStyleFields(writer: *Io.Writer, style: Style) Io.Writer.Error!void {
+    if (style.kind) |kind| {
+        try writer.writeAll(",\"kind\":");
+        try writeJsonString(writer, kind);
+    }
+    if (style.link) |link| {
+        try writer.writeAll(",\"href\":");
+        try writeJsonString(writer, link);
+    }
+    if (style.title) |title| {
+        try writer.writeAll(",\"title\":");
+        try writeJsonString(writer, title);
+    }
+}
+
+fn writeJsonString(writer: *Io.Writer, value: []const u8) Io.Writer.Error!void {
+    try writer.writeByte('"');
+    for (value) |byte| {
+        switch (byte) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (byte < 0x20) {
+                    try writer.print("\\u{x:0>4}", .{byte});
+                } else {
+                    try writer.writeByte(byte);
+                }
+            },
+        }
+    }
+    try writer.writeByte('"');
 }
 
 fn optionalEql(a: ?[]const u8, b: ?[]const u8) bool {

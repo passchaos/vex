@@ -12817,6 +12817,13 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     try std.testing.expect(std.mem.indexOf(u8, html, "<a href=\"https://example.com/a\" title=\"node docs\" data-vex-kind=\"node\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<a href=\"https://example.com/edge\" title=\"edge docs\" data-vex-kind=\"edge\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<a href=\"https://example.com/group\" title=\"cluster docs\" data-vex-kind=\"cluster\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "data-vex-manifest=\"{&quot;graph&quot;:&quot;StyledTerminal&quot;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&quot;nodes&quot;:[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&quot;edges&quot;:[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&quot;clusters&quot;:[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&quot;bbox&quot;:{&quot;x&quot;:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&quot;href&quot;:&quot;https://example.com/a&quot;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&quot;title&quot;:&quot;edge docs&quot;") != null);
 
     const linked = try renderAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .hyperlinks = true, .target_width = 100 },
@@ -12841,7 +12848,7 @@ test "terminal renderer falls back from unsafe HTML pre styles" {
         },
     });
     defer allocator.free(safe);
-    try std.testing.expect(std.mem.startsWith(u8, safe, "<pre style=\"font-family:monospace;color:#111\">"));
+    try std.testing.expect(std.mem.startsWith(u8, safe, "<pre style=\"font-family:monospace;color:#111\""));
 
     const quote = try renderAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{
