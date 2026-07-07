@@ -1263,7 +1263,7 @@ fn nodeStyle(node_item: anytype) Style {
     const border = attrValue(node_item.attrs.items, "color") orelse node_item.color;
     const style = attrValue(node_item.attrs.items, "style");
     const filled = styleHas(style, "filled");
-    const bg = if (filled) parseColor(fill orelse node_item.color) else Color.default;
+    const bg = if (filled) filledNodeBackground(fill, node_item.color) else Color.default;
     return .{
         .fg = if (font) |font_color| parseColor(font_color) else if (filled) contrastColor(bg) else parseColor(border),
         .bg = bg,
@@ -1474,6 +1474,16 @@ fn parseColor(value: []const u8) Color {
         } };
     }
     return namedColor(value);
+}
+
+fn filledNodeBackground(fill: ?[]const u8, color: []const u8) Color {
+    if (fill) |value| return parseColor(value);
+    // Graphviz uses lightgrey as the default fill for style=filled when a
+    // node did not provide a fillcolor and keeps black as the stroke color.
+    // Preserve that contrast in terminal output instead of turning default
+    // filled nodes into black boxes.
+    if (std.ascii.eqlIgnoreCase(color, "black")) return namedColor("lightgrey");
+    return parseColor(color);
 }
 
 fn contrastColor(background: Color) Color {

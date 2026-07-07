@@ -12989,6 +12989,27 @@ test "terminal renderer keeps filled white node labels readable" {
     try std.testing.expect(std.mem.indexOf(u8, term, "\x1b[38;2;255;255;255m\x1b[48;2;255;255;255m") == null);
 }
 
+test "terminal renderer uses Graphviz default filled node background" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Contrast {
+        \\  node [style=filled];
+        \\  b0 -> b1;
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .color_mode = .truecolor },
+    });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "b0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "\x1b[38;2;0;0;0m\x1b[48;2;211;211;211m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "\x1b[38;2;255;255;255m\x1b[48;2;0;0;0m") == null);
+}
+
 test "terminal renderer falls back from unsafe HTML pre styles" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "html-style" });
