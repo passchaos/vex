@@ -15,7 +15,7 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 - Core graph model with a programmatic builder API.
 - DOT subset parser compatible with common `graph`/`digraph` files, including subgraphs and ports.
 - Basic layered layout with `rankdir=TB|BT|LR|RL`.
-- SVG renderer, terminal renderer, and a simple native PNG raster path.
+- SVG renderer, layout-aware terminal renderer, and a simple native PNG raster path.
 - Output format dispatch for `terminal`, `svg`, `png`, and `pdf`.
 - CLI that reads DOT from a file or stdin and writes to a file or stdout.
 - Native parser/layout/rendering path by default; Graphviz `dot` is used only as a development/test oracle.
@@ -54,6 +54,31 @@ defer layout.deinit();
 try vex.render(writer, &graph, &layout, .svg, .{});
 ```
 
+## API Examples
+
+The `examples/api` programs build graphs directly with the Zig API and then
+render them:
+
+```sh
+zig build run-api-basic-terminal
+zig build run-api-ascii-undirected
+zig build run-api-clusters-compound
+zig build run-api-output-formats
+zig build run-api-records-ports-svg
+zig build run-api-shapes-styles-svg
+zig build run-api-force-layout-terminal
+```
+
+They progress from small terminal output to broader feature coverage:
+
+- `01_basic_terminal.zig`: directed graph construction, labels, layout, and terminal rendering.
+- `02_ascii_undirected.zig`: undirected API graph, `rankdir=LR`, and ASCII terminal fallback.
+- `03_clusters_compound.zig`: `addCluster`, graph attributes, compound edge hints, and terminal cluster panels.
+- `04_output_formats.zig`: one API graph rendered to terminal, SVG, PNG, and PDF.
+- `05_records_ports_svg.zig`: record labels, record ports, HTML-like table labels, and SVG output.
+- `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, terminal preview, and SVG output.
+- `07_force_layout_terminal.zig`: force-directed layout via `.fruchterman_reingold` and terminal rendering.
+
 ## Graphviz compatibility target
 
 Vex is intended to reimplement Graphviz behavior rather than shell out to
@@ -85,7 +110,7 @@ The parser currently supports a practical, mainstream DOT subset:
 
 ## Output backends
 
-- `terminal`: quick text preview for shell workflows.
+- `terminal`: layout-aware shell preview with box-drawn nodes, clusters, edges, arrow markers, edge labels, and an ASCII fallback.
 - `svg`: vector output with labels and basic shapes.
 - `png`: simple built-in rasterizer for early snapshots.
 - `pdf`: compact vector output using a built-in minimal PDF writer.

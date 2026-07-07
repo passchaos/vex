@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const Io = std.Io;
+const terminal_renderer = @import("render/terminal.zig");
 
 pub const NodeId = usize;
 pub const EdgeId = usize;
@@ -6626,28 +6627,10 @@ pub fn renderAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout: *c
     return aw.toOwnedSlice();
 }
 
-pub const TerminalOptions = struct {
-    unicode: bool = true,
-};
+pub const TerminalOptions = terminal_renderer.Options;
 
-pub fn renderTerminal(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: TerminalOptions) Io.Writer.Error!void {
-    _ = layout;
-    const arrow = if (graph.directed) "->" else "--";
-    const branch = if (options.unicode) "├─" else "|-";
-    const last = if (options.unicode) "└─" else "`-";
-    try writer.print("{s} {s} ({d} nodes, {d} edges)\n", .{ if (graph.directed) "digraph" else "graph", graph.name, graph.nodes.items.len, graph.edges.items.len });
-    try writer.writeAll("nodes:\n");
-    for (graph.nodes.items, 0..) |node_item, i| {
-        try writer.print("  {s} {s} [{s}]\n", .{ if (i + 1 == graph.nodes.items.len) last else branch, node_item.name, node_item.label });
-    }
-    try writer.writeAll("edges:\n");
-    for (graph.edges.items, 0..) |edge_item, i| {
-        const from = graph.nodes.items[edge_item.from].name;
-        const to = graph.nodes.items[edge_item.to].name;
-        try writer.print("  {s} {s} {s} {s}", .{ if (i + 1 == graph.edges.items.len) last else branch, from, arrow, to });
-        if (edge_item.label) |label| try writer.print(" [label={s}]", .{label});
-        try writer.writeByte('\n');
-    }
+pub fn renderTerminal(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: TerminalOptions) RenderError!void {
+    return terminal_renderer.renderGraph(writer, graph, layout, options);
 }
 
 pub const SvgOptions = struct {
@@ -12524,7 +12507,10 @@ test "SVG renderer emits document" {
 
     const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
-    try std.testing.expect(std.mem.indexOf(u8, term, "a -- b") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "b") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "─") != null);
 }
 
 test "SVG geometry parser reads Graphviz-style path and polygon numbers" {
@@ -12717,7 +12703,70 @@ test "render dispatch covers terminal and svg formats" {
 
     const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
-    try std.testing.expect(std.mem.indexOf(u8, term, "left -> right") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "<&>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "right") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "go") != null);
+}
+
+test "terminal renderer paints layout-aware boxes arrows labels and ASCII fallback" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Terminal {
+        \\  graph [rankdir=LR];
+        \\  node [shape=box];
+        \\  parse [label="Parse"];
+        \\  model [label="Model"];
+        \\  layout [label="Layout"];
+        \\  render [label="Render"];
+        \\  parse -> model [label="dot"];
+        \\  model -> layout [label="ir"];
+        \\  layout -> render [label="term"];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const unicode = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
+    defer allocator.free(unicode);
+    try std.testing.expect(std.mem.indexOf(u8, unicode, "Parse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unicode, "Render") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unicode, "term") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unicode, "┌") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unicode, "→") != null);
+
+    const ascii = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .unicode = false, .target_width = 90 } });
+    defer allocator.free(ascii);
+    try std.testing.expect(std.mem.indexOf(u8, ascii, "+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ascii, ">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ascii, "Parse") != null);
+}
+
+test "terminal renderer paints cluster panels and plaintext nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Clustered {
+        \\  graph [rankdir=TB];
+        \\  subgraph cluster_backend {
+        \\    label="Backend";
+        \\    api [shape=box label="API"];
+        \\    store [shape=box label="Store"];
+        \\  }
+        \\  note [shape=plaintext label="external client"];
+        \\  note -> api [label="http"];
+        \\  api -> store [label="query"];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 100, .target_height = 32 } });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "Backend") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "external client") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "http") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "query") != null);
 }
 
 test "DOT parser handles mainstream node lists, string concat, and boolean attrs" {

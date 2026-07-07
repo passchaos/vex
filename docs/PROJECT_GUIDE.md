@@ -27,7 +27,7 @@ Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Gr
 - 允许添加节点、添加边、设置属性。
 - 布局和渲染逻辑应面向这个统一图模型，而不是只绑定 DOT 文本输入。
 - DOT 解析器应该只是把 DSL 转换为同一个图模型。
-- 渲染输出需要后端化，CLI/API 同时面向 terminal、SVG、PNG、PDF 等格式；默认路径必须是 Vex 原生实现，Graphviz `dot` 只用于测试对照。
+- 渲染输出需要后端化，CLI/API 同时面向 terminal、SVG、PNG、PDF 等格式；默认路径必须是 Vex 原生实现，Graphviz `dot` 只用于测试对照。当前 terminal 后端已经拆到 `src/render/terminal.zig`，后续应继续把 parser/model/layout/SVG 从 `src/root.zig` 分阶段拆出。
 
 建议 API 方向：
 
@@ -59,7 +59,7 @@ try vex.renderSvg(writer, graph, layout, .{});
 ## 超越 Graphviz 的长期方向
 
 - 更清晰的模块边界：parser / model / layout / renderer / CLI 分离。
-- 支持多输出后端：terminal 快速预览、SVG、PNG、PDF，以及未来的 Web Canvas/WebGPU、可搜索/可折叠交互图。
+- 支持多输出后端：terminal 布局画布预览、SVG、PNG、PDF，以及未来的 Web Canvas/WebGPU、可搜索/可折叠交互图。
 - 更好的增量布局：大图局部更新时保持心理地图稳定。
 - 更强的可编程接口：Zig 原生 API，后续可提供 C ABI、WASM、Python/JS 绑定。
 - 更好的错误诊断：DOT 解析错误带位置、上下文和修复建议。

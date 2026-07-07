@@ -115,6 +115,73 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const api_examples = [_]struct {
+        step_name: []const u8,
+        exe_name: []const u8,
+        source: []const u8,
+        desc: []const u8,
+    }{
+        .{
+            .step_name = "run-api-basic-terminal",
+            .exe_name = "api-basic-terminal",
+            .source = "examples/api/01_basic_terminal.zig",
+            .desc = "Run API example: basic terminal renderer",
+        },
+        .{
+            .step_name = "run-api-ascii-undirected",
+            .exe_name = "api-ascii-undirected",
+            .source = "examples/api/02_ascii_undirected.zig",
+            .desc = "Run API example: ASCII undirected terminal renderer",
+        },
+        .{
+            .step_name = "run-api-clusters-compound",
+            .exe_name = "api-clusters-compound",
+            .source = "examples/api/03_clusters_compound.zig",
+            .desc = "Run API example: clusters and compound edges",
+        },
+        .{
+            .step_name = "run-api-output-formats",
+            .exe_name = "api-output-formats",
+            .source = "examples/api/04_output_formats.zig",
+            .desc = "Run API example: terminal, SVG, PNG, and PDF output",
+        },
+        .{
+            .step_name = "run-api-records-ports-svg",
+            .exe_name = "api-records-ports-svg",
+            .source = "examples/api/05_records_ports_svg.zig",
+            .desc = "Run API example: records, ports, and SVG output",
+        },
+        .{
+            .step_name = "run-api-shapes-styles-svg",
+            .exe_name = "api-shapes-styles-svg",
+            .source = "examples/api/06_shapes_styles_svg.zig",
+            .desc = "Run API example: shapes, styles, terminal, and SVG output",
+        },
+        .{
+            .step_name = "run-api-force-layout-terminal",
+            .exe_name = "api-force-layout-terminal",
+            .source = "examples/api/07_force_layout_terminal.zig",
+            .desc = "Run API example: force-directed terminal layout",
+        },
+    };
+
+    for (api_examples) |example| {
+        const example_exe = b.addExecutable(.{
+            .name = example.exe_name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(example.source),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "vex", .module = mod },
+                },
+            }),
+        });
+        const example_run = b.addRunArtifact(example_exe);
+        const example_step = b.step(example.step_name, example.desc);
+        example_step.dependOn(&example_run.step);
+    }
+
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
