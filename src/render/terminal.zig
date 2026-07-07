@@ -16,6 +16,9 @@ pub const Options = struct {
     color_mode: ColorMode = .none,
     output_format: OutputFormat = .raw,
     hyperlinks: bool = false,
+    node_border: BorderStyle = .single,
+    cluster_border: BorderStyle = .single,
+    line_style: LineStyle = .single,
     target_width: usize = 120,
     target_height: usize = 40,
     padding: usize = 2,
@@ -25,6 +28,17 @@ pub const Options = struct {
     show_edge_labels: bool = true,
     show_cluster_labels: bool = true,
     html_pre_style: []const u8 = default_html_pre_style,
+
+    pub fn polished() Options {
+        return .{
+            .color_mode = .truecolor,
+            .node_border = .rounded,
+            .cluster_border = .heavy,
+            .line_style = .heavy,
+            .target_width = 132,
+            .target_height = 44,
+        };
+    }
 };
 
 pub const ColorMode = enum {
@@ -36,6 +50,21 @@ pub const ColorMode = enum {
 pub const OutputFormat = enum {
     raw,
     html_pre,
+};
+
+pub const BorderStyle = enum {
+    single,
+    rounded,
+    heavy,
+    double,
+};
+
+pub const LineStyle = enum {
+    single,
+    rounded,
+    heavy,
+    double,
+    dashed,
 };
 
 pub const Rgb = struct {
@@ -95,6 +124,7 @@ const Style = struct {
     link: ?[]const u8 = null,
     title: ?[]const u8 = null,
     kind: ?[]const u8 = null,
+    line: LineStyle = .single,
 
     fn isSet(self: Style) bool {
         return self.fg.isSet() or self.bg.isSet() or self.attrs.isSet() or self.link != null or self.title != null or self.kind != null;
@@ -106,7 +136,8 @@ const Style = struct {
             a.attrs.eql(b.attrs) and
             optionalEql(a.link, b.link) and
             optionalEql(a.title, b.title) and
-            optionalEql(a.kind, b.kind);
+            optionalEql(a.kind, b.kind) and
+            a.line == b.line;
     }
 };
 
@@ -160,11 +191,13 @@ const NodePlan = struct {
     rect: RectI,
     kind: NodeKind,
     style: Style = .{},
+    border: BorderStyle = .single,
 };
 
 const ClusterPlan = struct {
     rect: RectI,
     style: Style = .{},
+    border: BorderStyle = .single,
 };
 
 const Cell = struct {
@@ -172,6 +205,7 @@ const Cell = struct {
     marker: Dir = .none,
     byte: u8 = 0,
     style: Style = .{},
+    line: LineStyle = .single,
 
     fn empty(self: Cell) bool {
         return self.mask == 0 and self.marker == .none and self.byte == 0 and !self.style.isSet();
@@ -219,6 +253,7 @@ const Canvas = struct {
             if (self.cells[idx].byte == 0) {
                 self.cells[idx].mask |= mask;
                 if (style.isSet()) self.cells[idx].style = style;
+                self.cells[idx].line = mergeLineStyle(self.cells[idx].line, style.line);
             }
         }
     }
@@ -279,7 +314,7 @@ const Canvas = struct {
                 } else if (cell.marker != .none) {
                     try writer.writeAll(markerGlyph(cell.marker, options.unicode));
                 } else {
-                    try writer.writeAll(maskGlyph(cell.mask, options.unicode));
+                    try writer.writeAll(maskGlyph(cell.mask, options.unicode, cell.line));
                 }
             }
             if (options.color_mode != .none and active.isSet()) {
@@ -322,7 +357,7 @@ const Canvas = struct {
                 } else if (cell.marker != .none) {
                     try writeHtmlEscaped(writer, markerGlyph(cell.marker, options.unicode));
                 } else {
-                    try writeHtmlEscaped(writer, maskGlyph(cell.mask, options.unicode));
+                    try writeHtmlEscaped(writer, maskGlyph(cell.mask, options.unicode, cell.line));
                 }
             }
             if (span_open) try closeHtmlStyledRun(writer, active);
@@ -367,7 +402,7 @@ pub fn renderGraph(writer: *Io.Writer, graph: anytype, layout: anytype, options:
 
     for (graph.nodes.items, 0..) |node_item, i| {
         const layout_node = layout.nodes[i];
-        node_plans[i] = nodePlan(node_item, layout_node, scale, padding);
+        node_plans[i] = nodePlan(node_item, layout_node, scale, padding, options);
         includeRect(&min_x, &min_y, &max_x, &max_y, node_plans[i].rect);
     }
 
@@ -436,7 +471,7 @@ fn chooseScale(layout: anytype, options: Options) Scale {
     };
 }
 
-fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32) NodePlan {
+fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32, options: Options) NodePlan {
     const kind = nodeKind(node_item.shape);
     const lines = labelLineCount(node_item.label);
     const label_width = labelMaxWidth(node_item.label);
@@ -459,7 +494,7 @@ fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32
         },
     };
 
-    return .{ .rect = rect, .kind = kind, .style = nodeStyle(node_item) };
+    return .{ .rect = rect, .kind = kind, .style = nodeStyle(node_item), .border = options.node_border };
 }
 
 fn clusterPlan(cluster_item: anytype, layout_cluster: anytype, scale: Scale, padding: i32, options: Options) ClusterPlan {
@@ -467,8 +502,7 @@ fn clusterPlan(cluster_item: anytype, layout_cluster: anytype, scale: Scale, pad
     const y = mapCoord(layout_cluster.y, scale.y, padding, 0);
     const w: i32 = @intCast(@max(@as(usize, @intFromFloat(@ceil(@max(layout_cluster.width * scale.x, 1.0)))), labelMaxWidth(cluster_item.label) + 4));
     const h: i32 = @intCast(@max(@as(usize, @intFromFloat(@ceil(@max(layout_cluster.height * scale.y, 1.0)))), 3));
-    _ = options;
-    return .{ .rect = .{ .x = x, .y = y, .w = w, .h = h }, .style = clusterStyle(cluster_item) };
+    return .{ .rect = .{ .x = x, .y = y, .w = w, .h = h }, .style = clusterStyle(cluster_item), .border = options.cluster_border };
 }
 
 fn nodeKind(shape: anytype) NodeKind {
@@ -509,7 +543,7 @@ fn mapPoint(point: anytype, scale: Scale, padding: i32, shift_x: i32, shift_y: i
 fn paintCluster(canvas: *Canvas, plan: ClusterPlan, label: []const u8, options: Options) void {
     const rect = plan.rect;
     if (rect.w < 2 or rect.h < 2) return;
-    drawRectStyled(canvas, rect, plan.style);
+    drawRectStyled(canvas, rect, plan.style, plan.border);
     if (options.show_cluster_labels and label.len > 0) {
         putTextStyled(canvas, rect.x + 2, rect.y, label, @max(rect.w - 4, 0), plan.style);
     }
@@ -520,7 +554,7 @@ fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
         .point => canvas.putByteStyled(plan.rect.x, plan.rect.y, '*', plan.style),
         .plain => paintLabelBlockStyled(canvas, plan.rect, label, plan.style),
         .boxed => {
-            drawRectStyled(canvas, plan.rect, plan.style);
+            drawRectStyled(canvas, plan.rect, plan.style, plan.border);
             const inner = RectI{
                 .x = plan.rect.x + 1,
                 .y = plan.rect.y + 1,
@@ -563,7 +597,7 @@ fn paintEdge(
     options: Options,
 ) void {
     if (edge_item.from >= node_plans.len or edge_item.to >= node_plans.len) return;
-    const style = edgeStyle(edge_item);
+    const style = edgeStyle(edge_item, options);
     const from_plan = node_plans[edge_item.from];
     const to_plan = node_plans[edge_item.to];
     const edge_waypoints = if (edge_item.id < layout.edge_waypoints.len) layout.edge_waypoints[edge_item.id].points else &.{};
@@ -640,19 +674,30 @@ fn drawPathStyled(canvas: *Canvas, from: PointI, to: PointI, style: Style) Dir {
 }
 
 fn drawRect(canvas: *Canvas, rect: RectI) void {
-    drawRectStyled(canvas, rect, .{});
+    drawRectStyled(canvas, rect, .{}, .single);
 }
 
-fn drawRectStyled(canvas: *Canvas, rect: RectI, style: Style) void {
+fn drawRectStyled(canvas: *Canvas, rect: RectI, style: Style, border: BorderStyle) void {
     if (rect.w <= 0 or rect.h <= 0) return;
     if (rect.w == 1 and rect.h == 1) {
         canvas.putByteStyled(rect.x, rect.y, '*', style);
         return;
     }
-    drawHorizontalStyled(canvas, rect.y, rect.x, rect.right(), style);
-    drawHorizontalStyled(canvas, rect.bottom(), rect.x, rect.right(), style);
-    drawVerticalStyled(canvas, rect.x, rect.y, rect.bottom(), style);
-    drawVerticalStyled(canvas, rect.right(), rect.y, rect.bottom(), style);
+    var border_style = style;
+    border_style.line = borderLineStyle(border);
+    drawHorizontalStyled(canvas, rect.y, rect.x, rect.right(), border_style);
+    drawHorizontalStyled(canvas, rect.bottom(), rect.x, rect.right(), border_style);
+    drawVerticalStyled(canvas, rect.x, rect.y, rect.bottom(), border_style);
+    drawVerticalStyled(canvas, rect.right(), rect.y, rect.bottom(), border_style);
+}
+
+fn borderLineStyle(border: BorderStyle) LineStyle {
+    return switch (border) {
+        .single => .single,
+        .rounded => .rounded,
+        .heavy => .heavy,
+        .double => .double,
+    };
 }
 
 fn drawHorizontal(canvas: *Canvas, y: i32, x0: i32, x1: i32) void {
@@ -735,8 +780,14 @@ fn nodeStyle(node_item: anytype) Style {
     };
 }
 
-fn edgeStyle(edge_item: anytype) Style {
+fn edgeStyle(edge_item: anytype, options: Options) Style {
     const style = attrValue(edge_item.attrs.items, "style");
+    const line: LineStyle = if (styleHas(style, "dotted") or styleHas(style, "dashed"))
+        .dashed
+    else if (styleHas(style, "bold") or attrFloat(edge_item.attrs.items, "penwidth", 1.0) >= 2.0)
+        .heavy
+    else
+        options.line_style;
     return .{
         .fg = parseColor(attrValue(edge_item.attrs.items, "color") orelse edge_item.color),
         .attrs = .{
@@ -746,6 +797,7 @@ fn edgeStyle(edge_item: anytype) Style {
         .link = attrValue(edge_item.attrs.items, "href") orelse attrValue(edge_item.attrs.items, "URL") orelse attrValue(edge_item.attrs.items, "url"),
         .title = attrValue(edge_item.attrs.items, "tooltip") orelse attrValue(edge_item.attrs.items, "title"),
         .kind = "edge",
+        .line = line,
     };
 }
 
@@ -808,7 +860,7 @@ fn buildHtmlManifest(
             try writeJsonString(writer, label);
         }
         try writeManifestRect(writer, edgeManifestRect(edge_item, node_plans));
-        try writeManifestStyleFields(writer, edgeStyle(edge_item));
+        try writeManifestStyleFields(writer, edgeStyle(edge_item, .{}));
         try writer.writeByte('}');
     }
     try writer.writeAll("],\"clusters\":[");
@@ -1104,14 +1156,92 @@ fn markerGlyph(dir: Dir, unicode: bool) []const u8 {
     };
 }
 
-fn maskGlyph(mask: u4, unicode: bool) []const u8 {
+fn mergeLineStyle(a: LineStyle, b: LineStyle) LineStyle {
+    if (a == b) return a;
+    if (a == .double or b == .double) return .double;
+    if (a == .heavy or b == .heavy) return .heavy;
+    if (a == .dashed or b == .dashed) return .dashed;
+    if (a == .rounded or b == .rounded) return .rounded;
+    return .single;
+}
+
+fn maskGlyph(mask: u4, unicode: bool, line: LineStyle) []const u8 {
     if (!unicode) {
         if (mask == 0) return " ";
         const horizontal = (mask & (E | W)) != 0;
         const vertical = (mask & (N | S)) != 0;
-        if (horizontal and !vertical) return "-";
+        if (horizontal and !vertical) return switch (line) {
+            .heavy, .double => "=",
+            .dashed => ".",
+            .single, .rounded => "-",
+        };
         if (vertical and !horizontal) return "|";
         return "+";
+    }
+
+    if (line == .heavy) {
+        return switch (mask) {
+            0 => " ",
+            E, W, E | W => "━",
+            N, S, N | S => "┃",
+            E | S => "┏",
+            W | S => "┓",
+            N | E => "┗",
+            N | W => "┛",
+            N | S | E => "┣",
+            N | S | W => "┫",
+            E | W | S => "┳",
+            N | E | W => "┻",
+            N | E | S | W => "╋",
+        };
+    }
+    if (line == .double) {
+        return switch (mask) {
+            0 => " ",
+            E, W, E | W => "═",
+            N, S, N | S => "║",
+            E | S => "╔",
+            W | S => "╗",
+            N | E => "╚",
+            N | W => "╝",
+            N | S | E => "╠",
+            N | S | W => "╣",
+            E | W | S => "╦",
+            N | E | W => "╩",
+            N | E | S | W => "╬",
+        };
+    }
+    if (line == .rounded) {
+        return switch (mask) {
+            0 => " ",
+            E, W, E | W => "─",
+            N, S, N | S => "│",
+            E | S => "╭",
+            W | S => "╮",
+            N | E => "╰",
+            N | W => "╯",
+            N | S | E => "├",
+            N | S | W => "┤",
+            E | W | S => "┬",
+            N | E | W => "┴",
+            N | E | S | W => "┼",
+        };
+    }
+    if (line == .dashed) {
+        return switch (mask) {
+            0 => " ",
+            E, W, E | W => "╌",
+            N, S, N | S => "╎",
+            E | S => "┌",
+            W | S => "┐",
+            N | E => "└",
+            N | W => "┘",
+            N | S | E => "├",
+            N | S | W => "┤",
+            E | W | S => "┬",
+            N | E | W => "┴",
+            N | E | S | W => "┼",
+        };
     }
 
     return switch (mask) {

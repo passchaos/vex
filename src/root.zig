@@ -12742,6 +12742,37 @@ test "terminal renderer paints layout-aware boxes arrows labels and ASCII fallba
     try std.testing.expect(std.mem.indexOf(u8, ascii, "Parse") != null);
 }
 
+test "terminal renderer supports polished border and line presets" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph StyledLines {
+        \\  graph [rankdir=LR];
+        \\  a [label="Alpha", shape=box];
+        \\  b [label="Beta", shape=box];
+        \\  c [label="Gamma", shape=box];
+        \\  a -> b [label="heavy", penwidth=3];
+        \\  b -> c [label="dash", style=dashed];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const polished = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = TerminalOptions.polished() });
+    defer allocator.free(polished);
+    try std.testing.expect(std.mem.indexOf(u8, polished, "╭") != null);
+    try std.testing.expect(std.mem.indexOf(u8, polished, "╰") != null);
+    try std.testing.expect(std.mem.indexOf(u8, polished, "━") != null);
+    try std.testing.expect(std.mem.indexOf(u8, polished, "╌") != null);
+
+    const double = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .node_border = .double, .cluster_border = .double, .line_style = .double, .target_width = 100 },
+    });
+    defer allocator.free(double);
+    try std.testing.expect(std.mem.indexOf(u8, double, "╔") != null);
+    try std.testing.expect(std.mem.indexOf(u8, double, "═") != null);
+}
+
 test "terminal renderer paints cluster panels and plaintext nodes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,

@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
     try stdout.interface.writeAll("terminal:\n");
-    try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = .{ .target_width = 110 } });
+    try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = vex.TerminalOptions.polished() });
     try stdout.interface.writeAll("\ntruecolor terminal:\n");
     try vex.render(&stdout.interface, &graph, &result, .terminal, .{
         .terminal = .{ .target_width = 110, .color_mode = .truecolor, .hyperlinks = true },
