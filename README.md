@@ -25,6 +25,8 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 ```sh
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/simple.dot --format terminal
+zig build run -- --input examples/simple.dot --format terminal --terminal-style polished --terminal-color truecolor
+zig build run -- --input examples/simple.dot --format terminal --terminal-output html --output simple-terminal.html
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format terminal
 zig build run -- --input examples/simple.dot --layout neato --output force.svg

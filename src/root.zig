@@ -6628,6 +6628,7 @@ pub fn renderAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout: *c
 }
 
 pub const TerminalOptions = terminal_renderer.Options;
+pub const terminal = terminal_renderer;
 
 pub fn renderTerminal(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: TerminalOptions) RenderError!void {
     return terminal_renderer.renderGraph(writer, graph, layout, options);

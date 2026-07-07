@@ -45,11 +45,24 @@ pub const ColorMode = enum {
     none,
     ansi256,
     truecolor,
+
+    pub fn fromString(value: []const u8) ?ColorMode {
+        if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "off")) return .none;
+        if (std.ascii.eqlIgnoreCase(value, "ansi256") or std.ascii.eqlIgnoreCase(value, "ansi")) return .ansi256;
+        if (std.ascii.eqlIgnoreCase(value, "truecolor") or std.ascii.eqlIgnoreCase(value, "rgb") or std.ascii.eqlIgnoreCase(value, "24bit")) return .truecolor;
+        return null;
+    }
 };
 
 pub const OutputFormat = enum {
     raw,
     html_pre,
+
+    pub fn fromString(value: []const u8) ?OutputFormat {
+        if (std.ascii.eqlIgnoreCase(value, "raw") or std.ascii.eqlIgnoreCase(value, "text")) return .raw;
+        if (std.ascii.eqlIgnoreCase(value, "html") or std.ascii.eqlIgnoreCase(value, "html_pre") or std.ascii.eqlIgnoreCase(value, "pre")) return .html_pre;
+        return null;
+    }
 };
 
 pub const BorderStyle = enum {
@@ -57,6 +70,14 @@ pub const BorderStyle = enum {
     rounded,
     heavy,
     double,
+
+    pub fn fromString(value: []const u8) ?BorderStyle {
+        if (std.ascii.eqlIgnoreCase(value, "single") or std.ascii.eqlIgnoreCase(value, "light")) return .single;
+        if (std.ascii.eqlIgnoreCase(value, "rounded") or std.ascii.eqlIgnoreCase(value, "round")) return .rounded;
+        if (std.ascii.eqlIgnoreCase(value, "heavy") or std.ascii.eqlIgnoreCase(value, "bold")) return .heavy;
+        if (std.ascii.eqlIgnoreCase(value, "double")) return .double;
+        return null;
+    }
 };
 
 pub const LineStyle = enum {
@@ -65,6 +86,15 @@ pub const LineStyle = enum {
     heavy,
     double,
     dashed,
+
+    pub fn fromString(value: []const u8) ?LineStyle {
+        if (std.ascii.eqlIgnoreCase(value, "single") or std.ascii.eqlIgnoreCase(value, "light")) return .single;
+        if (std.ascii.eqlIgnoreCase(value, "rounded") or std.ascii.eqlIgnoreCase(value, "round")) return .rounded;
+        if (std.ascii.eqlIgnoreCase(value, "heavy") or std.ascii.eqlIgnoreCase(value, "bold")) return .heavy;
+        if (std.ascii.eqlIgnoreCase(value, "double")) return .double;
+        if (std.ascii.eqlIgnoreCase(value, "dashed") or std.ascii.eqlIgnoreCase(value, "dash") or std.ascii.eqlIgnoreCase(value, "dotted")) return .dashed;
+        return null;
+    }
 };
 
 pub const Rgb = struct {
