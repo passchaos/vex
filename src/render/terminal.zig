@@ -184,6 +184,7 @@ const RectI = struct {
 const NodeKind = enum {
     boxed,
     record,
+    table,
     plain,
     point,
 };
@@ -503,7 +504,7 @@ fn chooseScale(layout: anytype, options: Options) Scale {
 }
 
 fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32, options: Options) NodePlan {
-    const kind = nodeKind(node_item.shape);
+    const kind = nodeKind(node_item.shape, node_item.label);
     const lines = labelLineCount(node_item.label);
     const label_width = labelMaxWidth(node_item.label);
     const cx = mapCoord(layout_node.center.x, scale.x, padding, 0);
@@ -521,6 +522,13 @@ fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32
             const scaled_w: usize = @intFromFloat(@ceil(@max(layout_node.width * scale.x, 1.0)));
             const w: i32 = @intCast(@max(@max(scaled_w, record.width + 4), 7));
             const h: i32 = @intCast(@max(record.height + 2, 3));
+            break :blk centeredRect(cx, cy, w, h);
+        },
+        .table => blk: {
+            const table = htmlTableLabelMetrics(node_item.label) orelse TerminalTableMetrics{ .width = label_width + 2, .height = lines + 2 };
+            const scaled_w: usize = @intFromFloat(@ceil(@max(layout_node.width * scale.x, 1.0)));
+            const w: i32 = @intCast(@max(@max(scaled_w, table.width), 5));
+            const h: i32 = @intCast(@max(table.height, 3));
             break :blk centeredRect(cx, cy, w, h);
         },
         .boxed => blk: {
@@ -543,7 +551,8 @@ fn clusterPlan(cluster_item: anytype, layout_cluster: anytype, scale: Scale, pad
     return .{ .rect = .{ .x = x, .y = y, .w = w, .h = h }, .style = clusterStyle(cluster_item), .border = options.cluster_border };
 }
 
-fn nodeKind(shape: anytype) NodeKind {
+fn nodeKind(shape: anytype, label: []const u8) NodeKind {
+    if (htmlTableLabelMetrics(label) != null) return .table;
     return switch (shape) {
         .record, .mrecord => .record,
         .plaintext => .plain,
@@ -592,6 +601,7 @@ fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
     switch (plan.kind) {
         .point => canvas.putByteStyled(plan.rect.x, plan.rect.y, '*', plan.style),
         .plain => paintLabelBlockStyled(canvas, plan.rect, label, plan.style),
+        .table => paintHtmlTableBlock(canvas, plan.rect, label, plan.style, plan.border),
         .boxed, .record => {
             drawRectStyled(canvas, plan.rect, plan.style, plan.border);
             const inner = RectI{
@@ -716,6 +726,166 @@ fn appendRecordField(fields: *RecordFields, raw: []const u8) void {
     }
     if (value.len == 0) return;
     fields.append(value);
+}
+
+const TerminalTable = struct {
+    cells: [8][8][]const u8 = undefined,
+    rows: usize = 0,
+    cols: usize = 0,
+};
+
+const TerminalTableMetrics = struct {
+    width: usize,
+    height: usize,
+};
+
+fn htmlTableLabelMetrics(label: []const u8) ?TerminalTableMetrics {
+    var table = parseHtmlTable(label) orelse return null;
+    var col_widths: [8]usize = @splat(1);
+    computeTableColWidths(&table, &col_widths);
+    var width: usize = 1;
+    for (col_widths[0..table.cols]) |col_width| width += col_width + 3;
+    const height = table.rows * 2 + 1;
+    return .{ .width = width, .height = height };
+}
+
+fn paintHtmlTableBlock(canvas: *Canvas, rect: RectI, label: []const u8, style: Style, border: BorderStyle) void {
+    var table = parseHtmlTable(label) orelse {
+        paintLabelBlockStyled(canvas, rect, label, style);
+        return;
+    };
+    var col_widths: [8]usize = @splat(1);
+    computeTableColWidths(&table, &col_widths);
+    var y = rect.y;
+    drawTableBorderRow(canvas, rect.x, y, col_widths[0..table.cols], style, border);
+    y += 1;
+    for (0..table.rows) |row| {
+        var x = rect.x;
+        drawVerticalStyled(canvas, x, y, y, styleWithLine(style, borderLineStyle(border)));
+        x += 1;
+        for (0..table.cols) |col| {
+            const cell_w: i32 = @intCast(col_widths[col] + 2);
+            const text = table.cells[row][col];
+            putTextStyled(canvas, x + @divTrunc(cell_w - @as(i32, @intCast(labelCellWidth(text))), 2), y, text, cell_w, style);
+            x += cell_w;
+            drawVerticalStyled(canvas, x, y, y, styleWithLine(style, borderLineStyle(border)));
+            x += 1;
+        }
+        y += 1;
+        drawTableBorderRow(canvas, rect.x, y, col_widths[0..table.cols], style, border);
+        y += 1;
+    }
+}
+
+fn drawTableBorderRow(canvas: *Canvas, x0: i32, y: i32, col_widths: []const usize, style: Style, border: BorderStyle) void {
+    var x = x0;
+    const line_style = styleWithLine(style, borderLineStyle(border));
+    for (col_widths, 0..) |col_width, index| {
+        const segment_w: i32 = @intCast(col_width + 3);
+        drawHorizontalStyled(canvas, y, x, x + segment_w - 1, line_style);
+        if (index == 0) x += segment_w else x += segment_w;
+    }
+}
+
+fn computeTableColWidths(table: *const TerminalTable, col_widths: *[8]usize) void {
+    for (0..table.rows) |row| {
+        for (0..table.cols) |col| {
+            col_widths[col] = @max(col_widths[col], labelCellWidth(table.cells[row][col]));
+        }
+    }
+}
+
+fn parseHtmlTable(label: []const u8) ?TerminalTable {
+    if (findHtmlTagLocal(label, "table", 0) == null) return null;
+    var table = TerminalTable{};
+    for (&table.cells) |*row| {
+        for (row) |*cell| cell.* = "";
+    }
+    var row_pos: usize = 0;
+    while (table.rows < table.cells.len) {
+        const tr_start = findHtmlTagLocal(label, "tr", row_pos) orelse break;
+        const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
+        const row_start = tr_start + tr_open_end + 1;
+        const tr_close = findHtmlCloseTagLocal(label, "tr", row_start) orelse break;
+        const row = label[row_start..tr_close];
+        var cell_pos: usize = 0;
+        var col: usize = 0;
+        while (col < table.cells[table.rows].len) {
+            const td_start = findHtmlTagLocal(row, "td", cell_pos) orelse break;
+            const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
+            const cell_start = td_start + td_open_end + 1;
+            const td_close = findHtmlCloseTagLocal(row, "td", cell_start) orelse break;
+            table.cells[table.rows][col] = stripHtmlInline(row[cell_start..td_close]);
+            col += 1;
+            cell_pos = td_close + 1;
+        }
+        if (col > 0) {
+            table.cols = @max(table.cols, col);
+            table.rows += 1;
+        }
+        row_pos = tr_close + 1;
+    }
+    if (table.rows == 0 or table.cols == 0) return null;
+    return table;
+}
+
+fn stripHtmlInline(text: []const u8) []const u8 {
+    var start: usize = 0;
+    var end: usize = text.len;
+    while (start < end and text[start] == '<') {
+        const close = std.mem.indexOfScalar(u8, text[start..], '>') orelse break;
+        start += close + 1;
+    }
+    while (end > start) {
+        const open = std.mem.lastIndexOfScalar(u8, text[start..end], '<') orelse break;
+        const abs_open = start + open;
+        if (std.mem.indexOfScalar(u8, text[abs_open..end], '>') == null) break;
+        end = abs_open;
+    }
+    return std.mem.trim(u8, text[start..end], " \t\r\n");
+}
+
+fn findHtmlTagLocal(text: []const u8, tag: []const u8, start: usize) ?usize {
+    var index = start;
+    while (index < text.len) {
+        const rel = std.mem.indexOfScalar(u8, text[index..], '<') orelse return null;
+        const open = index + rel;
+        if (open + 1 < text.len and text[open + 1] == '/') {
+            index = open + 1;
+            continue;
+        }
+        const close_rel = std.mem.indexOfScalar(u8, text[open + 1 ..], '>') orelse return null;
+        const name = htmlTagNameLocal(text[open + 1 .. open + 1 + close_rel]);
+        if (std.ascii.eqlIgnoreCase(name, tag)) return open;
+        index = open + 1;
+    }
+    return null;
+}
+
+fn findHtmlCloseTagLocal(text: []const u8, tag: []const u8, start: usize) ?usize {
+    var index = start;
+    while (index < text.len) {
+        const rel = std.mem.indexOf(u8, text[index..], "</") orelse return null;
+        const open = index + rel;
+        const close_rel = std.mem.indexOfScalar(u8, text[open + 2 ..], '>') orelse return null;
+        const name = htmlTagNameLocal(text[open + 2 .. open + 2 + close_rel]);
+        if (std.ascii.eqlIgnoreCase(name, tag)) return open;
+        index = open + 2;
+    }
+    return null;
+}
+
+fn htmlTagNameLocal(raw_tag: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, raw_tag, " \t\r\n/");
+    var end: usize = 0;
+    while (end < trimmed.len and !std.ascii.isWhitespace(trimmed[end]) and trimmed[end] != '/') : (end += 1) {}
+    return trimmed[0..end];
+}
+
+fn styleWithLine(style: Style, line: LineStyle) Style {
+    var result = style;
+    result.line = line;
+    return result;
 }
 
 fn paintLabelBlockStyled(canvas: *Canvas, rect: RectI, label: []const u8, style: Style) void {

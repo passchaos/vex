@@ -12818,6 +12818,31 @@ test "terminal renderer formats record node fields" {
     try std.testing.expect(std.mem.indexOf(u8, term, "owns") != null);
 }
 
+test "terminal renderer formats simple HTML table labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph HtmlTableTerminal {
+        \\  html [shape=plaintext, label=<
+        \\    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0">
+        \\      <TR><TD PORT="id"><B>id</B></TD><TD>uuid</TD></TR>
+        \\      <TR><TD PORT="status">status</TD><TD><I>enum</I></TD></TR>
+        \\    </TABLE>
+        \\  >];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "<TABLE") == null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "uuid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "enum") != null);
+}
+
 test "terminal renderer paints cluster panels and plaintext nodes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
