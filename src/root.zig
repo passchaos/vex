@@ -12769,6 +12769,51 @@ test "terminal renderer paints cluster panels and plaintext nodes" {
     try std.testing.expect(std.mem.indexOf(u8, term, "query") != null);
 }
 
+test "terminal renderer maps graph attributes to ANSI and HTML styles" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph StyledTerminal {
+        \\  graph [rankdir=LR];
+        \\  subgraph cluster_group {
+        \\    label="Group";
+        \\    color="#2563eb";
+        \\    fillcolor="#dbeafe";
+        \\    style=filled;
+        \\    a [label="<A&>", shape=box, color="#dc2626", fillcolor="#fef3c7", fontcolor="#16a34a", style="filled,bold"];
+        \\    b [label="Beta", shape=box, color="#7c3aed"];
+        \\  }
+        \\  a -> b [label="edge", color="#ff0000", fontcolor="#0000ff", penwidth=3];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const truecolor = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .color_mode = .truecolor, .target_width = 100 },
+    });
+    defer allocator.free(truecolor);
+    try std.testing.expect(std.mem.indexOf(u8, truecolor, "\x1b[38;2;255;0;0m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, truecolor, "\x1b[38;2;0;0;255m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, truecolor, "\x1b[1m") != null);
+
+    const ansi256 = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .color_mode = .ansi256, .target_width = 100 },
+    });
+    defer allocator.free(ansi256);
+    try std.testing.expect(std.mem.indexOf(u8, ansi256, "\x1b[38;5;") != null);
+
+    const html = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .output_format = .html_pre, .target_width = 100 },
+    });
+    defer allocator.free(html);
+    try std.testing.expect(std.mem.startsWith(u8, html, "<pre style=\""));
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span style=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "color:#0000ff;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "font-weight:700;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "&lt;A&amp;&gt;") != null);
+}
+
 test "DOT parser handles mainstream node lists, string concat, and boolean attrs" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,

@@ -11,6 +11,8 @@ pub const RenderError = Io.Writer.Error || std.mem.Allocator.Error;
 
 pub const Options = struct {
     unicode: bool = true,
+    color_mode: ColorMode = .none,
+    output_format: OutputFormat = .raw,
     target_width: usize = 120,
     target_height: usize = 40,
     padding: usize = 2,
@@ -19,6 +21,82 @@ pub const Options = struct {
     show_title: bool = false,
     show_edge_labels: bool = true,
     show_cluster_labels: bool = true,
+    html_pre_style: []const u8 = "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.2; white-space: pre;",
+};
+
+pub const ColorMode = enum {
+    none,
+    ansi256,
+    truecolor,
+};
+
+pub const OutputFormat = enum {
+    raw,
+    html_pre,
+};
+
+pub const Rgb = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+
+    fn eql(a: Rgb, b: Rgb) bool {
+        return a.r == b.r and a.g == b.g and a.b == b.b;
+    }
+};
+
+pub const Color = union(enum) {
+    default,
+    rgb: Rgb,
+
+    fn isSet(self: Color) bool {
+        return switch (self) {
+            .default => false,
+            .rgb => true,
+        };
+    }
+
+    fn eql(a: Color, b: Color) bool {
+        return switch (a) {
+            .default => switch (b) {
+                .default => true,
+                .rgb => false,
+            },
+            .rgb => |a_rgb| switch (b) {
+                .default => false,
+                .rgb => |b_rgb| a_rgb.eql(b_rgb),
+            },
+        };
+    }
+};
+
+pub const TextAttrs = packed struct {
+    bold: bool = false,
+    dim: bool = false,
+    underline: bool = false,
+    _pad: u5 = 0,
+
+    fn isSet(self: TextAttrs) bool {
+        return self.bold or self.dim or self.underline;
+    }
+
+    fn eql(a: TextAttrs, b: TextAttrs) bool {
+        return a.bold == b.bold and a.dim == b.dim and a.underline == b.underline;
+    }
+};
+
+const Style = struct {
+    fg: Color = .default,
+    bg: Color = .default,
+    attrs: TextAttrs = .{},
+
+    fn isSet(self: Style) bool {
+        return self.fg.isSet() or self.bg.isSet() or self.attrs.isSet();
+    }
+
+    fn eql(a: Style, b: Style) bool {
+        return a.fg.eql(b.fg) and a.bg.eql(b.bg) and a.attrs.eql(b.attrs);
+    }
 };
 
 const Dir = enum {
@@ -70,19 +148,22 @@ const NodeKind = enum {
 const NodePlan = struct {
     rect: RectI,
     kind: NodeKind,
+    style: Style = .{},
 };
 
 const ClusterPlan = struct {
     rect: RectI,
+    style: Style = .{},
 };
 
 const Cell = struct {
     mask: u4 = 0,
     marker: Dir = .none,
     byte: u8 = 0,
+    style: Style = .{},
 
     fn empty(self: Cell) bool {
-        return self.mask == 0 and self.marker == .none and self.byte == 0;
+        return self.mask == 0 and self.marker == .none and self.byte == 0 and !self.style.isSet();
     }
 };
 
@@ -119,41 +200,108 @@ const Canvas = struct {
     }
 
     fn addMask(self: *Canvas, x: i32, y: i32, mask: u4) void {
+        self.addMaskStyled(x, y, mask, .{});
+    }
+
+    fn addMaskStyled(self: *Canvas, x: i32, y: i32, mask: u4, style: Style) void {
         if (self.index(x, y)) |idx| {
-            if (self.cells[idx].byte == 0) self.cells[idx].mask |= mask;
+            if (self.cells[idx].byte == 0) {
+                self.cells[idx].mask |= mask;
+                if (style.isSet()) self.cells[idx].style = style;
+            }
         }
     }
 
     fn putByte(self: *Canvas, x: i32, y: i32, byte: u8) void {
+        self.putByteStyled(x, y, byte, .{});
+    }
+
+    fn putByteStyled(self: *Canvas, x: i32, y: i32, byte: u8, style: Style) void {
         if (self.index(x, y)) |idx| {
             self.cells[idx].byte = byte;
             self.cells[idx].marker = .none;
             self.cells[idx].mask = 0;
+            self.cells[idx].style = style;
         }
     }
 
     fn putMarker(self: *Canvas, x: i32, y: i32, dir: Dir) void {
+        self.putMarkerStyled(x, y, dir, .{});
+    }
+
+    fn putMarkerStyled(self: *Canvas, x: i32, y: i32, dir: Dir, style: Style) void {
         if (self.index(x, y)) |idx| {
-            if (self.cells[idx].byte == 0) self.cells[idx].marker = dir;
+            if (self.cells[idx].byte == 0) {
+                self.cells[idx].marker = dir;
+                if (style.isSet()) self.cells[idx].style = style;
+            }
         }
     }
 
-    fn render(self: *const Canvas, writer: *Io.Writer, unicode: bool) Io.Writer.Error!void {
+    fn render(self: *const Canvas, writer: *Io.Writer, options: Options) Io.Writer.Error!void {
+        switch (options.output_format) {
+            .raw => try self.renderRaw(writer, options),
+            .html_pre => try self.renderHtmlPre(writer, options),
+        }
+    }
+
+    fn renderRaw(self: *const Canvas, writer: *Io.Writer, options: Options) Io.Writer.Error!void {
+        var active: Style = .{};
         for (0..self.height) |y| {
             var end = self.width;
             while (end > 0 and self.cells[y * self.width + end - 1].empty()) : (end -= 1) {}
             for (0..end) |x| {
                 const cell = self.cells[y * self.width + x];
+                if (options.color_mode != .none and !cell.style.eql(active)) {
+                    try writeAnsiReset(writer);
+                    try writeAnsiStyle(writer, cell.style, options.color_mode);
+                    active = cell.style;
+                }
                 if (cell.byte != 0) {
                     try writer.writeByte(cell.byte);
                 } else if (cell.marker != .none) {
-                    try writer.writeAll(markerGlyph(cell.marker, unicode));
+                    try writer.writeAll(markerGlyph(cell.marker, options.unicode));
                 } else {
-                    try writer.writeAll(maskGlyph(cell.mask, unicode));
+                    try writer.writeAll(maskGlyph(cell.mask, options.unicode));
                 }
+            }
+            if (options.color_mode != .none and active.isSet()) {
+                try writeAnsiReset(writer);
+                active = .{};
             }
             try writer.writeByte('\n');
         }
+    }
+
+    fn renderHtmlPre(self: *const Canvas, writer: *Io.Writer, options: Options) Io.Writer.Error!void {
+        try writer.writeAll("<pre style=\"");
+        try writeHtmlEscaped(writer, options.html_pre_style);
+        try writer.writeAll("\">");
+        for (0..self.height) |y| {
+            var end = self.width;
+            while (end > 0 and self.cells[y * self.width + end - 1].empty()) : (end -= 1) {}
+            var active: Style = .{};
+            var span_open = false;
+            for (0..end) |x| {
+                const cell = self.cells[y * self.width + x];
+                if (!cell.style.eql(active)) {
+                    if (span_open) try writer.writeAll("</span>");
+                    active = cell.style;
+                    span_open = active.isSet();
+                    if (span_open) try writeHtmlSpanOpen(writer, active);
+                }
+                if (cell.byte != 0) {
+                    try writeHtmlByte(writer, cell.byte);
+                } else if (cell.marker != .none) {
+                    try writeHtmlEscaped(writer, markerGlyph(cell.marker, options.unicode));
+                } else {
+                    try writeHtmlEscaped(writer, maskGlyph(cell.mask, options.unicode));
+                }
+            }
+            if (span_open) try writer.writeAll("</span>");
+            try writer.writeByte('\n');
+        }
+        try writer.writeAll("</pre>\n");
     }
 };
 
@@ -222,7 +370,7 @@ pub fn renderGraph(writer: *Io.Writer, graph: anytype, layout: anytype, options:
     defer canvas.deinit();
 
     for (graph.clusters.items, 0..) |cluster_item, i| {
-        paintCluster(&canvas, cluster_plans[i].rect, cluster_item.label, options);
+        paintCluster(&canvas, cluster_plans[i], cluster_item.label, options);
     }
 
     for (graph.edges.items) |edge_item| {
@@ -233,7 +381,7 @@ pub fn renderGraph(writer: *Io.Writer, graph: anytype, layout: anytype, options:
         paintNode(&canvas, node_plans[i], node_item.label);
     }
 
-    try canvas.render(writer, options.unicode);
+    try canvas.render(writer, options);
 }
 
 const Scale = struct {
@@ -278,7 +426,7 @@ fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32
         },
     };
 
-    return .{ .rect = rect, .kind = kind };
+    return .{ .rect = rect, .kind = kind, .style = nodeStyle(node_item) };
 }
 
 fn clusterPlan(cluster_item: anytype, layout_cluster: anytype, scale: Scale, padding: i32, options: Options) ClusterPlan {
@@ -287,7 +435,7 @@ fn clusterPlan(cluster_item: anytype, layout_cluster: anytype, scale: Scale, pad
     const w: i32 = @intCast(@max(@as(usize, @intFromFloat(@ceil(@max(layout_cluster.width * scale.x, 1.0)))), labelMaxWidth(cluster_item.label) + 4));
     const h: i32 = @intCast(@max(@as(usize, @intFromFloat(@ceil(@max(layout_cluster.height * scale.y, 1.0)))), 3));
     _ = options;
-    return .{ .rect = .{ .x = x, .y = y, .w = w, .h = h } };
+    return .{ .rect = .{ .x = x, .y = y, .w = w, .h = h }, .style = clusterStyle(cluster_item) };
 }
 
 fn nodeKind(shape: anytype) NodeKind {
@@ -325,32 +473,37 @@ fn mapPoint(point: anytype, scale: Scale, padding: i32, shift_x: i32, shift_y: i
     };
 }
 
-fn paintCluster(canvas: *Canvas, rect: RectI, label: []const u8, options: Options) void {
+fn paintCluster(canvas: *Canvas, plan: ClusterPlan, label: []const u8, options: Options) void {
+    const rect = plan.rect;
     if (rect.w < 2 or rect.h < 2) return;
-    drawRect(canvas, rect);
+    drawRectStyled(canvas, rect, plan.style);
     if (options.show_cluster_labels and label.len > 0) {
-        putText(canvas, rect.x + 2, rect.y, label, @max(rect.w - 4, 0));
+        putTextStyled(canvas, rect.x + 2, rect.y, label, @max(rect.w - 4, 0), plan.style);
     }
 }
 
 fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
     switch (plan.kind) {
-        .point => canvas.putByte(plan.rect.x, plan.rect.y, '*'),
-        .plain => paintLabelBlock(canvas, plan.rect, label),
+        .point => canvas.putByteStyled(plan.rect.x, plan.rect.y, '*', plan.style),
+        .plain => paintLabelBlockStyled(canvas, plan.rect, label, plan.style),
         .boxed => {
-            drawRect(canvas, plan.rect);
+            drawRectStyled(canvas, plan.rect, plan.style);
             const inner = RectI{
                 .x = plan.rect.x + 1,
                 .y = plan.rect.y + 1,
                 .w = @max(plan.rect.w - 2, 1),
                 .h = @max(plan.rect.h - 2, 1),
             };
-            paintLabelBlock(canvas, inner, label);
+            paintLabelBlockStyled(canvas, inner, label, plan.style);
         },
     }
 }
 
 fn paintLabelBlock(canvas: *Canvas, rect: RectI, label: []const u8) void {
+    paintLabelBlockStyled(canvas, rect, label, .{});
+}
+
+fn paintLabelBlockStyled(canvas: *Canvas, rect: RectI, label: []const u8, style: Style) void {
     const lines = labelLineCount(label);
     if (lines == 0) return;
     const start_y = rect.y + @divTrunc(@max(rect.h - @as(i32, @intCast(lines)), 0), 2);
@@ -360,7 +513,7 @@ fn paintLabelBlock(canvas: *Canvas, rect: RectI, label: []const u8) void {
         if (row >= rect.h) break;
         const width: i32 = @intCast(labelCellWidth(line));
         const x = rect.x + @divTrunc(@max(rect.w - width, 0), 2);
-        putText(canvas, x, start_y + row, line, rect.w);
+        putTextStyled(canvas, x, start_y + row, line, rect.w, style);
     }
 }
 
@@ -377,6 +530,7 @@ fn paintEdge(
     options: Options,
 ) void {
     if (edge_item.from >= node_plans.len or edge_item.to >= node_plans.len) return;
+    const style = edgeStyle(edge_item);
     const from_plan = node_plans[edge_item.from];
     const to_plan = node_plans[edge_item.to];
     const edge_waypoints = if (edge_item.id < layout.edge_waypoints.len) layout.edge_waypoints[edge_item.id].points else &.{};
@@ -391,15 +545,15 @@ fn paintEdge(
 
     for (edge_waypoints) |waypoint| {
         const next = mapPoint(waypoint.point, scale, padding, shift_x, shift_y);
-        last_dir = drawPath(canvas, prev, next);
+        last_dir = drawPathStyled(canvas, prev, next, style);
         prev = next;
     }
 
     const end = nodeOutsidePoint(to_plan.rect, prev);
-    last_dir = drawPath(canvas, prev, end);
+    last_dir = drawPathStyled(canvas, prev, end, style);
 
     if (graph.directed and last_dir != .none) {
-        canvas.putMarker(end.x, end.y, last_dir);
+        canvas.putMarkerStyled(end.x, end.y, last_dir, style);
     }
 
     if (options.show_edge_labels) {
@@ -409,7 +563,7 @@ fn paintEdge(
             else
                 PointI{ .x = @divTrunc(route_start.x + end.x, 2), .y = @divTrunc(route_start.y + end.y, 2) };
             const width: i32 = @intCast(labelCellWidth(label));
-            putText(canvas, mid.x - @divTrunc(width, 2), mid.y, label, width);
+            putTextStyled(canvas, mid.x - @divTrunc(width, 2), mid.y, label, width, edgeLabelStyle(edge_item, style));
         }
     }
 }
@@ -427,40 +581,52 @@ fn nodeOutsidePoint(rect: RectI, toward: PointI) PointI {
 }
 
 fn drawPath(canvas: *Canvas, from: PointI, to: PointI) Dir {
+    return drawPathStyled(canvas, from, to, .{});
+}
+
+fn drawPathStyled(canvas: *Canvas, from: PointI, to: PointI, style: Style) Dir {
     if (from.x == to.x and from.y == to.y) return .none;
     if (from.x == to.x) {
-        drawVertical(canvas, from.x, from.y, to.y);
+        drawVerticalStyled(canvas, from.x, from.y, to.y, style);
         return if (to.y > from.y) .down else .up;
     }
     if (from.y == to.y) {
-        drawHorizontal(canvas, from.y, from.x, to.x);
+        drawHorizontalStyled(canvas, from.y, from.x, to.x, style);
         return if (to.x > from.x) .right else .left;
     }
     const dx = @abs(to.x - from.x);
     const dy = @abs(to.y - from.y);
     if (dx >= dy) {
-        drawHorizontal(canvas, from.y, from.x, to.x);
-        drawVertical(canvas, to.x, from.y, to.y);
+        drawHorizontalStyled(canvas, from.y, from.x, to.x, style);
+        drawVerticalStyled(canvas, to.x, from.y, to.y, style);
         return if (to.y > from.y) .down else .up;
     }
-    drawVertical(canvas, from.x, from.y, to.y);
-    drawHorizontal(canvas, to.y, from.x, to.x);
+    drawVerticalStyled(canvas, from.x, from.y, to.y, style);
+    drawHorizontalStyled(canvas, to.y, from.x, to.x, style);
     return if (to.x > from.x) .right else .left;
 }
 
 fn drawRect(canvas: *Canvas, rect: RectI) void {
+    drawRectStyled(canvas, rect, .{});
+}
+
+fn drawRectStyled(canvas: *Canvas, rect: RectI, style: Style) void {
     if (rect.w <= 0 or rect.h <= 0) return;
     if (rect.w == 1 and rect.h == 1) {
-        canvas.putByte(rect.x, rect.y, '*');
+        canvas.putByteStyled(rect.x, rect.y, '*', style);
         return;
     }
-    drawHorizontal(canvas, rect.y, rect.x, rect.right());
-    drawHorizontal(canvas, rect.bottom(), rect.x, rect.right());
-    drawVertical(canvas, rect.x, rect.y, rect.bottom());
-    drawVertical(canvas, rect.right(), rect.y, rect.bottom());
+    drawHorizontalStyled(canvas, rect.y, rect.x, rect.right(), style);
+    drawHorizontalStyled(canvas, rect.bottom(), rect.x, rect.right(), style);
+    drawVerticalStyled(canvas, rect.x, rect.y, rect.bottom(), style);
+    drawVerticalStyled(canvas, rect.right(), rect.y, rect.bottom(), style);
 }
 
 fn drawHorizontal(canvas: *Canvas, y: i32, x0: i32, x1: i32) void {
+    drawHorizontalStyled(canvas, y, x0, x1, .{});
+}
+
+fn drawHorizontalStyled(canvas: *Canvas, y: i32, x0: i32, x1: i32, style: Style) void {
     const lo = @min(x0, x1);
     const hi = @max(x0, x1);
     var x = lo;
@@ -470,11 +636,15 @@ fn drawHorizontal(canvas: *Canvas, y: i32, x0: i32, x1: i32) void {
         if (x < hi) mask |= E;
         if (x == lo and lo != hi) mask |= E;
         if (x == hi and lo != hi) mask |= W;
-        canvas.addMask(x, y, mask);
+        canvas.addMaskStyled(x, y, mask, style);
     }
 }
 
 fn drawVertical(canvas: *Canvas, x: i32, y0: i32, y1: i32) void {
+    drawVerticalStyled(canvas, x, y0, y1, .{});
+}
+
+fn drawVerticalStyled(canvas: *Canvas, x: i32, y0: i32, y1: i32, style: Style) void {
     const lo = @min(y0, y1);
     const hi = @max(y0, y1);
     var y = lo;
@@ -484,11 +654,15 @@ fn drawVertical(canvas: *Canvas, x: i32, y0: i32, y1: i32) void {
         if (y < hi) mask |= S;
         if (y == lo and lo != hi) mask |= S;
         if (y == hi and lo != hi) mask |= N;
-        canvas.addMask(x, y, mask);
+        canvas.addMaskStyled(x, y, mask, style);
     }
 }
 
 fn putText(canvas: *Canvas, x: i32, y: i32, text: []const u8, max_width: i32) void {
+    putTextStyled(canvas, x, y, text, max_width, .{});
+}
+
+fn putTextStyled(canvas: *Canvas, x: i32, y: i32, text: []const u8, max_width: i32, style: Style) void {
     if (max_width <= 0) return;
     var cx = x;
     var used: i32 = 0;
@@ -497,16 +671,179 @@ fn putText(canvas: *Canvas, x: i32, y: i32, text: []const u8, max_width: i32) vo
         const c = text[i];
         if (c == '\n' or c == '\r') break;
         if (c < 0x80) {
-            canvas.putByte(cx, y, if (std.ascii.isPrint(c)) c else ' ');
+            canvas.putByteStyled(cx, y, if (std.ascii.isPrint(c)) c else ' ', style);
             i += 1;
         } else {
-            canvas.putByte(cx, y, '?');
+            canvas.putByteStyled(cx, y, '?', style);
             i += 1;
             while (i < text.len and (text[i] & 0b1100_0000) == 0b1000_0000) : (i += 1) {}
         }
         cx += 1;
         used += 1;
     }
+}
+
+fn nodeStyle(node_item: anytype) Style {
+    const font = attrValue(node_item.attrs.items, "fontcolor");
+    const fill = attrValue(node_item.attrs.items, "fillcolor");
+    const border = attrValue(node_item.attrs.items, "color") orelse node_item.color;
+    const style = attrValue(node_item.attrs.items, "style");
+    return .{
+        .fg = parseColor(font orelse border),
+        .bg = if (styleHas(style, "filled")) parseColor(fill orelse node_item.color) else .default,
+        .attrs = .{
+            .bold = styleHas(style, "bold"),
+            .dim = styleHas(style, "dotted"),
+            .underline = node_item.shape == .underline,
+        },
+    };
+}
+
+fn edgeStyle(edge_item: anytype) Style {
+    const style = attrValue(edge_item.attrs.items, "style");
+    return .{
+        .fg = parseColor(attrValue(edge_item.attrs.items, "color") orelse edge_item.color),
+        .attrs = .{
+            .bold = styleHas(style, "bold") or attrFloat(edge_item.attrs.items, "penwidth", 1.0) >= 2.0,
+            .dim = styleHas(style, "dotted") or styleHas(style, "dashed"),
+        },
+    };
+}
+
+fn edgeLabelStyle(edge_item: anytype, fallback: Style) Style {
+    var style = fallback;
+    if (attrValue(edge_item.attrs.items, "fontcolor")) |color| style.fg = parseColor(color);
+    style.attrs.bold = true;
+    return style;
+}
+
+fn clusterStyle(cluster_item: anytype) Style {
+    const style = attrValue(cluster_item.attrs.items, "style");
+    return .{
+        .fg = parseColor(attrValue(cluster_item.attrs.items, "color") orelse "#64748b"),
+        .bg = if (styleHas(style, "filled")) parseColor(attrValue(cluster_item.attrs.items, "fillcolor") orelse "#f8fafc") else .default,
+        .attrs = .{ .bold = true },
+    };
+}
+
+fn attrValue(attrs: anytype, name: []const u8) ?[]const u8 {
+    for (attrs) |attr| {
+        if (std.ascii.eqlIgnoreCase(attr.name, name)) return attr.value;
+    }
+    return null;
+}
+
+fn styleHas(style: ?[]const u8, needle: []const u8) bool {
+    const value = style orelse return false;
+    var parts = std.mem.tokenizeAny(u8, value, ", ");
+    while (parts.next()) |part| {
+        if (std.ascii.eqlIgnoreCase(part, needle)) return true;
+    }
+    return false;
+}
+
+fn attrFloat(attrs: anytype, name: []const u8, fallback: f64) f64 {
+    const value = attrValue(attrs, name) orelse return fallback;
+    return std.fmt.parseFloat(f64, value) catch fallback;
+}
+
+fn parseColor(value: []const u8) Color {
+    if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "transparent")) return .default;
+    if (value.len == 4 and value[0] == '#') {
+        const r = std.fmt.parseInt(u8, value[1..2], 16) catch return namedColor(value);
+        const g = std.fmt.parseInt(u8, value[2..3], 16) catch return namedColor(value);
+        const b = std.fmt.parseInt(u8, value[3..4], 16) catch return namedColor(value);
+        return .{ .rgb = .{ .r = r * 17, .g = g * 17, .b = b * 17 } };
+    }
+    if (value.len == 7 and value[0] == '#') {
+        return .{ .rgb = .{
+            .r = std.fmt.parseInt(u8, value[1..3], 16) catch return namedColor(value),
+            .g = std.fmt.parseInt(u8, value[3..5], 16) catch return namedColor(value),
+            .b = std.fmt.parseInt(u8, value[5..7], 16) catch return namedColor(value),
+        } };
+    }
+    return namedColor(value);
+}
+
+fn namedColor(value: []const u8) Color {
+    if (std.ascii.eqlIgnoreCase(value, "black")) return .{ .rgb = .{ .r = 0, .g = 0, .b = 0 } };
+    if (std.ascii.eqlIgnoreCase(value, "white")) return .{ .rgb = .{ .r = 255, .g = 255, .b = 255 } };
+    if (std.ascii.eqlIgnoreCase(value, "red")) return .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } };
+    if (std.ascii.eqlIgnoreCase(value, "green")) return .{ .rgb = .{ .r = 0, .g = 128, .b = 0 } };
+    if (std.ascii.eqlIgnoreCase(value, "blue")) return .{ .rgb = .{ .r = 0, .g = 0, .b = 255 } };
+    if (std.ascii.eqlIgnoreCase(value, "yellow")) return .{ .rgb = .{ .r = 255, .g = 255, .b = 0 } };
+    if (std.ascii.eqlIgnoreCase(value, "orange")) return .{ .rgb = .{ .r = 255, .g = 165, .b = 0 } };
+    if (std.ascii.eqlIgnoreCase(value, "purple")) return .{ .rgb = .{ .r = 128, .g = 0, .b = 128 } };
+    if (std.ascii.eqlIgnoreCase(value, "pink")) return .{ .rgb = .{ .r = 255, .g = 192, .b = 203 } };
+    if (std.ascii.eqlIgnoreCase(value, "gray") or std.ascii.eqlIgnoreCase(value, "grey")) return .{ .rgb = .{ .r = 128, .g = 128, .b = 128 } };
+    if (std.ascii.eqlIgnoreCase(value, "lightgrey") or std.ascii.eqlIgnoreCase(value, "lightgray")) return .{ .rgb = .{ .r = 211, .g = 211, .b = 211 } };
+    return .default;
+}
+
+fn writeAnsiReset(writer: *Io.Writer) Io.Writer.Error!void {
+    try writer.writeAll("\x1b[0m");
+}
+
+fn writeAnsiStyle(writer: *Io.Writer, style: Style, mode: ColorMode) Io.Writer.Error!void {
+    if (style.attrs.bold) try writer.writeAll("\x1b[1m");
+    if (style.attrs.dim) try writer.writeAll("\x1b[2m");
+    if (style.attrs.underline) try writer.writeAll("\x1b[4m");
+    try writeAnsiColor(writer, style.fg, mode, false);
+    try writeAnsiColor(writer, style.bg, mode, true);
+}
+
+fn writeAnsiColor(writer: *Io.Writer, color: Color, mode: ColorMode, background: bool) Io.Writer.Error!void {
+    const rgb = switch (color) {
+        .default => return,
+        .rgb => |value| value,
+    };
+    switch (mode) {
+        .none => {},
+        .ansi256 => try writer.print("\x1b[{d};5;{d}m", .{ if (background) @as(u8, 48) else @as(u8, 38), rgbToAnsi256(rgb) }),
+        .truecolor => try writer.print("\x1b[{d};2;{d};{d};{d}m", .{ if (background) @as(u8, 48) else @as(u8, 38), rgb.r, rgb.g, rgb.b }),
+    }
+}
+
+fn rgbToAnsi256(rgb: Rgb) u8 {
+    if (rgb.r == rgb.g and rgb.g == rgb.b) {
+        if (rgb.r < 8) return 16;
+        if (rgb.r > 248) return 231;
+        return @intCast(@as(u16, 232) + @divTrunc(@as(u16, rgb.r) - 8, 10));
+    }
+    const r: u8 = @intCast(@divTrunc(@as(u16, rgb.r) * 5 + 127, 255));
+    const g: u8 = @intCast(@divTrunc(@as(u16, rgb.g) * 5 + 127, 255));
+    const b: u8 = @intCast(@divTrunc(@as(u16, rgb.b) * 5 + 127, 255));
+    return @intCast(@as(u16, 16) + 36 * @as(u16, r) + 6 * @as(u16, g) + @as(u16, b));
+}
+
+fn writeHtmlSpanOpen(writer: *Io.Writer, style: Style) Io.Writer.Error!void {
+    try writer.writeAll("<span style=\"");
+    switch (style.fg) {
+        .default => {},
+        .rgb => |rgb| try writer.print("color:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }),
+    }
+    switch (style.bg) {
+        .default => {},
+        .rgb => |rgb| try writer.print("background-color:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }),
+    }
+    if (style.attrs.bold) try writer.writeAll("font-weight:700;");
+    if (style.attrs.dim) try writer.writeAll("opacity:0.72;");
+    if (style.attrs.underline) try writer.writeAll("text-decoration:underline;");
+    try writer.writeAll("\">");
+}
+
+fn writeHtmlByte(writer: *Io.Writer, byte: u8) Io.Writer.Error!void {
+    switch (byte) {
+        '&' => try writer.writeAll("&amp;"),
+        '<' => try writer.writeAll("&lt;"),
+        '>' => try writer.writeAll("&gt;"),
+        '"' => try writer.writeAll("&quot;"),
+        else => try writer.writeByte(byte),
+    }
+}
+
+fn writeHtmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    for (text) |byte| try writeHtmlByte(writer, byte);
 }
 
 fn labelLineCount(label: []const u8) usize {
