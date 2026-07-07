@@ -185,6 +185,14 @@ const NodeKind = enum {
     boxed,
     record,
     table,
+    diamond,
+    circle,
+    double_circle,
+    cylinder,
+    note,
+    folder,
+    component,
+    underline,
     plain,
     point,
 };
@@ -531,7 +539,18 @@ fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32
             const h: i32 = @intCast(@max(table.height, 3));
             break :blk centeredRect(cx, cy, w, h);
         },
-        .boxed => blk: {
+        .diamond => blk: {
+            const w: i32 = @intCast(@max(label_width + 6, 7));
+            const h: i32 = @intCast(@max(lines + 2, 3));
+            break :blk centeredRect(cx, cy, w, h);
+        },
+        .circle, .double_circle => blk: {
+            const extra: usize = if (kind == .double_circle) 6 else 4;
+            const w: i32 = @intCast(@max(label_width + extra, 5));
+            const h: i32 = @intCast(@max(lines + 2, 3));
+            break :blk centeredRect(cx, cy, w, h);
+        },
+        .cylinder, .note, .folder, .component, .underline, .boxed => blk: {
             const scaled_w: usize = @intFromFloat(@ceil(@max(layout_node.width * scale.x, 1.0)));
             const label_w = label_width + 4;
             const w: i32 = @intCast(@max(@max(scaled_w, label_w), 5));
@@ -555,6 +574,14 @@ fn nodeKind(shape: anytype, label: []const u8) NodeKind {
     if (htmlTableLabelMetrics(label) != null) return .table;
     return switch (shape) {
         .record, .mrecord => .record,
+        .diamond, .mdiamond => .diamond,
+        .circle, .ellipse, .egg, .mcircle => .circle,
+        .doublecircle => .double_circle,
+        .cylinder => .cylinder,
+        .note => .note,
+        .folder => .folder,
+        .component => .component,
+        .underline => .underline,
         .plaintext => .plain,
         .point => .point,
         else => .boxed,
@@ -602,6 +629,14 @@ fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
         .point => canvas.putByteStyled(plan.rect.x, plan.rect.y, '*', plan.style),
         .plain => paintLabelBlockStyled(canvas, plan.rect, label, plan.style),
         .table => paintHtmlTableBlock(canvas, plan.rect, label, plan.style, plan.border),
+        .diamond => paintDiamondNode(canvas, plan, label),
+        .circle => paintDelimitedNode(canvas, plan, label, "(", ")"),
+        .double_circle => paintDelimitedNode(canvas, plan, label, "((", "))"),
+        .cylinder => paintCylinderNode(canvas, plan, label),
+        .note => paintNoteNode(canvas, plan, label),
+        .folder => paintFolderNode(canvas, plan, label),
+        .component => paintComponentNode(canvas, plan, label),
+        .underline => paintUnderlineNode(canvas, plan, label),
         .boxed, .record => {
             drawRectStyled(canvas, plan.rect, plan.style, plan.border);
             const inner = RectI{
@@ -617,6 +652,64 @@ fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
             }
         },
     }
+}
+
+fn paintDiamondNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
+    const rect = plan.rect;
+    const mid_y = rect.y + @divTrunc(rect.h, 2);
+    canvas.putByteStyled(rect.x, mid_y, '<', plan.style);
+    canvas.putByteStyled(rect.right(), mid_y, '>', plan.style);
+    paintLabelBlockStyled(canvas, .{ .x = rect.x + 2, .y = rect.y, .w = @max(rect.w - 4, 1), .h = rect.h }, label, plan.style);
+}
+
+fn paintDelimitedNode(canvas: *Canvas, plan: NodePlan, label: []const u8, left: []const u8, right: []const u8) void {
+    const rect = plan.rect;
+    const mid_y = rect.y + @divTrunc(rect.h, 2);
+    putTextStyled(canvas, rect.x, mid_y, left, @intCast(left.len), plan.style);
+    putTextStyled(canvas, rect.right() - @as(i32, @intCast(right.len)) + 1, mid_y, right, @intCast(right.len), plan.style);
+    paintLabelBlockStyled(canvas, .{
+        .x = rect.x + @as(i32, @intCast(left.len)) + 1,
+        .y = rect.y,
+        .w = @max(rect.w - @as(i32, @intCast(left.len + right.len)) - 2, 1),
+        .h = rect.h,
+    }, label, plan.style);
+}
+
+fn paintCylinderNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
+    drawRectStyled(canvas, plan.rect, plan.style, plan.border);
+    drawHorizontalStyled(canvas, plan.rect.y + 1, plan.rect.x + 1, plan.rect.right() - 1, plan.style);
+    paintLabelBlockStyled(canvas, .{ .x = plan.rect.x + 1, .y = plan.rect.y + 1, .w = @max(plan.rect.w - 2, 1), .h = @max(plan.rect.h - 2, 1) }, label, plan.style);
+}
+
+fn paintNoteNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
+    drawRectStyled(canvas, plan.rect, plan.style, plan.border);
+    if (plan.rect.w >= 4) {
+        canvas.putByteStyled(plan.rect.right() - 1, plan.rect.y, '/', plan.style);
+        canvas.putByteStyled(plan.rect.right(), plan.rect.y + 1, '/', plan.style);
+    }
+    paintLabelBlockStyled(canvas, .{ .x = plan.rect.x + 1, .y = plan.rect.y + 1, .w = @max(plan.rect.w - 2, 1), .h = @max(plan.rect.h - 2, 1) }, label, plan.style);
+}
+
+fn paintFolderNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
+    drawRectStyled(canvas, plan.rect, plan.style, plan.border);
+    if (plan.rect.w >= 6) {
+        putTextStyled(canvas, plan.rect.x + 1, plan.rect.y, "____", 4, plan.style);
+    }
+    paintLabelBlockStyled(canvas, .{ .x = plan.rect.x + 1, .y = plan.rect.y + 1, .w = @max(plan.rect.w - 2, 1), .h = @max(plan.rect.h - 2, 1) }, label, plan.style);
+}
+
+fn paintComponentNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
+    drawRectStyled(canvas, plan.rect, plan.style, plan.border);
+    if (plan.rect.h >= 3) {
+        canvas.putByteStyled(plan.rect.x, plan.rect.y + 1, '[', plan.style);
+        canvas.putByteStyled(plan.rect.x + 1, plan.rect.y + 1, ']', plan.style);
+    }
+    paintLabelBlockStyled(canvas, .{ .x = plan.rect.x + 2, .y = plan.rect.y + 1, .w = @max(plan.rect.w - 3, 1), .h = @max(plan.rect.h - 2, 1) }, label, plan.style);
+}
+
+fn paintUnderlineNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
+    paintLabelBlockStyled(canvas, plan.rect, label, plan.style);
+    drawHorizontalStyled(canvas, plan.rect.bottom(), plan.rect.x, plan.rect.right(), plan.style);
 }
 
 fn paintLabelBlock(canvas: *Canvas, rect: RectI, label: []const u8) void {

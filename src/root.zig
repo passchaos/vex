@@ -12510,7 +12510,7 @@ test "SVG renderer emits document" {
     try std.testing.expect(std.mem.indexOf(u8, term, "a") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "b") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "test") != null);
-    try std.testing.expect(std.mem.indexOf(u8, term, "─") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "(") != null or std.mem.indexOf(u8, term, "─") != null);
 }
 
 test "SVG geometry parser reads Graphviz-style path and polygon numbers" {
@@ -12841,6 +12841,37 @@ test "terminal renderer formats simple HTML table labels" {
     try std.testing.expect(std.mem.indexOf(u8, term, "uuid") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "status") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "enum") != null);
+}
+
+test "terminal renderer gives common shapes distinct glyphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph TerminalShapes {
+        \\  graph [rankdir=LR];
+        \\  diamond [shape=diamond, label="Decision"];
+        \\  circle [shape=circle, label="Circle"];
+        \\  done [shape=doublecircle, label="Done"];
+        \\  data [shape=cylinder, label="Data"];
+        \\  note [shape=note, label="Note"];
+        \\  folder [shape=folder, label="Folder"];
+        \\  component [shape=component, label="Component"];
+        \\  under [shape=underline, label="Under"];
+        \\  diamond -> circle -> done -> data -> note -> folder -> component -> under;
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 140 } });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "<") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, ">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "((") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "Under") != null);
 }
 
 test "terminal renderer paints cluster panels and plaintext nodes" {
