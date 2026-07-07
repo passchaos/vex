@@ -183,6 +183,7 @@ const RectI = struct {
 
 const NodeKind = enum {
     boxed,
+    record,
     plain,
     point,
 };
@@ -515,6 +516,13 @@ fn nodePlan(node_item: anytype, layout_node: anytype, scale: Scale, padding: i32
             const h: i32 = @intCast(@max(lines, 1));
             break :blk centeredRect(cx, cy, w, h);
         },
+        .record => blk: {
+            const record = recordLabelMetrics(node_item.label);
+            const scaled_w: usize = @intFromFloat(@ceil(@max(layout_node.width * scale.x, 1.0)));
+            const w: i32 = @intCast(@max(@max(scaled_w, record.width + 4), 7));
+            const h: i32 = @intCast(@max(record.height + 2, 3));
+            break :blk centeredRect(cx, cy, w, h);
+        },
         .boxed => blk: {
             const scaled_w: usize = @intFromFloat(@ceil(@max(layout_node.width * scale.x, 1.0)));
             const label_w = label_width + 4;
@@ -537,6 +545,7 @@ fn clusterPlan(cluster_item: anytype, layout_cluster: anytype, scale: Scale, pad
 
 fn nodeKind(shape: anytype) NodeKind {
     return switch (shape) {
+        .record, .mrecord => .record,
         .plaintext => .plain,
         .point => .point,
         else => .boxed,
@@ -583,7 +592,7 @@ fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
     switch (plan.kind) {
         .point => canvas.putByteStyled(plan.rect.x, plan.rect.y, '*', plan.style),
         .plain => paintLabelBlockStyled(canvas, plan.rect, label, plan.style),
-        .boxed => {
+        .boxed, .record => {
             drawRectStyled(canvas, plan.rect, plan.style, plan.border);
             const inner = RectI{
                 .x = plan.rect.x + 1,
@@ -591,13 +600,122 @@ fn paintNode(canvas: *Canvas, plan: NodePlan, label: []const u8) void {
                 .w = @max(plan.rect.w - 2, 1),
                 .h = @max(plan.rect.h - 2, 1),
             };
-            paintLabelBlockStyled(canvas, inner, label, plan.style);
+            if (plan.kind == .record) {
+                paintRecordBlock(canvas, inner, label, plan.style);
+            } else {
+                paintLabelBlockStyled(canvas, inner, label, plan.style);
+            }
         },
     }
 }
 
 fn paintLabelBlock(canvas: *Canvas, rect: RectI, label: []const u8) void {
     paintLabelBlockStyled(canvas, rect, label, .{});
+}
+
+const RecordField = struct {
+    label: []const u8,
+};
+
+const RecordFields = struct {
+    fields: [24]RecordField = undefined,
+    count: usize = 0,
+
+    fn append(self: *RecordFields, label: []const u8) void {
+        if (self.count >= self.fields.len) return;
+        self.fields[self.count] = .{ .label = label };
+        self.count += 1;
+    }
+};
+
+const RecordLabelMetrics = struct {
+    width: usize,
+    height: usize,
+};
+
+fn recordLabelMetrics(label: []const u8) RecordLabelMetrics {
+    var fields = parseRecordFields(label);
+    if (fields.count == 0) return .{ .width = labelMaxWidth(label), .height = labelLineCount(label) };
+    var width: usize = 0;
+    var height: usize = 1;
+    for (fields.fields[0..fields.count]) |field| {
+        width += @max(labelCellWidth(field.label), 1) + 2;
+        height = @max(height, labelLineCount(field.label));
+    }
+    if (fields.count > 1) width += fields.count - 1;
+    return .{ .width = width, .height = height };
+}
+
+fn paintRecordBlock(canvas: *Canvas, rect: RectI, label: []const u8, style: Style) void {
+    var fields = parseRecordFields(label);
+    if (fields.count == 0) {
+        paintLabelBlockStyled(canvas, rect, label, style);
+        return;
+    }
+    var cursor = rect.x;
+    const base_width = @divTrunc(rect.w, @as(i32, @intCast(fields.count)));
+    for (fields.fields[0..fields.count], 0..) |field, index| {
+        const is_last = index + 1 == fields.count;
+        const remaining = rect.x + rect.w - cursor;
+        const field_w = if (is_last) remaining else @max(base_width, @as(i32, @intCast(labelCellWidth(field.label) + 2)));
+        const field_rect = RectI{ .x = cursor, .y = rect.y, .w = @max(field_w, 1), .h = rect.h };
+        paintLabelBlockStyled(canvas, field_rect, field.label, style);
+        cursor += field_w;
+        if (!is_last and cursor < rect.x + rect.w) {
+            drawVerticalStyled(canvas, cursor, rect.y - 1, rect.y + rect.h, style);
+            cursor += 1;
+        }
+    }
+}
+
+fn parseRecordFields(label: []const u8) RecordFields {
+    var result = RecordFields{};
+    const body = stripRecordBraces(label);
+    var start: usize = 0;
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i <= body.len) : (i += 1) {
+        const at_end = i == body.len;
+        if (!at_end) {
+            switch (body[i]) {
+                '{' => depth += 1,
+                '}' => {
+                    if (depth > 0) depth -= 1;
+                },
+                '|' => if (depth == 0) {
+                    appendRecordField(&result, body[start..i]);
+                    start = i + 1;
+                },
+                else => {},
+            }
+            continue;
+        }
+        appendRecordField(&result, body[start..i]);
+    }
+    return result;
+}
+
+fn stripRecordBraces(label: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, label, " \t\r\n");
+    if (trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}') {
+        return trimmed[1 .. trimmed.len - 1];
+    }
+    return trimmed;
+}
+
+fn appendRecordField(fields: *RecordFields, raw: []const u8) void {
+    var value = std.mem.trim(u8, raw, " \t\r\n");
+    if (value.len == 0) return;
+    if (value[0] == '{') {
+        value = stripRecordBraces(value);
+    }
+    if (value.len > 0 and value[0] == '<') {
+        if (std.mem.indexOfScalar(u8, value, '>')) |end| {
+            value = std.mem.trim(u8, value[end + 1 ..], " \t\r\n");
+        }
+    }
+    if (value.len == 0) return;
+    fields.append(value);
 }
 
 fn paintLabelBlockStyled(canvas: *Canvas, rect: RectI, label: []const u8, style: Style) void {

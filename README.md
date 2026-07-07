@@ -75,7 +75,7 @@ They progress from small terminal output to broader feature coverage:
 - `02_ascii_undirected.zig`: undirected API graph, `rankdir=LR`, and ASCII terminal fallback.
 - `03_clusters_compound.zig`: `addCluster`, graph attributes, compound edge hints, and terminal cluster panels.
 - `04_output_formats.zig`: one API graph rendered to plain/truecolor terminal, OSC 8 hyperlinks, semantic HTML `<pre>`, SVG, PNG, and PDF.
-- `05_records_ports_svg.zig`: record labels, record ports, HTML-like table labels, and SVG output.
+- `05_records_ports_svg.zig`: record labels, record ports, terminal record-field preview, HTML-like table labels, and SVG output.
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, terminal preview, and SVG output.
 - `07_force_layout_terminal.zig`: force-directed layout via `.fruchterman_reingold` and terminal rendering.
 

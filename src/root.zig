@@ -12794,6 +12794,30 @@ test "terminal renderer places edge labels away from occupied cells" {
     try std.testing.expect(std.mem.indexOf(u8, term, "pipeline│") == null);
 }
 
+test "terminal renderer formats record node fields" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Records {
+        \\  graph [rankdir=LR];
+        \\  user [shape=record, label="{<id> id|<name> name|<email> email}"];
+        \\  order [shape=Mrecord, label="{<id> order|total}"];
+        \\  user:id -> order:id [label="owns"];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 120 } });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "name") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "email") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "<id>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "│") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "owns") != null);
+}
+
 test "terminal renderer paints cluster panels and plaintext nodes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,

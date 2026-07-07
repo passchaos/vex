@@ -54,8 +54,11 @@ pub fn main(init: std.process.Init) !void {
     try vex.render(&file_writer.interface, &graph, &result, .svg, .{});
     try file_writer.interface.flush();
 
-    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
+    try stdout.interface.writeAll("terminal:\n");
+    try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = .{ .target_width = 120 } });
+    try stdout.interface.writeByte('\n');
     try stdout.interface.writeAll("wrote zig-out/examples/api_records_ports.svg\n");
     try stdout.interface.flush();
 }
