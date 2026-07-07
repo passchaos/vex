@@ -110,7 +110,7 @@ The parser currently supports a practical, mainstream DOT subset:
 
 ## Output backends
 
-- `terminal`: layout-aware shell preview with box-drawn nodes, clusters, edges, arrow markers, edge labels, ASCII fallback, DOT/API color/style attributes, ANSI 256/truecolor, optional OSC 8 hyperlinks, and semantic HTML `<pre>` output with links, titles, and `data-vex-kind` metadata.
+- `terminal`: layout-aware shell preview with box-drawn nodes, clusters, edges, arrow markers, edge labels, ASCII fallback, DOT/API color/style attributes, ANSI 256/truecolor, optional OSC 8 hyperlinks, and semantic HTML `<pre>` output with links, titles, `data-vex-kind` metadata, and safe style fallback.
 - `svg`: vector output with labels and basic shapes.
 - `png`: simple built-in rasterizer for early snapshots.
 - `pdf`: compact vector output using a built-in minimal PDF writer.

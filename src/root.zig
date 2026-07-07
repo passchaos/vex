@@ -12826,6 +12826,44 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     try std.testing.expect(std.mem.indexOf(u8, linked, "\x1b]8;;\x1b\\") != null);
 }
 
+test "terminal renderer falls back from unsafe HTML pre styles" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "html-style" });
+    defer graph.deinit();
+    _ = try graph.edgeByName("a", "b", .{ .label = "safe" });
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const safe = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{
+            .output_format = .html_pre,
+            .html_pre_style = "font-family:monospace;color:#111",
+        },
+    });
+    defer allocator.free(safe);
+    try std.testing.expect(std.mem.startsWith(u8, safe, "<pre style=\"font-family:monospace;color:#111\">"));
+
+    const quote = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{
+            .output_format = .html_pre,
+            .html_pre_style = "color:red\" onclick=\"alert(1)",
+        },
+    });
+    defer allocator.free(quote);
+    try std.testing.expect(std.mem.startsWith(u8, quote, "<pre style=\"font-family: ui-monospace"));
+    try std.testing.expect(std.mem.indexOf(u8, quote, "onclick") == null);
+
+    const tag = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{
+            .output_format = .html_pre,
+            .html_pre_style = "><script>alert(1)</script>",
+        },
+    });
+    defer allocator.free(tag);
+    try std.testing.expect(std.mem.startsWith(u8, tag, "<pre style=\"font-family: ui-monospace"));
+    try std.testing.expect(std.mem.indexOf(u8, tag, "script") == null);
+}
+
 test "DOT parser handles mainstream node lists, string concat, and boolean attrs" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,

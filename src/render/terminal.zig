@@ -9,6 +9,8 @@ const Io = std.Io;
 
 pub const RenderError = Io.Writer.Error || std.mem.Allocator.Error;
 
+pub const default_html_pre_style = "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.2; white-space: pre;";
+
 pub const Options = struct {
     unicode: bool = true,
     color_mode: ColorMode = .none,
@@ -22,7 +24,7 @@ pub const Options = struct {
     show_title: bool = false,
     show_edge_labels: bool = true,
     show_cluster_labels: bool = true,
-    html_pre_style: []const u8 = "font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.2; white-space: pre;",
+    html_pre_style: []const u8 = default_html_pre_style,
 };
 
 pub const ColorMode = enum {
@@ -294,7 +296,7 @@ const Canvas = struct {
 
     fn renderHtmlPre(self: *const Canvas, writer: *Io.Writer, options: Options) Io.Writer.Error!void {
         try writer.writeAll("<pre style=\"");
-        try writeHtmlEscaped(writer, options.html_pre_style);
+        try writer.writeAll(safeHtmlPreStyle(options.html_pre_style));
         try writer.writeAll("\">");
         for (0..self.height) |y| {
             var end = self.width;
@@ -912,6 +914,18 @@ fn writeHtmlByte(writer: *Io.Writer, byte: u8) Io.Writer.Error!void {
 
 fn writeHtmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
     for (text) |byte| try writeHtmlByte(writer, byte);
+}
+
+fn safeHtmlPreStyle(style: []const u8) []const u8 {
+    if (style.len == 0) return default_html_pre_style;
+    for (style) |byte| {
+        switch (byte) {
+            '"', '<', '>' => return default_html_pre_style,
+            0...0x1f, 0x7f => return default_html_pre_style,
+            else => {},
+        }
+    }
+    return style;
 }
 
 fn labelLineCount(label: []const u8) usize {
