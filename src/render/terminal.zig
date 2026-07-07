@@ -1262,9 +1262,11 @@ fn nodeStyle(node_item: anytype) Style {
     const fill = attrValue(node_item.attrs.items, "fillcolor");
     const border = attrValue(node_item.attrs.items, "color") orelse node_item.color;
     const style = attrValue(node_item.attrs.items, "style");
+    const filled = styleHas(style, "filled");
+    const bg = if (filled) parseColor(fill orelse node_item.color) else Color.default;
     return .{
-        .fg = parseColor(font orelse border),
-        .bg = if (styleHas(style, "filled")) parseColor(fill orelse node_item.color) else .default,
+        .fg = if (font) |font_color| parseColor(font_color) else if (filled) contrastColor(bg) else parseColor(border),
+        .bg = bg,
         .attrs = .{
             .bold = styleHas(style, "bold"),
             .dim = styleHas(style, "dotted"),
@@ -1472,6 +1474,21 @@ fn parseColor(value: []const u8) Color {
         } };
     }
     return namedColor(value);
+}
+
+fn contrastColor(background: Color) Color {
+    const rgb = switch (background) {
+        .default => return .default,
+        .rgb => |value| value,
+    };
+    // Integer approximation of WCAG relative luminance in sRGB space. This is
+    // deliberately cheap; terminal color contrast only needs a stable black or
+    // white choice.
+    const luminance: u32 = @divTrunc(@as(u32, rgb.r) * 299 + @as(u32, rgb.g) * 587 + @as(u32, rgb.b) * 114, 1000);
+    return if (luminance >= 140)
+        .{ .rgb = .{ .r = 0, .g = 0, .b = 0 } }
+    else
+        .{ .rgb = .{ .r = 255, .g = 255, .b = 255 } };
 }
 
 fn namedColor(value: []const u8) Color {

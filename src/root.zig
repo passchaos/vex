@@ -12968,6 +12968,27 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     try std.testing.expect(std.mem.indexOf(u8, linked, "\x1b]8;;\x1b\\") != null);
 }
 
+test "terminal renderer keeps filled white node labels readable" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Contrast {
+        \\  node [style=filled,color=white];
+        \\  a0 -> a1;
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+        .terminal = .{ .color_mode = .truecolor },
+    });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "a0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "\x1b[38;2;0;0;0m\x1b[48;2;255;255;255m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "\x1b[38;2;255;255;255m\x1b[48;2;255;255;255m") == null);
+}
+
 test "terminal renderer falls back from unsafe HTML pre styles" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "html-style" });
