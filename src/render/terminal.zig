@@ -284,6 +284,30 @@ const Canvas = struct {
         }
     }
 
+    fn canPlaceText(self: *const Canvas, x: i32, y: i32, width: i32) bool {
+        if (width <= 0) return false;
+        var dx: i32 = 0;
+        while (dx < width) : (dx += 1) {
+            const idx = self.index(x + dx, y) orelse return false;
+            if (!self.cells[idx].empty()) return false;
+        }
+        return true;
+    }
+
+    fn canPlaceTextWithMargin(self: *const Canvas, x: i32, y: i32, width: i32) bool {
+        if (!self.canPlaceText(x, y, width)) return false;
+        var dy: i32 = -1;
+        while (dy <= 1) : (dy += 1) {
+            var dx: i32 = -1;
+            while (dx <= width) : (dx += 1) {
+                const idx = self.index(x + dx, y + dy) orelse return false;
+                if (dy == 0 and dx >= 0 and dx < width) continue;
+                if (!self.cells[idx].empty()) return false;
+            }
+        }
+        return true;
+    }
+
     fn render(self: *const Canvas, writer: *Io.Writer, options: Options, manifest: ?[]const u8) Io.Writer.Error!void {
         switch (options.output_format) {
             .raw => try self.renderRaw(writer, options),
@@ -436,11 +460,17 @@ pub fn renderGraph(writer: *Io.Writer, graph: anytype, layout: anytype, options:
     }
 
     for (graph.edges.items) |edge_item| {
-        paintEdge(&canvas, graph, layout, edge_item, node_plans, scale, padding, shift_x, shift_y, options);
+        paintEdgePath(&canvas, graph, layout, edge_item, node_plans, scale, padding, shift_x, shift_y, options);
     }
 
     for (graph.nodes.items, 0..) |node_item, i| {
         paintNode(&canvas, node_plans[i], node_item.label);
+    }
+
+    if (options.show_edge_labels) {
+        for (graph.edges.items) |edge_item| {
+            paintEdgeLabel(&canvas, layout, edge_item, node_plans, scale, padding, shift_x, shift_y, options);
+        }
     }
 
     var manifest: ?[]u8 = null;
@@ -584,7 +614,7 @@ fn paintLabelBlockStyled(canvas: *Canvas, rect: RectI, label: []const u8, style:
     }
 }
 
-fn paintEdge(
+fn paintEdgePath(
     canvas: *Canvas,
     graph: anytype,
     layout: anytype,
@@ -607,7 +637,6 @@ fn paintEdge(
         to_plan.rect.center();
 
     var prev = nodeOutsidePoint(from_plan.rect, first_target);
-    const route_start = prev;
     var last_dir: Dir = .none;
 
     for (edge_waypoints) |waypoint| {
@@ -622,17 +651,65 @@ fn paintEdge(
     if (graph.directed and last_dir != .none) {
         canvas.putMarkerStyled(end.x, end.y, last_dir, style);
     }
+}
 
-    if (options.show_edge_labels) {
-        if (edge_item.label) |label| {
-            const mid: PointI = if (edge_waypoints.len > 0)
-                mapPoint(edge_waypoints[edge_waypoints.len / 2].point, scale, padding, shift_x, shift_y)
-            else
-                PointI{ .x = @divTrunc(route_start.x + end.x, 2), .y = @divTrunc(route_start.y + end.y, 2) };
-            const width: i32 = @intCast(labelCellWidth(label));
-            putTextStyled(canvas, mid.x - @divTrunc(width, 2), mid.y, label, width, edgeLabelStyle(edge_item, style));
-        }
+fn paintEdgeLabel(
+    canvas: *Canvas,
+    layout: anytype,
+    edge_item: anytype,
+    node_plans: []const NodePlan,
+    scale: Scale,
+    padding: i32,
+    shift_x: i32,
+    shift_y: i32,
+    options: Options,
+) void {
+    const label = edge_item.label orelse return;
+    if (edge_item.from >= node_plans.len or edge_item.to >= node_plans.len) return;
+    const style = edgeStyle(edge_item, options);
+    const from_plan = node_plans[edge_item.from];
+    const to_plan = node_plans[edge_item.to];
+    const edge_waypoints = if (edge_item.id < layout.edge_waypoints.len) layout.edge_waypoints[edge_item.id].points else &.{};
+    const first_target = if (edge_waypoints.len > 0)
+        mapPoint(edge_waypoints[0].point, scale, padding, shift_x, shift_y)
+    else
+        to_plan.rect.center();
+
+    const route_start = nodeOutsidePoint(from_plan.rect, first_target);
+    const end_reference = if (edge_waypoints.len > 0)
+        mapPoint(edge_waypoints[edge_waypoints.len - 1].point, scale, padding, shift_x, shift_y)
+    else
+        route_start;
+    const end = nodeOutsidePoint(to_plan.rect, end_reference);
+    const mid: PointI = if (edge_waypoints.len > 0)
+        mapPoint(edge_waypoints[edge_waypoints.len / 2].point, scale, padding, shift_x, shift_y)
+    else
+        PointI{ .x = @divTrunc(route_start.x + end.x, 2), .y = @divTrunc(route_start.y + end.y, 2) };
+    const width: i32 = @intCast(labelCellWidth(label));
+    const label_pos = findLabelPosition(canvas, mid, width);
+    putTextStyled(canvas, label_pos.x, label_pos.y, label, width, edgeLabelStyle(edge_item, style));
+}
+
+fn findLabelPosition(canvas: *const Canvas, mid: PointI, width: i32) PointI {
+    const centered_x = mid.x - @divTrunc(width, 2);
+    const candidates = [_]PointI{
+        .{ .x = centered_x, .y = mid.y - 2 },
+        .{ .x = centered_x, .y = mid.y + 2 },
+        .{ .x = centered_x, .y = mid.y - 3 },
+        .{ .x = centered_x, .y = mid.y + 3 },
+        .{ .x = centered_x, .y = mid.y - 1 },
+        .{ .x = centered_x, .y = mid.y + 1 },
+        .{ .x = mid.x + 2, .y = mid.y },
+        .{ .x = mid.x - width - 2, .y = mid.y },
+        .{ .x = centered_x, .y = mid.y },
+    };
+    for (candidates) |candidate| {
+        if (canvas.canPlaceTextWithMargin(candidate.x, candidate.y, width)) return candidate;
     }
+    for (candidates) |candidate| {
+        if (canvas.canPlaceText(candidate.x, candidate.y, width)) return candidate;
+    }
+    return .{ .x = centered_x, .y = mid.y };
 }
 
 fn nodeOutsidePoint(rect: RectI, toward: PointI) PointI {

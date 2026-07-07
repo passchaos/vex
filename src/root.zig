@@ -12773,6 +12773,27 @@ test "terminal renderer supports polished border and line presets" {
     try std.testing.expect(std.mem.indexOf(u8, double, "═") != null);
 }
 
+test "terminal renderer places edge labels away from occupied cells" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Labels {
+        \\  graph [rankdir=LR];
+        \\  a [label="DOT parser", shape=box];
+        \\  b [label="Graph model", shape=box];
+        \\  a -> b [label="pipeline"];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "pipeline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "DOT parser   pipeline") == null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "pipeline│") == null);
+}
+
 test "terminal renderer paints cluster panels and plaintext nodes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
