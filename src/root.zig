@@ -1977,6 +1977,151 @@ pub const Layout = struct {
     }
 };
 
+pub const RenderScene = struct {
+    allocator: std.mem.Allocator,
+    graph: Graph,
+    layout: Layout,
+
+    pub fn init(allocator: std.mem.Allocator, graph: *const Graph, layout: *const Layout) !RenderScene {
+        var graph_copy = try cloneGraphForRender(allocator, graph);
+        errdefer graph_copy.deinit();
+        var layout_copy = try cloneLayoutForRender(allocator, layout);
+        errdefer layout_copy.deinit();
+        return .{
+            .allocator = allocator,
+            .graph = graph_copy,
+            .layout = layout_copy,
+        };
+    }
+
+    pub fn deinit(self: *RenderScene) void {
+        self.layout.deinit();
+        self.graph.deinit();
+        self.* = undefined;
+    }
+};
+
+fn cloneGraphForRender(allocator: std.mem.Allocator, source: *const Graph) !Graph {
+    var result = try Graph.init(allocator, .{
+        .directed = source.directed,
+        .strict = source.strict,
+        .name = source.name,
+        .rankdir = source.rankdir,
+    });
+    errdefer result.deinit();
+
+    result.allocator.free(result.node_defaults.color);
+    result.node_defaults.color = try allocator.dupe(u8, source.node_defaults.color);
+    result.node_defaults.shape = source.node_defaults.shape;
+    result.allocator.free(result.edge_defaults.color);
+    result.edge_defaults.color = try allocator.dupe(u8, source.edge_defaults.color);
+    result.edge_defaults.weight = source.edge_defaults.weight;
+    result.edge_defaults.constraint = source.edge_defaults.constraint;
+    result.edge_defaults.min_len = source.edge_defaults.min_len;
+
+    result.attrs = try copyAttrList(allocator, source.attrs.items);
+    result.node_default_attrs = try copyAttrList(allocator, source.node_default_attrs.items);
+    result.edge_default_attrs = try copyAttrList(allocator, source.edge_default_attrs.items);
+
+    for (source.nodes.items) |node_item| {
+        const name = try allocator.dupe(u8, node_item.name);
+        errdefer allocator.free(name);
+        const label = try allocator.dupe(u8, node_item.label);
+        errdefer allocator.free(label);
+        const color = try allocator.dupe(u8, node_item.color);
+        errdefer allocator.free(color);
+        var attrs = try copyAttrList(allocator, node_item.attrs.items);
+        errdefer freeAttrList(allocator, &attrs);
+        const id = result.nodes.items.len;
+        try result.nodes.append(allocator, .{
+            .id = id,
+            .name = name,
+            .label = label,
+            .color = color,
+            .shape = node_item.shape,
+            .attrs = attrs,
+        });
+        try result.node_index.put(name, id);
+    }
+
+    for (source.edges.items) |edge_item| {
+        var attrs = try copyAttrList(allocator, edge_item.attrs.items);
+        errdefer freeAttrList(allocator, &attrs);
+        try result.edges.append(allocator, .{
+            .id = edge_item.id,
+            .from = edge_item.from,
+            .to = edge_item.to,
+            .label = if (edge_item.label) |value| try allocator.dupe(u8, value) else null,
+            .color = try allocator.dupe(u8, edge_item.color),
+            .weight = edge_item.weight,
+            .constraint = edge_item.constraint,
+            .min_len = edge_item.min_len,
+            .tail_port = edge_item.tail_port,
+            .head_port = edge_item.head_port,
+            .tail_record_port = if (edge_item.tail_record_port) |value| try allocator.dupe(u8, value) else null,
+            .head_record_port = if (edge_item.head_record_port) |value| try allocator.dupe(u8, value) else null,
+            .ltail = if (edge_item.ltail) |value| try allocator.dupe(u8, value) else null,
+            .lhead = if (edge_item.lhead) |value| try allocator.dupe(u8, value) else null,
+            .attrs = attrs,
+        });
+    }
+
+    for (source.clusters.items) |cluster| {
+        var attrs = try copyAttrList(allocator, cluster.attrs.items);
+        errdefer freeAttrList(allocator, &attrs);
+        try result.clusters.append(allocator, .{
+            .id = cluster.id,
+            .parent_name = if (cluster.parent_name) |value| try allocator.dupe(u8, value) else null,
+            .name = try allocator.dupe(u8, cluster.name),
+            .label = try allocator.dupe(u8, cluster.label),
+            .nodes = try allocator.dupe(NodeId, cluster.nodes),
+            .attrs = attrs,
+        });
+    }
+
+    for (source.rank_constraints.items) |constraint| {
+        try result.rank_constraints.append(allocator, .{
+            .kind = constraint.kind,
+            .node_ids = try allocator.dupe(NodeId, constraint.node_ids),
+        });
+    }
+
+    return result;
+}
+
+fn cloneLayoutForRender(allocator: std.mem.Allocator, source: *const Layout) !Layout {
+    const nodes = try allocator.dupe(NodeLayout, source.nodes);
+    errdefer allocator.free(nodes);
+    const clusters = try allocator.dupe(ClusterLayout, source.clusters);
+    errdefer allocator.free(clusters);
+    const ranks = try allocator.dupe(usize, source.ranks);
+    errdefer allocator.free(ranks);
+    const rank_depths = try allocator.dupe(f64, source.rank_depths);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.dupe(f64, source.rank_heights);
+    errdefer allocator.free(rank_heights);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, source.edge_waypoints.len);
+    errdefer allocator.free(edge_waypoints);
+    for (source.edge_waypoints, 0..) |waypoints, i| {
+        edge_waypoints[i] = .{ .points = try allocator.dupe(EdgeWaypoint, waypoints.points) };
+    }
+    return .{
+        .allocator = allocator,
+        .rankdir = source.rankdir,
+        .nodes = nodes,
+        .clusters = clusters,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = source.margin,
+        .margin_x = source.margin_x,
+        .margin_y = source.margin_y,
+        .width = source.width,
+        .height = source.height,
+    };
+}
+
 const LayoutAxes = struct {
     rankdir: RankDir,
 
@@ -6611,7 +6756,11 @@ pub const RenderOptions = struct {
 
 pub const RenderError = Io.Writer.Error || std.mem.Allocator.Error || error{UnsupportedFormat};
 
-pub fn render(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, format: OutputFormat, options: RenderOptions) RenderError!void {
+pub fn render(writer: *Io.Writer, scene: *const RenderScene, format: OutputFormat, options: RenderOptions) RenderError!void {
+    return renderLayout(writer, &scene.graph, &scene.layout, format, options);
+}
+
+pub fn renderLayout(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, format: OutputFormat, options: RenderOptions) RenderError!void {
     return switch (format) {
         .terminal => renderTerminal(writer, graph, layout, options.terminal),
         .svg => renderSvg(writer, graph, layout, options.svg),
@@ -6620,10 +6769,17 @@ pub fn render(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, fo
     };
 }
 
-pub fn renderAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout: *const Layout, format: OutputFormat, options: RenderOptions) ![]u8 {
+pub fn renderAlloc(allocator: std.mem.Allocator, scene: *const RenderScene, format: OutputFormat, options: RenderOptions) ![]u8 {
     var aw = Io.Writer.Allocating.init(allocator);
     errdefer aw.deinit();
-    try render(&aw.writer, graph, layout, format, options);
+    try render(&aw.writer, scene, format, options);
+    return aw.toOwnedSlice();
+}
+
+pub fn renderLayoutAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout: *const Layout, format: OutputFormat, options: RenderOptions) ![]u8 {
+    var aw = Io.Writer.Allocating.init(allocator);
+    errdefer aw.deinit();
+    try renderLayout(&aw.writer, graph, layout, format, options);
     return aw.toOwnedSlice();
 }
 
@@ -12506,7 +12662,7 @@ test "SVG renderer emits document" {
     try std.testing.expect(std.mem.startsWith(u8, svg, "<svg"));
     try std.testing.expect(std.mem.indexOf(u8, svg, "test") != null);
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "a") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "b") != null);
@@ -12690,7 +12846,7 @@ test "render dispatch covers terminal and svg formats" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
 
-    const svg = try renderAlloc(allocator, &graph, &layout, .svg, .{});
+    const svg = try renderLayoutAlloc(allocator, &graph, &layout, .svg, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "go") != null);
@@ -12698,15 +12854,35 @@ test "render dispatch covers terminal and svg formats" {
     try graph.setNodeAttr(graph.node_index.get("left").?, "label", "<&>");
     var escaped_layout = try layoutLayered(allocator, &graph, .{});
     defer escaped_layout.deinit();
-    const escaped_svg = try renderAlloc(allocator, &graph, &escaped_layout, .svg, .{});
+    const escaped_svg = try renderLayoutAlloc(allocator, &graph, &escaped_layout, .svg, .{});
     defer allocator.free(escaped_svg);
     try std.testing.expect(std.mem.indexOf(u8, escaped_svg, "&lt;&amp;&gt;") != null);
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{});
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{});
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "<&>") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "right") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "go") != null);
+}
+
+test "RenderScene is self-contained render input" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "scene", .rankdir = .LR });
+    defer graph.deinit();
+    const a = try graph.nodeWith("a", .{ .label = "Original", .shape = .box });
+    const b = try graph.nodeWith("b", .{ .label = "Target", .shape = .box });
+    _ = try graph.edge(a, b, .{ .label = "edge" });
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    var scene = try RenderScene.init(allocator, &graph, &layout);
+    defer scene.deinit();
+
+    try graph.setNodeAttr(a, "label", "Mutated");
+    const term = try renderAlloc(allocator, &scene, .terminal, .{});
+    defer allocator.free(term);
+    try std.testing.expect(std.mem.indexOf(u8, term, "Original") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term, "Mutated") == null);
 }
 
 test "terminal renderer paints layout-aware boxes arrows labels and ASCII fallback" {
@@ -12728,7 +12904,7 @@ test "terminal renderer paints layout-aware boxes arrows labels and ASCII fallba
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const unicode = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
+    const unicode = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
     defer allocator.free(unicode);
     try std.testing.expect(std.mem.indexOf(u8, unicode, "Parse") != null);
     try std.testing.expect(std.mem.indexOf(u8, unicode, "Render") != null);
@@ -12736,7 +12912,7 @@ test "terminal renderer paints layout-aware boxes arrows labels and ASCII fallba
     try std.testing.expect(std.mem.indexOf(u8, unicode, "┌") != null);
     try std.testing.expect(std.mem.indexOf(u8, unicode, "→") != null);
 
-    const ascii = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .unicode = false, .target_width = 90 } });
+    const ascii = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .unicode = false, .target_width = 90 } });
     defer allocator.free(ascii);
     try std.testing.expect(std.mem.indexOf(u8, ascii, "+") != null);
     try std.testing.expect(std.mem.indexOf(u8, ascii, ">") != null);
@@ -12759,14 +12935,14 @@ test "terminal renderer supports polished border and line presets" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const polished = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = TerminalOptions.polished() });
+    const polished = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = TerminalOptions.polished() });
     defer allocator.free(polished);
     try std.testing.expect(std.mem.indexOf(u8, polished, "╭") != null);
     try std.testing.expect(std.mem.indexOf(u8, polished, "╰") != null);
     try std.testing.expect(std.mem.indexOf(u8, polished, "━") != null);
     try std.testing.expect(std.mem.indexOf(u8, polished, "╌") != null);
 
-    const double = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const double = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .node_border = .double, .cluster_border = .double, .line_style = .double, .target_width = 100 },
     });
     defer allocator.free(double);
@@ -12788,7 +12964,7 @@ test "terminal renderer places edge labels away from occupied cells" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "pipeline") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "DOT parser   pipeline") == null);
@@ -12809,7 +12985,7 @@ test "terminal renderer formats record node fields" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 120 } });
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 120 } });
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "id") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "name") != null);
@@ -12835,7 +13011,7 @@ test "terminal renderer formats simple HTML table labels" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 90 } });
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "<TABLE") == null);
     try std.testing.expect(std.mem.indexOf(u8, term, "id") != null);
@@ -12866,7 +13042,7 @@ test "terminal renderer gives common shapes distinct glyphs" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 140 } });
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 140 } });
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "<") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, ">") != null);
@@ -12896,7 +13072,7 @@ test "terminal renderer paints cluster panels and plaintext nodes" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 100, .target_height = 32 } });
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{ .terminal = .{ .target_width = 100, .target_height = 32 } });
     defer allocator.free(term);
     try std.testing.expect(std.mem.indexOf(u8, term, "Backend") != null);
     try std.testing.expect(std.mem.indexOf(u8, term, "external client") != null);
@@ -12926,7 +13102,7 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const truecolor = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const truecolor = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .color_mode = .truecolor, .target_width = 100 },
     });
     defer allocator.free(truecolor);
@@ -12934,13 +13110,13 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     try std.testing.expect(std.mem.indexOf(u8, truecolor, "\x1b[38;2;0;0;255m") != null);
     try std.testing.expect(std.mem.indexOf(u8, truecolor, "\x1b[1m") != null);
 
-    const ansi256 = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const ansi256 = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .color_mode = .ansi256, .target_width = 100 },
     });
     defer allocator.free(ansi256);
     try std.testing.expect(std.mem.indexOf(u8, ansi256, "\x1b[38;5;") != null);
 
-    const html = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const html = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .output_format = .html_pre, .target_width = 100 },
     });
     defer allocator.free(html);
@@ -12960,7 +13136,7 @@ test "terminal renderer maps graph attributes to ANSI and HTML styles" {
     try std.testing.expect(std.mem.indexOf(u8, html, "&quot;href&quot;:&quot;https://example.com/a&quot;") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "&quot;title&quot;:&quot;edge docs&quot;") != null);
 
-    const linked = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const linked = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .hyperlinks = true, .target_width = 100 },
     });
     defer allocator.free(linked);
@@ -12980,7 +13156,7 @@ test "terminal renderer keeps filled white node labels readable" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .color_mode = .truecolor },
     });
     defer allocator.free(term);
@@ -13001,7 +13177,7 @@ test "terminal renderer uses Graphviz default filled node background" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const term = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const term = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{ .color_mode = .truecolor },
     });
     defer allocator.free(term);
@@ -13018,7 +13194,7 @@ test "terminal renderer falls back from unsafe HTML pre styles" {
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
 
-    const safe = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const safe = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{
             .output_format = .html_pre,
             .html_pre_style = "font-family:monospace;color:#111",
@@ -13027,7 +13203,7 @@ test "terminal renderer falls back from unsafe HTML pre styles" {
     defer allocator.free(safe);
     try std.testing.expect(std.mem.startsWith(u8, safe, "<pre style=\"font-family:monospace;color:#111\""));
 
-    const quote = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const quote = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{
             .output_format = .html_pre,
             .html_pre_style = "color:red\" onclick=\"alert(1)",
@@ -13037,7 +13213,7 @@ test "terminal renderer falls back from unsafe HTML pre styles" {
     try std.testing.expect(std.mem.startsWith(u8, quote, "<pre style=\"font-family: ui-monospace"));
     try std.testing.expect(std.mem.indexOf(u8, quote, "onclick") == null);
 
-    const tag = try renderAlloc(allocator, &graph, &layout, .terminal, .{
+    const tag = try renderLayoutAlloc(allocator, &graph, &layout, .terminal, .{
         .terminal = .{
             .output_format = .html_pre,
             .html_pre_style = "><script>alert(1)</script>",

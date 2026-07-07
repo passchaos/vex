@@ -134,18 +134,20 @@ pub fn main(init: std.process.Init) !void {
 
     var layout = try vex.layoutGraph(allocator, &graph, .{ .algorithm = layout_arg });
     defer layout.deinit();
+    var scene = try vex.RenderScene.init(allocator, &graph, &layout);
+    defer scene.deinit();
 
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try vex.render(&file_writer.interface, &graph, &layout, format, .{ .terminal = terminal_options });
+        try vex.render(&file_writer.interface, &scene, format, .{ .terminal = terminal_options });
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try vex.render(&stdout_file_writer.interface, &graph, &layout, format, .{ .terminal = terminal_options });
+        try vex.render(&stdout_file_writer.interface, &scene, format, .{ .terminal = terminal_options });
         try stdout_file_writer.interface.flush();
     }
 }

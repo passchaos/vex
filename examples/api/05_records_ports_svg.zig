@@ -45,19 +45,21 @@ pub fn main(init: std.process.Init) !void {
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
+    var scene = try vex.RenderScene.init(allocator, &graph, &result);
+    defer scene.deinit();
 
     try std.Io.Dir.cwd().createDirPath(io, "zig-out/examples");
     var file = try std.Io.Dir.cwd().createFile(io, "zig-out/examples/api_records_ports.svg", .{ .truncate = true });
     defer file.close(io);
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &graph, &result, .svg, .{});
+    try vex.render(&file_writer.interface, &scene, .svg, .{});
     try file_writer.interface.flush();
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
     try stdout.interface.writeAll("terminal:\n");
-    try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = .{ .target_width = 120 } });
+    try vex.render(&stdout.interface, &scene, .terminal, .{ .terminal = .{ .target_width = 120 } });
     try stdout.interface.writeByte('\n');
     try stdout.interface.writeAll("wrote zig-out/examples/api_records_ports.svg\n");
     try stdout.interface.flush();

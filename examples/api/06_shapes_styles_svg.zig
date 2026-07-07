@@ -35,18 +35,20 @@ pub fn main(init: std.process.Init) !void {
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
+    var scene = try vex.RenderScene.init(allocator, &graph, &result);
+    defer scene.deinit();
 
     try std.Io.Dir.cwd().createDirPath(io, "zig-out/examples");
     var file = try std.Io.Dir.cwd().createFile(io, "zig-out/examples/api_shapes_styles.svg", .{ .truncate = true });
     defer file.close(io);
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &graph, &result, .svg, .{});
+    try vex.render(&file_writer.interface, &scene, .svg, .{});
     try file_writer.interface.flush();
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = .{ .target_width = 92 } });
+    try vex.render(&stdout.interface, &scene, .terminal, .{ .terminal = .{ .target_width = 92 } });
     try stdout.interface.writeAll("\nwrote zig-out/examples/api_shapes_styles.svg\n");
     try stdout.interface.flush();
 }

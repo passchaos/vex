@@ -53,7 +53,10 @@ _ = try graph.edge(a, b, .{ .label = "next" });
 
 var layout = try vex.layoutGraph(allocator, &graph, .{});
 defer layout.deinit();
-try vex.render(writer, &graph, &layout, .svg, .{});
+
+var scene = try vex.RenderScene.init(allocator, &graph, &layout);
+defer scene.deinit();
+try vex.render(writer, &scene, .svg, .{});
 ```
 
 ## API Examples

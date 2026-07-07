@@ -34,21 +34,23 @@ pub fn main(init: std.process.Init) !void {
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
+    var scene = try vex.RenderScene.init(allocator, &graph, &result);
+    defer scene.deinit();
 
     var stdout_buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
     try stdout.interface.writeAll("terminal:\n");
-    try vex.render(&stdout.interface, &graph, &result, .terminal, .{ .terminal = vex.TerminalOptions.polished() });
+    try vex.render(&stdout.interface, &scene, .terminal, .{ .terminal = vex.TerminalOptions.polished() });
     try stdout.interface.writeAll("\ntruecolor terminal:\n");
-    try vex.render(&stdout.interface, &graph, &result, .terminal, .{
+    try vex.render(&stdout.interface, &scene, .terminal, .{
         .terminal = .{ .target_width = 110, .color_mode = .truecolor, .hyperlinks = true },
     });
     try stdout.interface.writeAll("\nwrote:\n");
 
-    try writeRenderedFile(io, &graph, &result, .svg, "zig-out/examples/api_output_formats.svg", .{});
-    try writeRenderedFile(io, &graph, &result, .png, "zig-out/examples/api_output_formats.png", .{});
-    try writeRenderedFile(io, &graph, &result, .pdf, "zig-out/examples/api_output_formats.pdf", .{});
-    try writeRenderedFile(io, &graph, &result, .terminal, "zig-out/examples/api_output_formats.html", .{
+    try writeRenderedFile(io, &scene, .svg, "zig-out/examples/api_output_formats.svg", .{});
+    try writeRenderedFile(io, &scene, .png, "zig-out/examples/api_output_formats.png", .{});
+    try writeRenderedFile(io, &scene, .pdf, "zig-out/examples/api_output_formats.pdf", .{});
+    try writeRenderedFile(io, &scene, .terminal, "zig-out/examples/api_output_formats.html", .{
         .terminal = .{ .output_format = .html_pre, .target_width = 110 },
     });
 
@@ -59,12 +61,12 @@ pub fn main(init: std.process.Init) !void {
     try stdout.interface.flush();
 }
 
-fn writeRenderedFile(io: std.Io, graph: *const vex.Graph, layout: *const vex.Layout, format: vex.OutputFormat, path: []const u8, options: vex.RenderOptions) !void {
+fn writeRenderedFile(io: std.Io, scene: *const vex.RenderScene, format: vex.OutputFormat, path: []const u8, options: vex.RenderOptions) !void {
     try std.Io.Dir.cwd().createDirPath(io, "zig-out/examples");
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);
     var buffer: [8192]u8 = undefined;
     var writer = file.writer(io, &buffer);
-    try vex.render(&writer.interface, graph, layout, format, options);
+    try vex.render(&writer.interface, scene, format, options);
     try writer.interface.flush();
 }

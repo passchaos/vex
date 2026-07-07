@@ -41,10 +41,12 @@ pub fn main(init: std.process.Init) !void {
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
+    var scene = try vex.RenderScene.init(allocator, &graph, &result);
+    defer scene.deinit();
 
     var stdout_buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &graph, &result, .terminal, .{
+    try vex.render(&stdout.interface, &scene, .terminal, .{
         .terminal = .{ .target_width = 118, .target_height = 36 },
     });
     try stdout.interface.flush();
