@@ -7636,7 +7636,7 @@ fn graphvizRenderNodeLayout(graph: *const Graph, layout: *const Layout, node_ite
     if (cluster_index >= graph.subgraphs.items.len) return result;
     const cluster = layout.subgraphs[cluster_index];
     if (cluster.width <= 0 or cluster.height <= 0) return result;
-    const visual_left = clusterVisualRect(graph.subgraphs.items[cluster_index], layout, cluster_index).x;
+    const visual_left = rawClusterVisualRect(graph.subgraphs.items[cluster_index], layout, cluster_index).x;
     if (cluster.x + cluster.width / 2.0 < layout.width / 2.0) {
         result.center.x = visual_left + 55.0;
         return result;
@@ -7692,7 +7692,7 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
     var bounds = BoundsBuilder{};
     for (layout.subgraphs, 0..) |cluster_box, index| {
         if (index >= graph.subgraphs.items.len or cluster_box.width <= 0 or cluster_box.height <= 0) continue;
-        bounds.includeRect(clusterVisualRect(graph.subgraphs.items[index], layout, index));
+        bounds.includeRect(clusterVisualRect(graph, layout, index));
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= layout.nodes.len) continue;
@@ -9623,12 +9623,12 @@ fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Lay
 fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent: ?SubgraphId) Io.Writer.Error!void {
     for (graph.subgraphs.items, 0..) |cluster, index| {
         if (cluster.parent != parent) continue;
-        try renderSvgClusterBox(writer, cluster, layout, index);
+        try renderSvgClusterBox(writer, graph, cluster, layout, index);
         try renderSvgClusterTree(writer, graph, layout, cluster.id);
     }
 }
 
-fn renderSvgClusterBox(writer: *Io.Writer, cluster: Subgraph, layout: *const Layout, index: usize) Io.Writer.Error!void {
+fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, layout: *const Layout, index: usize) Io.Writer.Error!void {
     if (index >= layout.subgraphs.len) return;
     const box = layout.subgraphs[index];
     if (box.width <= 0 or box.height <= 0) return;
@@ -9637,7 +9637,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Subgraph, layout: *const Lay
     try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.label);
     try writer.writeByte('\n');
-    const rect = clusterVisualRect(cluster, layout, index);
+    const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
     } else {
@@ -9687,7 +9687,11 @@ fn renderSvgClusterBox(writer: *Io.Writer, cluster: Subgraph, layout: *const Lay
     try writer.writeAll("</g>\n");
 }
 
-fn clusterVisualRect(cluster: Subgraph, layout: *const Layout, index: usize) RectF {
+fn clusterVisualRect(graph: *const Graph, layout: *const Layout, index: usize) RectF {
+    return clusterVisualRectContainingNodes(graph, layout, index, rawClusterVisualRect(graph.subgraphs.items[index], layout, index));
+}
+
+fn rawClusterVisualRect(cluster: Subgraph, layout: *const Layout, index: usize) RectF {
     const box = layout.subgraphs[index];
     var rect = RectF{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
     if (cluster.parent != null or layout.subgraphs.len <= 1) return rect;
@@ -9714,6 +9718,19 @@ fn clusterVisualRect(cluster: Subgraph, layout: *const Layout, index: usize) Rec
         rect.height -= 1.2;
     }
     return rect;
+}
+
+fn clusterVisualRectContainingNodes(graph: *const Graph, layout: *const Layout, index: usize, rect: RectF) RectF {
+    if (index >= graph.subgraphs.items.len) return rect;
+    var bounds = BoundsBuilder{};
+    bounds.includeRect(rect);
+    for (graph.subgraphs.items[index].nodes) |node_id| {
+        if (node_id >= graph.nodes.items.len or node_id >= layout.nodes.len) continue;
+        const node_item = graph.nodes.items[node_id];
+        if (resolveNodeVisual(node_item).hidden) continue;
+        bounds.includeRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)));
+    }
+    return bounds.rect() orelse rect;
 }
 
 fn clusterVisualRectHasVerticalTrim(cluster: Subgraph, layout: *const Layout) bool {
@@ -17007,9 +17024,55 @@ fn expectLayoutNodeClusterPaddingNear(graph: *const Graph, layout: *const Layout
 fn expectLayoutClusterMatchesSvgAnchor(graph: *const Graph, layout: *const Layout, svg: []const u8, cluster_label: []const u8, tolerance: f64) !void {
     const cluster_index = subgraphIndexByLabel(graph, cluster_label) orelse return error.MissingClusterRect;
     if (cluster_index >= layout.subgraphs.len) return error.MissingClusterRect;
-    const layout_screen_x = clusterVisualRect(graph.subgraphs.items[cluster_index], layout, cluster_index).x + svgGraphvizTranslate(svg).x;
+    const layout_screen_x = clusterVisualRect(graph, layout, cluster_index).x + svgGraphvizTranslate(svg).x;
     const svg_screen_x = svgClusterScreenX(svg, cluster_label) orelse return error.MissingClusterRect;
     try std.testing.expect(@abs(layout_screen_x - svg_screen_x) <= tolerance);
+}
+
+fn expectSubgraphContainsRenderedNodes(graph: *const Graph, layout: *const Layout, cluster_label: []const u8) !void {
+    const cluster_index = subgraphIndexByLabel(graph, cluster_label) orelse return error.MissingClusterRect;
+    if (cluster_index >= layout.subgraphs.len) return error.MissingClusterRect;
+    const rect = clusterVisualRect(graph, layout, cluster_index);
+    for (graph.subgraphs.items[cluster_index].nodes) |node_id| {
+        if (node_id >= graph.nodes.items.len or node_id >= layout.nodes.len) return error.MissingNodeCenter;
+        const node_rect = nodeRect(graphvizRenderNodeLayout(graph, layout, graph.nodes.items[node_id]));
+        try std.testing.expect(node_rect.x >= rect.x - 0.001);
+        try std.testing.expect(node_rect.y >= rect.y - 0.001);
+        try std.testing.expect(node_rect.x + node_rect.width <= rect.x + rect.width + 0.001);
+        try std.testing.expect(node_rect.y + node_rect.height <= rect.y + rect.height + 0.001);
+    }
+}
+
+test "SVG subgraph visual bounds contain members for all rankdirs" {
+    const allocator = std.testing.allocator;
+    const rankdirs = [_][]const u8{ "TB", "BT", "LR", "RL" };
+    for (rankdirs) |rankdir| {
+        const dot = try std.fmt.allocPrint(allocator,
+            \\digraph G {{
+            \\  graph [rankdir={s}];
+            \\  subgraph cluster_left {{
+            \\    label="process #1";
+            \\    a0 -> a1 -> a2 -> a3;
+            \\  }}
+            \\  subgraph cluster_right {{
+            \\    label="process #2";
+            \\    b0 -> b1 -> b2 -> b3;
+            \\  }}
+            \\  start -> a0;
+            \\  start -> b0;
+            \\  a1 -> b3 [constraint=false];
+            \\}}
+        , .{rankdir});
+        defer allocator.free(dot);
+
+        var graph = try parseDot(allocator, dot);
+        defer graph.deinit();
+        var layout = try layoutLayered(allocator, &graph, .{});
+        defer layout.deinit();
+
+        try expectSubgraphContainsRenderedNodes(&graph, &layout, "process #1");
+        try expectSubgraphContainsRenderedNodes(&graph, &layout, "process #2");
+    }
 }
 
 test "user cluster example stays compact and Graphviz-like" {
