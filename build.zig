@@ -122,16 +122,16 @@ pub fn build(b: *std.Build) void {
         desc: []const u8,
     }{
         .{
-            .step_name = "run-api-basic-terminal",
-            .exe_name = "api-basic-terminal",
-            .source = "examples/api/01_basic_terminal.zig",
-            .desc = "Run API example: basic terminal renderer",
+            .step_name = "run-api-basic-svg",
+            .exe_name = "api-basic-svg",
+            .source = "examples/api/01_basic_svg.zig",
+            .desc = "Run API example: basic SVG renderer",
         },
         .{
-            .step_name = "run-api-ascii-undirected",
-            .exe_name = "api-ascii-undirected",
-            .source = "examples/api/02_ascii_undirected.zig",
-            .desc = "Run API example: ASCII undirected terminal renderer",
+            .step_name = "run-api-undirected-svg",
+            .exe_name = "api-undirected-svg",
+            .source = "examples/api/02_undirected_svg.zig",
+            .desc = "Run API example: undirected SVG renderer",
         },
         .{
             .step_name = "run-api-clusters-compound",
@@ -140,10 +140,10 @@ pub fn build(b: *std.Build) void {
             .desc = "Run API example: clusters and compound edges",
         },
         .{
-            .step_name = "run-api-output-formats",
-            .exe_name = "api-output-formats",
-            .source = "examples/api/04_output_formats.zig",
-            .desc = "Run API example: terminal, SVG, PNG, and PDF output",
+            .step_name = "run-api-svg-output",
+            .exe_name = "api-svg-output",
+            .source = "examples/api/04_svg_output.zig",
+            .desc = "Run API example: SVG output dispatch",
         },
         .{
             .step_name = "run-api-records-ports-svg",
@@ -155,13 +155,13 @@ pub fn build(b: *std.Build) void {
             .step_name = "run-api-shapes-styles-svg",
             .exe_name = "api-shapes-styles-svg",
             .source = "examples/api/06_shapes_styles_svg.zig",
-            .desc = "Run API example: shapes, styles, terminal, and SVG output",
+            .desc = "Run API example: shapes, styles, and SVG output",
         },
         .{
-            .step_name = "run-api-force-layout-terminal",
-            .exe_name = "api-force-layout-terminal",
-            .source = "examples/api/07_force_layout_terminal.zig",
-            .desc = "Run API example: force-directed terminal layout",
+            .step_name = "run-api-force-layout-svg",
+            .exe_name = "api-force-layout-svg",
+            .source = "examples/api/07_force_layout_svg.zig",
+            .desc = "Run API example: force-directed SVG layout",
         },
     };
 

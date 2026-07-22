@@ -7,40 +7,64 @@ const vex = @import("vex");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-    const io = init.io;
 
-    var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "ShapesStyles" });
+    var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "ShapesStylesSubgraphs", .rankdir = .TB });
     defer graph.deinit();
-    try graph.setGraphAttr("splines", "ortho");
-    try graph.setGraphAttr("label", "API-built shapes and styles");
+    try graph.setGraphAttr(.{ .nodesep = 0.9 });
 
-    const start = try styledNode(&graph, "start", "Start", .msquare, "#dbeafe");
-    const decision = try styledNode(&graph, "decision", "Valid?", .diamond, "#fef3c7");
-    const retry = try styledNode(&graph, "retry", "Retry", .octagon, "#fee2e2");
-    const success = try styledNode(&graph, "success", "Done", .doublecircle, "#dcfce7");
-    const note = try styledNode(&graph, "note", "audit\nlog", .note, "#e0f2fe");
-    const hidden = try graph.nodeWith("hidden", .{ .shape = .point, .label = "ignored" });
+    const start_node_id = try styledNode(&graph, "Start", .mdiamond, "#e0f2fe");
 
-    const input = try graph.edge(start, decision, .{ .label = "input", .color = "#2563eb" });
-    try graph.setEdgeAttr(input, "penwidth", "2");
-    const yes = try graph.edge(decision, success, .{ .label = "yes", .color = "#16a34a" });
-    try graph.setEdgeAttr(yes, "penwidth", "2");
-    const no = try graph.edge(decision, retry, .{ .label = "no", .color = "#dc2626" });
-    try graph.setEdgeAttr(no, "style", "dashed");
-    _ = try graph.edge(retry, decision, .{ .label = "again", .constraint = false });
-    _ = try graph.edge(success, note, .{ .label = "emit" });
-    const dotted = try graph.edge(hidden, start, .{ .constraint = false });
-    try graph.setEdgeAttr(dotted, "style", "dotted");
-    try graph.setEdgeAttr(dotted, "arrowhead", "none");
+    const a0_node_id = try styledNode(&graph, "a0", .box, "#dbeafe");
+    const a1_node_id = try styledNode(&graph, "a1", .box, "#dbeafe");
+    const a2_node_id = try styledNode(&graph, "a2", .box, "#dbeafe");
+    const a3_node_id = try styledNode(&graph, "a3", .box, "#dbeafe");
 
-    var result = try vex.layoutGraph(allocator, &graph, .{});
+    const b0_node_id = try styledNode(&graph, "b0", .ellipse, "#dcfce7");
+    const b1_node_id = try styledNode(&graph, "b1", .ellipse, "#dcfce7");
+    const b2_node_id = try styledNode(&graph, "b2", .ellipse, "#dcfce7");
+    const b3_node_id = try styledNode(&graph, "b3", .ellipse, "#dcfce7");
+
+    _ = try graph.addSubgraph("process #1", null, &.{ a0_node_id, a1_node_id, a2_node_id, a3_node_id }, &.{
+        .{ .name = "color", .value = "#2563eb" },
+        .{ .name = "fillcolor", .value = "#dbeafe" },
+        .{ .name = "style", .value = "filled" },
+    });
+    _ = try graph.addSubgraph("process #2", null, &.{ b0_node_id, b1_node_id, b2_node_id, b3_node_id }, &.{
+        .{ .name = "color", .value = "#16a34a" },
+        .{ .name = "fillcolor", .value = "#dcfce7" },
+        .{ .name = "style", .value = "filled" },
+    });
+
+    _ = try graph.edge(a0_node_id, a1_node_id, .{ .color = "#2563eb" });
+    _ = try graph.edge(a1_node_id, a2_node_id, .{ .color = "#2563eb" });
+    _ = try graph.edge(a2_node_id, a3_node_id, .{ .color = "#2563eb" });
+    _ = try graph.edge(b0_node_id, b1_node_id, .{ .color = "#16a34a" });
+    _ = try graph.edge(b1_node_id, b2_node_id, .{ .color = "#16a34a" });
+    _ = try graph.edge(b2_node_id, b3_node_id, .{ .color = "#16a34a" });
+
+    _ = try graph.edge(start_node_id, a0_node_id, .{});
+    _ = try graph.edge(start_node_id, b0_node_id, .{});
+    const cross = try graph.edge(a1_node_id, b3_node_id, .{ .label = "handoff", .color = "#7c3aed", .constraint = false });
+    try graph.setEdgeAttr(cross, .{ .style = .dashed });
+
+    try outputFileAndStdout(init.gpa, init.io, graph, "zig-out/examples", "06.svg");
+}
+
+fn outputFileAndStdout(gpa: std.mem.Allocator, io: std.Io, graph: vex.Graph, sub_dir: []const u8, file_name: []const u8) !void {
+    var result = try vex.layoutGraph(gpa, &graph, .{});
     defer result.deinit();
-    var scene = try vex.RenderScene.init(allocator, &graph, &result);
+
+    var scene = try vex.RenderScene.init(gpa, &graph, &result);
     defer scene.deinit();
 
-    try std.Io.Dir.cwd().createDirPath(io, "zig-out/examples");
-    var file = try std.Io.Dir.cwd().createFile(io, "zig-out/examples/api_shapes_styles.svg", .{ .truncate = true });
+    try std.Io.Dir.cwd().createDirPath(io, sub_dir);
+
+    const sub_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub_dir, file_name });
+    defer gpa.free(sub_path);
+
+    var file = try std.Io.Dir.cwd().createFile(io, sub_path, .{ .truncate = true });
     defer file.close(io);
+
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(io, &file_buffer);
     try vex.render(&file_writer.interface, &scene, .svg, .{});
@@ -48,15 +72,16 @@ pub fn main(init: std.process.Init) !void {
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .terminal, .{ .terminal = .{ .target_width = 92 } });
-    try stdout.interface.writeAll("\nwrote zig-out/examples/api_shapes_styles.svg\n");
+    try stdout.interface.writeAll("wrote ");
+    try stdout.interface.writeAll(sub_path);
+    try stdout.interface.writeAll("\n");
     try stdout.interface.flush();
 }
 
-fn styledNode(graph: *vex.Graph, name: []const u8, label: []const u8, shape: vex.Shape, fill: []const u8) !vex.NodeId {
-    const id = try graph.nodeWith(name, .{ .label = label, .shape = shape });
-    try graph.setNodeAttr(id, "style", "filled");
-    try graph.setNodeAttr(id, "fillcolor", fill);
-    try graph.setNodeAttr(id, "color", "#334155");
+fn styledNode(graph: *vex.Graph, label: []const u8, shape: vex.Shape, fill: []const u8) !vex.NodeId {
+    const id = try graph.nodeWith(label, .{ .shape = shape });
+    try graph.setNodeAttr(id, .{ .style = .filled });
+    try graph.setNodeAttr(id, .{ .fillcolor = fill });
+    try graph.setNodeAttr(id, .{ .color = "#334155" });
     return id;
 }

@@ -7,10 +7,8 @@ const usage =
     \\
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
-    \\        [--format terminal|svg|png|pdf] [--layout dot|sugiyama|fr|neato|fdp]
+    \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
     \\        [--input-format auto|dot|mermaid]
-    \\        [--terminal-style default|polished] [--terminal-color none|ansi256|truecolor]
-    \\        [--terminal-output raw|html] [--terminal-hyperlinks] [--terminal-ascii]
     \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
@@ -34,7 +32,6 @@ pub fn main(init: std.process.Init) !void {
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var input_format: vex.InputFormat = .auto;
-    var terminal_options: vex.TerminalOptions = .{};
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -63,48 +60,14 @@ pub fn main(init: std.process.Init) !void {
             input_format = vex.InputFormat.fromString(args[i]) orelse return error.UnknownInputFormat;
         } else if (std.mem.eql(u8, arg, "--mermaid")) {
             input_format = .mermaid;
-        } else if (std.mem.eql(u8, arg, "--terminal-style")) {
-            i += 1;
-            if (i >= args.len) return error.MissingTerminalStyle;
-            if (std.ascii.eqlIgnoreCase(args[i], "default")) {
-                terminal_options.node_border = .single;
-                terminal_options.cluster_border = .single;
-                terminal_options.line_style = .single;
-            } else if (std.ascii.eqlIgnoreCase(args[i], "polished")) {
-                terminal_options = vex.TerminalOptions.polished();
-            } else {
-                return error.UnknownTerminalStyle;
-            }
-        } else if (std.mem.eql(u8, arg, "--terminal-color")) {
-            i += 1;
-            if (i >= args.len) return error.MissingTerminalColor;
-            terminal_options.color_mode = vex.terminal.ColorMode.fromString(args[i]) orelse return error.UnknownTerminalColor;
-        } else if (std.mem.eql(u8, arg, "--terminal-output")) {
-            i += 1;
-            if (i >= args.len) return error.MissingTerminalOutput;
-            terminal_options.output_format = vex.terminal.OutputFormat.fromString(args[i]) orelse return error.UnknownTerminalOutput;
-        } else if (std.mem.eql(u8, arg, "--terminal-node-border")) {
-            i += 1;
-            if (i >= args.len) return error.MissingTerminalNodeBorder;
-            terminal_options.node_border = vex.terminal.BorderStyle.fromString(args[i]) orelse return error.UnknownTerminalNodeBorder;
-        } else if (std.mem.eql(u8, arg, "--terminal-cluster-border")) {
-            i += 1;
-            if (i >= args.len) return error.MissingTerminalClusterBorder;
-            terminal_options.cluster_border = vex.terminal.BorderStyle.fromString(args[i]) orelse return error.UnknownTerminalClusterBorder;
-        } else if (std.mem.eql(u8, arg, "--terminal-line")) {
-            i += 1;
-            if (i >= args.len) return error.MissingTerminalLine;
-            terminal_options.line_style = vex.terminal.LineStyle.fromString(args[i]) orelse return error.UnknownTerminalLine;
-        } else if (std.mem.eql(u8, arg, "--terminal-hyperlinks")) {
-            terminal_options.hyperlinks = true;
-        } else if (std.mem.eql(u8, arg, "--terminal-ascii")) {
-            terminal_options.unicode = false;
         } else if (std.mem.eql(u8, arg, "--layout") or std.mem.eql(u8, arg, "-K")) {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
             layout_arg = vex.LayoutAlgorithm.fromString(args[i]) orelse return error.UnknownLayout;
         } else if (std.mem.startsWith(u8, arg, "-K") and arg.len > 2) {
             layout_arg = vex.LayoutAlgorithm.fromString(arg[2..]) orelse return error.UnknownLayout;
+        } else if (std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "-")) {
+            return error.UnknownOption;
         } else if (input_path == null) {
             input_path = arg;
         } else if (output_path == null) {
@@ -142,12 +105,12 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try vex.render(&file_writer.interface, &scene, format, .{ .terminal = terminal_options });
+        try vex.render(&file_writer.interface, &scene, format, .{});
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try vex.render(&stdout_file_writer.interface, &scene, format, .{ .terminal = terminal_options });
+        try vex.render(&stdout_file_writer.interface, &scene, format, .{});
         try stdout_file_writer.interface.flush();
     }
 }

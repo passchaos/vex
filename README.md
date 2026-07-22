@@ -15,8 +15,8 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 - Core graph model with a programmatic builder API.
 - DOT subset parser compatible with common `graph`/`digraph` files, including subgraphs and ports.
 - Basic layered layout with `rankdir=TB|BT|LR|RL`.
-- SVG renderer, layout-aware terminal renderer, and a simple native PNG raster path.
-- Output format dispatch for `terminal`, `svg`, `png`, and `pdf`.
+- SVG renderer.
+- Output format dispatch with SVG as the currently supported backend.
 - CLI that reads DOT from a file or stdin and writes to a file or stdout.
 - Native parser/layout/rendering path by default; Graphviz `dot` is used only as a development/test oracle.
 
@@ -24,11 +24,8 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 
 ```sh
 zig build run -- --input examples/simple.dot --output simple.svg
-zig build run -- --input examples/simple.dot --format terminal
-zig build run -- --input examples/simple.dot --format terminal --terminal-style polished --terminal-color truecolor
-zig build run -- --input examples/simple.dot --format terminal --terminal-output html --output simple-terminal.html
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
-zig build run -- --input examples/mainstream.dot --format terminal
+zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
@@ -47,7 +44,7 @@ const vex = @import("vex");
 var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "G" });
 defer graph.deinit();
 
-const a = try graph.nodeWith("A", .{ .shape = .box, .label = "Start" });
+const a = try graph.nodeWith("Start", .{ .shape = .box });
 const b = try graph.node("B");
 _ = try graph.edge(a, b, .{ .label = "next" });
 
@@ -65,24 +62,24 @@ The `examples/api` programs build graphs directly with the Zig API and then
 render them:
 
 ```sh
-zig build run-api-basic-terminal
-zig build run-api-ascii-undirected
+zig build run-api-basic-svg
+zig build run-api-undirected-svg
 zig build run-api-clusters-compound
-zig build run-api-output-formats
+zig build run-api-svg-output
 zig build run-api-records-ports-svg
 zig build run-api-shapes-styles-svg
-zig build run-api-force-layout-terminal
+zig build run-api-force-layout-svg
 ```
 
-They progress from small terminal output to broader feature coverage:
+They progress from small SVG output to broader feature coverage:
 
-- `01_basic_terminal.zig`: directed graph construction, labels, layout, and terminal rendering.
-- `02_ascii_undirected.zig`: undirected API graph, `rankdir=LR`, and ASCII terminal fallback.
-- `03_clusters_compound.zig`: `addCluster`, graph attributes, compound edge hints, and terminal cluster panels.
-- `04_output_formats.zig`: one API graph rendered to plain/truecolor terminal, OSC 8 hyperlinks, semantic HTML `<pre>`, SVG, PNG, and PDF.
-- `05_records_ports_svg.zig`: record labels, record ports, terminal record-field preview, HTML-like table labels, and SVG output.
-- `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, terminal preview, and SVG output.
-- `07_force_layout_terminal.zig`: force-directed layout via `.fruchterman_reingold` and terminal rendering.
+- `01_basic_svg.zig`: directed graph construction, labels, layout, and SVG rendering.
+- `02_undirected_svg.zig`: undirected API graph, `rankdir=LR`, and SVG rendering.
+- `03_clusters_compound.zig`: `addSubgraph`, graph attributes, compound edge hints, and SVG output.
+- `04_svg_output.zig`: one API graph rendered through the SVG output dispatch path.
+- `05_records_ports_svg.zig`: record labels, record ports, HTML-like table labels, and SVG output.
+- `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, and SVG output.
+- `07_force_layout_svg.zig`: force-directed layout via `.fruchterman_reingold` and SVG rendering.
 
 ## Graphviz compatibility target
 
@@ -107,7 +104,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Node statements: `A [label="Start", shape=box]`.
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
 - Comma node lists in node statements and edge operands: `a, b -- c, d`.
-- Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph cluster { c d }`.
+- Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph group { c d }`.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, HTML-like IDs/labels as text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes.
@@ -115,12 +112,9 @@ The parser currently supports a practical, mainstream DOT subset:
 
 ## Output backends
 
-- `terminal`: layout-aware shell preview with box-drawn nodes, clusters, edges, arrow markers, edge labels, ASCII fallback, polished border/line presets, DOT/API color/style attributes, ANSI 256/truecolor, optional OSC 8 hyperlinks, and semantic HTML `<pre>` output with links, titles, `data-vex-kind` metadata, a `data-vex-manifest` interaction map, and safe style fallback.
 - `svg`: vector output with labels and basic shapes.
-- `png`: simple built-in rasterizer for early snapshots.
-- `pdf`: compact vector output using a built-in minimal PDF writer.
 
-The native PNG/PDF paths are intentionally dependency-free MVP backends: PNG currently rasterizes boxes/edges without text; PDF keeps vector edges, boxes, and labels.
+The public render API keeps an `OutputFormat` dispatch layer so output backends can be added or removed without changing call sites that already pass a format.
 
 Future work should expand remaining non-MVP DOT details—full cluster layout semantics, complete HTML-label rendering, and all Graphviz edge cases—toward the full grammar in Graphviz's local source at
 `~/Work/graphviz/lib/cgraph/grammar.y` and `~/Work/graphviz/doc/infosrc/grammar`.

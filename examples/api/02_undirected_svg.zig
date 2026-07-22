@@ -1,6 +1,6 @@
-//! Render an undirected graph with the API and the terminal ASCII fallback.
+//! Render an undirected graph with the API and SVG output.
 //!
-//! Run with: zig build run-api-ascii-undirected
+//! Run with: zig build run-api-undirected-svg
 
 const std = @import("std");
 const vex = @import("vex");
@@ -16,11 +16,11 @@ pub fn main(init: std.process.Init) !void {
     });
     defer graph.deinit();
 
-    const client = try graph.nodeWith("client", .{ .label = "Client", .shape = .ellipse });
-    const gateway = try graph.nodeWith("gateway", .{ .label = "Gateway", .shape = .box });
-    const api = try graph.nodeWith("api", .{ .label = "API", .shape = .box });
-    const cache = try graph.nodeWith("cache", .{ .label = "Cache", .shape = .cylinder });
-    const db = try graph.nodeWith("db", .{ .label = "DB", .shape = .cylinder });
+    const client = try graph.nodeWith("Client", .{ .shape = .ellipse });
+    const gateway = try graph.nodeWith("Gateway", .{ .shape = .box });
+    const api = try graph.nodeWith("API", .{ .shape = .box });
+    const cache = try graph.nodeWith("Cache", .{ .shape = .cylinder });
+    const db = try graph.nodeWith("DB", .{ .shape = .cylinder });
 
     _ = try graph.edge(client, gateway, .{ .label = "tls" });
     _ = try graph.edge(gateway, api, .{ .label = "http" });
@@ -35,8 +35,6 @@ pub fn main(init: std.process.Init) !void {
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .terminal, .{
-        .terminal = .{ .unicode = false, .target_width = 96 },
-    });
+    try vex.render(&stdout.interface, &scene, .svg, .{});
     try stdout.interface.flush();
 }

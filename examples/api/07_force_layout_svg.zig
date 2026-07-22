@@ -1,6 +1,6 @@
 //! Build a cyclic graph with the API and render a force-directed layout.
 //!
-//! Run with: zig build run-api-force-layout-terminal
+//! Run with: zig build run-api-force-layout-svg
 
 const std = @import("std");
 const vex = @import("vex");
@@ -12,13 +12,13 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = false, .name = "ForceLayout" });
     defer graph.deinit();
 
-    const ui = try graph.nodeWith("ui", .{ .label = "UI", .shape = .box });
-    const api = try graph.nodeWith("api", .{ .label = "API", .shape = .box });
-    const auth = try graph.nodeWith("auth", .{ .label = "Auth", .shape = .box });
-    const jobs = try graph.nodeWith("jobs", .{ .label = "Jobs", .shape = .box });
-    const cache = try graph.nodeWith("cache", .{ .label = "Cache", .shape = .cylinder });
-    const db = try graph.nodeWith("db", .{ .label = "DB", .shape = .cylinder });
-    const metrics = try graph.nodeWith("metrics", .{ .label = "Metrics", .shape = .ellipse });
+    const ui = try graph.nodeWith("UI", .{ .shape = .box });
+    const api = try graph.nodeWith("API", .{ .shape = .box });
+    const auth = try graph.nodeWith("Auth", .{ .shape = .box });
+    const jobs = try graph.nodeWith("Jobs", .{ .shape = .box });
+    const cache = try graph.nodeWith("Cache", .{ .shape = .cylinder });
+    const db = try graph.nodeWith("DB", .{ .shape = .cylinder });
+    const metrics = try graph.nodeWith("Metrics", .{ .shape = .ellipse });
 
     _ = try graph.edge(ui, api, .{ .label = "http" });
     _ = try graph.edge(api, auth, .{ .label = "token" });
@@ -40,8 +40,6 @@ pub fn main(init: std.process.Init) !void {
 
     var stdout_buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .terminal, .{
-        .terminal = .{ .target_width = 110, .target_height = 34 },
-    });
+    try vex.render(&stdout.interface, &scene, .svg, .{});
     try stdout.interface.flush();
 }

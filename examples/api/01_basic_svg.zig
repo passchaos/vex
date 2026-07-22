@@ -1,6 +1,6 @@
-//! Build a graph with the Vex API and render it to the terminal.
+//! Build a graph with the Vex API and render it to SVG.
 //!
-//! Run with: zig build run-api-basic-terminal
+//! Run with: zig build run-api-basic-svg
 
 const std = @import("std");
 const vex = @import("vex");
@@ -12,14 +12,14 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "ApiPipeline" });
     defer graph.deinit();
 
-    const parse = try graph.nodeWith("parse", .{ .shape = .box, .label = "Parse DOT" });
-    const model = try graph.nodeWith("model", .{ .shape = .box, .label = "Graph model" });
-    const layout = try graph.nodeWith("layout", .{ .shape = .box, .label = "Layered layout" });
-    const terminal = try graph.nodeWith("terminal", .{ .shape = .box, .label = "Terminal" });
+    const parse = try graph.nodeWith("Parse DOT", .{ .shape = .box });
+    const model = try graph.nodeWith("Graph model", .{ .shape = .box });
+    const layout = try graph.nodeWith("Layered layout", .{ .shape = .box });
+    const svg = try graph.nodeWith("SVG", .{ .shape = .box });
 
     _ = try graph.edge(parse, model, .{ .label = "tokens" });
     _ = try graph.edge(model, layout, .{ .label = "nodes + edges" });
-    _ = try graph.edge(layout, terminal, .{ .label = "canvas" });
+    _ = try graph.edge(layout, svg, .{ .label = "document" });
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
@@ -28,6 +28,6 @@ pub fn main(init: std.process.Init) !void {
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .terminal, .{ .terminal = .{ .target_width = 88 } });
+    try vex.render(&stdout.interface, &scene, .svg, .{});
     try stdout.interface.flush();
 }

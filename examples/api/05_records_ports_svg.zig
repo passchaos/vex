@@ -12,23 +12,20 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "RecordsPorts", .rankdir = .LR });
     defer graph.deinit();
 
-    const user = try graph.nodeWith("user", .{
+    const user = try graph.nodeWith("{<id> id|<name> name|<email> email}", .{
         .shape = .record,
-        .label = "{<id> id|<name> name|<email> email}",
     });
-    const order = try graph.nodeWith("order", .{
+    const order = try graph.nodeWith("{<id> id|<user_id> user_id|<total> total}", .{
         .shape = .record,
-        .label = "{<id> id|<user_id> user_id|<total> total}",
     });
-    const payment = try graph.nodeWith("payment", .{
-        .shape = .plaintext,
-        .label =
+    const payment = try graph.nodeWith(
         \\<TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0">
         \\  <TR><TD PORT="id"><B>id</B></TD><TD>uuid</TD></TR>
         \\  <TR><TD PORT="order_id">order_id</TD><TD>uuid</TD></TR>
         \\  <TR><TD PORT="status">status</TD><TD><I>enum</I></TD></TR>
         \\</TABLE>
-        ,
+    , .{
+        .shape = .plaintext,
     });
 
     _ = try graph.edge(user, order, .{
@@ -58,9 +55,6 @@ pub fn main(init: std.process.Init) !void {
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try stdout.interface.writeAll("terminal:\n");
-    try vex.render(&stdout.interface, &scene, .terminal, .{ .terminal = .{ .target_width = 120 } });
-    try stdout.interface.writeByte('\n');
     try stdout.interface.writeAll("wrote zig-out/examples/api_records_ports.svg\n");
     try stdout.interface.flush();
 }
