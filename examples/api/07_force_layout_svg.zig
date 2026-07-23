@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
     const db = try graph.addNode("DB", .{ .shape = .cylinder });
     const metrics = try graph.addNode("Metrics", .{ .shape = .ellipse });
 
-    try graph.addRankConstraint(.same, &.{ jobs, api });
+    // try graph.addRankConstraint(.same, &.{ jobs, api });
 
     _ = try graph.addEdge(ui, api, .{ .label = "http" });
     _ = try graph.addEdge(api, auth, .{ .label = "token" });
@@ -33,7 +33,8 @@ pub fn main(init: std.process.Init) !void {
     _ = try graph.addEdge(metrics, ui, .{ .label = "dash" });
 
     try common.writeSvg(init.gpa, init.io, &graph, "07.svg", .{
-        .algorithm = .fruchterman_reingold,
-        .force = .{ .width = 620, .height = 360, .iterations = 180 },
+        .algorithm = .sugiyama,
+        // .algorithm = .fruchterman_reingold,
+        // .force = .{ .width = 620, .height = 360, .iterations = 180 },
     });
 }

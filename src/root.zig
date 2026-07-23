@@ -7819,11 +7819,110 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     };
     try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
     if (edge_item.label) |label| {
-        try renderSvgTextBlock(writer, label, route.label.x, route.label.y - 6.0, visual.font_size, visual.font_color, visual.font_family, true, true);
+        const label_center = edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+        try renderSvgTextBlock(writer, label, label_center.x, label_center.y, visual.font_size, visual.font_color, visual.font_family, true, true);
     }
     try renderSvgExtraEdgeLabels(writer, edge_item, route, visual);
     try writeSvgInteractiveClose(writer, edge_wrap);
     try writer.writeAll("</g>\n");
+}
+
+fn edgeLabelCenterAvoidingNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, label: []const u8) Point {
+    const base = Point{ .x = route.label.x, .y = route.label.y - 6.0 };
+    const base_rect = edgeLabelRect(label, base, visual.font_size);
+    if (!edgeLabelOverlapsNodes(graph, layout, edge_item, base_rect)) return base;
+
+    var candidates: [96]Point = undefined;
+    var candidate_count: usize = 0;
+    const rank_offsets = [_]f64{ -24, 24, -36, 36, -54, 54, -72, 72 };
+    for (rank_offsets) |offset| appendEdgeLabelCandidate(&candidates, &candidate_count, shiftLabelRankAxis(base, layout.rankdir, offset));
+    const cross_offsets = [_]f64{ -36, 36, -54, 54, -72, 72 };
+    for (cross_offsets) |offset| appendEdgeLabelCandidate(&candidates, &candidate_count, shiftLabelCrossAxis(base, layout.rankdir, offset));
+
+    const label_rect = edgeLabelRect(label, base, visual.font_size);
+    for (graph.nodes.items) |node_item| {
+        if (node_item.id >= layout.nodes.len) continue;
+        if (resolveNodeVisual(node_item).hidden) continue;
+        const rect = expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), 4.0);
+        if (!rectsOverlap(label_rect, rect)) continue;
+        const half_width = label_rect.width / 2.0;
+        const half_height = label_rect.height / 2.0;
+        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = base.x, .y = rect.y - half_height - 6.0 });
+        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = base.x, .y = rect.y + rect.height + half_height + 6.0 });
+        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = rect.x - half_width - 6.0, .y = base.y });
+        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = rect.x + rect.width + half_width + 6.0, .y = base.y });
+    }
+
+    var best = base;
+    var best_score = std.math.floatMax(f64);
+    for (candidates[0..candidate_count]) |candidate| {
+        const rect = edgeLabelRect(label, candidate, visual.font_size);
+        if (!labelRectInsideLayout(rect, layout)) continue;
+        if (edgeLabelOverlapsNodes(graph, layout, edge_item, rect)) continue;
+        const dx = candidate.x - base.x;
+        const dy = candidate.y - base.y;
+        const score = dx * dx + dy * dy;
+        if (score < best_score) {
+            best_score = score;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+fn appendEdgeLabelCandidate(candidates: *[96]Point, count: *usize, candidate: Point) void {
+    if (count.* >= candidates.len) return;
+    candidates[count.*] = candidate;
+    count.* += 1;
+}
+
+fn shiftLabelRankAxis(point: Point, rankdir: RankDir, offset: f64) Point {
+    return switch (rankdir) {
+        .TB, .BT => .{ .x = point.x, .y = point.y + offset },
+        .LR, .RL => .{ .x = point.x + offset, .y = point.y },
+    };
+}
+
+fn shiftLabelCrossAxis(point: Point, rankdir: RankDir, offset: f64) Point {
+    return switch (rankdir) {
+        .TB, .BT => .{ .x = point.x + offset, .y = point.y },
+        .LR, .RL => .{ .x = point.x, .y = point.y + offset },
+    };
+}
+
+fn edgeLabelRect(label: []const u8, center: Point, font_size: f64) RectF {
+    const line_height = font_size * 1.25;
+    const height = @as(f64, @floatFromInt(displayLabelLineCount(label))) * line_height + 8.0;
+    const width = displayLabelEstimatedWidth(label, font_size) + 12.0;
+    return .{
+        .x = center.x - width / 2.0,
+        .y = center.y - height / 2.0,
+        .width = width,
+        .height = height,
+    };
+}
+
+fn edgeLabelOverlapsNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, label_rect: RectF) bool {
+    _ = edge_item;
+    for (graph.nodes.items) |node_item| {
+        if (node_item.id >= layout.nodes.len) continue;
+        if (resolveNodeVisual(node_item).hidden) continue;
+        const rect = expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), 2.0);
+        if (rectsOverlap(label_rect, rect)) return true;
+    }
+    return false;
+}
+
+fn labelRectInsideLayout(rect: RectF, layout: *const Layout) bool {
+    const padding: f64 = 2.0;
+    return rect.x >= padding and rect.y >= padding and
+        rect.x + rect.width <= layout.width - padding and
+        rect.y + rect.height <= layout.height - padding;
+}
+
+fn rectsOverlap(a: RectF, b: RectF) bool {
+    return @max(a.x, b.x) < @min(a.x + a.width, b.x + b.width) and
+        @max(a.y, b.y) < @min(a.y + a.height, b.y + b.height);
 }
 
 fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node) Io.Writer.Error!void {
@@ -17783,6 +17882,49 @@ test "SVG marker path route shortens arrow endpoints" {
     try std.testing.expect(shortened.end.y < route.end.y);
     try std.testing.expectEqual(@as(f64, 90), shortened.end.y);
     try std.testing.expectEqual(route.label.y, shortened.label.y);
+}
+
+test "SVG edge labels avoid overlapping intervening nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "labels" });
+    defer graph.deinit();
+    const from = try graph.addNode("from", .{ .shape = .box });
+    const middle = try graph.addNode("middle", .{ .shape = .box });
+    const to = try graph.addNode("to", .{ .shape = .box });
+    const edge_id = try graph.addEdge(from, to, .{ .label = "write" });
+
+    var layout = Layout{
+        .allocator = allocator,
+        .graph = try Graph.init(allocator, .{ .directed = true }),
+        .rankdir = .TB,
+        .nodes = try allocator.dupe(NodeLayout, &.{
+            .{ .center = .{ .x = 40, .y = 20 }, .width = 54, .height = 36 },
+            .{ .center = .{ .x = 40, .y = 100 }, .width = 62, .height = 36 },
+            .{ .center = .{ .x = 40, .y = 180 }, .width = 54, .height = 36 },
+        }),
+        .subgraphs = try allocator.alloc(SubgraphLayout, 0),
+        .edge_waypoints = try allocator.alloc(EdgeWaypoints, 0),
+        .ranks = try allocator.dupe(usize, &.{ 0, 1, 2 }),
+        .rank_depths = try allocator.alloc(f64, 0),
+        .rank_heights = try allocator.alloc(f64, 0),
+        .margin = 16,
+        .margin_x = 16,
+        .margin_y = 16,
+        .width = 140,
+        .height = 220,
+    };
+    defer layout.deinit();
+
+    const route = edgeRoute(layout.nodes[from], layout.nodes[to], .TB, 0);
+    const edge_item = graph.edges.items[edge_id];
+    const visual = resolveEdgeVisual(edge_item);
+    const before = edgeLabelRect(edge_item.label.?, .{ .x = route.label.x, .y = route.label.y - 6.0 }, visual.font_size);
+    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, before));
+    const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, visual, edge_item.label.?);
+    const after = edgeLabelRect(edge_item.label.?, label_center, visual.font_size);
+    try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, after));
+    try std.testing.expect(label_center.y != route.label.y - 6.0);
+    _ = middle;
 }
 
 test "DOT parser propagates edge constraint and minlen controls" {
