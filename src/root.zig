@@ -7704,7 +7704,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const title_baseline_y = if (label_loc) |value|
             if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
         else
-            24.0;
+            layout.height - 16.0;
         const title_font = attrValue(graph.attrs.items, "fontname") orelse options.font_family;
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = attrValue(graph.attrs.items, "fontcolor") orelse "black";
@@ -16446,6 +16446,42 @@ test "SVG renderer honors graph labelloc and labeljust attributes" {
     try std.testing.expect(layout.margin_y >= 26.0);
     const b = nodeIdByLabel(&graph, "b");
     try std.testing.expect(layout.nodes[b].center.y + layout.nodes[b].height / 2.0 < layout.height - 16.0);
+}
+
+test "SVG renderer defaults root graph labels to bottom" {
+    const allocator = std.testing.allocator;
+    var bottom = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="Default Bottom"];
+        \\  a -> b;
+        \\}
+    );
+    defer bottom.deinit();
+    var bottom_layout = try layoutLayered(allocator, &bottom, .{});
+    defer bottom_layout.deinit();
+    const bottom_svg = try renderSvgAlloc(allocator, &bottom, &bottom_layout, .{});
+    defer allocator.free(bottom_svg);
+
+    var bottom_y_value_buf: [32]u8 = undefined;
+    const bottom_y_value = try svgNumberForTest(&bottom_y_value_buf, bottom_layout.height - 16.0);
+    var bottom_y_buf: [64]u8 = undefined;
+    const bottom_y = try std.fmt.bufPrint(&bottom_y_buf, "y=\"{s}\"", .{bottom_y_value});
+    try std.testing.expect(std.mem.indexOf(u8, bottom_svg, bottom_y) != null);
+
+    var top = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="Explicit Top", labelloc=t];
+        \\  a -> b;
+        \\}
+    );
+    defer top.deinit();
+    var top_layout = try layoutLayered(allocator, &top, .{});
+    defer top_layout.deinit();
+    const top_svg = try renderSvgAlloc(allocator, &top, &top_layout, .{});
+    defer allocator.free(top_svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, top_svg, "Explicit Top") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top_svg, "y=\"24\"") != null);
 }
 
 test "SVG renderer honors node xlabel labelloc labeljust and margin attributes" {
