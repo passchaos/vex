@@ -53,7 +53,7 @@ defer layout.deinit();
 try vex.render(writer, &layout, .svg, .{});
 ```
 
-Default node and edge label attributes set through the API apply to subsequently added items, with per-item options taking precedence.
+Default node and edge label attributes set through the API apply to subsequently added items, with per-item options taking precedence. Typed graph attributes include spline routing modes such as `curved`, `polyline`, `line`, `ortho`, and `none`.
 
 ## API Examples
 

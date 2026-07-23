@@ -143,6 +143,7 @@ pub const OrderingMode = enum {
 
 pub const SplineMode = enum {
     curved,
+    polyline,
     line,
     ortho,
     none,
@@ -1556,6 +1557,7 @@ fn layoutAlgorithmName(algorithm: LayoutAlgorithm) []const u8 {
 fn splineModeName(mode: SplineMode) []const u8 {
     return switch (mode) {
         .curved => "curved",
+        .polyline => "polyline",
         .line => "line",
         .ortho => "ortho",
         .none => "none",
@@ -13187,7 +13189,7 @@ test "code API sets typed subgraph attrs" {
         .concentrate = true,
         .nodesep = 0.8,
         .ranksep = .{ .equally = 1.2 },
-        .splines = .ortho,
+        .splines = .polyline,
         .bgcolor = "transparent",
         .ordering = .out,
         .color = "#2563eb",
@@ -13218,7 +13220,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("true", attrValue(item.attrs.items, "concentrate").?);
     try std.testing.expectEqualStrings("0.8", attrValue(item.attrs.items, "nodesep").?);
     try std.testing.expectEqualStrings("1.2 equally", attrValue(item.attrs.items, "ranksep").?);
-    try std.testing.expectEqualStrings("ortho", attrValue(item.attrs.items, "splines").?);
+    try std.testing.expectEqualStrings("polyline", attrValue(item.attrs.items, "splines").?);
     try std.testing.expectEqualStrings("transparent", attrValue(item.attrs.items, "bgcolor").?);
     try std.testing.expectEqualStrings("out", attrValue(item.attrs.items, "ordering").?);
     try std.testing.expectEqualStrings("#2563eb", attrValue(item.attrs.items, "color").?);
@@ -13239,6 +13241,26 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("subgraph tip", attrValue(item.attrs.items, "tooltip").?);
     try std.testing.expectEqualStrings("subgraph title", attrValue(item.attrs.items, "title").?);
     try std.testing.expectEqualStrings("_parent", attrValue(item.attrs.items, "target").?);
+}
+
+test "code API sets typed graph polyline splines" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    try graph.setGraphAttr(.{ .splines = .polyline });
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    _ = try graph.addEdge(a, b, .{});
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("polyline", attrValue(graph.attrs.items, "splines").?);
+    try std.testing.expect(svgPathCommandCount(svg, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(svg, 'L') >= 1);
 }
 
 test "Fruchterman-Reingold layout places nodes within bounds" {
