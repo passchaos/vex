@@ -169,6 +169,7 @@ pub const GraphAttr = union(enum) {
     splines: SplineMode,
     samplepoints: usize,
     bgcolor: []const u8,
+    colorscheme: []const u8,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -211,6 +212,7 @@ pub const NodeFixedSize = enum {
 pub const NodeAttr = union(enum) {
     label: []const u8,
     color: []const u8,
+    colorscheme: []const u8,
     fillcolor: []const u8,
     gradientangle: f64,
     fontcolor: []const u8,
@@ -290,6 +292,7 @@ pub const EdgePort = struct {
 pub const NodeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
+    colorscheme: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
     gradientangle: ?f64 = null,
     fontcolor: ?[]const u8 = null,
@@ -329,6 +332,7 @@ pub const NodeOptions = struct {
 pub const EdgeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
+    colorscheme: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
     fontcolor: ?[]const u8 = null,
     fontname: ?[]const u8 = null,
@@ -392,6 +396,7 @@ pub const EdgeOptions = struct {
 pub const EdgeAttr = union(enum) {
     label: []const u8,
     color: []const u8,
+    colorscheme: []const u8,
     fillcolor: []const u8,
     fontcolor: []const u8,
     fontname: []const u8,
@@ -463,6 +468,7 @@ pub const SubgraphAttr = union(enum) {
     ordering: OrderingMode,
     color: []const u8,
     pencolor: []const u8,
+    colorscheme: []const u8,
     fillcolor: []const u8,
     gradientangle: f64,
     fontcolor: []const u8,
@@ -497,6 +503,7 @@ pub const SubgraphOptions = struct {
     ordering: ?OrderingMode = null,
     color: ?[]const u8 = null,
     pencolor: ?[]const u8 = null,
+    colorscheme: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
     gradientangle: ?f64 = null,
     fontcolor: ?[]const u8 = null,
@@ -845,6 +852,7 @@ pub const Graph = struct {
                 try self.setGraphAttrRaw("samplepoints", text);
             },
             .bgcolor => |value| try self.setGraphAttrRaw("bgcolor", value),
+            .colorscheme => |value| try self.setGraphAttrRaw("colorscheme", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -882,6 +890,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setDefaultNodeAttrRaw("label", value),
             .color => |value| try self.setDefaultNodeAttrRaw("color", value),
+            .colorscheme => |value| try self.setDefaultNodeAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setDefaultNodeAttrRaw("fillcolor", value),
             .gradientangle => |value| try self.setDefaultNodeAttrFloat("gradientangle", value),
             .fontcolor => |value| try self.setDefaultNodeAttrRaw("fontcolor", value),
@@ -948,6 +957,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setDefaultEdgeAttrRaw("label", value),
             .color => |value| try self.setDefaultEdgeAttrRaw("color", value),
+            .colorscheme => |value| try self.setDefaultEdgeAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setDefaultEdgeAttrRaw("fillcolor", value),
             .fontcolor => |value| try self.setDefaultEdgeAttrRaw("fontcolor", value),
             .fontname => |value| try self.setDefaultEdgeAttrRaw("fontname", value),
@@ -1032,6 +1042,7 @@ pub const Graph = struct {
     fn applyNodeOptions(self: *Graph, id: NodeId, options: NodeOptions) !void {
         if (options.label) |value| try self.setNodeAttr(id, .{ .label = value });
         if (options.color) |value| try self.setNodeAttr(id, .{ .color = value });
+        if (options.colorscheme) |value| try self.setNodeAttr(id, .{ .colorscheme = value });
         if (options.fillcolor) |value| try self.setNodeAttr(id, .{ .fillcolor = value });
         if (options.gradientangle) |value| try self.setNodeAttr(id, .{ .gradientangle = value });
         if (options.fontcolor) |value| try self.setNodeAttr(id, .{ .fontcolor = value });
@@ -1072,6 +1083,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setNodeAttrRaw(id, "label", value),
             .color => |value| try self.setNodeAttrRaw(id, "color", value),
+            .colorscheme => |value| try self.setNodeAttrRaw(id, "colorscheme", value),
             .fillcolor => |value| try self.setNodeAttrRaw(id, "fillcolor", value),
             .gradientangle => |value| try self.setNodeAttrFloat(id, "gradientangle", value),
             .fontcolor => |value| try self.setNodeAttrRaw(id, "fontcolor", value),
@@ -1149,6 +1161,7 @@ pub const Graph = struct {
     fn applyEdgeOptions(self: *Graph, id: EdgeId, options: EdgeOptions) !void {
         if (options.label) |value| try self.setEdgeAttr(id, .{ .label = value });
         if (options.color) |value| try self.setEdgeAttr(id, .{ .color = value });
+        if (options.colorscheme) |value| try self.setEdgeAttr(id, .{ .colorscheme = value });
         if (options.fillcolor) |value| try self.setEdgeAttr(id, .{ .fillcolor = value });
         if (options.fontcolor) |value| try self.setEdgeAttr(id, .{ .fontcolor = value });
         if (options.fontname) |value| try self.setEdgeAttr(id, .{ .fontname = value });
@@ -1211,6 +1224,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setEdgeAttrRaw(id, "label", value),
             .color => |value| try self.setEdgeAttrRaw(id, "color", value),
+            .colorscheme => |value| try self.setEdgeAttrRaw(id, "colorscheme", value),
             .fillcolor => |value| try self.setEdgeAttrRaw(id, "fillcolor", value),
             .fontcolor => |value| try self.setEdgeAttrRaw(id, "fontcolor", value),
             .fontname => |value| try self.setEdgeAttrRaw(id, "fontname", value),
@@ -1352,6 +1366,7 @@ pub const Graph = struct {
         if (options.ordering) |value| try self.setSubgraphAttr(id, .{ .ordering = value });
         if (options.color) |value| try self.setSubgraphAttr(id, .{ .color = value });
         if (options.pencolor) |value| try self.setSubgraphAttr(id, .{ .pencolor = value });
+        if (options.colorscheme) |value| try self.setSubgraphAttr(id, .{ .colorscheme = value });
         if (options.fillcolor) |value| try self.setSubgraphAttr(id, .{ .fillcolor = value });
         if (options.gradientangle) |value| try self.setSubgraphAttr(id, .{ .gradientangle = value });
         if (options.fontcolor) |value| try self.setSubgraphAttr(id, .{ .fontcolor = value });
@@ -1394,6 +1409,7 @@ pub const Graph = struct {
             .ordering => |value| try self.setSubgraphAttrRaw(id, "ordering", orderingModeName(value)),
             .color => |value| try self.setSubgraphAttrRaw(id, "color", value),
             .pencolor => |value| try self.setSubgraphAttrRaw(id, "pencolor", value),
+            .colorscheme => |value| try self.setSubgraphAttrRaw(id, "colorscheme", value),
             .fillcolor => |value| try self.setSubgraphAttrRaw(id, "fillcolor", value),
             .gradientangle => |value| try self.setSubgraphAttrFloat(id, "gradientangle", value),
             .fontcolor => |value| try self.setSubgraphAttrRaw(id, "fontcolor", value),
@@ -7716,7 +7732,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
             if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
-            const visual = resolveEdgeVisual(edge_item);
+            const visual = resolveEdgeVisual(graph, edge_item);
             if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), edgeMarkerFill(edge_item, visual, true), visual.marker_scale);
             if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), edgeMarkerFill(edge_item, visual, false), visual.marker_scale);
         }
@@ -7800,7 +7816,7 @@ fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
 
 fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
     if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
-    const visual = resolveEdgeVisual(edge_item);
+    const visual = resolveEdgeVisual(graph, edge_item);
     if (visual.hidden) return;
     try writeSvgEdgeComment(writer, graph, edge_item);
     var default_id_buf: [32]u8 = undefined;
@@ -7874,7 +7890,7 @@ fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, 
     const label_rect = edgeLabelRect(label, base, font_size);
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= layout.nodes.len) continue;
-        if (resolveNodeVisual(node_item).hidden) continue;
+        if (resolveNodeVisual(graph, node_item).hidden) continue;
         const rect = expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), 4.0);
         if (!rectsOverlap(label_rect, rect)) continue;
         const half_width = label_rect.width / 2.0;
@@ -7938,7 +7954,7 @@ fn edgeLabelOverlapsNodes(graph: *const Graph, layout: *const Layout, edge_item:
     _ = edge_item;
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= layout.nodes.len) continue;
-        if (resolveNodeVisual(node_item).hidden) continue;
+        if (resolveNodeVisual(graph, node_item).hidden) continue;
         const rect = expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), 2.0);
         if (rectsOverlap(label_rect, rect)) return true;
     }
@@ -7958,7 +7974,7 @@ fn rectsOverlap(a: RectF, b: RectF) bool {
 }
 
 fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node) Io.Writer.Error!void {
-    var visual = resolveNodeVisual(node_item);
+    var visual = resolveNodeVisual(graph, node_item);
     if (visual.hidden) return;
     const l = graphvizRenderNodeLayout(graph, layout, node_item);
     try writeSvgNodeNameComment(writer, node_item);
@@ -8009,7 +8025,7 @@ fn svgNeedsMarkerDefs(graph: *const Graph, concentrate: bool) bool {
     if (!graph.directed) return false;
     for (graph.edges.items) |edge_item| {
         if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
-        const visual = resolveEdgeVisual(edge_item);
+        const visual = resolveEdgeVisual(graph, edge_item);
         if (visual.marker_end != .none and visual.marker_end != .normal) return true;
         if (visual.marker_start != .none and visual.marker_start != .normal) return true;
     }
@@ -8061,15 +8077,15 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= layout.nodes.len) continue;
-        if (resolveNodeVisual(node_item).hidden) continue;
+        if (resolveNodeVisual(graph, node_item).hidden) continue;
         const node_layout = graphvizRenderNodeLayout(graph, layout, node_item);
-        const visual = resolveNodeVisual(node_item);
+        const visual = resolveNodeVisual(graph, node_item);
         bounds.includeRect(nodeRect(node_layout));
         if (nodeXLabelRect(node_item, node_layout, visual)) |rect| bounds.includeRect(rect);
     }
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) continue;
-        const visual = resolveEdgeVisual(edge_item);
+        const visual = resolveEdgeVisual(graph, edge_item);
         if (visual.hidden) continue;
         const route = if (edge_item.from == edge_item.to)
             selfLoopRoute(layout.nodes[edge_item.from])
@@ -10351,7 +10367,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     if (index >= layout.subgraphs.len) return;
     const box = layout.subgraphs[index];
     if (box.width <= 0 or box.height <= 0) return;
-    var visual = resolveClusterVisual(cluster);
+    var visual = resolveClusterVisual(graph, cluster);
     if (visual.hidden) return;
     var default_id_buf: [32]u8 = undefined;
     const default_id = std.fmt.bufPrint(&default_id_buf, "clust{d}", .{index + 1}) catch unreachable;
@@ -10465,7 +10481,7 @@ fn clusterVisualRectContainingNodes(graph: *const Graph, layout: *const Layout, 
     for (graph.subgraphs.items[index].nodes) |node_id| {
         if (node_id >= graph.nodes.items.len or node_id >= layout.nodes.len) continue;
         const node_item = graph.nodes.items[node_id];
-        if (resolveNodeVisual(node_item).hidden) continue;
+        if (resolveNodeVisual(graph, node_item).hidden) continue;
         bounds.includeRect(expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), member_padding));
     }
     return bounds.rect() orelse rect;
@@ -11508,20 +11524,20 @@ fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: 
     }
 }
 
-fn resolveNodeVisual(node_item: Node) NodeVisual {
+fn resolveNodeVisual(graph: *const Graph, node_item: Node) NodeVisual {
     const style = attrValue(node_item.attrs.items, "style");
     const filled = styleHas(style, "filled") or (styleHas(style, "wedged") and wedgedNodeFillEligible(node_item.shape));
     const invisible = styleHas(style, "invis");
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
     const color_attr = attrValue(node_item.attrs.items, "color");
-    const color = color_attr orelse node_item.color;
+    const color = resolveSvgColor(graph, node_item.attrs.items, color_attr orelse node_item.color);
     const explicit_color = color_attr != null and !(std.ascii.eqlIgnoreCase(color_attr.?, "black") and std.ascii.eqlIgnoreCase(node_item.color, "black"));
-    const fill = attrValue(node_item.attrs.items, "fillcolor") orelse if (filled) (if (explicit_color) color else "lightgrey") else "none";
+    const fill = if (attrValue(node_item.attrs.items, "fillcolor")) |value| resolveSvgColor(graph, node_item.attrs.items, value) else if (filled) (if (explicit_color) color else "lightgrey") else "none";
     return .{
         .fill = fill,
         .stroke = color,
-        .font_color = attrValue(node_item.attrs.items, "fontcolor") orelse "black",
+        .font_color = resolveSvgColor(graph, node_item.attrs.items, attrValue(node_item.attrs.items, "fontcolor") orelse "black"),
         .font_family = attrValue(node_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.0),
@@ -11532,7 +11548,7 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     };
 }
 
-fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
+fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
     const style = attrValue(edge_item.attrs.items, "style");
     const bold = styleHas(style, "bold");
     const arrowhead = attrValue(edge_item.attrs.items, "arrowhead");
@@ -11541,12 +11557,12 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     const head_enabled = markerEnabledByDir(dir, true);
     const tail_enabled = markerEnabledByDir(dir, false);
     const raw_stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color;
-    const stroke = if (parseColorList(raw_stroke)) |colors| colors.segments[0].color else raw_stroke;
-    const fill = attrValue(edge_item.attrs.items, "fillcolor") orelse stroke;
+    const stroke = if (parseColorList(raw_stroke)) |colors| resolveSvgColor(graph, edge_item.attrs.items, colors.segments[0].color) else resolveSvgColor(graph, edge_item.attrs.items, raw_stroke);
+    const fill = if (attrValue(edge_item.attrs.items, "fillcolor")) |value| resolveSvgColor(graph, edge_item.attrs.items, value) else stroke;
     return .{
         .stroke = stroke,
         .fill = fill,
-        .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "black",
+        .font_color = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "fontcolor") orelse "black"),
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
@@ -11558,26 +11574,26 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     };
 }
 
-fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
+fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
     const style = attrValue(cluster.attrs.items, "style");
     const filled = styleHas(style, "filled");
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
     const color_attr = attrValue(cluster.attrs.items, "color");
-    const color = color_attr orelse "#94a3b8";
-    const stroke = attrValue(cluster.attrs.items, "pencolor") orelse color;
+    const color = resolveSvgColor(graph, cluster.attrs.items, color_attr orelse "#94a3b8");
+    const stroke = if (attrValue(cluster.attrs.items, "pencolor")) |value| resolveSvgColor(graph, cluster.attrs.items, value) else color;
     const fillcolor = attrValue(cluster.attrs.items, "fillcolor");
     const bgcolor = attrValue(cluster.attrs.items, "bgcolor");
     const fill = if (bgcolor) |value|
-        if (!filled or (fillcolor == null and color_attr == null)) value else (fillcolor orelse color)
+        if (!filled or (fillcolor == null and color_attr == null)) resolveSvgColor(graph, cluster.attrs.items, value) else if (fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
     else if (filled)
-        fillcolor orelse color
+        if (fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
     else
         "none";
     return .{
         .fill = fill,
         .stroke = stroke,
-        .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "black",
+        .font_color = resolveSvgColor(graph, cluster.attrs.items, attrValue(cluster.attrs.items, "fontcolor") orelse "black"),
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
@@ -11610,6 +11626,44 @@ fn parsePositiveAttrFloat(attrs: []const Attr, name: []const u8, fallback: f64) 
 fn parseAttrUsize(attrs: []const Attr, name: []const u8, fallback: usize) usize {
     const value = attrValue(attrs, name) orelse return fallback;
     return std.fmt.parseInt(usize, value, 10) catch fallback;
+}
+
+fn resolveSvgColor(graph: *const Graph, attrs: []const Attr, color: []const u8) []const u8 {
+    if (std.mem.eql(u8, color, "black") or std.mem.eql(u8, color, "white") or std.mem.eql(u8, color, "lightgrey")) return color;
+    if (color.len >= 2 and color[0] == '/' and color[1] == '/') {
+        const scheme = attrValue(attrs, "colorscheme") orelse attrValue(graph.attrs.items, "colorscheme") orelse return color[2..];
+        return colorFromScheme(scheme, color[2..]) orelse color[2..];
+    }
+    if (color.len >= 1 and color[0] == '/') {
+        const rest = color[1..];
+        if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
+            const scheme = rest[0..slash];
+            const name = rest[slash + 1 ..];
+            if (std.ascii.eqlIgnoreCase(scheme, "X11") or std.ascii.eqlIgnoreCase(scheme, "Xlib")) return name;
+            return colorFromScheme(scheme, name) orelse color;
+        }
+        return rest;
+    }
+    const scheme = attrValue(attrs, "colorscheme") orelse attrValue(graph.attrs.items, "colorscheme") orelse return color;
+    if (std.ascii.eqlIgnoreCase(scheme, "X11") or std.ascii.eqlIgnoreCase(scheme, "Xlib")) return color;
+    return colorFromScheme(scheme, color) orelse color;
+}
+
+fn colorFromScheme(scheme: []const u8, name: []const u8) ?[]const u8 {
+    if (!std.ascii.eqlIgnoreCase(scheme, "bugn9")) return null;
+    const index = std.fmt.parseInt(usize, name, 10) catch return null;
+    return switch (index) {
+        1 => "#f7fcfd",
+        2 => "#e5f5f9",
+        3 => "#ccece6",
+        4 => "#99d8c9",
+        5 => "#66c2a4",
+        6 => "#41ae76",
+        7 => "#238b45",
+        8 => "#006d2c",
+        9 => "#00441b",
+        else => null,
+    };
 }
 
 fn styleHas(style: ?[]const u8, needle: []const u8) bool {
@@ -15910,9 +15964,9 @@ test "SVG renderer uses typed solid node edge and subgraph styles" {
     try std.testing.expectEqualStrings("dashed,solid", attrValue(graph.nodes.items[a].attrs.items, "style").?);
     try std.testing.expectEqualStrings("dotted,solid", attrValue(graph.edges.items[0].attrs.items, "style").?);
     try std.testing.expectEqualStrings("dotted,solid", attrValue(graph.subgraphs.items[0].attrs.items, "style").?);
-    try std.testing.expectEqual(DashStyle.none, resolveNodeVisual(graph.nodes.items[a]).dash);
-    try std.testing.expectEqual(DashStyle.none, resolveEdgeVisual(graph.edges.items[0]).dash);
-    try std.testing.expectEqual(DashStyle.none, resolveClusterVisual(graph.subgraphs.items[0]).dash);
+    try std.testing.expectEqual(DashStyle.none, resolveNodeVisual(&graph, graph.nodes.items[a]).dash);
+    try std.testing.expectEqual(DashStyle.none, resolveEdgeVisual(&graph, graph.edges.items[0]).dash);
+    try std.testing.expectEqual(DashStyle.none, resolveClusterVisual(&graph, graph.subgraphs.items[0]).dash);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") == null);
 }
@@ -15959,6 +16013,64 @@ test "SVG renderer uses typed diagonals node style" {
     try std.testing.expectEqualStrings("filled,diagonals", attrValue(graph.nodes.items[0].attrs.items, "style").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#15803d\"") != null);
     try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"#15803d\"") >= 6);
+}
+
+test "SVG renderer resolves Graphviz bugn9 colorscheme colors" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [colorscheme=bugn9];
+        \\  node [shape=box, style=filled];
+        \\  a [color=7, fillcolor=2, fontcolor=9];
+        \\  b [colorscheme=X11, color=red];
+        \\  a -> b [color=6, fontcolor=8];
+        \\  subgraph cluster_scheme {
+        \\    colorscheme=bugn9;
+        \\    color=4;
+        \\    fillcolor=1;
+        \\    style=filled;
+        \\    c;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#e5f5f9\" stroke=\"#238b45\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#00441b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#41ae76\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f7fcfd\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#99d8c9\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"red\"") != null);
+}
+
+test "SVG renderer uses typed colorscheme attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .colorscheme = "bugn9" });
+
+    const a = try graph.addNode("a", .{
+        .shape = .box,
+        .style = .filled,
+        .color = "7",
+        .fillcolor = "2",
+    });
+    const b = try graph.addNode("b", .{ .shape = .box });
+    _ = try graph.addEdge(a, b, .{ .color = "6" });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("bugn9", attrValue(graph.attrs.items, "colorscheme").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#e5f5f9\" stroke=\"#238b45\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#41ae76\"") != null);
 }
 
 test "SVG renderer honors bold style and node peripheries" {
@@ -17005,8 +17117,8 @@ test "SVG renderer honors edge label font position and decoration attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
     try std.testing.expect(countSubstrings(svg, "stroke=\"#2563eb\"") >= 2);
 
-    const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, resolveEdgeVisual(edge_item), edge_item.label.?);
-    const label_rect = edgeLabelRect(edge_item.label.?, label_center, resolveEdgeVisual(edge_item).font_size);
+    const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, resolveEdgeVisual(&graph, edge_item), edge_item.label.?);
+    const label_rect = edgeLabelRect(edge_item.label.?, label_center, resolveEdgeVisual(&graph, edge_item).font_size);
     const edge_fragment = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingEdgeFragment;
     var decorate_numbers: [16]f64 = undefined;
     const decorate_count = lastSvgPathNumbersInFragment(edge_fragment, decorate_numbers[0..]);
@@ -19411,7 +19523,7 @@ test "SVG edge labels avoid overlapping intervening nodes" {
 
     const route = edgeRoute(layout.nodes[from], layout.nodes[to], .TB, 0);
     const edge_item = graph.edges.items[edge_id];
-    const visual = resolveEdgeVisual(edge_item);
+    const visual = resolveEdgeVisual(&graph, edge_item);
     const before = edgeLabelRect(edge_item.label.?, .{ .x = route.label.x, .y = route.label.y - 6.0 }, visual.font_size);
     try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, before));
     const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, visual, edge_item.label.?);
