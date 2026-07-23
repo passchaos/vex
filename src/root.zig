@@ -150,6 +150,12 @@ pub const SplineMode = enum {
     none,
 };
 
+pub const OutputOrder = enum {
+    breadthfirst,
+    nodesfirst,
+    edgesfirst,
+};
+
 pub const RankSep = union(enum) {
     value: f64,
     equally: f64,
@@ -178,6 +184,7 @@ pub const GraphAttr = union(enum) {
     labeljust: LabelJust,
     labelloc: LabelLoc,
     nojustify: bool,
+    outputorder: OutputOrder,
     ordering: OrderingMode,
     url: []const u8,
     href: []const u8,
@@ -868,6 +875,7 @@ pub const Graph = struct {
             .labeljust => |value| try self.setGraphAttrRaw("labeljust", labelJustName(value)),
             .labelloc => |value| try self.setGraphAttrRaw("labelloc", labelLocName(value)),
             .nojustify => |value| try self.setGraphAttrRaw("nojustify", boolAttrValue(value)),
+            .outputorder => |value| try self.setGraphAttrRaw("outputorder", outputOrderName(value)),
             .ordering => |value| try self.setGraphAttrRaw("ordering", orderingModeName(value)),
             .url => |value| try self.setGraphAttrRaw("URL", value),
             .href => |value| try self.setGraphAttrRaw("href", value),
@@ -1620,6 +1628,14 @@ fn splineModeName(mode: SplineMode) []const u8 {
         .line => "line",
         .ortho => "ortho",
         .none => "none",
+    };
+}
+
+fn outputOrderName(order: OutputOrder) []const u8 {
+    return switch (order) {
+        .breadthfirst => "breadthfirst",
+        .nodesfirst => "nodesfirst",
+        .edgesfirst => "edgesfirst",
     };
 }
 
@@ -7772,6 +7788,19 @@ fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, la
 }
 
 fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
+    switch (svgOutputOrder(graph)) {
+        .edgesfirst => {
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+            return;
+        },
+        .nodesfirst => {
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+            return;
+        },
+        .breadthfirst => {},
+    }
     if (graph.nodes.items.len > 512 or graph.edges.items.len > 1024) {
         for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
         for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
@@ -7817,6 +7846,13 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
         if (node_item.id < node_written.len and node_written[node_item.id]) continue;
         try renderSvgNodeGroup(writer, graph, layout, options, node_item);
     }
+}
+
+fn svgOutputOrder(graph: *const Graph) OutputOrder {
+    const value = attrValue(graph.attrs.items, "outputorder") orelse return .breadthfirst;
+    if (std.ascii.eqlIgnoreCase(value, "edgesfirst")) return .edgesfirst;
+    if (std.ascii.eqlIgnoreCase(value, "nodesfirst")) return .nodesfirst;
+    return .breadthfirst;
 }
 
 fn sortEdgesByTarget(graph: *const Graph, edge_ids: []EdgeId) void {
@@ -16629,6 +16665,41 @@ test "SVG renderer honors graph pad attribute in canvas bounds" {
     const tiny = attrPad(attrs[0..], svg_clip_padding);
     try std.testing.expectApproxEqAbs(@as(f64, 3.6), tiny.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 7.2), tiny.y, 0.001);
+}
+
+test "SVG renderer honors Graphviz outputorder" {
+    const allocator = std.testing.allocator;
+    var edges_first = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [outputorder=edgesfirst];
+        \\  a -> b;
+        \\}
+    );
+    defer edges_first.deinit();
+    var edges_layout = try layoutLayered(allocator, &edges_first, .{});
+    defer edges_layout.deinit();
+    const edges_svg = try renderSvgAlloc(allocator, &edges_first, &edges_layout, .{});
+    defer allocator.free(edges_svg);
+
+    const edge_pos = std.mem.indexOf(u8, edges_svg, "<g id=\"edge1\" class=\"edge\">") orelse return error.MissingEdge;
+    const node_pos = std.mem.indexOf(u8, edges_svg, "<g id=\"node1\" class=\"node\">") orelse return error.MissingNode;
+    try std.testing.expect(edge_pos < node_pos);
+
+    var nodes_first = try Graph.init(allocator, .{ .directed = true });
+    defer nodes_first.deinit();
+    try nodes_first.setGraphAttr(.{ .outputorder = .nodesfirst });
+    const a = try nodes_first.addNode("a", .{});
+    const b = try nodes_first.addNode("b", .{});
+    _ = try nodes_first.addEdge(a, b, .{});
+    var nodes_layout = try layoutLayered(allocator, &nodes_first, .{});
+    defer nodes_layout.deinit();
+    const nodes_svg = try renderSvgAlloc(allocator, &nodes_first, &nodes_layout, .{});
+    defer allocator.free(nodes_svg);
+
+    try std.testing.expectEqualStrings("nodesfirst", attrValue(nodes_first.attrs.items, "outputorder").?);
+    const typed_node_pos = std.mem.indexOf(u8, nodes_svg, "<g id=\"node1\" class=\"node\">") orelse return error.MissingTypedNode;
+    const typed_edge_pos = std.mem.indexOf(u8, nodes_svg, "<g id=\"edge1\" class=\"edge\">") orelse return error.MissingTypedEdge;
+    try std.testing.expect(typed_node_pos < typed_edge_pos);
 }
 
 test "SVG renderer keeps graph name as metadata unless graph label is explicit" {
