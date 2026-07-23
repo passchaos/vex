@@ -230,6 +230,8 @@ pub const NodeAttr = union(enum) {
     height: f64,
     fixedsize: NodeFixedSize,
     margin: []const u8,
+    toplabel: []const u8,
+    bottomlabel: []const u8,
     xlabel: []const u8,
     labelloc: LabelLoc,
     labeljust: LabelJust,
@@ -307,6 +309,8 @@ pub const NodeOptions = struct {
     height: ?f64 = null,
     fixedsize: ?NodeFixedSize = null,
     margin: ?[]const u8 = null,
+    toplabel: ?[]const u8 = null,
+    bottomlabel: ?[]const u8 = null,
     xlabel: ?[]const u8 = null,
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
@@ -905,6 +909,8 @@ pub const Graph = struct {
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
+            .toplabel => |value| try self.setDefaultNodeAttrRaw("toplabel", value),
+            .bottomlabel => |value| try self.setDefaultNodeAttrRaw("bottomlabel", value),
             .xlabel => |value| try self.setDefaultNodeAttrRaw("xlabel", value),
             .labelloc => |value| try self.setDefaultNodeAttrRaw("labelloc", labelLocName(value)),
             .labeljust => |value| try self.setDefaultNodeAttrRaw("labeljust", labelJustName(value)),
@@ -1045,6 +1051,8 @@ pub const Graph = struct {
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
         if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
+        if (options.toplabel) |value| try self.setNodeAttr(id, .{ .toplabel = value });
+        if (options.bottomlabel) |value| try self.setNodeAttr(id, .{ .bottomlabel = value });
         if (options.xlabel) |value| try self.setNodeAttr(id, .{ .xlabel = value });
         if (options.labelloc) |value| try self.setNodeAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setNodeAttr(id, .{ .labeljust = value });
@@ -1091,6 +1099,8 @@ pub const Graph = struct {
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
+            .toplabel => |value| try self.setNodeAttrRaw(id, "toplabel", value),
+            .bottomlabel => |value| try self.setNodeAttrRaw(id, "bottomlabel", value),
             .xlabel => |value| try self.setNodeAttrRaw(id, "xlabel", value),
             .labelloc => |value| try self.setNodeAttrRaw(id, "labelloc", labelLocName(value)),
             .labeljust => |value| try self.setNodeAttrRaw(id, "labeljust", labelJustName(value)),
@@ -7983,6 +7993,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
         try renderSvgNodeLabel(writer, node_item, l, visual);
     }
+    try renderSvgNodeAuxLabels(writer, node_item, l, visual);
     try renderSvgNodeXLabel(writer, node_item, l, visual);
     try writeSvgInteractiveClose(writer, node_wrap);
     try writer.writeAll("</g>\n");
@@ -9105,6 +9116,26 @@ fn nodeLabelYOffset(node_item: Node) f64 {
         .msquare => -0.495,
         .ellipse, .circle, .doublecircle, .mcircle => -0.305,
         else => 0.0,
+    };
+}
+
+fn renderSvgNodeAuxLabels(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+    if (!nodeAuxLabelsEligible(node_item.shape)) return;
+    const shape_layout = visualShapeLayout(node_item, layout);
+    if (attrValue(node_item.attrs.items, "toplabel")) |label| {
+        const y = shape_layout.center.y - shape_layout.height / 2.0 - visual.font_size * 0.35;
+        try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font_family, "middle");
+    }
+    if (attrValue(node_item.attrs.items, "bottomlabel")) |label| {
+        const y = shape_layout.center.y + shape_layout.height / 2.0 + visual.font_size * 0.55;
+        try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font_family, "middle");
+    }
+}
+
+fn nodeAuxLabelsEligible(shape: Shape) bool {
+    return switch (shape) {
+        .mdiamond, .mcircle => true,
+        else => false,
     };
 }
 
@@ -17134,6 +17165,53 @@ test "SVG renderer draws Msquare with Graphviz-like corner marks" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"none\" stroke=\"black\" points=") != null);
     try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"black\" points=") >= 4);
+}
+
+test "SVG renderer honors M-shape auxiliary labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  start [shape=Mdiamond, toplabel="entry", bottomlabel="exit"];
+        \\  state [shape=Mcircle, toplabel="ready", bottomlabel="done"];
+        \\  square [shape=Msquare, toplabel="ignored", bottomlabel="also ignored"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("entry", attrValue(graph.nodes.items[nodeIdByLabel(&graph, "start")].attrs.items, "toplabel").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">entry</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">exit</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">ready</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">done</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">ignored</text>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">also ignored</text>") == null);
+}
+
+test "code API exposes typed M-shape auxiliary labels" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    _ = try graph.addNode("state", .{
+        .shape = .mcircle,
+        .toplabel = "ready",
+        .bottomlabel = "done",
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("ready", attrValue(graph.nodes.items[0].attrs.items, "toplabel").?);
+    try std.testing.expectEqualStrings("done", attrValue(graph.nodes.items[0].attrs.items, "bottomlabel").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">ready</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">done</text>") != null);
 }
 
 test "SVG renderer honors additional Graphviz arrow marker shapes" {
