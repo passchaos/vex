@@ -7774,11 +7774,11 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         else
             layout.height - 16.0;
         const title_font = if (attrValue(graph.attrs.items, "fontname")) |fontname|
-            svgFontFamily(graph, fontname)
+            svgFont(graph, fontname)
         else if (std.mem.eql(u8, options.font_family, default_svg_font_family))
-            svgFontFamily(graph, default_graphviz_fontname)
+            svgFont(graph, default_graphviz_fontname)
         else
-            options.font_family;
+            SvgFont{ .family = options.font_family };
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "fontcolor") orelse "black");
         const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
@@ -7910,7 +7910,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         const route = selfLoopRoute(layout.nodes[edge_item.from]);
         try renderSvgSelfLoopPaths(writer, graph, graph.directed, edge_item, route, visual);
         if (edge_item.label) |label| {
-            try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font_family);
+            try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font);
         }
         try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, route.label);
         try writeSvgInteractiveClose(writer, edge_wrap);
@@ -7932,7 +7932,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         else
             edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
         main_label_center = label_center;
-        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font_family);
+        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
     }
     try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center);
     try writeSvgInteractiveClose(writer, edge_wrap);
@@ -8748,20 +8748,20 @@ fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Wri
 fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, main_label_center: ?Point) Io.Writer.Error!void {
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
     const label_font_color = attrValue(edge_item.attrs.items, "labelfontcolor") orelse visual.font_color;
-    const label_font_family = if (attrValue(edge_item.attrs.items, "labelfontname")) |fontname| svgFontFamily(graph, fontname) else visual.font_family;
+    const label_font = if (attrValue(edge_item.attrs.items, "labelfontname")) |fontname| svgFont(graph, fontname) else visual.font;
     const label_distance = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0);
     const label_angle = parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0);
     if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
         const pos = endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
-        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .tail, label, pos, label_font_size, label_font_color, label_font_family);
+        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .tail, label, pos, label_font_size, label_font_color, label_font);
     }
     if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
         const pos = endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
-        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .head, label, pos, label_font_size, label_font_color, label_font_family);
+        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .head, label, pos, label_font_size, label_font_color, label_font);
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
         const pos = edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size);
-        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, pos, label_font_size, label_font_color, label_font_family);
+        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, pos, label_font_size, label_font_color, label_font);
     }
     if (edge_item.label != null and main_label_center != null and edgeDecorateEnabled(edge_item.attrs.items)) {
         const label = edge_item.label.?;
@@ -8775,7 +8775,7 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
             .fill = "none",
             .stroke = visual.stroke,
             .font_color = visual.font_color,
-            .font_family = visual.font_family,
+            .font = visual.font,
             .font_size = visual.font_size,
             .width = @max(1.0, visual.width * 0.75),
             .radius = 0,
@@ -8786,13 +8786,13 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
     }
 }
 
-fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_item: Edge, kind: SvgInteractiveKind, label: []const u8, pos: Point, font_size: f64, font_color: []const u8, font_family: []const u8) Io.Writer.Error!void {
+fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_item: Edge, kind: SvgInteractiveKind, label: []const u8, pos: Point, font_size: f64, font_color: []const u8, font: SvgFont) Io.Writer.Error!void {
     var edge_name_buf: [256]u8 = undefined;
     var context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
     context.node_name = label;
     context.label_name = label;
     const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label);
-    try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font_family, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
+    try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
     try writeSvgInteractiveClose(writer, wrap);
 }
 
@@ -9203,10 +9203,10 @@ fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
     const anchor = nodeLabelAnchor(node_item.attrs.items, layout, margin.x);
     const y = nodeLabelY(node_item.attrs.items, visualShapeLayout(node_item, layout), margin.y) - nodeLabelYOffset(node_item);
     if (plainSingleLineLabel(node_item.label)) {
-        try renderSvgPlainTextBlock(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, anchor.anchor);
+        try renderSvgPlainTextBlock(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font, anchor.anchor);
         return;
     }
-    try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, false, false, anchor.anchor, noJustifyLineAnchor(node_item.attrs.items, anchor.anchor));
+    try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font, false, false, anchor.anchor, noJustifyLineAnchor(node_item.attrs.items, anchor.anchor));
 }
 
 fn nodeLabelYOffset(node_item: Node) f64 {
@@ -9223,11 +9223,11 @@ fn renderSvgNodeAuxLabels(writer: *Io.Writer, node_item: Node, layout: NodeLayou
     const shape_layout = visualShapeLayout(node_item, layout);
     if (attrValue(node_item.attrs.items, "toplabel")) |label| {
         const y = shape_layout.center.y - shape_layout.height / 2.0 - visual.font_size * 0.35;
-        try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font_family, "middle");
+        try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font, "middle");
     }
     if (attrValue(node_item.attrs.items, "bottomlabel")) |label| {
         const y = shape_layout.center.y + shape_layout.height / 2.0 + visual.font_size * 0.55;
-        try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font_family, "middle");
+        try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font, "middle");
     }
 }
 
@@ -9241,7 +9241,7 @@ fn nodeAuxLabelsEligible(shape: Shape) bool {
 fn renderSvgNodeXLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const label = attrValue(node_item.attrs.items, "xlabel") orelse return;
     const center = nodeXLabelCenter(label, layout, visual.font_size);
-    try renderSvgTextBlock(writer, label, center.x, center.y, visual.font_size, visual.font_color, visual.font_family, true, true);
+    try renderSvgTextBlock(writer, label, center.x, center.y, visual.font_size, visual.font_color, visual.font, true, true);
 }
 
 fn nodeXLabelCenter(label: []const u8, layout: NodeLayout, font_size: f64) Point {
@@ -10359,42 +10359,66 @@ fn graphFontNamesMode(graph: *const Graph) FontNames {
     return .gd;
 }
 
-fn svgFontFamily(graph: *const Graph, fontname: []const u8) []const u8 {
-    return svgFontFamilyForMode(graphFontNamesMode(graph), fontname);
+fn svgFont(graph: *const Graph, fontname: []const u8) SvgFont {
+    return svgFontForMode(graphFontNamesMode(graph), fontname);
 }
 
-fn svgFontFamilyForMode(mode: FontNames, fontname: []const u8) []const u8 {
+fn svgFontForMode(mode: FontNames, fontname: []const u8) SvgFont {
     if (postscriptFontAlias(fontname)) |alias| {
         return switch (mode) {
-            .svg => alias.svg,
-            .ps => alias.ps,
-            .gd => alias.gd,
+            .svg => .{
+                .family = alias.svg_family,
+                .weight = alias.svg_weight,
+                .stretch = alias.stretch,
+                .style = alias.svg_style,
+            },
+            .ps => .{
+                .family = alias.ps_family,
+                .weight = alias.weight,
+                .stretch = alias.stretch,
+                .style = alias.style,
+            },
+            .gd => .{
+                .family = alias.gd_family,
+                .weight = alias.weight,
+                .stretch = alias.stretch,
+                .style = alias.style,
+            },
         };
     }
-    return fontname;
+    return .{ .family = fontname };
 }
 
 const FontAlias = struct {
-    ps: []const u8,
-    gd: []const u8,
-    svg: []const u8,
+    ps_family: []const u8,
+    gd_family: []const u8,
+    svg_family: []const u8,
+    weight: ?[]const u8 = null,
+    stretch: ?[]const u8 = null,
+    style: ?[]const u8 = null,
+    svg_weight: ?[]const u8 = null,
+    svg_style: ?[]const u8 = null,
 };
 
 fn postscriptFontAlias(fontname: []const u8) ?FontAlias {
-    if (std.ascii.eqlIgnoreCase(fontname, "Times-Roman")) return .{ .ps = "Times-Roman,serif", .gd = "Times,serif", .svg = "serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Times-Bold")) return .{ .ps = "Times-Bold,serif", .gd = "Times,serif", .svg = "serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Times-Italic")) return .{ .ps = "Times-Italic,serif", .gd = "Times,serif", .svg = "serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Times-BoldItalic")) return .{ .ps = "Times-BoldItalic,serif", .gd = "Times,serif", .svg = "serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Courier")) return .{ .ps = "Courier,monospace", .gd = "Courier,monospace", .svg = "monospace" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Courier-Bold")) return .{ .ps = "Courier-Bold,monospace", .gd = "Courier,monospace", .svg = "monospace" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Courier-Oblique")) return .{ .ps = "Courier-Oblique,monospace", .gd = "Courier,monospace", .svg = "monospace" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Courier-BoldOblique")) return .{ .ps = "Courier-BoldOblique,monospace", .gd = "Courier,monospace", .svg = "monospace" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica")) return .{ .ps = "Helvetica,sans-Serif", .gd = "Helvetica,sans-Serif", .svg = "sans-Serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Bold")) return .{ .ps = "Helvetica-Bold,sans-Serif", .gd = "Helvetica,sans-Serif", .svg = "sans-Serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Oblique")) return .{ .ps = "Helvetica-Oblique,sans-Serif", .gd = "Helvetica,sans-Serif", .svg = "sans-Serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-BoldOblique")) return .{ .ps = "Helvetica-BoldOblique,sans-Serif", .gd = "Helvetica,sans-Serif", .svg = "sans-Serif" };
-    if (std.ascii.eqlIgnoreCase(fontname, "Symbol")) return .{ .ps = "Symbol,fantasy", .gd = "Symbol,fantasy", .svg = "fantasy" };
-    if (std.ascii.eqlIgnoreCase(fontname, "ZapfDingbats")) return .{ .ps = "ZapfDingbats,fantasy", .gd = "Dingbats,fantasy", .svg = "fantasy" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Times-Roman")) return .{ .ps_family = "Times-Roman,serif", .gd_family = "Times,serif", .svg_family = "serif" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Times-Bold")) return .{ .ps_family = "Times-Bold,serif", .gd_family = "Times,serif", .svg_family = "serif", .weight = "bold", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Times-Italic")) return .{ .ps_family = "Times-Italic,serif", .gd_family = "Times,serif", .svg_family = "serif", .style = "italic", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Times-BoldItalic")) return .{ .ps_family = "Times-BoldItalic,serif", .gd_family = "Times,serif", .svg_family = "serif", .weight = "bold", .style = "italic", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Courier")) return .{ .ps_family = "Courier,monospace", .gd_family = "Courier,monospace", .svg_family = "monospace" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Courier-Bold")) return .{ .ps_family = "Courier-Bold,monospace", .gd_family = "Courier,monospace", .svg_family = "monospace", .weight = "bold", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Courier-Oblique")) return .{ .ps_family = "Courier-Oblique,monospace", .gd_family = "Courier,monospace", .svg_family = "monospace", .style = "oblique", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Courier-BoldOblique")) return .{ .ps_family = "Courier-BoldOblique,monospace", .gd_family = "Courier,monospace", .svg_family = "monospace", .weight = "bold", .style = "oblique", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica")) return .{ .ps_family = "Helvetica,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Bold")) return .{ .ps_family = "Helvetica-Bold,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .weight = "bold", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Oblique")) return .{ .ps_family = "Helvetica-Oblique,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .style = "oblique", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-BoldOblique")) return .{ .ps_family = "Helvetica-BoldOblique,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .weight = "bold", .style = "oblique", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow")) return .{ .ps_family = "Helvetica-Narrow,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .stretch = "condensed" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow-Bold")) return .{ .ps_family = "Helvetica-Narrow-Bold,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .weight = "bold", .stretch = "condensed", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow-Oblique")) return .{ .ps_family = "Helvetica-Narrow-Oblique,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .stretch = "condensed", .style = "oblique", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow-BoldOblique")) return .{ .ps_family = "Helvetica-Narrow-BoldOblique,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .weight = "bold", .stretch = "condensed", .style = "oblique", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Symbol")) return .{ .ps_family = "Symbol,fantasy", .gd_family = "Symbol,fantasy", .svg_family = "fantasy" };
+    if (std.ascii.eqlIgnoreCase(fontname, "ZapfDingbats")) return .{ .ps_family = "ZapfDingbats,fantasy", .gd_family = "Dingbats,fantasy", .svg_family = "fantasy" };
     return null;
 }
 
@@ -10450,11 +10474,18 @@ const MarkerShape = enum {
 const default_graphviz_fontname = "Times-Roman";
 const default_svg_font_family = "Times,serif";
 
+const SvgFont = struct {
+    family: []const u8,
+    weight: ?[]const u8 = null,
+    stretch: ?[]const u8 = null,
+    style: ?[]const u8 = null,
+};
+
 const NodeVisual = struct {
     fill: []const u8,
     stroke: []const u8,
     font_color: []const u8,
-    font_family: []const u8,
+    font: SvgFont,
     font_size: f64,
     width: f64,
     radius: f64,
@@ -10467,7 +10498,7 @@ const EdgeVisual = struct {
     stroke: []const u8,
     fill: []const u8,
     font_color: []const u8,
-    font_family: []const u8,
+    font: SvgFont,
     font_size: f64,
     width: f64,
     dash: DashStyle,
@@ -10481,7 +10512,7 @@ const ClusterVisual = struct {
     fill: []const u8,
     stroke: []const u8,
     font_color: []const u8,
-    font_family: []const u8,
+    font: SvgFont,
     font_size: f64,
     width: f64,
     radius: f64,
@@ -10564,14 +10595,14 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     else
         rect.y + top_label_offset;
     if (plainSingleLineLabel(cluster.label)) {
-        try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font_family, visual.font_size);
+        try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
         try writeSvgTextFill(writer, visual.font_color);
         try writer.writeAll(">");
         try writeXmlEscaped(writer, cluster.label);
         try writer.writeAll("</text>\n");
     } else {
         const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
-        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font_family, false, false, text_anchor, noJustifyLineAnchorInherited(graph, cluster.attrs.items, text_anchor));
+        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorInherited(graph, cluster.attrs.items, text_anchor));
     }
     try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
@@ -11624,12 +11655,7 @@ fn renderSvgRecordNode(writer: *Io.Writer, label: []const u8, layout: NodeLayout
 
 fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     if (node.children.len == 0) {
-        try writer.print("<text xml:space=\"preserve\" text-anchor=\"middle\" x=\"{d:.1}\" y=\"{d:.1}\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{
-            rect.x + rect.width / 2.0,
-            rect.y + rect.height / 2.0,
-            visual.font_family,
-            visual.font_size,
-        });
+        try writeSvgTextOpen(writer, "middle", rect.x + rect.width / 2.0, rect.y + rect.height / 2.0, visual.font, visual.font_size);
         try writeSvgTextFill(writer, visual.font_color);
         try writer.writeAll(" dominant-baseline=\"middle\">");
         try writeXmlEscaped(writer, node.label);
@@ -11681,7 +11707,7 @@ fn resolveNodeVisual(graph: *const Graph, node_item: Node) NodeVisual {
         .fill = fill,
         .stroke = if (borderless) "none" else color,
         .font_color = resolveSvgColor(graph, node_item.attrs.items, attrValue(node_item.attrs.items, "fontcolor") orelse "black"),
-        .font_family = svgFontFamily(graph, attrValue(node_item.attrs.items, "fontname") orelse default_graphviz_fontname),
+        .font = svgFont(graph, attrValue(node_item.attrs.items, "fontname") orelse default_graphviz_fontname),
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.0),
         .radius = if (rounded) 10 else 0,
@@ -11706,7 +11732,7 @@ fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
         .stroke = stroke,
         .fill = fill,
         .font_color = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "fontcolor") orelse "black"),
-        .font_family = svgFontFamily(graph, attrValue(edge_item.attrs.items, "fontname") orelse default_graphviz_fontname),
+        .font = svgFont(graph, attrValue(edge_item.attrs.items, "fontname") orelse default_graphviz_fontname),
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .dash = dashStyleFromAttr(style),
@@ -11745,7 +11771,7 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
         .fill = fill,
         .stroke = stroke,
         .font_color = resolveSvgColor(graph, cluster.attrs.items, inheritedClusterFontAttr(graph, cluster, "fontcolor") orelse "black"),
-        .font_family = svgFontFamily(graph, inheritedClusterFontAttr(graph, cluster, "fontname") orelse default_graphviz_fontname),
+        .font = svgFont(graph, inheritedClusterFontAttr(graph, cluster, "fontname") orelse default_graphviz_fontname),
         .font_size = inheritedClusterFontSize(graph, cluster),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .radius = if (rounded) 10 else 0,
@@ -13416,8 +13442,8 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
     };
 }
 
-fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
-    try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font_family, label_background, dominant_middle, "middle", null);
+fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
+    try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font, label_background, dominant_middle, "middle", null);
 }
 
 fn writeSvgTextFill(writer: *Io.Writer, fill: []const u8) Io.Writer.Error!void {
@@ -13425,12 +13451,15 @@ fn writeSvgTextFill(writer: *Io.Writer, fill: []const u8) Io.Writer.Error!void {
     try writer.print(" fill=\"{s}\"", .{fill});
 }
 
-fn writeSvgTextOpen(writer: *Io.Writer, text_anchor: []const u8, x: f64, y: f64, font_family: []const u8, font_size: f64) Io.Writer.Error!void {
+fn writeSvgTextOpen(writer: *Io.Writer, text_anchor: []const u8, x: f64, y: f64, font: SvgFont, font_size: f64) Io.Writer.Error!void {
     try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"", .{text_anchor});
     try writeSvgNumber(writer, x);
     try writer.writeAll("\" y=\"");
     try writeSvgNumber(writer, y);
-    try writer.print("\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ font_family, font_size });
+    try writer.print("\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ font.family, font_size });
+    if (font.weight) |weight| try writer.print(" font-weight=\"{s}\"", .{weight});
+    if (font.stretch) |stretch| try writer.print(" font-stretch=\"{s}\"", .{stretch});
+    if (font.style) |style| try writer.print(" font-style=\"{s}\"", .{style});
 }
 
 fn writeSvgTspanOpen(writer: *Io.Writer, x: f64, anchor: ?[]const u8) Io.Writer.Error!void {
@@ -13456,17 +13485,17 @@ fn plainSingleLineLabel(text: []const u8) bool {
     return true;
 }
 
-fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, text_anchor: []const u8) Io.Writer.Error!void {
+fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, text_anchor: []const u8) Io.Writer.Error!void {
     const line_height = font_size * 1.25;
     const y = center_y - line_height / 2.0 + line_height * 0.72;
-    try writeSvgTextOpen(writer, text_anchor, x, y, font_family, font_size);
+    try writeSvgTextOpen(writer, text_anchor, x, y, font, font_size);
     try writeSvgTextFill(writer, fill);
     try writer.writeAll(">");
     try writeXmlEscaped(writer, text);
     try writer.writeAll("</text>\n");
 }
 
-fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool, text_anchor: []const u8, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
+fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, label_background: bool, dominant_middle: bool, text_anchor: []const u8, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
     const line_count = displayLabelLineCount(text);
     const line_height = font_size * 1.25;
     const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
@@ -13480,7 +13509,7 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
         try writer.writeAll(" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n");
     }
 
-    try writeSvgTextOpen(writer, text_anchor, x, first_y, font_family, font_size);
+    try writeSvgTextOpen(writer, text_anchor, x, first_y, font, font_size);
     try writeSvgTextFill(writer, fill);
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
@@ -17314,11 +17343,11 @@ test "SVG renderer honors Graphviz fontnames modes" {
     var explicit_svg = try parseDot(allocator,
         \\digraph G {
         \\  graph [fontnames=svg, label="Graph", fontname="Times-Roman"];
-        \\  node [fontname="Courier"];
+        \\  node [fontname="Courier-BoldOblique"];
         \\  edge [fontname="Helvetica"];
         \\  subgraph cluster_api {
         \\    label="API";
-        \\    fontname="Helvetica";
+        \\    fontname="Helvetica-Narrow";
         \\    a;
         \\  }
         \\  a -> b [label="edge", labelfontname="Times-Roman", xlabel="external"];
@@ -17330,8 +17359,9 @@ test "SVG renderer honors Graphviz fontnames modes" {
     const explicit_svg_output = try renderSvgAlloc(allocator, &explicit_svg, &explicit_svg_layout, .{});
     defer allocator.free(explicit_svg_output);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"serif\" font-size=\"14.00\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"monospace\" font-size=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"monospace\" font-size=\"14.00\" font-weight=\"bold\" font-style=\"italic\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"sans-Serif\" font-size=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-stretch=\"condensed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"Times-Roman") == null);
 
     var ps = try parseDot(allocator,
@@ -17354,7 +17384,7 @@ test "SVG renderer honors Graphviz fontnames modes" {
         \\digraph G {
         \\  graph [fontnames=gd, label="Graph", fontname="Times-Roman"];
         \\  node [fontname="Courier-Bold"];
-        \\  a -> b [label="edge", fontname="Helvetica-Bold", labelfontname="Times-Roman", xlabel="external"];
+        \\  a -> b [label="edge", fontname="Helvetica-Narrow-BoldOblique", labelfontname="Times-Roman", xlabel="external"];
         \\}
     );
     defer gd.deinit();
@@ -17363,13 +17393,13 @@ test "SVG renderer honors Graphviz fontnames modes" {
     const gd_svg = try renderSvgAlloc(allocator, &gd, &gd_layout, .{});
     defer allocator.free(gd_svg);
     try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Times,serif\" font-size=\"14.00\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Courier,monospace\" font-size=\"14.00\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Helvetica,sans-Serif\" font-size=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Courier,monospace\" font-size=\"14.00\" font-weight=\"bold\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Helvetica,sans-Serif\" font-size=\"14.00\" font-weight=\"bold\" font-stretch=\"condensed\" font-style=\"oblique\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
     try typed.setGraphAttr(.{ .fontnames = .ps });
-    const ta = try typed.addNode("A", .{ .fontname = "Times-Roman" });
+    const ta = try typed.addNode("A", .{ .fontname = "Times-BoldItalic" });
     const tb = try typed.addNode("B", .{});
     _ = try typed.addEdge(ta, tb, .{ .label = "edge" });
     var typed_layout = try layoutLayered(allocator, &typed, .{});
@@ -17377,7 +17407,7 @@ test "SVG renderer honors Graphviz fontnames modes" {
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
     try std.testing.expectEqualStrings("ps", attrValue(typed.attrs.items, "fontnames").?);
-    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "font-family=\"Times-Roman,serif\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "font-family=\"Times-BoldItalic,serif\" font-size=\"14.00\" font-weight=\"bold\" font-style=\"italic\"") != null);
 }
 
 test "SVG renderer preserves text spacing like Graphviz" {
@@ -19892,7 +19922,7 @@ test "SVG marker path route shortens arrow endpoints" {
         .stroke = "black",
         .fill = "black",
         .font_color = "black",
-        .font_family = default_svg_font_family,
+        .font = .{ .family = default_svg_font_family },
         .font_size = 14,
         .width = 1,
         .dash = .none,
@@ -19907,7 +19937,7 @@ test "SVG marker path route shortens arrow endpoints" {
         .stroke = "black",
         .fill = "black",
         .font_color = "black",
-        .font_family = default_svg_font_family,
+        .font = .{ .family = default_svg_font_family },
         .font_size = 14,
         .width = 1,
         .dash = .none,
