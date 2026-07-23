@@ -2286,11 +2286,11 @@ const Parser = struct {
     fn parseSubgraph(self: *Parser, graph: *Graph) anyerror!NodeSet {
         var subgraph_name: ?[]const u8 = null;
         var subgraph_id: ?SubgraphId = null;
+        defer if (subgraph_name) |name| self.allocator.free(name);
         if (self.matchKeyword("subgraph")) {
             if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .angle_string) {
-                subgraph_name = self.current.lexeme;
+                subgraph_name = try self.parseIdText();
                 subgraph_id = try self.subgraphByTextId(graph, subgraph_name.?);
-                try self.advance();
             }
         }
         try self.expect(.lbrace);
@@ -20052,6 +20052,27 @@ test "DOT compound edges clip to cluster boundaries" {
     const path_points = svgPathStartEnd(svg, "b-&gt;c") orelse return error.MissingCompoundPath;
     try std.testing.expect(pointOnRectBoundary(left, path_points.start));
     try std.testing.expect(pointNearRectBoundary(right, path_points.end, 8.0));
+}
+
+test "DOT quoted subgraph names match compound edge attrs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  compound=true;
+        \\  subgraph "left \"cluster\"" { a -> b; }
+        \\  subgraph "right \"cluster\"" { c -> d; }
+        \\  b -> c [ltail="left \"cluster\"", lhead="right \"cluster\""];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("left \"cluster\"", graph.subgraphs.items[0].label);
+    try std.testing.expectEqualStrings("right \"cluster\"", graph.subgraphs.items[1].label);
+    const edge_item = graph.edges.items[2];
+    try std.testing.expectEqual(@as(SubgraphId, 0), edge_item.ltail.?);
+    try std.testing.expectEqual(@as(SubgraphId, 1), edge_item.lhead.?);
+    try std.testing.expectEqualStrings("left \"cluster\"", attrValue(edge_item.attrs.items, "ltail").?);
+    try std.testing.expectEqualStrings("right \"cluster\"", attrValue(edge_item.attrs.items, "lhead").?);
 }
 
 test "DOT ltail and lhead are ignored unless graph compound is true" {
