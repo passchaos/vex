@@ -7733,8 +7733,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         for (graph.edges.items) |edge_item| {
             if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(graph, edge_item);
-            if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), edgeMarkerFill(edge_item, visual, true), visual.marker_scale);
-            if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), edgeMarkerFill(edge_item, visual, false), visual.marker_scale);
+            if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(graph, edge_item, visual, true), edgeMarkerFill(graph, edge_item, visual, true), visual.marker_scale);
+            if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(graph, edge_item, visual, false), edgeMarkerFill(graph, edge_item, visual, false), visual.marker_scale);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -7831,7 +7831,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     }
     if (edge_item.from == edge_item.to) {
         const route = selfLoopRoute(layout.nodes[edge_item.from]);
-        try renderSvgSelfLoopPaths(writer, graph.directed, edge_item, route, visual);
+        try renderSvgSelfLoopPaths(writer, graph, graph.directed, edge_item, route, visual);
         if (edge_item.label) |label| {
             try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font_family);
         }
@@ -7847,7 +7847,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .tail_mdiamond = graph.nodes.items[edge_item.from].shape == .mdiamond,
         .head_msquare = graph.nodes.items[edge_item.to].shape == .msquare,
     };
-    try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
+    try renderSvgEdgePaths(writer, graph, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
     var main_label_center: ?Point = null;
     if (edge_item.label) |label| {
         const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
@@ -7991,19 +7991,19 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     var fill_buf: [96]u8 = undefined;
     if (wedgedNodeFillEligible(node_item.shape)) {
         const fill_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, l));
-        if (try renderSvgWedgedEllipseFill(writer, "vex-node-wedges", node_item.id + 1, node_item.attrs.items, fill_layout, visual.fill, visual.stroke)) {
+        if (try renderSvgWedgedEllipseFill(writer, graph, "vex-node-wedges", node_item.id + 1, node_item.attrs.items, fill_layout, visual.fill, visual.stroke)) {
             visual.fill = "none";
         } else {
-            try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+            try resolveSvgGradientFill(writer, graph, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
         }
     } else if (stripedNodeFillEligible(node_item.shape)) {
-        if (try renderSvgStripedRectFill(writer, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
+        if (try renderSvgStripedRectFill(writer, graph, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
             visual.fill = "none";
         } else {
-            try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+            try resolveSvgGradientFill(writer, graph, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
         }
     } else {
-        try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+        try resolveSvgGradientFill(writer, graph, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
     }
     try renderSvgNodeShape(writer, node_item, l, visual, options);
     if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
@@ -8285,7 +8285,7 @@ const ColorList = struct {
     len: usize = 0,
 };
 
-fn resolveSvgGradientFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, fill: *[]const u8, buffer: *[96]u8) Io.Writer.Error!void {
+fn resolveSvgGradientFill(writer: *Io.Writer, graph: *const Graph, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, fill: *[]const u8, buffer: *[96]u8) Io.Writer.Error!void {
     const style = attrValue(attrs, "style");
     if (!styleHas(style, "filled") and !styleHas(style, "radial")) return;
     const fillcolor = attrValue(attrs, "fillcolor") orelse return;
@@ -8295,14 +8295,14 @@ fn resolveSvgGradientFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, 
     const angle = parseAttrFloat(attrs, "gradientangle", 0.0);
     const url = std.fmt.bufPrint(buffer, "url(#{s}-{d})", .{ id_prefix, id }) catch unreachable;
     if (styleHas(style, "radial")) {
-        try writeSvgRadialGradientDef(writer, id_prefix, id, colors.segments[0], colors.segments[1], angle);
+        try writeSvgRadialGradientDef(writer, graph, attrs, id_prefix, id, colors.segments[0], colors.segments[1], angle);
     } else {
-        try writeSvgLinearGradientDef(writer, id_prefix, id, rect, colors.segments[0], colors.segments[1], angle);
+        try writeSvgLinearGradientDef(writer, graph, attrs, id_prefix, id, rect, colors.segments[0], colors.segments[1], angle);
     }
     fill.* = url;
 }
 
-fn renderSvgStripedRectFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, radius: f64, fallback_fill: []const u8) Io.Writer.Error!bool {
+fn renderSvgStripedRectFill(writer: *Io.Writer, graph: *const Graph, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, radius: f64, fallback_fill: []const u8) Io.Writer.Error!bool {
     if (!styleHas(attrValue(attrs, "style"), "striped")) return false;
     const fillcolor = attrValue(attrs, "fillcolor") orelse fallback_fill;
     const colors = parseColorList(fillcolor) orelse return false;
@@ -8318,7 +8318,7 @@ fn renderSvgStripedRectFill(writer: *Io.Writer, id_prefix: []const u8, id: usize
             rect.width * segment.fraction;
         if (stripe_width <= 0) continue;
         try writeSvgRectOpen(writer, .{ .x = cursor, .y = rect.y, .width = stripe_width, .height = rect.height }, radius);
-        try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{segment.color});
+        try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{resolveSvgColor(graph, attrs, segment.color)});
         cursor += stripe_width;
         if (cursor >= rect.x + rect.width) break;
     }
@@ -8326,7 +8326,7 @@ fn renderSvgStripedRectFill(writer: *Io.Writer, id_prefix: []const u8, id: usize
     return true;
 }
 
-fn renderSvgWedgedEllipseFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, attrs: []const Attr, layout: NodeLayout, fallback_fill: []const u8, stroke: []const u8) Io.Writer.Error!bool {
+fn renderSvgWedgedEllipseFill(writer: *Io.Writer, graph: *const Graph, id_prefix: []const u8, id: usize, attrs: []const Attr, layout: NodeLayout, fallback_fill: []const u8, stroke: []const u8) Io.Writer.Error!bool {
     if (!styleHas(attrValue(attrs, "style"), "wedged")) return false;
     const fillcolor = attrValue(attrs, "fillcolor") orelse attrValue(attrs, "color") orelse fallback_fill;
     const colors = parseColorList(fillcolor) orelse return false;
@@ -8353,7 +8353,7 @@ fn renderSvgWedgedEllipseFill(writer: *Io.Writer, id_prefix: []const u8, id: usi
         else
             @min(1.0, cursor + segment.fraction);
         if (next <= cursor) continue;
-        try writeSvgEllipseWedge(writer, layout.center, rx, ry, cursor, next, segment.color, stroke);
+        try writeSvgEllipseWedge(writer, layout.center, rx, ry, cursor, next, resolveSvgColor(graph, attrs, segment.color), stroke);
         cursor = next;
         rendered = true;
         if (cursor >= 1.0) break;
@@ -8412,7 +8412,7 @@ fn writeSvgEllipseWedge(writer: *Io.Writer, center: Point, rx: f64, ry: f64, sta
     try writer.writeAll("\" stroke-width=\"0.5\"/>\n");
 }
 
-fn writeSvgLinearGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usize, rect: RectF, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
+fn writeSvgLinearGradientDef(writer: *Io.Writer, graph: *const Graph, attrs: []const Attr, id_prefix: []const u8, id: usize, rect: RectF, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
     const line = gradientLine(rect, angle_degrees);
     try writer.print("<defs><linearGradient id=\"{s}-{d}\" gradientUnits=\"userSpaceOnUse\" x1=\"{d:.1}\" y1=\"{d:.1}\" x2=\"{d:.1}\" y2=\"{d:.1}\">\n", .{
         id_prefix,
@@ -8422,12 +8422,12 @@ fn writeSvgLinearGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usiz
         line.end.x,
         line.end.y,
     });
-    try writeSvgGradientStop(writer, gradientStopStartOffset(start, stop), start.color);
-    try writeSvgGradientStop(writer, gradientStopEndOffset(start, stop), stop.color);
+    try writeSvgGradientStop(writer, gradientStopStartOffset(start, stop), resolveSvgColor(graph, attrs, start.color));
+    try writeSvgGradientStop(writer, gradientStopEndOffset(start, stop), resolveSvgColor(graph, attrs, stop.color));
     try writer.writeAll("</linearGradient></defs>\n");
 }
 
-fn writeSvgRadialGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usize, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
+fn writeSvgRadialGradientDef(writer: *Io.Writer, graph: *const Graph, attrs: []const Attr, id_prefix: []const u8, id: usize, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
     const focus = radialGradientFocus(angle_degrees);
     try writer.print("<defs><radialGradient id=\"{s}-{d}\" cx=\"50%\" cy=\"50%\" r=\"75%\" fx=\"{d:.0}%\" fy=\"{d:.0}%\">\n", .{
         id_prefix,
@@ -8435,8 +8435,8 @@ fn writeSvgRadialGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usiz
         focus.x,
         focus.y,
     });
-    try writeSvgGradientStop(writer, 0.0, start.color);
-    try writeSvgGradientStop(writer, 1.0, stop.color);
+    try writeSvgGradientStop(writer, 0.0, resolveSvgColor(graph, attrs, start.color));
+    try writeSvgGradientStop(writer, 1.0, resolveSvgColor(graph, attrs, stop.color));
     try writer.writeAll("</radialGradient></defs>\n");
 }
 
@@ -8715,18 +8715,19 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
     try writeSvgInteractiveClose(writer, wrap);
 }
 
-fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
+fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
     const render_route = graphvizMsquareHeadRoute(graphvizDiamondTailRoute(graphvizCrossClusterLongRoute(layout, edge_item, rankdir, crossClusterLeftDiagonalRoute(layout, edge_item, rankdir, route)), rankdir, hints), rankdir, hints);
     if (edgeColorList(edge_item)) |colors| {
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
             const color_offset = colorListOffset(colors.len, index, spacing);
             const segment_route = edgeRouteForEdgeWithColorOffset(render_route, rankdir, color_offset);
-            const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
+            const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
+            const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
             const back_edge = isBackEdge(layout, edge_item);
             const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
             const path_clip = if (back_edge) edgePathClip(segment_visual) else EdgePathClip{};
-            try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{segment.color});
+            try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{color});
             try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip, hints);
             try writer.writeByte('"');
             try writeSvgStrokeWidth(writer, visual.width);
@@ -8925,12 +8926,13 @@ fn graphvizSameClusterBackEdgePathStartOnlyShift(layout: *const Layout, edge_ite
     return .{ .x = 0.0, .y = y_shift };
 }
 
-fn renderSvgSelfLoopPaths(writer: *Io.Writer, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+fn renderSvgSelfLoopPaths(writer: *Io.Writer, graph: *const Graph, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
     if (edgeColorList(edge_item)) |colors| {
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
             const color_offset = colorListOffset(colors.len, index, spacing);
-            const segment_visual = edgeVisualForSegment(edge_item, visual, segment.color, index, colors.len);
+            const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
+            const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
             const shifted = offsetEdgeRoute(route, .TB, color_offset);
             try writeSvgSelfLoopPath(writer, shifted, segment_visual);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
@@ -8960,26 +8962,26 @@ fn edgeColorList(edge_item: Edge) ?ColorList {
     return parseColorList(color);
 }
 
-fn edgeMarkerColor(edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
+fn edgeMarkerColor(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
     const colors = edgeColorList(edge_item) orelse return visual.stroke;
-    if (head) return colors.segments[0].color;
-    if (colors.len >= 2) return colors.segments[1].color;
-    return colors.segments[0].color;
+    if (head) return resolveSvgColor(graph, edge_item.attrs.items, colors.segments[0].color);
+    if (colors.len >= 2) return resolveSvgColor(graph, edge_item.attrs.items, colors.segments[1].color);
+    return resolveSvgColor(graph, edge_item.attrs.items, colors.segments[0].color);
 }
 
-fn edgeMarkerFill(edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
-    if (attrValue(edge_item.attrs.items, "fillcolor")) |fillcolor| return fillcolor;
-    return edgeMarkerColor(edge_item, visual, head);
+fn edgeMarkerFill(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
+    if (attrValue(edge_item.attrs.items, "fillcolor")) |fillcolor| return resolveSvgColor(graph, edge_item.attrs.items, fillcolor);
+    return edgeMarkerColor(graph, edge_item, visual, head);
 }
 
-fn edgeVisualForSegment(edge_item: Edge, visual: EdgeVisual, color: []const u8, index: usize, color_count: usize) EdgeVisual {
+fn edgeVisualForSegment(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, color: []const u8, index: usize, color_count: usize) EdgeVisual {
     var result = visual;
     result.stroke = color;
     if (attrValue(edge_item.attrs.items, "fillcolor") == null) result.fill = color;
     if (index != 0) result.marker_end = .none;
     if (index != @min(color_count - 1, 1)) result.marker_start = .none;
-    if (result.marker_start != .none) result.stroke = edgeMarkerColor(edge_item, visual, false);
-    if (result.marker_end != .none) result.stroke = edgeMarkerColor(edge_item, visual, true);
+    if (result.marker_start != .none) result.stroke = edgeMarkerColor(graph, edge_item, visual, false);
+    if (result.marker_end != .none) result.stroke = edgeMarkerColor(graph, edge_item, visual, true);
     return result;
 }
 
@@ -10376,11 +10378,11 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     try writer.writeByte('\n');
     const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, .{ .graph_name = graph.name, .node_name = cluster.label, .label_name = cluster.label }, cluster.label);
     const rect = clusterVisualRect(graph, layout, index);
-    if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
+    if (try renderSvgStripedRectFill(writer, graph, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
     } else {
         var fill_buf: [96]u8 = undefined;
-        try resolveSvgGradientFill(writer, "vex-cluster-fill", index + 1, cluster.attrs.items, rect, &visual.fill, &fill_buf);
+        try resolveSvgGradientFill(writer, graph, "vex-cluster-fill", index + 1, cluster.attrs.items, rect, &visual.fill, &fill_buf);
     }
     const stroke = if (visual.peripheries == 0) "none" else visual.stroke;
     if (visual.radius <= 0.001) {
@@ -16023,7 +16025,11 @@ test "SVG renderer resolves Graphviz bugn9 colorscheme colors" {
         \\  node [shape=box, style=filled];
         \\  a [color=7, fillcolor=2, fontcolor=9];
         \\  b [colorscheme=X11, color=red];
+        \\  gradient [style=filled, fillcolor="2:7"];
+        \\  stripes [style=striped, fillcolor="1;0.4:5"];
+        \\  wedge [shape=circle, style=wedged, fillcolor="3:8"];
         \\  a -> b [color=6, fontcolor=8];
+        \\  gradient -> stripes [color="4:9"];
         \\  subgraph cluster_scheme {
         \\    colorscheme=bugn9;
         \\    color=4;
@@ -16046,6 +16052,12 @@ test "SVG renderer resolves Graphviz bugn9 colorscheme colors" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f7fcfd\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#99d8c9\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"red\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"#e5f5f9\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"#238b45\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#66c2a4\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#ccece6\" stroke=\"black\" stroke-width=\"0.5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#006d2c\" stroke=\"black\" stroke-width=\"0.5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#00441b\"") != null);
 }
 
 test "SVG renderer uses typed colorscheme attributes" {
