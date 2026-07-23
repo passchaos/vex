@@ -294,6 +294,7 @@ pub const EdgeOptions = struct {
     target: ?[]const u8 = null,
     arrowhead: ?ArrowShape = null,
     arrowtail: ?ArrowShape = null,
+    arrowsize: ?f64 = null,
     dir: ?EdgeDir = null,
     taillabel: ?[]const u8 = null,
     headlabel: ?[]const u8 = null,
@@ -330,6 +331,7 @@ pub const EdgeAttr = union(enum) {
     target: []const u8,
     arrowhead: ArrowShape,
     arrowtail: ArrowShape,
+    arrowsize: f64,
     dir: EdgeDir,
     taillabel: []const u8,
     headlabel: []const u8,
@@ -821,6 +823,7 @@ pub const Graph = struct {
             .target => |value| try self.setDefaultEdgeAttrRaw("target", value),
             .arrowhead => |value| try self.setDefaultEdgeAttrRaw("arrowhead", arrowShapeName(value)),
             .arrowtail => |value| try self.setDefaultEdgeAttrRaw("arrowtail", arrowShapeName(value)),
+            .arrowsize => |value| try self.setDefaultEdgeAttrFloat("arrowsize", value),
             .dir => |value| try self.setDefaultEdgeAttrRaw("dir", edgeDirName(value)),
             .taillabel => |value| try self.setDefaultEdgeAttrRaw("taillabel", value),
             .headlabel => |value| try self.setDefaultEdgeAttrRaw("headlabel", value),
@@ -956,6 +959,7 @@ pub const Graph = struct {
         if (options.target) |value| try self.setEdgeAttr(id, .{ .target = value });
         if (options.arrowhead) |value| try self.setEdgeAttr(id, .{ .arrowhead = value });
         if (options.arrowtail) |value| try self.setEdgeAttr(id, .{ .arrowtail = value });
+        if (options.arrowsize) |value| try self.setEdgeAttr(id, .{ .arrowsize = value });
         if (options.dir) |value| try self.setEdgeAttr(id, .{ .dir = value });
         if (options.taillabel) |value| try self.setEdgeAttr(id, .{ .taillabel = value });
         if (options.headlabel) |value| try self.setEdgeAttr(id, .{ .headlabel = value });
@@ -991,6 +995,7 @@ pub const Graph = struct {
             .target => |value| try self.setEdgeAttrRaw(id, "target", value),
             .arrowhead => |value| try self.setEdgeAttrRaw(id, "arrowhead", arrowShapeName(value)),
             .arrowtail => |value| try self.setEdgeAttrRaw(id, "arrowtail", arrowShapeName(value)),
+            .arrowsize => |value| try self.setEdgeAttrFloat(id, "arrowsize", value),
             .dir => |value| try self.setEdgeAttrRaw(id, "dir", edgeDirName(value)),
             .taillabel => |value| try self.setEdgeAttrRaw(id, "taillabel", value),
             .headlabel => |value| try self.setEdgeAttrRaw(id, "headlabel", value),
@@ -13243,6 +13248,7 @@ test "code API sets typed node and edge options at creation" {
         .target = "_self",
         .arrowhead = .vee,
         .arrowtail = .dot,
+        .arrowsize = 1.75,
         .dir = .both,
         .taillabel = "tail",
         .headlabel = "head",
@@ -13294,6 +13300,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("_self", attrValue(edge_item.attrs.items, "target").?);
     try std.testing.expectEqualStrings("vee", attrValue(edge_item.attrs.items, "arrowhead").?);
     try std.testing.expectEqualStrings("dot", attrValue(edge_item.attrs.items, "arrowtail").?);
+    try std.testing.expectEqualStrings("1.75", attrValue(edge_item.attrs.items, "arrowsize").?);
     try std.testing.expectEqualStrings("both", attrValue(edge_item.attrs.items, "dir").?);
     try std.testing.expectEqualStrings("tail", attrValue(edge_item.attrs.items, "taillabel").?);
     try std.testing.expectEqualStrings("head", attrValue(edge_item.attrs.items, "headlabel").?);
@@ -16356,6 +16363,31 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
     try std.testing.expectEqual(layout.nodes[b].center.y, unclipped.start.y);
     try std.testing.expectEqual(layout.nodes[c].center.x, unclipped.end.x);
     try std.testing.expectEqual(layout.nodes[c].center.y, unclipped.end.y);
+}
+
+test "SVG renderer uses typed edge arrowsize attribute" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{ .shape = .box });
+    const b = try graph.addNode("b", .{ .shape = .box });
+    _ = try graph.addEdge(a, b, .{
+        .color = "#2563eb",
+        .arrowhead = .vee,
+        .arrowsize = 2.0,
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("2", attrValue(graph.edges.items[0].attrs.items, "arrowsize").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "markerWidth=\"14.00\" markerHeight=\"14.00\"") != null);
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
+    try std.testing.expect(route.end.x < layout.nodes[b].center.x);
 }
 
 test "SVG renderer honors DOT concentrate graph attribute for duplicate edges" {
