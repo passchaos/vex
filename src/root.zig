@@ -177,6 +177,7 @@ pub const GraphAttr = union(enum) {
     fontcolor: []const u8,
     labeljust: LabelJust,
     labelloc: LabelLoc,
+    nojustify: bool,
     ordering: OrderingMode,
     url: []const u8,
     href: []const u8,
@@ -237,6 +238,7 @@ pub const NodeAttr = union(enum) {
     xlabel: []const u8,
     labelloc: LabelLoc,
     labeljust: LabelJust,
+    nojustify: bool,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -317,6 +319,7 @@ pub const NodeOptions = struct {
     xlabel: ?[]const u8 = null,
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
+    nojustify: ?bool = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -380,6 +383,7 @@ pub const EdgeOptions = struct {
     labeldistance: ?f64 = null,
     labelangle: ?f64 = null,
     labelfloat: ?bool = null,
+    nojustify: ?bool = null,
     decorate: ?bool = null,
     tailclip: ?bool = null,
     headclip: ?bool = null,
@@ -444,6 +448,7 @@ pub const EdgeAttr = union(enum) {
     labeldistance: f64,
     labelangle: f64,
     labelfloat: bool,
+    nojustify: bool,
     decorate: bool,
     tailclip: bool,
     headclip: bool,
@@ -481,6 +486,7 @@ pub const SubgraphAttr = union(enum) {
     margin: []const u8,
     labelloc: LabelLoc,
     labeljust: LabelJust,
+    nojustify: bool,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -516,6 +522,7 @@ pub const SubgraphOptions = struct {
     margin: ?[]const u8 = null,
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
+    nojustify: ?bool = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -860,6 +867,7 @@ pub const Graph = struct {
             .fontcolor => |value| try self.setGraphAttrRaw("fontcolor", value),
             .labeljust => |value| try self.setGraphAttrRaw("labeljust", labelJustName(value)),
             .labelloc => |value| try self.setGraphAttrRaw("labelloc", labelLocName(value)),
+            .nojustify => |value| try self.setGraphAttrRaw("nojustify", boolAttrValue(value)),
             .ordering => |value| try self.setGraphAttrRaw("ordering", orderingModeName(value)),
             .url => |value| try self.setGraphAttrRaw("URL", value),
             .href => |value| try self.setGraphAttrRaw("href", value),
@@ -923,6 +931,7 @@ pub const Graph = struct {
             .xlabel => |value| try self.setDefaultNodeAttrRaw("xlabel", value),
             .labelloc => |value| try self.setDefaultNodeAttrRaw("labelloc", labelLocName(value)),
             .labeljust => |value| try self.setDefaultNodeAttrRaw("labeljust", labelJustName(value)),
+            .nojustify => |value| try self.setDefaultNodeAttrRaw("nojustify", boolAttrValue(value)),
             .url => |value| try self.setDefaultNodeAttrRaw("URL", value),
             .href => |value| try self.setDefaultNodeAttrRaw("href", value),
             .tooltip => |value| try self.setDefaultNodeAttrRaw("tooltip", value),
@@ -1009,6 +1018,7 @@ pub const Graph = struct {
             .labeldistance => |value| try self.setDefaultEdgeAttrFloat("labeldistance", value),
             .labelangle => |value| try self.setDefaultEdgeAttrFloat("labelangle", value),
             .labelfloat => |value| try self.setDefaultEdgeAttrRaw("labelfloat", boolAttrValue(value)),
+            .nojustify => |value| try self.setDefaultEdgeAttrRaw("nojustify", boolAttrValue(value)),
             .decorate => |value| try self.setDefaultEdgeAttrRaw("decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
@@ -1067,6 +1077,7 @@ pub const Graph = struct {
         if (options.xlabel) |value| try self.setNodeAttr(id, .{ .xlabel = value });
         if (options.labelloc) |value| try self.setNodeAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setNodeAttr(id, .{ .labeljust = value });
+        if (options.nojustify) |value| try self.setNodeAttr(id, .{ .nojustify = value });
         if (options.url) |value| try self.setNodeAttr(id, .{ .url = value });
         if (options.href) |value| try self.setNodeAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setNodeAttr(id, .{ .tooltip = value });
@@ -1116,6 +1127,7 @@ pub const Graph = struct {
             .xlabel => |value| try self.setNodeAttrRaw(id, "xlabel", value),
             .labelloc => |value| try self.setNodeAttrRaw(id, "labelloc", labelLocName(value)),
             .labeljust => |value| try self.setNodeAttrRaw(id, "labeljust", labelJustName(value)),
+            .nojustify => |value| try self.setNodeAttrRaw(id, "nojustify", boolAttrValue(value)),
             .url => |value| try self.setNodeAttrRaw(id, "URL", value),
             .href => |value| try self.setNodeAttrRaw(id, "href", value),
             .tooltip => |value| try self.setNodeAttrRaw(id, "tooltip", value),
@@ -1209,6 +1221,7 @@ pub const Graph = struct {
         if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
         if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
         if (options.labelfloat) |value| try self.setEdgeAttr(id, .{ .labelfloat = value });
+        if (options.nojustify) |value| try self.setEdgeAttr(id, .{ .nojustify = value });
         if (options.decorate) |value| try self.setEdgeAttr(id, .{ .decorate = value });
         if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
@@ -1276,6 +1289,7 @@ pub const Graph = struct {
             .labeldistance => |value| try self.setEdgeAttrFloat(id, "labeldistance", value),
             .labelangle => |value| try self.setEdgeAttrFloat(id, "labelangle", value),
             .labelfloat => |value| try self.setEdgeAttrRaw(id, "labelfloat", boolAttrValue(value)),
+            .nojustify => |value| try self.setEdgeAttrRaw(id, "nojustify", boolAttrValue(value)),
             .decorate => |value| try self.setEdgeAttrRaw(id, "decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
@@ -1379,6 +1393,7 @@ pub const Graph = struct {
         if (options.margin) |value| try self.setSubgraphAttr(id, .{ .margin = value });
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setSubgraphAttr(id, .{ .labeljust = value });
+        if (options.nojustify) |value| try self.setSubgraphAttr(id, .{ .nojustify = value });
         if (options.url) |value| try self.setSubgraphAttr(id, .{ .url = value });
         if (options.href) |value| try self.setSubgraphAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setSubgraphAttr(id, .{ .tooltip = value });
@@ -1435,6 +1450,7 @@ pub const Graph = struct {
             .margin => |value| try self.setSubgraphAttrRaw(id, "margin", value),
             .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", labelLocName(value)),
             .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", labelJustName(value)),
+            .nojustify => |value| try self.setSubgraphAttrRaw(id, "nojustify", boolAttrValue(value)),
             .url => |value| try self.setSubgraphAttrRaw(id, "URL", value),
             .href => |value| try self.setSubgraphAttrRaw(id, "href", value),
             .tooltip => |value| try self.setSubgraphAttrRaw(id, "tooltip", value),
@@ -7725,7 +7741,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "fontcolor") orelse "black");
         const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
-        try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor);
+        try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor, noJustifyLineAnchor(graph.attrs.items, text_anchor));
     }
     try writeSvgInteractiveClose(writer, graph_wrap);
     if (svgNeedsMarkerDefs(graph, concentrate)) {
@@ -8715,7 +8731,7 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
     context.node_name = label;
     context.label_name = label;
     const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label);
-    try renderSvgTextBlock(writer, label, pos.x, pos.y, font_size, font_color, font_family, true, true);
+    try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font_family, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
     try writeSvgInteractiveClose(writer, wrap);
 }
 
@@ -9129,7 +9145,7 @@ fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         try renderSvgPlainTextBlock(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, anchor.anchor);
         return;
     }
-    try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, false, false, anchor.anchor);
+    try renderSvgTextBlockWithAnchor(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font_family, false, false, anchor.anchor, noJustifyLineAnchor(node_item.attrs.items, anchor.anchor));
 }
 
 fn nodeLabelYOffset(node_item: Node) f64 {
@@ -9223,6 +9239,16 @@ fn edgeDecorateEnabled(attrs: []const Attr) bool {
 fn edgeLabelFloatEnabled(attrs: []const Attr) bool {
     const value = attrValue(attrs, "labelfloat") orelse return false;
     return parseBool(value) orelse false;
+}
+
+fn noJustifyLineAnchor(attrs: []const Attr, anchor: []const u8) ?[]const u8 {
+    const value = attrValue(attrs, "nojustify") orelse return null;
+    return if (parseBool(value) orelse false) anchor else null;
+}
+
+fn noJustifyLineAnchorInherited(graph: *const Graph, attrs: []const Attr, anchor: []const u8) ?[]const u8 {
+    const value = attrValue(attrs, "nojustify") orelse attrValue(graph.attrs.items, "nojustify") orelse return null;
+    return if (parseBool(value) orelse false) anchor else null;
 }
 
 fn distanceBetween(a: Point, b: Point) f64 {
@@ -10436,7 +10462,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         try writer.writeAll("</text>\n");
     } else {
         const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
-        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font_family, false, false, text_anchor);
+        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font_family, false, false, text_anchor, noJustifyLineAnchorInherited(graph, cluster.attrs.items, text_anchor));
     }
     try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
@@ -13260,7 +13286,7 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
 }
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
-    try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font_family, label_background, dominant_middle, "middle");
+    try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font_family, label_background, dominant_middle, "middle", null);
 }
 
 fn writeSvgTextFill(writer: *Io.Writer, fill: []const u8) Io.Writer.Error!void {
@@ -13309,7 +13335,7 @@ fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_
     try writer.writeAll("</text>\n");
 }
 
-fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool, text_anchor: []const u8) Io.Writer.Error!void {
+fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, label_background: bool, dominant_middle: bool, text_anchor: []const u8, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
     const line_count = displayLabelLineCount(text);
     const line_height = font_size * 1.25;
     const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
@@ -13327,21 +13353,22 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
     try writeSvgTextFill(writer, fill);
     if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
-    try writeDisplayLabelTspans(writer, text, x, line_height);
+    try writeDisplayLabelTspans(writer, text, x, line_height, forced_line_anchor);
     try writer.writeAll("</text>\n");
 }
 
-fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_height: f64) Io.Writer.Error!void {
+fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_height: f64, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
     var start: usize = 0;
     var index: usize = 0;
     var line_index: usize = 0;
     while (index <= text.len) : (index += 1) {
         if (index < text.len and !isLabelLineBreak(text[index])) continue;
+        const line_anchor = forced_line_anchor orelse labelLineAnchor(if (index < text.len) text[index] else '\n');
         if (line_index == 0) {
-            try writeSvgTspanOpen(writer, x, labelLineAnchor(if (index < text.len) text[index] else '\n'));
+            try writeSvgTspanOpen(writer, x, line_anchor);
         } else {
             try writer.writeAll("</tspan>");
-            try writeSvgTspanOpenDy(writer, x, line_height, labelLineAnchor(if (index < text.len) text[index] else '\n'));
+            try writeSvgTspanOpenDy(writer, x, line_height, line_anchor);
         }
         const line = text[start..index];
         try writeXmlEscaped(writer, line);
@@ -14496,6 +14523,52 @@ test "SVG renderer honors DOT line alignment in external labels" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">node right</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">edge left</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">edge right</tspan>") != null);
+}
+
+test "SVG renderer honors Graphviz nojustify labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="graph left\lgraph right\r", nojustify=true];
+        \\  node [shape=box];
+        \\  normal [label="normal left\lnormal right\r"];
+        \\  node_float [label="node left\lnode right\r", labeljust=l, nojustify=true];
+        \\  node_float -> normal [label="edge left\ledge right\r", nojustify=true];
+        \\  subgraph cluster_float {
+        \\    label="cluster left\lcluster right\r";
+        \\    labeljust=r;
+        \\    nojustify=true;
+        \\    member;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const root_fragment = svgRootFragment(svg) orelse return error.MissingRootGraph;
+    try std.testing.expect(std.mem.indexOf(u8, root_fragment, "text-anchor=\"middle\">graph left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root_fragment, "text-anchor=\"middle\">graph right</tspan>") != null);
+
+    const normal_fragment = svgGroupFragmentByTitle(svg, "normal") orelse return error.MissingNormalNode;
+    try std.testing.expect(std.mem.indexOf(u8, normal_fragment, "text-anchor=\"start\">normal left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, normal_fragment, "text-anchor=\"end\">normal right</tspan>") != null);
+
+    const node_fragment = svgGroupFragmentByTitle(svg, "node_float") orelse return error.MissingNoJustifyNode;
+    try std.testing.expect(std.mem.indexOf(u8, node_fragment, "text-anchor=\"start\">node left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, node_fragment, "text-anchor=\"start\">node right</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, node_fragment, "text-anchor=\"end\">node right</tspan>") == null);
+
+    const edge_fragment = svgGroupFragmentByTitle(svg, "node_float-&gt;normal") orelse return error.MissingNoJustifyEdge;
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "text-anchor=\"middle\">edge left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "text-anchor=\"middle\">edge right</tspan>") != null);
+
+    const cluster_fragment = svgGroupFragmentByTitle(svg, "cluster left\ncluster right\n") orelse return error.MissingNoJustifyCluster;
+    try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "text-anchor=\"end\">cluster left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "text-anchor=\"end\">cluster right</tspan>") != null);
 }
 
 test "layered layout uses crossing reduction and variable label sizes" {
