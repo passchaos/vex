@@ -253,6 +253,8 @@ pub const ArrowShape = enum {
     normal,
     none,
     open,
+    inv,
+    oinv,
     vee,
     dot,
     odot,
@@ -1696,6 +1698,8 @@ fn arrowShapeName(shape: ArrowShape) []const u8 {
         .normal => "normal",
         .none => "none",
         .open => "open",
+        .inv => "inv",
+        .oinv => "oinv",
         .vee => "vee",
         .dot => "dot",
         .odot => "odot",
@@ -10026,6 +10030,8 @@ const MarkerShape = enum {
     none,
     normal,
     open,
+    inv,
+    oinv,
     vee,
     dot,
     odot,
@@ -11349,6 +11355,8 @@ fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, sh
         .none => {},
         .normal => try writer.print("<path d=\"M 1.2 1.4 L 9.2 5 L 1.2 8.6 z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
         .open => try writer.print("<path d=\"M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{stroke}),
+        .inv => try writer.print("<path d=\"M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
+        .oinv => try writer.print("<path d=\"M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{stroke}),
         .vee => try writer.print("<path d=\"M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{stroke}),
         .dot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
         .odot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{stroke}),
@@ -11461,6 +11469,8 @@ fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
     if (std.ascii.eqlIgnoreCase(text, "none")) return .none;
     if (std.ascii.eqlIgnoreCase(text, "normal")) return .normal;
     if (std.ascii.eqlIgnoreCase(text, "open")) return .open;
+    if (std.ascii.eqlIgnoreCase(text, "inv")) return .inv;
+    if (std.ascii.eqlIgnoreCase(text, "oinv")) return .oinv;
     if (std.ascii.eqlIgnoreCase(text, "vee")) return .vee;
     if (std.ascii.eqlIgnoreCase(text, "dot")) return .dot;
     if (std.ascii.eqlIgnoreCase(text, "odot")) return .odot;
@@ -16460,6 +16470,8 @@ test "SVG renderer honors additional Graphviz arrow marker shapes" {
         \\  f -> g [arrowhead=crow, color="#9333ea"];
         \\  g -> h [arrowhead=empty, color="#0f172a"];
         \\  h -> i [arrowhead=open, color="#0ea5e9"];
+        \\  i -> j [arrowhead=inv, color="#ea580c", fillcolor="#fed7aa"];
+        \\  j -> k [arrowhead=oinv, color="#0891b2"];
         \\}
     );
     defer graph.deinit();
@@ -16477,6 +16489,8 @@ test "SVG renderer honors additional Graphviz arrow marker shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 0.8 0.8 L 9.2 5 L 0.8 9.2 z") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#0ea5e9\" stroke-width=\"1.4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#fed7aa\" stroke=\"#ea580c\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"#0891b2\"") != null);
 }
 
 test "SVG renderer honors arrowsize and edge clipping attributes" {
@@ -16529,7 +16543,7 @@ test "SVG renderer uses typed edge arrowsize attribute" {
     const b = try graph.addNode("b", .{ .shape = .box });
     _ = try graph.addEdge(a, b, .{
         .color = "#2563eb",
-        .arrowhead = .open,
+        .arrowhead = .inv,
         .arrowsize = 2.0,
     });
 
@@ -16539,7 +16553,7 @@ test "SVG renderer uses typed edge arrowsize attribute" {
     defer allocator.free(svg);
 
     try std.testing.expectEqualStrings("2", attrValue(graph.edges.items[0].attrs.items, "arrowsize").?);
-    try std.testing.expectEqualStrings("open", attrValue(graph.edges.items[0].attrs.items, "arrowhead").?);
+    try std.testing.expectEqualStrings("inv", attrValue(graph.edges.items[0].attrs.items, "arrowhead").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "markerWidth=\"14.00\" markerHeight=\"14.00\"") != null);
     const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
