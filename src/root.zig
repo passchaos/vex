@@ -15399,6 +15399,35 @@ test "SVG renderer honors common Graphviz visual attributes" {
     try std.testing.expect(second_offset > 0);
 }
 
+test "SVG renderer honors Graphviz invisible style" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  visible [shape=box];
+        \\  hidden_node [label="Hidden Node", style=invis];
+        \\  visible -> hidden_node [label="Hidden Edge", style=invis];
+        \\  subgraph cluster_hidden {
+        \\    label="Hidden Cluster";
+        \\    style=invis;
+        \\    hidden_member;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>visible</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Hidden Node") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Hidden Edge") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Hidden Cluster") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>hidden_member</title>") != null);
+    try std.testing.expect(svgGraphContentBounds(&graph, &layout) != null);
+}
+
 test "SVG renderer accepts semicolon separated style lists" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
