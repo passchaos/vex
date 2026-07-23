@@ -2864,7 +2864,7 @@ fn startsWithMermaidHeader(line: []const u8) bool {
     var parts = std.mem.tokenizeAny(u8, line, " \t");
     const first = parts.next() orelse return false;
     if (!std.mem.eql(u8, first, "graph") and !std.mem.eql(u8, first, "flowchart")) return false;
-    const second = parts.next() orelse return true;
+    const second = parts.next() orelse return std.mem.eql(u8, first, "flowchart");
     return std.ascii.eqlIgnoreCase(second, "TD") or
         std.ascii.eqlIgnoreCase(second, "TB") or
         std.ascii.eqlIgnoreCase(second, "BT") or
@@ -13561,6 +13561,7 @@ test "input format auto detects Mermaid flowcharts without breaking DOT graphs" 
     try std.testing.expectEqual(InputFormat.mermaid, detectInputFormat("flowchart TD\nA --> B"));
     try std.testing.expectEqual(InputFormat.mermaid, detectInputFormat("graph LR\nA --> B"));
     try std.testing.expectEqual(InputFormat.dot, detectInputFormat("graph G { a -- b }"));
+    try std.testing.expectEqual(InputFormat.dot, detectInputFormat("graph\n{\n  a -- b\n}"));
 }
 
 test "Mermaid parser maps flowchart subgraphs to clusters" {
