@@ -2462,7 +2462,18 @@ const Parser = struct {
     fn setParsedEdgeAttr(self: *Parser, graph: *Graph, id: EdgeId, name: []const u8, value: []const u8) !void {
         if (edgeLabelLikeAttr(name)) {
             const edge_item = graph.edges.items[id];
-            const expanded = try expandEdgeLabel(self.allocator, graph, self.nodeTextId(graph, edge_item.from), self.nodeTextId(graph, edge_item.to), value);
+            const tail = self.nodeTextId(graph, edge_item.from);
+            const head = self.nodeTextId(graph, edge_item.to);
+            var edge_name_buf: [512]u8 = undefined;
+            const edge_name = edgeTextWithPorts(edge_name_buf[0..], graph.directed, tail, head, edge_item.tail_record_port, edge_item.tail_port, edge_item.head_record_port, edge_item.head_port) catch
+                std.fmt.bufPrint(edge_name_buf[0..], "{s}{s}{s}", .{ tail, if (graph.directed) "->" else "--", head }) catch tail;
+            const expanded = try expandLabelEscapes(self.allocator, value, .{
+                .graph_name = graph.name,
+                .tail_name = tail,
+                .head_name = head,
+                .edge_name = edge_name,
+                .label_name = value,
+            });
             defer self.allocator.free(expanded);
             try graph.setEdgeAttrRaw(id, name, expanded);
             return;
@@ -2621,6 +2632,30 @@ fn expandEdgeLabel(allocator: std.mem.Allocator, graph: *const Graph, tail: []co
         .edge_name = edge_name,
         .label_name = value,
     });
+}
+
+fn edgeTextWithPorts(buffer: []u8, directed: bool, tail: []const u8, head: []const u8, tail_record_port: ?[]const u8, tail_port: CompassPort, head_record_port: ?[]const u8, head_port: CompassPort) ![]const u8 {
+    var tail_buf: [128]u8 = undefined;
+    var head_buf: [128]u8 = undefined;
+    const tail_text = try edgeEndpointText(tail_buf[0..], tail, tail_record_port, tail_port);
+    const head_text = try edgeEndpointText(head_buf[0..], head, head_record_port, head_port);
+    const op = if (directed) "->" else "--";
+    return std.fmt.bufPrint(buffer, "{s}{s}{s}", .{ tail_text, op, head_text });
+}
+
+fn edgeEndpointText(buffer: []u8, node_name: []const u8, record_port: ?[]const u8, port: CompassPort) ![]const u8 {
+    if (record_port == null and port == .auto) return node_name;
+    var port_buf: [128]u8 = undefined;
+    const port_text = try edgePortText(port_buf[0..], record_port, port);
+    return std.fmt.bufPrint(buffer, "{s}:{s}", .{ node_name, port_text });
+}
+
+fn edgePortText(buffer: []u8, record_port: ?[]const u8, port: CompassPort) ![]const u8 {
+    if (record_port) |record| {
+        if (port == .auto) return record;
+        return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, compassPortName(port) });
+    }
+    return compassPortName(port);
 }
 
 const LabelEscapeContext = struct {
@@ -8130,8 +8165,8 @@ fn edgeFallbackTitle(edge_item: Edge, edge_name: ?[]const u8) []const u8 {
 fn svgEdgeEscapeContext(graph: *const Graph, edge_item: Edge, edge_name_buf: *[256]u8) LabelEscapeContext {
     const tail = if (edge_item.from < graph.nodes.items.len) svgNodeName(graph.nodes.items[edge_item.from]) else "";
     const head = if (edge_item.to < graph.nodes.items.len) svgNodeName(graph.nodes.items[edge_item.to]) else "";
-    const op = if (graph.directed) "->" else "--";
-    const edge_name = std.fmt.bufPrint(edge_name_buf, "{s}{s}{s}", .{ tail, op, head }) catch tail;
+    const edge_name = edgeTextWithPorts(edge_name_buf[0..], graph.directed, tail, head, edge_item.tail_record_port, edge_item.tail_port, edge_item.head_record_port, edge_item.head_port) catch
+        std.fmt.bufPrint(edge_name_buf[0..], "{s}{s}{s}", .{ tail, if (graph.directed) "->" else "--", head }) catch tail;
     return .{
         .graph_name = graph.name,
         .node_name = edge_name,
@@ -14015,6 +14050,22 @@ test "DOT label escapes expand graph node and edge context" {
     try std.testing.expectEqualStrings("node_a|node_b|node_a->node_b|Ctx|\\T|\\H|\\E|\\G|\\L", graph.edges.items[0].label.?);
 }
 
+test "DOT edge name escape includes compass ports" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Ports {
+        \\  a:e -> b:w [label="\E", xlabel="\E"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const edge_item = graph.edges.items[0];
+    try std.testing.expectEqual(CompassPort.east, edge_item.tail_port);
+    try std.testing.expectEqual(CompassPort.west, edge_item.head_port);
+    try std.testing.expectEqualStrings("a:e->b:w", edge_item.label.?);
+    try std.testing.expectEqualStrings("a:e->b:w", attrValue(edge_item.attrs.items, "xlabel").?);
+}
+
 test "DOT parser decodes quoted graph names for label escapes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -16053,6 +16104,11 @@ test "SVG renderer expands URL escape sequences with object context" {
         \\    headlabel="head",
         \\    taillabel="tail"
         \\  ];
+        \\  a:e -> b:w [
+        \\    URL="https://example.com/ported/\E",
+        \\    tooltip="ported \E",
+        \\    target="ported-\E"
+        \\  ];
         \\}
     );
     defer graph.deinit();
@@ -16069,6 +16125,10 @@ test "SVG renderer expands URL escape sequences with object context" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/go/a-&gt;b\" xlink:href=\"https://example.com/label/go/go/a-&gt;b\" xlink:title=\"go\" target=\"edge-a-&gt;b\"><title>go</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/head/a-&gt;b\" xlink:href=\"https://example.com/head/head/head/a-&gt;b\" xlink:title=\"head\" target=\"edge-a-&gt;b\"><title>head</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/tail/a-&gt;b\" xlink:href=\"https://example.com/tail/tail/tail/a-&gt;b\" xlink:title=\"tail\" target=\"edge-a-&gt;b\"><title>tail</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "href=\"https://example.com/ported/a:e-&gt;b:w\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "xlink:title=\"ported a:e-&gt;b:w\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "target=\"ported-a:e-&gt;b:w\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>ported a:e-&gt;b:w</title>") != null);
 }
 
 test "SVG renderer honors typed id and class metadata" {
