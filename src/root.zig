@@ -2046,13 +2046,13 @@ const Parser = struct {
         if (self.matchKeyword("strict")) strict = true;
 
         const directed = if (self.matchKeyword("digraph")) true else if (self.matchKeyword("graph")) false else return error.ExpectedGraph;
-        const name = if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .angle_string) blk: {
-            const n = self.current.lexeme;
-            try self.advance();
-            break :blk n;
-        } else "G";
+        const parsed_name = if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .angle_string)
+            try self.parseIdText()
+        else
+            try self.allocator.dupe(u8, "G");
+        defer self.allocator.free(parsed_name);
 
-        var graph = try Graph.init(self.allocator, .{ .directed = directed, .strict = strict, .name = name });
+        var graph = try Graph.init(self.allocator, .{ .directed = directed, .strict = strict, .name = parsed_name });
         errdefer graph.deinit();
 
         try self.expect(.lbrace);
@@ -14003,6 +14003,28 @@ test "DOT label escapes expand graph node and edge context" {
     const node_a = nodeIdByLabel(&graph, "node_a");
     try std.testing.expectEqualStrings("node=node_a graph=Ctx", graph.nodes.items[node_a].label);
     try std.testing.expectEqualStrings("node_a|node_b|node_a->node_b|Ctx", graph.edges.items[0].label.?);
+}
+
+test "DOT parser decodes quoted graph names for label escapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph "Graph \"A&B\"" {
+        \\  graph [label="graph=\G"];
+        \\  a [label="node=\N graph=\G"];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("Graph \"A&B\"", graph.name);
+    try std.testing.expectEqualStrings("graph=Graph \"A&B\"", attrValue(graph.attrs.items, "label").?);
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expectEqualStrings("node=a graph=Graph \"A&B\"", graph.nodes.items[a].label);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Graph &quot;A&amp;B&quot;</title>") != null);
 }
 
 test "DOT label escapes expand external label attributes" {
