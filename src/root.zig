@@ -1506,7 +1506,7 @@ const TokenTag = enum {
     eof,
     id,
     string,
-    html,
+    angle_string,
     lbrace,
     rbrace,
     lbracket,
@@ -1557,10 +1557,10 @@ const Lexer = struct {
                     if (ch == '>') {
                         var lookahead = self.index;
                         while (lookahead < self.source.len and std.ascii.isWhitespace(self.source[lookahead])) : (lookahead += 1) {}
-                        if (lookahead >= self.source.len or isHtmlIdTerminator(self.source[lookahead])) break;
+                        if (lookahead >= self.source.len or isAngleStringTerminator(self.source[lookahead])) break;
                     }
-                } else return error.UnterminatedHtmlString;
-                break :blk .{ .tag = .html, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
+                } else return error.UnterminatedAngleString;
+                break :blk .{ .tag = .angle_string, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
             },
             '-' => blk: {
                 if (self.index >= self.source.len) return error.UnexpectedCharacter;
@@ -1653,7 +1653,7 @@ fn isIdChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-' or c >= 0x80;
 }
 
-fn isHtmlIdTerminator(c: u8) bool {
+fn isAngleStringTerminator(c: u8) bool {
     return switch (c) {
         ']', ',', ';', '{', '}', '-' => true,
         else => false,
@@ -1788,7 +1788,7 @@ const Parser = struct {
         if (self.matchKeyword("strict")) strict = true;
 
         const directed = if (self.matchKeyword("digraph")) true else if (self.matchKeyword("graph")) false else return error.ExpectedGraph;
-        const name = if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .html) blk: {
+        const name = if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .angle_string) blk: {
             const n = self.current.lexeme;
             try self.advance();
             break :blk n;
@@ -2028,7 +2028,7 @@ const Parser = struct {
         var subgraph_name: ?[]const u8 = null;
         var subgraph_id: ?SubgraphId = null;
         if (self.matchKeyword("subgraph")) {
-            if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .html) {
+            if (self.current.tag == .id or self.current.tag == .string or self.current.tag == .angle_string) {
                 subgraph_name = self.current.lexeme;
                 subgraph_id = try self.subgraphByTextId(graph, subgraph_name.?);
                 try self.advance();
@@ -2194,7 +2194,7 @@ const Parser = struct {
     }
 
     fn parseIdText(self: *Parser) ![]const u8 {
-        if (self.current.tag != .id and self.current.tag != .string and self.current.tag != .html) return error.ExpectedId;
+        if (self.current.tag != .id and self.current.tag != .string and self.current.tag != .angle_string) return error.ExpectedId;
         var value = if (self.current.tag == .string)
             try dupeDotString(self.allocator, self.current.lexeme)
         else
@@ -4301,17 +4301,6 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         },
         else => {},
     }
-    if (htmlTableMetrics(node_item.label)) |table| {
-        const table_width = htmlTablePreferredWidth(table, options.label_char_width * font_scale);
-        const table_height = htmlTablePreferredHeight(table, options.label_line_height * 1.6 * font_scale);
-        if (node_item.shape == .plaintext and htmlTableHasExplicitSize(table)) {
-            width = table_width;
-            height = table_height;
-        } else {
-            width = @max(width, table_width);
-            height = @max(height, table_height);
-        }
-    }
     applyNodeSizeAttrs(node_item, &width, &height);
     return .{ .width = width, .height = height };
 }
@@ -5669,112 +5658,16 @@ fn labelMaxLineLen(text: []const u8) usize {
     return @max(max_len, current);
 }
 
-fn isHtmlLikeLabel(text: []const u8) bool {
-    var index: usize = 0;
-    while (std.mem.indexOfScalar(u8, text[index..], '<')) |rel| {
-        const start = index + rel + 1;
-        const close_rel = std.mem.indexOfScalar(u8, text[start..], '>') orelse return false;
-        const tag = htmlTagName(text[start .. start + close_rel]);
-        if (isKnownHtmlLabelTag(tag)) return true;
-        index = start + close_rel + 1;
-    }
-    return false;
-}
-
-fn isKnownHtmlLabelTag(tag: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(tag, "br") or
-        std.ascii.eqlIgnoreCase(tag, "b") or
-        std.ascii.eqlIgnoreCase(tag, "i") or
-        std.ascii.eqlIgnoreCase(tag, "u") or
-        std.ascii.eqlIgnoreCase(tag, "font") or
-        std.ascii.eqlIgnoreCase(tag, "sub") or
-        std.ascii.eqlIgnoreCase(tag, "sup") or
-        std.ascii.eqlIgnoreCase(tag, "table") or
-        std.ascii.eqlIgnoreCase(tag, "tr") or
-        std.ascii.eqlIgnoreCase(tag, "td");
-}
-
-fn htmlTagName(raw_tag: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, raw_tag, " \t\r\n/");
-    var end: usize = 0;
-    while (end < trimmed.len and !std.ascii.isWhitespace(trimmed[end]) and trimmed[end] != '/') : (end += 1) {}
-    return trimmed[0..end];
-}
-
 fn displayLabelLineCount(text: []const u8) usize {
-    if (!isHtmlLikeLabel(text)) return labelLineCount(text);
-    var count: usize = 1;
-    var scanner: HtmlLabelScanner = .{ .text = text };
-    while (scanner.next()) |token| {
-        if (token == .newline) count += 1;
-    }
-    return count;
+    return labelLineCount(text);
 }
 
 fn displayLabelMaxLineLen(text: []const u8) usize {
-    if (!isHtmlLikeLabel(text)) return labelMaxLineLen(text);
-    var current: usize = 0;
-    var max_len: usize = 0;
-    var has_text = false;
-    var pending_space = false;
-    var scanner: HtmlLabelScanner = .{ .text = text };
-    while (scanner.next()) |token| {
-        switch (token) {
-            .newline => {
-                max_len = @max(max_len, current);
-                current = 0;
-                has_text = false;
-                pending_space = false;
-            },
-            .char => |c| {
-                if (isHtmlLabelSpace(c)) {
-                    if (has_text) pending_space = true;
-                    continue;
-                }
-                if (pending_space) {
-                    current += 1;
-                    pending_space = false;
-                }
-                if ((c & 0xc0) != 0x80) current += 1;
-                has_text = true;
-            },
-            .tag_open, .tag_close => {},
-        }
-    }
-    return @max(max_len, current);
+    return labelMaxLineLen(text);
 }
 
 fn displayLabelEstimatedWidth(text: []const u8, font_size: f64) f64 {
-    if (!isHtmlLikeLabel(text)) return labelEstimatedWidth(text, font_size);
-    var current: f64 = 0;
-    var max_width: f64 = 0;
-    var has_text = false;
-    var pending_space = false;
-    var scanner: HtmlLabelScanner = .{ .text = text };
-    while (scanner.next()) |token| {
-        switch (token) {
-            .newline => {
-                max_width = @max(max_width, current);
-                current = 0;
-                has_text = false;
-                pending_space = false;
-            },
-            .char => |c| {
-                if (isHtmlLabelSpace(c)) {
-                    if (has_text) pending_space = true;
-                    continue;
-                }
-                if (pending_space) {
-                    current += labelCharWidth(' ', font_size);
-                    pending_space = false;
-                }
-                current += labelCharWidth(c, font_size);
-                has_text = true;
-            },
-            .tag_open, .tag_close => {},
-        }
-    }
-    return @max(max_width, current);
+    return labelEstimatedWidth(text, font_size);
 }
 
 fn labelEstimatedWidth(text: []const u8, font_size: f64) f64 {
@@ -5804,553 +5697,6 @@ fn labelCharWidth(c: u8, font_size: f64) f64 {
         'm', 'w', 'M', 'W' => em * 0.78,
         else => if (c < 0x80) em * 0.50 else em,
     };
-}
-
-fn isHtmlLabelSpace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\r' or c == '\n';
-}
-
-const HtmlToken = union(enum) {
-    char: u8,
-    newline,
-    tag_open: []const u8,
-    tag_close: []const u8,
-};
-
-const HtmlLabelScanner = struct {
-    text: []const u8,
-    index: usize = 0,
-
-    fn next(self: *HtmlLabelScanner) ?HtmlToken {
-        while (self.index < self.text.len) {
-            const c = self.text[self.index];
-            if (c == '<') {
-                const start = self.index + 1;
-                const close_rel = std.mem.indexOfScalar(u8, self.text[start..], '>') orelse {
-                    self.index += 1;
-                    return .{ .char = c };
-                };
-                const raw_tag = self.text[start .. start + close_rel];
-                const tag = htmlTagName(raw_tag);
-                const is_close = htmlTagIsClosing(raw_tag);
-                self.index = start + close_rel + 1;
-                if (std.ascii.eqlIgnoreCase(tag, "br")) return .newline;
-                if (htmlStyleTagKind(tag) != .none) {
-                    return if (is_close) .{ .tag_close = tag } else .{ .tag_open = raw_tag };
-                }
-                continue;
-            }
-            if (c == '&') {
-                if (htmlEntity(self, "&amp;")) return .{ .char = '&' };
-                if (htmlEntity(self, "&lt;")) return .{ .char = '<' };
-                if (htmlEntity(self, "&gt;")) return .{ .char = '>' };
-                if (htmlEntity(self, "&quot;")) return .{ .char = '"' };
-                if (htmlEntity(self, "&apos;")) return .{ .char = '\'' };
-            }
-            self.index += 1;
-            if (c == '\n') return .newline;
-            return .{ .char = c };
-        }
-        return null;
-    }
-};
-
-fn htmlTagIsClosing(raw_tag: []const u8) bool {
-    const trimmed = trimHtmlTagLeft(raw_tag);
-    return trimmed.len > 0 and trimmed[0] == '/';
-}
-
-fn trimHtmlTagLeft(raw_tag: []const u8) []const u8 {
-    var start: usize = 0;
-    while (start < raw_tag.len and isHtmlLabelSpace(raw_tag[start])) : (start += 1) {}
-    return raw_tag[start..];
-}
-
-const HtmlStyleTag = enum {
-    none,
-    bold,
-    italic,
-    underline,
-    overline,
-    strike,
-    subscript,
-    superscript,
-    font,
-};
-
-const HtmlTextStyle = struct {
-    bold: bool = false,
-    italic: bool = false,
-    underline: bool = false,
-    overline: bool = false,
-    strike: bool = false,
-    baseline_shift: []const u8 = "",
-    font_color: ?[]const u8 = null,
-    font_face: ?[]const u8 = null,
-    font_size: ?[]const u8 = null,
-};
-
-fn htmlStyleTagKind(tag: []const u8) HtmlStyleTag {
-    if (std.ascii.eqlIgnoreCase(tag, "b")) return .bold;
-    if (std.ascii.eqlIgnoreCase(tag, "i")) return .italic;
-    if (std.ascii.eqlIgnoreCase(tag, "u")) return .underline;
-    if (std.ascii.eqlIgnoreCase(tag, "o")) return .overline;
-    if (std.ascii.eqlIgnoreCase(tag, "s")) return .strike;
-    if (std.ascii.eqlIgnoreCase(tag, "sub")) return .subscript;
-    if (std.ascii.eqlIgnoreCase(tag, "sup")) return .superscript;
-    if (std.ascii.eqlIgnoreCase(tag, "font")) return .font;
-    return .none;
-}
-
-fn applyHtmlOpenStyle(style: *HtmlTextStyle, raw_tag: []const u8) void {
-    switch (htmlStyleTagKind(htmlTagName(raw_tag))) {
-        .bold => style.bold = true,
-        .italic => style.italic = true,
-        .underline => style.underline = true,
-        .overline => style.overline = true,
-        .strike => style.strike = true,
-        .subscript => style.baseline_shift = "sub",
-        .superscript => style.baseline_shift = "super",
-        .font => {
-            if (htmlAttrValue(raw_tag, "color")) |value| style.font_color = value;
-            if (htmlAttrValue(raw_tag, "face")) |value| style.font_face = value;
-            if (htmlAttrValue(raw_tag, "point-size")) |value| style.font_size = value;
-        },
-        .none => {},
-    }
-}
-
-fn resetHtmlCloseStyle(style: *HtmlTextStyle, tag: []const u8) void {
-    switch (htmlStyleTagKind(tag)) {
-        .bold => style.bold = false,
-        .italic => style.italic = false,
-        .underline => style.underline = false,
-        .overline => style.overline = false,
-        .strike => style.strike = false,
-        .subscript, .superscript => style.baseline_shift = "",
-        .font => {
-            style.font_color = null;
-            style.font_face = null;
-            style.font_size = null;
-        },
-        .none => {},
-    }
-}
-
-fn htmlStyleActive(style: HtmlTextStyle) bool {
-    return style.bold or style.italic or style.underline or style.overline or style.strike or
-        style.baseline_shift.len > 0 or style.font_color != null or style.font_face != null or style.font_size != null;
-}
-
-fn writeHtmlStyleOpen(writer: *Io.Writer, style: HtmlTextStyle) Io.Writer.Error!bool {
-    if (!htmlStyleActive(style)) return false;
-    try writer.writeAll("<tspan");
-    if (style.bold) try writer.writeAll(" font-weight=\"bold\"");
-    if (style.italic) try writer.writeAll(" font-style=\"italic\"");
-    if (style.underline or style.overline or style.strike) {
-        try writer.writeAll(" text-decoration=\"");
-        var wrote = false;
-        if (style.underline) {
-            try writer.writeAll("underline");
-            wrote = true;
-        }
-        if (style.overline) {
-            if (wrote) try writer.writeByte(' ');
-            try writer.writeAll("overline");
-            wrote = true;
-        }
-        if (style.strike) {
-            if (wrote) try writer.writeByte(' ');
-            try writer.writeAll("line-through");
-        }
-        try writer.writeByte('"');
-    }
-    if (style.baseline_shift.len > 0) try writer.print(" baseline-shift=\"{s}\"", .{style.baseline_shift});
-    if (style.font_color) |value| try writer.print(" fill=\"{s}\"", .{value});
-    if (style.font_face) |value| try writer.print(" font-family=\"{s}\"", .{value});
-    if (style.font_size) |value| try writer.print(" font-size=\"{s}\"", .{value});
-    try writer.writeByte('>');
-    return true;
-}
-
-fn htmlEntity(scanner: *HtmlLabelScanner, entity: []const u8) bool {
-    if (scanner.index + entity.len > scanner.text.len) return false;
-    if (!std.mem.eql(u8, scanner.text[scanner.index .. scanner.index + entity.len], entity)) return false;
-    scanner.index += entity.len;
-    return true;
-}
-
-const HtmlTableMetrics = struct {
-    rows: usize,
-    cols: usize,
-    max_cell_len: usize,
-    border: f64 = 1.5,
-    cell_border: f64 = 1.0,
-    cell_padding: f64 = 6.0,
-    cell_spacing: f64 = 0.0,
-    bg_color: ?[]const u8 = null,
-    col_widths: [32]f64 = @splat(0),
-    row_heights: [32]f64 = @splat(0),
-};
-
-fn htmlTableMetrics(label: []const u8) ?HtmlTableMetrics {
-    if (!isHtmlLikeLabel(label)) return null;
-    const table_start = findHtmlTag(label, "table", 0) orelse return null;
-    const table_open_end = std.mem.indexOfScalar(u8, label[table_start..], '>') orelse return null;
-    const table_tag = label[table_start + 1 .. table_start + table_open_end];
-    var pos: usize = 0;
-    var rows: usize = 0;
-    var max_cols: usize = 0;
-    var max_cell_len: usize = 1;
-    var occupied: [32]usize = @splat(0);
-    var col_widths: [32]f64 = @splat(0);
-    var row_heights: [32]f64 = @splat(0);
-    while (findHtmlTag(label, "tr", pos)) |tr_start| {
-        if (rows > 0) {
-            for (&occupied) |*remaining| {
-                if (remaining.* > 0) remaining.* -= 1;
-            }
-        }
-        const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
-        const content_start = tr_start + tr_open_end + 1;
-        const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
-        const row = label[content_start..tr_close];
-        var cell_pos: usize = 0;
-        var cols: usize = 0;
-        while (findHtmlTag(row, "td", cell_pos)) |td_start| {
-            cols = nextFreeHtmlColumn(&occupied, cols);
-            const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
-            const td_tag = row[td_start + 1 .. td_start + td_open_end];
-            const cell_start = td_start + td_open_end + 1;
-            const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
-            const cell = row[cell_start..td_close];
-            max_cell_len = @max(max_cell_len, displayLabelMaxLineLen(cell));
-            const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
-            const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
-            applyHtmlCellSizeHints(td_tag, rows, cols, rowspan, colspan, &row_heights, &col_widths);
-            var span_i: usize = 0;
-            while (span_i < colspan and cols + span_i < occupied.len) : (span_i += 1) {
-                occupied[cols + span_i] = @max(occupied[cols + span_i], rowspan);
-            }
-            cols += colspan;
-            cell_pos = td_close + 1;
-        }
-        if (cols > 0) {
-            rows += 1;
-            max_cols = @max(max_cols, cols);
-        }
-        pos = tr_close + 1;
-    }
-    if (rows == 0 or max_cols == 0) return null;
-    return .{
-        .rows = rows,
-        .cols = max_cols,
-        .max_cell_len = max_cell_len,
-        .border = @floatFromInt(htmlIntAttr(table_tag, "border", 1)),
-        .cell_border = @floatFromInt(htmlIntAttr(table_tag, "cellborder", 1)),
-        .cell_padding = @floatFromInt(htmlIntAttr(table_tag, "cellpadding", 6)),
-        .cell_spacing = @floatFromInt(htmlIntAttr(table_tag, "cellspacing", 0)),
-        .bg_color = htmlAttrValue(table_tag, "bgcolor"),
-        .col_widths = col_widths,
-        .row_heights = row_heights,
-    };
-}
-
-fn htmlTablePreferredWidth(metrics: HtmlTableMetrics, fallback_cell_width: f64) f64 {
-    var total = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1));
-    for (metrics.col_widths[0..metrics.cols]) |width| {
-        total += if (width > 0) width else @as(f64, @floatFromInt(@max(metrics.max_cell_len, 1))) * fallback_cell_width + metrics.cell_padding * 2.0;
-    }
-    return @max(1, total);
-}
-
-fn htmlTablePreferredHeight(metrics: HtmlTableMetrics, fallback_cell_height: f64) f64 {
-    var total = metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1));
-    for (metrics.row_heights[0..metrics.rows]) |height| {
-        total += if (height > 0) height else fallback_cell_height + metrics.cell_padding * 2.0;
-    }
-    return @max(1, total);
-}
-
-fn htmlTableHasExplicitSize(metrics: HtmlTableMetrics) bool {
-    for (metrics.col_widths[0..metrics.cols]) |width| {
-        if (width > 0) return true;
-    }
-    for (metrics.row_heights[0..metrics.rows]) |height| {
-        if (height > 0) return true;
-    }
-    return false;
-}
-
-const HtmlTableGrid = struct {
-    x: f64,
-    y: f64,
-    col_widths: [32]f64,
-    row_heights: [32]f64,
-    cell_spacing: f64,
-};
-
-fn htmlTableGrid(label: []const u8, layout: NodeLayout) ?HtmlTableGrid {
-    const metrics = htmlTableMetrics(label) orelse return null;
-    const x = layout.center.x - layout.width / 2.0;
-    const y = layout.center.y - layout.height / 2.0;
-    var col_widths = metrics.col_widths;
-    var row_heights = metrics.row_heights;
-    const inner_w = @max(1, layout.width - metrics.cell_spacing * @as(f64, @floatFromInt(metrics.cols + 1)));
-    const inner_h = @max(1, layout.height - metrics.cell_spacing * @as(f64, @floatFromInt(metrics.rows + 1)));
-    distributeHtmlGridSizes(col_widths[0..metrics.cols], inner_w);
-    distributeHtmlGridSizes(row_heights[0..metrics.rows], inner_h);
-    return .{
-        .x = x,
-        .y = y,
-        .col_widths = col_widths,
-        .row_heights = row_heights,
-        .cell_spacing = metrics.cell_spacing,
-    };
-}
-
-fn htmlTableCellRect(label: []const u8, layout: NodeLayout, port: []const u8) ?RectF {
-    const grid = htmlTableGrid(label, layout) orelse return null;
-    var row_pos: usize = 0;
-    var row_index: usize = 0;
-    var occupied: [32]usize = @splat(0);
-    while (findHtmlTag(label, "tr", row_pos)) |tr_start| : (row_index += 1) {
-        if (row_index > 0) {
-            for (&occupied) |*remaining| {
-                if (remaining.* > 0) remaining.* -= 1;
-            }
-        }
-        const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
-        const content_start = tr_start + tr_open_end + 1;
-        const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
-        const row = label[content_start..tr_close];
-        var cell_pos: usize = 0;
-        var col_index: usize = 0;
-        while (findHtmlTag(row, "td", cell_pos)) |td_start| : (col_index += 1) {
-            col_index = nextFreeHtmlColumn(&occupied, col_index);
-            const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
-            const td_tag = row[td_start + 1 .. td_start + td_open_end];
-            const cell_start = td_start + td_open_end + 1;
-            const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
-            const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
-            const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
-            const rect = htmlGridCellRect(grid, row_index, col_index, rowspan, colspan);
-            var span_i: usize = 0;
-            while (span_i < colspan and col_index + span_i < occupied.len) : (span_i += 1) {
-                occupied[col_index + span_i] = @max(occupied[col_index + span_i], rowspan);
-            }
-            if (htmlAttrValue(td_tag, "port")) |cell_port| {
-                if (std.mem.eql(u8, cell_port, port)) return rect;
-            }
-            cell_pos = td_close + 1;
-            col_index += colspan - 1;
-        }
-        row_pos = tr_close + 1;
-    }
-    return null;
-}
-
-fn htmlGridCellRect(grid: HtmlTableGrid, row_index: usize, col_index: usize, rowspan: usize, colspan: usize) RectF {
-    var x = grid.x + grid.cell_spacing;
-    var col: usize = 0;
-    while (col < col_index and col < grid.col_widths.len) : (col += 1) {
-        x += grid.col_widths[col] + grid.cell_spacing;
-    }
-    var y = grid.y + grid.cell_spacing;
-    var row: usize = 0;
-    while (row < row_index and row < grid.row_heights.len) : (row += 1) {
-        y += grid.row_heights[row] + grid.cell_spacing;
-    }
-    var width: f64 = 0;
-    var span_col: usize = 0;
-    while (span_col < colspan and col_index + span_col < grid.col_widths.len) : (span_col += 1) {
-        if (span_col > 0) width += grid.cell_spacing;
-        width += grid.col_widths[col_index + span_col];
-    }
-    var height: f64 = 0;
-    var span_row: usize = 0;
-    while (span_row < rowspan and row_index + span_row < grid.row_heights.len) : (span_row += 1) {
-        if (span_row > 0) height += grid.cell_spacing;
-        height += grid.row_heights[row_index + span_row];
-    }
-    return .{
-        .x = x,
-        .y = y,
-        .width = @max(1, width),
-        .height = @max(1, height),
-    };
-}
-
-fn applyHtmlCellSizeHints(tag: []const u8, row_index: usize, col_index: usize, rowspan: usize, colspan: usize, row_heights: *[32]f64, col_widths: *[32]f64) void {
-    if (htmlAttrFloat(tag, "width")) |width| {
-        const per_col = width / @as(f64, @floatFromInt(@max(colspan, 1)));
-        var i: usize = 0;
-        while (i < colspan and col_index + i < col_widths.len) : (i += 1) {
-            col_widths[col_index + i] = @max(col_widths[col_index + i], per_col);
-        }
-    }
-    if (htmlAttrFloat(tag, "height")) |height| {
-        const per_row = height / @as(f64, @floatFromInt(@max(rowspan, 1)));
-        var i: usize = 0;
-        while (i < rowspan and row_index + i < row_heights.len) : (i += 1) {
-            row_heights[row_index + i] = @max(row_heights[row_index + i], per_row);
-        }
-    }
-}
-
-fn distributeHtmlGridSizes(values: []f64, target_total: f64) void {
-    if (values.len == 0) return;
-    var used: f64 = 0;
-    var flexible: usize = 0;
-    for (values) |value| {
-        if (value > 0) {
-            used += value;
-        } else {
-            flexible += 1;
-        }
-    }
-    const remaining = @max(0, target_total - used);
-    const fallback = if (flexible > 0)
-        remaining / @as(f64, @floatFromInt(flexible))
-    else if (used < target_total)
-        (target_total - used) / @as(f64, @floatFromInt(values.len))
-    else
-        0;
-    for (values) |*value| {
-        if (value.* > 0) {
-            if (flexible == 0 and fallback > 0) value.* += fallback;
-        } else {
-            value.* = @max(1, fallback);
-        }
-    }
-}
-
-const HtmlCellSides = struct {
-    left: bool = false,
-    top: bool = false,
-    right: bool = false,
-    bottom: bool = false,
-
-    fn any(self: HtmlCellSides) bool {
-        return self.left or self.top or self.right or self.bottom;
-    }
-};
-
-fn htmlCellSides(tag: []const u8) ?HtmlCellSides {
-    const value = htmlAttrValue(tag, "sides") orelse return null;
-    var result = HtmlCellSides{};
-    for (value) |c| {
-        switch (std.ascii.toLower(c)) {
-            'l' => result.left = true,
-            't' => result.top = true,
-            'r' => result.right = true,
-            'b' => result.bottom = true,
-            else => {},
-        }
-    }
-    return if (result.any()) result else null;
-}
-
-fn htmlTableOpenTag(label: []const u8) ?[]const u8 {
-    const table_start = findHtmlTag(label, "table", 0) orelse return null;
-    const table_open_end = std.mem.indexOfScalar(u8, label[table_start..], '>') orelse return null;
-    return label[table_start + 1 .. table_start + table_open_end];
-}
-
-fn htmlStyleHas(tag: []const u8, needle: []const u8) bool {
-    const style = htmlAttrValue(tag, "style") orelse return false;
-    var parts = std.mem.tokenizeAny(u8, style, ", ");
-    while (parts.next()) |part| {
-        if (std.ascii.eqlIgnoreCase(part, needle)) return true;
-    }
-    return false;
-}
-
-fn htmlDashStyle(tag: []const u8) DashStyle {
-    if (htmlStyleHas(tag, "dotted")) return .dotted;
-    if (htmlStyleHas(tag, "dashed")) return .dashed;
-    return .none;
-}
-
-fn htmlIntAttr(tag: []const u8, name: []const u8, fallback: usize) usize {
-    const value = htmlAttrValue(tag, name) orelse return fallback;
-    return std.fmt.parseInt(usize, value, 10) catch fallback;
-}
-
-fn htmlAttrFloat(tag: []const u8, name: []const u8) ?f64 {
-    const value = htmlAttrValue(tag, name) orelse return null;
-    const parsed = std.fmt.parseFloat(f64, value) catch return null;
-    return if (parsed > 0) parsed else null;
-}
-
-fn nextFreeHtmlColumn(occupied: *const [32]usize, start: usize) usize {
-    var index = start;
-    while (index < occupied.len and occupied[index] > 0) : (index += 1) {}
-    return index;
-}
-
-fn htmlAttrValue(tag: []const u8, name: []const u8) ?[]const u8 {
-    var index: usize = 0;
-    while (index < tag.len) {
-        while (index < tag.len and (std.ascii.isWhitespace(tag[index]) or tag[index] == '/')) : (index += 1) {}
-        const key_start = index;
-        while (index < tag.len and (std.ascii.isAlphanumeric(tag[index]) or tag[index] == '_' or tag[index] == '-')) : (index += 1) {}
-        if (index == key_start) {
-            index += 1;
-            continue;
-        }
-        const key = tag[key_start..index];
-        while (index < tag.len and std.ascii.isWhitespace(tag[index])) : (index += 1) {}
-        if (index >= tag.len or tag[index] != '=') continue;
-        index += 1;
-        while (index < tag.len and std.ascii.isWhitespace(tag[index])) : (index += 1) {}
-        if (index >= tag.len) break;
-        const value = if (tag[index] == '"' or tag[index] == '\'') blk: {
-            const quote = tag[index];
-            index += 1;
-            const value_start = index;
-            while (index < tag.len and tag[index] != quote) : (index += 1) {}
-            const result = tag[value_start..index];
-            if (index < tag.len) index += 1;
-            break :blk result;
-        } else blk: {
-            const value_start = index;
-            while (index < tag.len and !std.ascii.isWhitespace(tag[index]) and tag[index] != '>') : (index += 1) {}
-            break :blk tag[value_start..index];
-        };
-        if (std.ascii.eqlIgnoreCase(key, name)) return value;
-    }
-    return null;
-}
-
-fn findHtmlTag(text: []const u8, tag: []const u8, start: usize) ?usize {
-    var index = start;
-    while (index < text.len) {
-        const rel = std.mem.indexOfScalar(u8, text[index..], '<') orelse return null;
-        const open = index + rel;
-        if (open + 1 < text.len and text[open + 1] == '/') {
-            index = open + 1;
-            continue;
-        }
-        const close_rel = std.mem.indexOfScalar(u8, text[open + 1 ..], '>') orelse return null;
-        const name = htmlTagName(text[open + 1 .. open + 1 + close_rel]);
-        if (std.ascii.eqlIgnoreCase(name, tag)) return open;
-        index = open + 1;
-    }
-    return null;
-}
-
-fn findHtmlCloseTag(text: []const u8, tag: []const u8, start: usize) ?usize {
-    var index = start;
-    while (index < text.len) {
-        const rel = std.mem.indexOf(u8, text[index..], "</") orelse return null;
-        const open = index + rel;
-        const close_rel = std.mem.indexOfScalar(u8, text[open + 2 ..], '>') orelse return null;
-        const name = htmlTagName(text[open + 2 .. open + 2 + close_rel]);
-        if (std.ascii.eqlIgnoreCase(name, tag)) return open;
-        index = open + 2;
-    }
-    return null;
 }
 
 const RecordMetrics = struct {
@@ -8133,12 +7479,6 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         }
     } else {
         try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
-    }
-    if (htmlTableMetrics(node_item.label) != null) {
-        try renderSvgHtmlTableLabel(writer, node_item.label, l, visual);
-        try writeSvgInteractiveClose(writer, node_wrap);
-        try writer.writeAll("</g>\n");
-        return;
     }
     try renderSvgNodeShape(writer, node_item, l, visual, options);
     if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
@@ -10326,134 +9666,6 @@ fn writeSvgStrokeWidth(writer: *Io.Writer, width: f64) Io.Writer.Error!void {
     try writer.writeAll(" stroke-width=\"");
     try writeSvgNumber(writer, width);
     try writer.writeByte('"');
-}
-
-fn renderSvgHtmlTableLabel(writer: *Io.Writer, label: []const u8, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
-    const metrics = htmlTableMetrics(label) orelse return;
-    const grid = htmlTableGrid(label, layout) orelse return;
-    const fill = metrics.bg_color orelse visual.fill;
-    const table_tag = htmlTableOpenTag(label);
-    const table_invisible = if (table_tag) |tag| htmlStyleHas(tag, "invis") or htmlStyleHas(tag, "invisible") else false;
-    const table_stroke = if (table_tag) |tag| htmlAttrValue(tag, "color") orelse visual.stroke else visual.stroke;
-    const table_dash = if (table_tag) |tag| htmlDashStyle(tag) else .none;
-
-    if (!table_invisible) {
-        try writeSvgRectOpen(writer, .{ .x = grid.x, .y = grid.y, .width = layout.width, .height = layout.height }, visual.radius);
-        try writer.print(" fill=\"{s}\" stroke=\"{s}\"", .{ fill, if (metrics.border > 0) table_stroke else "none" });
-        try writeSvgStrokeWidth(writer, metrics.border);
-        try writeSvgDash(writer, table_dash);
-        try writer.writeAll("/>\n");
-    }
-
-    var row_pos: usize = 0;
-    var row_index: usize = 0;
-    var occupied: [32]usize = @splat(0);
-    while (findHtmlTag(label, "tr", row_pos)) |tr_start| : (row_index += 1) {
-        if (row_index > 0) {
-            for (&occupied) |*remaining| {
-                if (remaining.* > 0) remaining.* -= 1;
-            }
-        }
-        const tr_open_end = std.mem.indexOfScalar(u8, label[tr_start..], '>') orelse break;
-        const content_start = tr_start + tr_open_end + 1;
-        const tr_close = findHtmlCloseTag(label, "tr", content_start) orelse break;
-        const row = label[content_start..tr_close];
-        var cell_pos: usize = 0;
-        var col_index: usize = 0;
-        while (findHtmlTag(row, "td", cell_pos)) |td_start| : (col_index += 1) {
-            col_index = nextFreeHtmlColumn(&occupied, col_index);
-            const td_open_end = std.mem.indexOfScalar(u8, row[td_start..], '>') orelse break;
-            const td_tag = row[td_start + 1 .. td_start + td_open_end];
-            const cell_start = td_start + td_open_end + 1;
-            const td_close = findHtmlCloseTag(row, "td", cell_start) orelse break;
-            const colspan = @max(htmlIntAttr(td_tag, "colspan", 1), 1);
-            const rowspan = @max(htmlIntAttr(td_tag, "rowspan", 1), 1);
-            const cell_rect = htmlGridCellRect(grid, row_index, col_index, rowspan, colspan);
-            var span_i: usize = 0;
-            while (span_i < colspan and col_index + span_i < occupied.len) : (span_i += 1) {
-                occupied[col_index + span_i] = @max(occupied[col_index + span_i], rowspan);
-            }
-            const cell_border: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellborder", @intFromFloat(metrics.cell_border)));
-            const cell_padding: f64 = @floatFromInt(htmlIntAttr(td_tag, "cellpadding", @intFromFloat(metrics.cell_padding)));
-            const cell = row[cell_start..td_close];
-            const align_attr = htmlAttrValue(td_tag, "align");
-            const text_anchor: []const u8 = if (align_attr) |value|
-                if (std.ascii.eqlIgnoreCase(value, "left")) "start" else if (std.ascii.eqlIgnoreCase(value, "right")) "end" else "middle"
-            else
-                "middle";
-            const text_x = if (std.mem.eql(u8, text_anchor, "start"))
-                cell_rect.x + cell_padding
-            else if (std.mem.eql(u8, text_anchor, "end"))
-                cell_rect.x + cell_rect.width - cell_padding
-            else
-                cell_rect.x + cell_rect.width / 2.0;
-            const valign_attr = htmlAttrValue(td_tag, "valign");
-            const text_y = if (valign_attr) |value|
-                if (std.ascii.eqlIgnoreCase(value, "top"))
-                    cell_rect.y + cell_padding + visual.font_size * 0.5
-                else if (std.ascii.eqlIgnoreCase(value, "bottom"))
-                    cell_rect.y + cell_rect.height - cell_padding - visual.font_size * 0.5
-                else
-                    cell_rect.y + cell_rect.height / 2.0
-            else
-                cell_rect.y + cell_rect.height / 2.0;
-            const cell_invisible = htmlStyleHas(td_tag, "invis") or htmlStyleHas(td_tag, "invisible");
-            if (!table_invisible and !cell_invisible) {
-                if (htmlAttrValue(td_tag, "bgcolor")) |cell_bg| {
-                    try writeSvgRectOpen(writer, cell_rect, 0);
-                    try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{cell_bg});
-                }
-                if (cell_border > 0) {
-                    const cell_stroke = htmlAttrValue(td_tag, "color") orelse visual.stroke;
-                    try renderSvgHtmlCellBorder(writer, cell_rect, htmlCellSides(td_tag), cell_stroke, cell_border, htmlDashStyle(td_tag));
-                }
-                try renderSvgTextBlockWithAnchor(
-                    writer,
-                    cell,
-                    text_x,
-                    text_y,
-                    visual.font_size,
-                    visual.font_color,
-                    visual.font_family,
-                    false,
-                    true,
-                    text_anchor,
-                );
-            }
-            cell_pos = td_close + 1;
-            col_index += colspan - 1;
-        }
-        row_pos = tr_close + 1;
-    }
-}
-
-fn renderSvgHtmlCellBorder(writer: *Io.Writer, rect: RectF, maybe_sides: ?HtmlCellSides, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
-    const sides = maybe_sides orelse {
-        try writeSvgRectOpen(writer, rect, 0);
-        try writer.print(" fill=\"none\" stroke=\"{s}\"", .{stroke});
-        try writeSvgStrokeWidth(writer, width);
-        try writeSvgDash(writer, dash);
-        try writer.writeAll("/>\n");
-        return;
-    };
-
-    if (sides.top) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x + rect.width, rect.y, stroke, width, dash);
-    if (sides.right) try writeSvgBorderLine(writer, rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height, stroke, width, dash);
-    if (sides.bottom) try writeSvgBorderLine(writer, rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height, stroke, width, dash);
-    if (sides.left) try writeSvgBorderLine(writer, rect.x, rect.y, rect.x, rect.y + rect.height, stroke, width, dash);
-}
-
-fn writeSvgBorderLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, stroke: []const u8, width: f64, dash: DashStyle) Io.Writer.Error!void {
-    try writer.print("<path d=\"M {d:.1} {d:.1} L {d:.1} {d:.1}\" fill=\"none\" stroke=\"{s}\"", .{
-        x1,
-        y1,
-        x2,
-        y2,
-        stroke,
-    });
-    try writeSvgStrokeWidth(writer, width);
-    try writeSvgDash(writer, dash);
-    try writer.writeAll("/>\n");
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
@@ -12667,11 +11879,11 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
     const start_toward = if (back_toward) |toward| toward.start else to.center;
     const end_toward = if (back_toward) |toward| toward.end else from.center;
     const raw_start = if (tail_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, false) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_record_port, edge_item.tail_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_record_port, edge_item.tail_port, true) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_port, rankdir, true)
+        samePortBoundaryPoint(graph, layout, edge_item, false) orelse recordBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_record_port, edge_item.tail_port, true) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.from], from, start_toward, edge_item.tail_port, rankdir, true)
     else
         from.center;
     const raw_end = if (head_clip)
-        samePortBoundaryPoint(graph, layout, edge_item, true) orelse htmlTableBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_record_port, edge_item.head_port) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_record_port, edge_item.head_port, false) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_port, rankdir, false)
+        samePortBoundaryPoint(graph, layout, edge_item, true) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_record_port, edge_item.head_port, false) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_port, rankdir, false)
     else
         to.center;
     const compound = graphCompoundEnabled(graph);
@@ -13046,12 +12258,6 @@ fn findRecordPortRect(node: RecordAst, port: []const u8, rect: RectF) ?RectF {
     return null;
 }
 
-fn htmlTableBoundaryPoint(node_item: Node, layout: NodeLayout, toward: Point, record_port: ?[]const u8, compass: CompassPort) ?Point {
-    const port = record_port orelse return null;
-    const cell_rect = htmlTableCellRect(node_item.label, layout, port) orelse return null;
-    return pointForPort(cell_rect, compass, toward);
-}
-
 fn offsetPoint(point: Point, rankdir: RankDir, offset: f64) Point {
     return LayoutAxes.init(rankdir).offsetPoint(point, offset);
 }
@@ -13114,7 +12320,7 @@ fn writeSvgTspanOpenDy(writer: *Io.Writer, x: f64, dy: f64) Io.Writer.Error!void
 }
 
 fn plainSingleLineLabel(text: []const u8) bool {
-    return std.mem.indexOfScalar(u8, text, '\n') == null and !isHtmlLikeLabel(text);
+    return std.mem.indexOfScalar(u8, text, '\n') == null;
 }
 
 fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, text_anchor: []const u8) Io.Writer.Error!void {
@@ -13151,65 +12357,14 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
 
 fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_height: f64) Io.Writer.Error!void {
     try writeSvgTspanOpen(writer, x);
-    if (isHtmlLikeLabel(text)) {
-        var scanner: HtmlLabelScanner = .{ .text = text };
-        var has_text = false;
-        var pending_space = false;
-        var style: HtmlTextStyle = .{};
-        var style_open = false;
-        while (scanner.next()) |token| {
-            switch (token) {
-                .newline => {
-                    if (style_open) {
-                        try writer.writeAll("</tspan>");
-                        style_open = false;
-                    }
-                    try writer.writeAll("</tspan>");
-                    try writeSvgTspanOpenDy(writer, x, line_height);
-                    has_text = false;
-                    pending_space = false;
-                },
-                .tag_open => |raw_tag| {
-                    if (style_open) {
-                        try writer.writeAll("</tspan>");
-                        style_open = false;
-                    }
-                    applyHtmlOpenStyle(&style, raw_tag);
-                },
-                .tag_close => |tag| {
-                    if (style_open) {
-                        try writer.writeAll("</tspan>");
-                        style_open = false;
-                    }
-                    resetHtmlCloseStyle(&style, tag);
-                },
-                .char => |c| {
-                    if (isHtmlLabelSpace(c)) {
-                        if (has_text) pending_space = true;
-                        continue;
-                    }
-                    if (pending_space) {
-                        if (!style_open) style_open = try writeHtmlStyleOpen(writer, style);
-                        try writer.writeByte(' ');
-                        pending_space = false;
-                    }
-                    if (!style_open) style_open = try writeHtmlStyleOpen(writer, style);
-                    try writeXmlEscaped(writer, &.{c});
-                    has_text = true;
-                },
-            }
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var idx: usize = 0;
+    while (lines.next()) |line| : (idx += 1) {
+        if (idx > 0) {
+            try writer.writeAll("</tspan>");
+            try writeSvgTspanOpenDy(writer, x, line_height);
         }
-        if (style_open) try writer.writeAll("</tspan>");
-    } else {
-        var lines = std.mem.splitScalar(u8, text, '\n');
-        var idx: usize = 0;
-        while (lines.next()) |line| : (idx += 1) {
-            if (idx > 0) {
-                try writer.writeAll("</tspan>");
-                try writeSvgTspanOpenDy(writer, x, line_height);
-            }
-            try writeXmlEscaped(writer, line);
-        }
+        try writeXmlEscaped(writer, line);
     }
     try writer.writeAll("</tspan>");
 }
@@ -13858,7 +13013,7 @@ test "SVG cluster geometry parser handles Graphviz polygon clusters" {
     try std.testing.expectApproxEqAbs(@as(f64, 98.8), svgNodeScreenCenterY(svg, "a0").?, 0.001);
 }
 
-test "DOT parser supports subgraphs, ports, escaped strings, and HTML-like ids" {
+test "DOT parser supports subgraphs, ports, escaped strings, and angle strings" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\strict digraph Fancy {
@@ -14596,12 +13751,11 @@ test "label width estimation uses Times-like character classes" {
     const narrow = displayLabelEstimatedWidth("iiii", 14.0);
     const wide = displayLabelEstimatedWidth("mmmm", 14.0);
     const digits = displayLabelEstimatedWidth("####", 14.0);
-    const html = displayLabelEstimatedWidth("<B>ii</B> <I>mm</I>", 14.0);
+    const angle_text = displayLabelEstimatedWidth("<B>ii</B> <I>mm</I>", 14.0);
 
     try std.testing.expect(narrow < digits);
     try std.testing.expect(digits < wide);
-    try std.testing.expect(html > narrow);
-    try std.testing.expect(html < wide);
+    try std.testing.expect(angle_text > wide);
 }
 
 test "guarded symmetric compaction rejects wider or higher-stress changes" {
@@ -15611,11 +14765,11 @@ test "SVG renderer uses Graphviz default pen widths" {
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg, "stroke-width=\"2\"") != null);
 }
 
-test "SVG renderer normalizes simple HTML-like labels without affecting plain angle text" {
+test "SVG renderer treats angle string labels as plain text" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  html [label=< <B>Title</B><BR/>A &amp; B >, shape=box];
+        \\  angle [label=< <B>Title</B><BR/>A &amp; B >, shape=box];
         \\  plain [label="<&>"];
         \\}
     );
@@ -15626,236 +14780,24 @@ test "SVG renderer normalizes simple HTML-like labels without affecting plain an
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Title</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">A &amp; B</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;B&gt;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;B&gt;Title&lt;/B&gt;&lt;BR/&gt;A &amp;amp; B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "font-weight=\"bold\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<BR/>") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;&amp;&gt;") != null);
 }
 
-test "SVG renderer honors common Graphviz HTML text styles" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=box,label=<
-        \\    <B>Bold</B> <I>Italic</I> <U>Under</U><BR/>
-        \\    <FONT COLOR="#dc2626" FACE="Courier" POINT-SIZE="18">Red</FONT>
-        \\    <SUP>sup</SUP><SUB>sub</SUB><S>strike</S><O>over</O>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-weight=\"bold\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bold</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-style=\"italic\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "text-decoration=\"underline\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dc2626\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-family=\"Courier\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "font-size=\"18\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "baseline-shift=\"super\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "baseline-shift=\"sub\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "text-decoration=\"line-through\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "text-decoration=\"overline\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<B>") == null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<FONT") == null);
-}
-
-test "SVG renderer lays out simple HTML table labels as grids" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE>
-        \\      <TR><TD>A</TD><TD>B</TD></TR>
-        \\      <TR><TD>C</TD><TD>D</TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">D</tspan>") != null);
-    try std.testing.expect(countSubstrings(svg, "<rect") >= 5);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<TABLE>") == null);
-}
-
-test "SVG renderer honors simple HTML table visual attributes" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE BORDER="2" CELLBORDER="2" CELLSPACING="4" CELLPADDING="9" BGCOLOR="lightgrey" COLOR="#2563eb" STYLE="dashed">
-        \\      <TR><TD COLOR="#dc2626" STYLE="dotted">A</TD><TD>B</TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"#2563eb\" stroke-width=\"2\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#2563eb\" stroke-width=\"2\" stroke-dasharray=\"8,5\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\" stroke-width=\"2\" stroke-dasharray=\"2,5\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">A</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">B</tspan>") != null);
-}
-
-test "SVG renderer honors HTML table colspan bgcolor and alignment" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE CELLBORDER="1" CELLSPACING="2" CELLPADDING="4">
-        \\      <TR><TD COLSPAN="2" BGCOLOR="gold" ALIGN="LEFT">Header</TD></TR>
-        \\      <TR><TD>A</TD><TD ALIGN="RIGHT">B</TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"gold\" stroke=\"none\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Header</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\"") != null);
-}
-
-test "SVG renderer honors HTML table rowspan cells" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE CELLBORDER="1" CELLSPACING="2">
-        \\      <TR><TD ROWSPAN="2" BGCOLOR="lightgrey">Left</TD><TD>Top</TD></TR>
-        \\      <TR><TD>Bottom</TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"none\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Left</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
-}
-
-test "SVG renderer honors per-cell HTML table padding border and valign" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE CELLBORDER="1" CELLPADDING="4">
-        \\      <TR><TD CELLBORDER="0" CELLPADDING="12" VALIGN="TOP">Top</TD><TD VALIGN="BOTTOM">Bottom</TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"0.0\"") == null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
-}
-
-test "SVG renderer honors HTML table cell sides attribute" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
-        \\      <TR><TD STYLE="invis">Hidden</TD><TD SIDES="ltr">Top</TD><TD SIDES="b">Bottom</TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"") != null);
-    try std.testing.expect(countSubstrings(svg, "<path d=\"M ") >= 4);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "Hidden") == null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Top</tspan>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">Bottom</tspan>") != null);
-}
-
-test "SVG renderer honors HTML table cell width height fixedsize hints" {
-    const allocator = std.testing.allocator;
-    var graph = try parseDot(allocator,
-        \\digraph G {
-        \\  html [shape=plain,label=<
-        \\    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="0">
-        \\      <TR><TD WIDTH="9" HEIGHT="9" FIXEDSIZE="true" PORT="a"></TD><TD WIDTH="18" HEIGHT="9" FIXEDSIZE="true" PORT="b"></TD></TR>
-        \\    </TABLE>
-        \\  >];
-        \\}
-    );
-    defer graph.deinit();
-
-    var layout = try layoutLayered(allocator, &graph, .{});
-    defer layout.deinit();
-    const html = nodeIdByLabel(&graph, "html");
-    const a = htmlTableCellRect(graph.nodes.items[html].label, layout.nodes[html], "a") orelse return error.MissingHtmlPort;
-    const b = htmlTableCellRect(graph.nodes.items[html].label, layout.nodes[html], "b") orelse return error.MissingHtmlPort;
-
-    try std.testing.expect(b.width > a.width);
-    try std.testing.expect(@abs(b.width - a.width * 2.0) < 0.01);
-    try std.testing.expect(@abs(a.height - 9.0) < 0.01);
-    try std.testing.expect(@abs(b.height - 9.0) < 0.01);
-
-    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
-    defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"18\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "height=\"9\"") != null);
-}
-
-test "HTML table TD PORT routes edge endpoints to cells" {
+test "angle string table syntax does not create table cells or ports" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
         \\  graph [rankdir=LR];
-        \\  html [shape=plain,label=<
+        \\  angle [shape=plain,label=<
         \\    <TABLE CELLBORDER="1" CELLSPACING="2" CELLPADDING="4">
         \\      <TR><TD PORT="left">L</TD><TD PORT="right">R</TD></TR>
         \\    </TABLE>
         \\  >];
         \\  target [shape=box];
-        \\  html:right:e -> target:w;
+        \\  angle:right:e -> target:w;
         \\}
     );
     defer graph.deinit();
@@ -15864,16 +14806,14 @@ test "HTML table TD PORT routes edge endpoints to cells" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
 
-    const html = nodeIdByLabel(&graph, "html");
-    const cell = htmlTableCellRect(graph.nodes.items[html].label, layout.nodes[html], "right") orelse return error.MissingHtmlPort;
+    const angle = nodeIdByLabel(&graph, "angle");
     const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
-    try std.testing.expectEqual(cell.x + cell.width, route.start.x);
-    try std.testing.expect(route.start.y >= cell.y);
-    try std.testing.expect(route.start.y <= cell.y + cell.height);
+    try std.testing.expectApproxEqAbs(layout.nodes[angle].center.x + layout.nodes[angle].width / 2.0, route.start.x, 0.001);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">R</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "&lt;TABLE") != null);
+    try std.testing.expectEqual(@as(usize, 1), countSubstrings(svg, "<rect"));
 }
 
 test "SVG renderer honors graph label and bgcolor attributes" {
