@@ -162,6 +162,7 @@ pub const GraphAttr = union(enum) {
     nodesep: f64,
     ranksep: RankSep,
     splines: SplineMode,
+    samplepoints: usize,
     bgcolor: []const u8,
     pad: []const u8,
     margin: []const u8,
@@ -815,6 +816,11 @@ pub const Graph = struct {
                 },
             },
             .splines => |value| try self.setGraphAttrRaw("splines", splineModeName(value)),
+            .samplepoints => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("samplepoints", text);
+            },
             .bgcolor => |value| try self.setGraphAttrRaw("bgcolor", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
@@ -12739,6 +12745,23 @@ test "code API allows duplicate node names and uses ids for identity" {
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     try std.testing.expectEqual(@as(usize, 2), layout.nodes.len);
+}
+
+test "code API exposes typed graph samplepoints attr" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .samplepoints = 16 });
+    try std.testing.expectEqualStrings("16", attrValue(graph.attrs.items, "samplepoints").?);
+
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [samplepoints=24];
+        \\  a -> b;
+        \\}
+    );
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("24", attrValue(parsed.attrs.items, "samplepoints").?);
 }
 
 test "code API sets typed node and edge options at creation" {
