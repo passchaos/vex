@@ -11477,16 +11477,21 @@ fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
     if (std.ascii.eqlIgnoreCase(text, "none")) return .none;
     if (std.ascii.eqlIgnoreCase(text, "normal")) return .normal;
     if (std.ascii.eqlIgnoreCase(text, "open")) return .open;
+    if (std.ascii.eqlIgnoreCase(text, "onormal")) return .empty;
     if (std.ascii.eqlIgnoreCase(text, "inv")) return .inv;
     if (std.ascii.eqlIgnoreCase(text, "oinv")) return .oinv;
+    if (std.ascii.eqlIgnoreCase(text, "invempty")) return .oinv;
     if (std.ascii.eqlIgnoreCase(text, "curve")) return .curve;
     if (std.ascii.eqlIgnoreCase(text, "icurve")) return .icurve;
     if (std.ascii.eqlIgnoreCase(text, "vee")) return .vee;
     if (std.ascii.eqlIgnoreCase(text, "dot")) return .dot;
+    if (std.ascii.eqlIgnoreCase(text, "invdot")) return .dot;
     if (std.ascii.eqlIgnoreCase(text, "odot")) return .odot;
+    if (std.ascii.eqlIgnoreCase(text, "invodot") or std.ascii.eqlIgnoreCase(text, "oinvdot")) return .odot;
     if (std.ascii.eqlIgnoreCase(text, "box")) return .box;
     if (std.ascii.eqlIgnoreCase(text, "obox")) return .obox;
     if (std.ascii.eqlIgnoreCase(text, "diamond")) return .diamond;
+    if (std.ascii.eqlIgnoreCase(text, "ediamond")) return .odiamond;
     if (std.ascii.eqlIgnoreCase(text, "odiamond")) return .odiamond;
     if (std.ascii.eqlIgnoreCase(text, "tee")) return .tee;
     if (std.ascii.eqlIgnoreCase(text, "crow")) return .crow;
@@ -16505,6 +16510,33 @@ test "SVG renderer honors additional Graphviz arrow marker shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"#0891b2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1.5 1.2 C 8.5 1.2 8.5 8.8 1.5 8.8\" fill=\"none\" stroke=\"#7c3aed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1.2 C 1.5 1.2 1.5 8.8 8.5 8.8\" fill=\"none\" stroke=\"#be123c\"") != null);
+}
+
+test "SVG renderer accepts Graphviz arrow marker aliases" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [arrowhead=onormal, color="#2563eb"];
+        \\  b -> c [arrowhead=invempty, color="#dc2626"];
+        \\  c -> d [arrowhead=ediamond, color="#16a34a"];
+        \\  d -> e [arrowhead=invdot, color="#f59e0b"];
+        \\  e -> f [arrowhead=invodot, color="#9333ea"];
+        \\  f -> g [arrowhead=oinvdot, color="#0f172a"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 0.8 0.8 L 9.2 5 L 0.8 9.2 z\" fill=\"#ffffff\" stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#f59e0b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#9333ea\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#0f172a\"") != null);
 }
 
 test "SVG renderer honors arrowsize and edge clipping attributes" {
