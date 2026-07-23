@@ -11631,6 +11631,7 @@ fn parseAttrUsize(attrs: []const Attr, name: []const u8, fallback: usize) usize 
 }
 
 fn resolveSvgColor(graph: *const Graph, attrs: []const Attr, color: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(color, "transparent")) return "none";
     if (std.mem.eql(u8, color, "black") or std.mem.eql(u8, color, "white") or std.mem.eql(u8, color, "lightgrey")) return color;
     if (color.len >= 2 and color[0] == '/' and color[1] == '/') {
         const scheme = attrValue(attrs, "colorscheme") orelse attrValue(graph.attrs.items, "colorscheme") orelse return color[2..];
@@ -16339,6 +16340,35 @@ test "SVG node rendering separates Graphviz color and fillcolor semantics" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\" stroke=\"black\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#16a34a\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+}
+
+test "SVG renderer maps Graphviz transparent color to none" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [bgcolor=transparent];
+        \\  hidden_fill [shape=box, style=filled, color=transparent, fillcolor=transparent];
+        \\  visible [shape=box];
+        \\  hidden_fill -> visible [color=transparent, fillcolor=transparent];
+        \\  subgraph cluster_transparent {
+        \\    style=filled;
+        \\    color=transparent;
+        \\    fillcolor=transparent;
+        \\    member;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"none\" stroke=\"none\" points=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"transparent\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"transparent\"") == null);
 }
 
 test "SVG renderer uses Graphviz default pen widths" {
