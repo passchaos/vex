@@ -40,9 +40,9 @@ const a = try graph.addNode("A", .{});
 const b = try graph.addNode("B", .{});
 try graph.addEdge(a, b, .{ .label = "A to B" });
 
-var layout = try vex.layoutSugiyama(allocator, graph);
+var layout = try vex.layoutGraph(allocator, &graph, .{});
 defer layout.deinit();
-try vex.renderSvg(writer, graph, layout, .{});
+try vex.render(writer, &layout, .svg, .{});
 ```
 
 ## 初期实现路线

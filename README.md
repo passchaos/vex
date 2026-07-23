@@ -76,7 +76,7 @@ They progress from small SVG output to broader feature coverage:
 - `04_svg_output.zig`: one API graph rendered through the SVG output dispatch path.
 - `05_records_ports_svg.zig`: record labels, record ports, HTML-like table labels, and SVG output.
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, and SVG output.
-- `07_force_layout_svg.zig`: force-directed layout via `.fruchterman_reingold` and SVG rendering.
+- `07_force_layout_svg.zig`: cyclic undirected graph rendered with Sugiyama to exercise edge-label avoidance.
 
 ## Graphviz compatibility target
 

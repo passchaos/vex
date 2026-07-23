@@ -1,4 +1,4 @@
-//! Build a cyclic graph with the API and render a force-directed layout.
+//! Build a cyclic graph with the API and render it with layered SVG layout.
 //!
 //! Run with: zig build run-api-force-layout-svg
 
