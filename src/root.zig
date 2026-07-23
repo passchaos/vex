@@ -7932,6 +7932,7 @@ fn svgEdgeEscapeContext(graph: *const Graph, edge_item: Edge, edge_name_buf: *[2
     const edge_name = std.fmt.bufPrint(edge_name_buf, "{s}{s}{s}", .{ tail, op, head }) catch tail;
     return .{
         .graph_name = graph.name,
+        .node_name = edge_name,
         .tail_name = tail,
         .head_name = head,
         .edge_name = edge_name,
@@ -15437,7 +15438,7 @@ test "SVG renderer expands URL escape sequences with object context" {
         \\  a [URL="https://example.com/node/\N/\G", tooltip="node \N \G", target="node-\N"];
         \\  b;
         \\  a -> b [
-        \\    URL="https://example.com/edge/\E/\T/\H/\G",
+        \\    URL="https://example.com/edge/\N/\E/\T/\H/\G",
         \\    labelURL="https://example.com/label/\N/\E",
         \\    headURL="https://example.com/head/\N/\E",
         \\    tailURL="https://example.com/tail/\N/\E",
@@ -15459,7 +15460,7 @@ test "SVG renderer expands URL escape sequences with object context" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName\" target=\"frame-GraphName\"><title>graph GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\" target=\"node-a\"><title>node a GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\" target=\"cluster-API\"><title>cluster API GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a/b/GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/a-&gt;b\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/a-&gt;b\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/a-&gt;b\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
