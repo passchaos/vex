@@ -13,11 +13,11 @@ pub fn main(init: std.process.Init) !void {
     defer graph.deinit();
     try graph.setGraphAttr(.{ .compound = true });
 
-    const browser = try graph.addNodeWith("Browser", .{ .shape = .box, .color = "#dbeafe" });
-    const edge = try graph.addNodeWith("Edge", .{ .shape = .box, .color = "#dbeafe" });
-    const api = try graph.addNodeWith("API", .{ .shape = .box, .color = "#dcfce7" });
-    const worker = try graph.addNodeWith("Worker", .{ .shape = .box, .color = "#dcfce7" });
-    const store = try graph.addNodeWith("Store", .{ .shape = .box, .color = "#dcfce7" });
+    const browser = try graph.addNode("Browser", .{ .shape = .box, .color = "#dbeafe" });
+    const edge = try graph.addNode("Edge", .{ .shape = .box, .color = "#dbeafe" });
+    const api = try graph.addNode("API", .{ .shape = .box, .color = "#dcfce7" });
+    const worker = try graph.addNode("Worker", .{ .shape = .box, .color = "#dcfce7" });
+    const store = try graph.addNode("Store", .{ .shape = .box, .color = "#dcfce7" });
 
     const frontend = try graph.addSubgraph("Frontend", null, &.{ browser, edge }, .{
         .color = "#2563eb",
@@ -31,19 +31,20 @@ pub fn main(init: std.process.Init) !void {
     });
 
     _ = try graph.addEdge(browser, edge, .{ .label = "https" });
-    const cross = try graph.addEdge(edge, api, .{ .label = "json", .ltail = frontend, .lhead = backend });
-    try graph.setEdgeAttr(cross, .{ .penwidth = 2 });
+    _ = try graph.addEdge(edge, api, .{
+        .label = "json",
+        .ltail = frontend,
+        .lhead = backend,
+        .penwidth = 2,
+    });
     _ = try graph.addEdge(api, worker, .{ .label = "job" });
     _ = try graph.addEdge(worker, store, .{ .label = "write" });
     _ = try graph.addEdge(api, store, .{ .label = "read", .constraint = false });
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
-    var scene = try vex.RenderScene.init(allocator, &graph, &result);
-    defer scene.deinit();
-
     var stdout_buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .svg, .{});
+    try vex.render(&stdout.interface, &result, .svg, .{});
     try stdout.interface.flush();
 }

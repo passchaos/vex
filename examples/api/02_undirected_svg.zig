@@ -16,11 +16,11 @@ pub fn main(init: std.process.Init) !void {
     });
     defer graph.deinit();
 
-    const client = try graph.addNodeWith("Client", .{ .shape = .ellipse });
-    const gateway = try graph.addNodeWith("Gateway", .{ .shape = .box });
-    const api = try graph.addNodeWith("API", .{ .shape = .box });
-    const cache = try graph.addNodeWith("Cache", .{ .shape = .cylinder });
-    const db = try graph.addNodeWith("DB", .{ .shape = .cylinder });
+    const client = try graph.addNode("Client", .{ .shape = .ellipse });
+    const gateway = try graph.addNode("Gateway", .{ .shape = .box });
+    const api = try graph.addNode("API", .{ .shape = .box });
+    const cache = try graph.addNode("Cache", .{ .shape = .cylinder });
+    const db = try graph.addNode("DB", .{ .shape = .cylinder });
 
     _ = try graph.addEdge(client, gateway, .{ .label = "tls" });
     _ = try graph.addEdge(gateway, api, .{ .label = "http" });
@@ -30,11 +30,8 @@ pub fn main(init: std.process.Init) !void {
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
-    var scene = try vex.RenderScene.init(allocator, &graph, &result);
-    defer scene.deinit();
-
     var stdout_buffer: [8192]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .svg, .{});
+    try vex.render(&stdout.interface, &result, .svg, .{});
     try stdout.interface.flush();
 }

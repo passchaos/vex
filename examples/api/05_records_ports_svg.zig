@@ -12,13 +12,13 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "RecordsPorts", .rankdir = .LR });
     defer graph.deinit();
 
-    const user = try graph.addNodeWith("{<id> id|<name> name|<email> email}", .{
+    const user = try graph.addNode("{<id> id|<name> name|<email> email}", .{
         .shape = .record,
     });
-    const order = try graph.addNodeWith("{<id> id|<user_id> user_id|<total> total}", .{
+    const order = try graph.addNode("{<id> id|<user_id> user_id|<total> total}", .{
         .shape = .record,
     });
-    const payment = try graph.addNodeWith(
+    const payment = try graph.addNode(
         \\<TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0">
         \\  <TR><TD PORT="id"><B>id</B></TD><TD>uuid</TD></TR>
         \\  <TR><TD PORT="order_id">order_id</TD><TD>uuid</TD></TR>
@@ -42,15 +42,12 @@ pub fn main(init: std.process.Init) !void {
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
-    var scene = try vex.RenderScene.init(allocator, &graph, &result);
-    defer scene.deinit();
-
     try std.Io.Dir.cwd().createDirPath(io, "zig-out/examples");
     var file = try std.Io.Dir.cwd().createFile(io, "zig-out/examples/api_records_ports.svg", .{ .truncate = true });
     defer file.close(io);
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &scene, .svg, .{});
+    try vex.render(&file_writer.interface, &result, .svg, .{});
     try file_writer.interface.flush();
 
     var stdout_buffer: [8192]u8 = undefined;

@@ -106,25 +106,6 @@ pub const CompassPort = enum {
     north_west,
 };
 
-pub const EdgeOptions = struct {
-    label: ?[]const u8 = null,
-    color: ?[]const u8 = null,
-    weight: ?f64 = null,
-    constraint: ?bool = null,
-    min_len: ?usize = null,
-    tail_port: CompassPort = .auto,
-    head_port: CompassPort = .auto,
-    tail_record_port: ?[]const u8 = null,
-    head_record_port: ?[]const u8 = null,
-    ltail: ?SubgraphId = null,
-    lhead: ?SubgraphId = null,
-};
-
-pub const NodeOptions = struct {
-    color: ?[]const u8 = null,
-    shape: ?Shape = null,
-};
-
 pub const SubgraphStyle = enum {
     filled,
     bold,
@@ -316,33 +297,50 @@ pub const SubgraphAttr = union(enum) {
     title: []const u8,
 };
 
-pub const SubgraphOptions = struct {
-    label: ?[]const u8 = null,
-    rankdir: ?RankDir = null,
-    layout: ?LayoutAlgorithm = null,
-    compound: ?bool = null,
-    concentrate: ?bool = null,
-    nodesep: ?f64 = null,
-    ranksep: ?RankSep = null,
-    splines: ?SplineMode = null,
-    bgcolor: ?[]const u8 = null,
-    ordering: ?OrderingMode = null,
-    color: ?[]const u8 = null,
-    fillcolor: ?[]const u8 = null,
-    fontcolor: ?[]const u8 = null,
-    fontname: ?[]const u8 = null,
-    fontsize: ?f64 = null,
-    style: ?SubgraphStyle = null,
-    styles: []const SubgraphStyle = &.{},
-    penwidth: ?f64 = null,
-    margin: ?[]const u8 = null,
-    labelloc: ?LabelLoc = null,
-    labeljust: ?LabelJust = null,
-    url: ?[]const u8 = null,
-    href: ?[]const u8 = null,
-    tooltip: ?[]const u8 = null,
-    title: ?[]const u8 = null,
+pub const NodeOptions = AttrOptions(NodeAttr);
+pub const EdgeOptions = AttrOptionsWithExtra(EdgeAttr, &.{
+    .{ .name = "tail_port", .type = CompassPort, .default_value_ptr = &@as(CompassPort, .auto) },
+    .{ .name = "head_port", .type = CompassPort, .default_value_ptr = &@as(CompassPort, .auto) },
+    .{ .name = "tail_record_port", .type = ?[]const u8, .default_value_ptr = &@as(?[]const u8, null) },
+    .{ .name = "head_record_port", .type = ?[]const u8, .default_value_ptr = &@as(?[]const u8, null) },
+    .{ .name = "ltail", .type = ?SubgraphId, .default_value_ptr = &@as(?SubgraphId, null) },
+    .{ .name = "lhead", .type = ?SubgraphId, .default_value_ptr = &@as(?SubgraphId, null) },
+});
+pub const SubgraphOptions = AttrOptions(SubgraphAttr);
+
+fn AttrOptions(comptime Attrs: type) type {
+    return AttrOptionsWithExtra(Attrs, &.{});
+}
+
+const OptionExtraField = struct {
+    name: [:0]const u8,
+    type: type,
+    default_value_ptr: ?*const anyopaque,
 };
+
+fn AttrOptionsWithExtra(comptime Attrs: type, comptime extra_fields: []const OptionExtraField) type {
+    const attr_fields = @typeInfo(Attrs).@"union".fields;
+    const field_count = attr_fields.len + extra_fields.len;
+    comptime var names: [field_count][:0]const u8 = undefined;
+    comptime var types: [field_count]type = undefined;
+    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+
+    inline for (attr_fields, 0..) |field, index| {
+        names[index] = field.name;
+        types[index] = ?field.type;
+        const default_value: ?field.type = null;
+        field_attrs[index] = .{ .default_value_ptr = &default_value };
+    }
+
+    inline for (extra_fields, 0..) |field, extra_index| {
+        const index = attr_fields.len + extra_index;
+        names[index] = field.name;
+        types[index] = field.type;
+        field_attrs[index] = .{ .default_value_ptr = field.default_value_ptr };
+    }
+
+    return @Struct(.auto, null, &names, &types, &field_attrs);
+}
 
 pub const Node = struct {
     id: NodeId,
@@ -470,7 +468,7 @@ pub const Graph = struct {
         self.* = undefined;
     }
 
-    pub fn addNode(self: *Graph, label: []const u8) !NodeId {
+    pub fn addNode(self: *Graph, label: []const u8, options: NodeOptions) !NodeId {
         const owned_label = try self.allocator.dupe(u8, label);
         errdefer self.allocator.free(owned_label);
 
@@ -497,14 +495,18 @@ pub const Graph = struct {
             .attrs = attrs,
         };
         try self.nodes.append(self.allocator, n);
+        errdefer _ = self.removeLastNode(id);
+        try self.applyNodeOptions(id, options);
         return id;
     }
 
-    pub fn addNodeWith(self: *Graph, label: []const u8, options: NodeOptions) !NodeId {
-        const id = try self.addNode(label);
-        if (options.color) |color| try self.setNodeAttr(id, .{ .color = color });
-        if (options.shape) |shape| try self.setNodeShape(id, shape);
-        return id;
+    fn removeLastNode(self: *Graph, id: NodeId) bool {
+        if (id + 1 != self.nodes.items.len) return false;
+        var node = self.nodes.pop().?;
+        self.allocator.free(node.label);
+        self.allocator.free(node.color);
+        freeAttrList(self.allocator, &node.attrs);
+        return true;
     }
 
     pub fn addEdge(self: *Graph, from: NodeId, to: NodeId, options: EdgeOptions) !EdgeId {
@@ -555,7 +557,20 @@ pub const Graph = struct {
             .attrs = attrs,
         };
         try self.edges.append(self.allocator, e);
+        errdefer _ = self.removeLastEdge(id);
+        try self.applyEdgeOptions(id, options);
         return id;
+    }
+
+    fn removeLastEdge(self: *Graph, id: EdgeId) bool {
+        if (id + 1 != self.edges.items.len) return false;
+        var edge = self.edges.pop().?;
+        if (edge.label) |label| self.allocator.free(label);
+        if (edge.tail_record_port) |port| self.allocator.free(port);
+        if (edge.head_record_port) |port| self.allocator.free(port);
+        self.allocator.free(edge.color);
+        freeAttrList(self.allocator, &edge.attrs);
+        return true;
     }
 
     pub fn addRankConstraint(self: *Graph, kind: RankKind, node_ids: []const NodeId) !void {
@@ -700,7 +715,7 @@ pub const Graph = struct {
 
     fn setDefaultNodeAttrRaw(self: *Graph, name: []const u8, value: []const u8) !void {
         try setAttrInList(self.allocator, &self.node_default_attrs, name, value);
-        if (std.ascii.eqlIgnoreCase(name, "color") or std.ascii.eqlIgnoreCase(name, "fillcolor")) {
+        if (std.ascii.eqlIgnoreCase(name, "color")) {
             const owned = try self.allocator.dupe(u8, value);
             self.allocator.free(self.node_defaults.color);
             self.node_defaults.color = owned;
@@ -764,6 +779,29 @@ pub const Graph = struct {
         }
     }
 
+    fn applyNodeOptions(self: *Graph, id: NodeId, options: NodeOptions) !void {
+        if (options.label) |value| try self.setNodeAttr(id, .{ .label = value });
+        if (options.color) |value| try self.setNodeAttr(id, .{ .color = value });
+        if (options.fillcolor) |value| try self.setNodeAttr(id, .{ .fillcolor = value });
+        if (options.fontcolor) |value| try self.setNodeAttr(id, .{ .fontcolor = value });
+        if (options.shape) |value| try self.setNodeAttr(id, .{ .shape = value });
+        if (options.style) |value| try self.setNodeAttr(id, .{ .style = value });
+        if (options.penwidth) |value| try self.setNodeAttr(id, .{ .penwidth = value });
+        if (options.width) |value| try self.setNodeAttr(id, .{ .width = value });
+        if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
+        if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
+        if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
+        if (options.xlabel) |value| try self.setNodeAttr(id, .{ .xlabel = value });
+        if (options.labelloc) |value| try self.setNodeAttr(id, .{ .labelloc = value });
+        if (options.labeljust) |value| try self.setNodeAttr(id, .{ .labeljust = value });
+        if (options.url) |value| try self.setNodeAttr(id, .{ .url = value });
+        if (options.href) |value| try self.setNodeAttr(id, .{ .href = value });
+        if (options.tooltip) |value| try self.setNodeAttr(id, .{ .tooltip = value });
+        if (options.title) |value| try self.setNodeAttr(id, .{ .title = value });
+        if (options.ordering) |value| try self.setNodeAttr(id, .{ .ordering = value });
+        if (options.group) |value| try self.setNodeAttr(id, .{ .group = value });
+    }
+
     pub fn setNodeAttr(self: *Graph, id: NodeId, attr: NodeAttr) !void {
         switch (attr) {
             .label => |value| try self.setNodeAttrRaw(id, "label", value),
@@ -802,7 +840,7 @@ pub const Graph = struct {
             const expanded = try self.allocator.dupe(u8, value);
             self.allocator.free(n.label);
             n.label = expanded;
-        } else if (std.ascii.eqlIgnoreCase(name, "color") or std.ascii.eqlIgnoreCase(name, "fillcolor")) {
+        } else if (std.ascii.eqlIgnoreCase(name, "color")) {
             const owned = try self.allocator.dupe(u8, value);
             self.allocator.free(n.color);
             n.color = owned;
@@ -816,6 +854,34 @@ pub const Graph = struct {
         if (id >= self.nodes.items.len) return error.InvalidNodeId;
         self.nodes.items[id].shape = shape;
         try setAttrInList(self.allocator, &self.nodes.items[id].attrs, "shape", shapeName(shape));
+    }
+
+    fn applyEdgeOptions(self: *Graph, id: EdgeId, options: EdgeOptions) !void {
+        if (options.label) |value| try self.setEdgeAttr(id, .{ .label = value });
+        if (options.color) |value| try self.setEdgeAttr(id, .{ .color = value });
+        if (options.fontcolor) |value| try self.setEdgeAttr(id, .{ .fontcolor = value });
+        if (options.style) |value| try self.setEdgeAttr(id, .{ .style = value });
+        if (options.penwidth) |value| try self.setEdgeAttr(id, .{ .penwidth = value });
+        if (options.weight) |value| try self.setEdgeAttr(id, .{ .weight = value });
+        if (options.constraint) |value| try self.setEdgeAttr(id, .{ .constraint = value });
+        if (options.min_len) |value| try self.setEdgeAttr(id, .{ .min_len = value });
+        if (options.url) |value| try self.setEdgeAttr(id, .{ .url = value });
+        if (options.href) |value| try self.setEdgeAttr(id, .{ .href = value });
+        if (options.tooltip) |value| try self.setEdgeAttr(id, .{ .tooltip = value });
+        if (options.title) |value| try self.setEdgeAttr(id, .{ .title = value });
+        if (options.arrowhead) |value| try self.setEdgeAttr(id, .{ .arrowhead = value });
+        if (options.arrowtail) |value| try self.setEdgeAttr(id, .{ .arrowtail = value });
+        if (options.dir) |value| try self.setEdgeAttr(id, .{ .dir = value });
+        if (options.taillabel) |value| try self.setEdgeAttr(id, .{ .taillabel = value });
+        if (options.headlabel) |value| try self.setEdgeAttr(id, .{ .headlabel = value });
+        if (options.xlabel) |value| try self.setEdgeAttr(id, .{ .xlabel = value });
+        if (options.labelfontcolor) |value| try self.setEdgeAttr(id, .{ .labelfontcolor = value });
+        if (options.labelfontname) |value| try self.setEdgeAttr(id, .{ .labelfontname = value });
+        if (options.labelfontsize) |value| try self.setEdgeAttr(id, .{ .labelfontsize = value });
+        if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
+        if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
+        if (options.samehead) |value| try self.setEdgeAttr(id, .{ .samehead = value });
+        if (options.sametail) |value| try self.setEdgeAttr(id, .{ .sametail = value });
     }
 
     pub fn setEdgeAttr(self: *Graph, id: EdgeId, attr: EdgeAttr) !void {
@@ -896,7 +962,7 @@ pub const Graph = struct {
         if (options.fontname) |value| try self.setSubgraphAttr(id, .{ .fontname = value });
         if (options.fontsize) |value| try self.setSubgraphAttr(id, .{ .fontsize = value });
         if (options.style) |value| try self.setSubgraphAttr(id, .{ .style = value });
-        if (options.styles.len > 0) try self.setSubgraphAttr(id, .{ .styles = options.styles });
+        if (options.styles) |value| try self.setSubgraphAttr(id, .{ .styles = value });
         if (options.penwidth) |value| try self.setSubgraphAttr(id, .{ .penwidth = value });
         if (options.margin) |value| try self.setSubgraphAttr(id, .{ .margin = value });
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
@@ -1836,7 +1902,7 @@ const Parser = struct {
 
     fn nodeByTextId(self: *Parser, graph: *Graph, text_id: []const u8) !NodeId {
         if (self.node_index.get(text_id)) |id| return id;
-        const id = try graph.addNode(text_id);
+        const id = try graph.addNode(text_id, .{});
         if (builtin.is_test) try graph.setNodeAttrRaw(id, "vex_text_id", text_id);
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
@@ -2185,7 +2251,7 @@ const MermaidParseState = struct {
 
     fn nodeByTextId(self: *MermaidParseState, graph: *Graph, text_id: []const u8) !NodeId {
         if (self.node_index.get(text_id)) |id| return id;
-        const id = try graph.addNode(text_id);
+        const id = try graph.addNode(text_id, .{});
         if (builtin.is_test) try graph.setNodeAttrRaw(id, "vex_text_id", text_id);
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
@@ -2667,6 +2733,7 @@ pub const EdgeWaypoints = struct {
 
 pub const Layout = struct {
     allocator: std.mem.Allocator,
+    graph: Graph,
     rankdir: RankDir,
     nodes: []NodeLayout,
     subgraphs: []SubgraphLayout,
@@ -2688,35 +2755,12 @@ pub const Layout = struct {
         self.allocator.free(self.ranks);
         self.allocator.free(self.rank_depths);
         self.allocator.free(self.rank_heights);
-        self.* = undefined;
-    }
-};
-
-pub const RenderScene = struct {
-    allocator: std.mem.Allocator,
-    graph: Graph,
-    layout: Layout,
-
-    pub fn init(allocator: std.mem.Allocator, graph: *const Graph, layout: *const Layout) !RenderScene {
-        var graph_copy = try cloneGraphForRender(allocator, graph);
-        errdefer graph_copy.deinit();
-        var layout_copy = try cloneLayoutForRender(allocator, layout);
-        errdefer layout_copy.deinit();
-        return .{
-            .allocator = allocator,
-            .graph = graph_copy,
-            .layout = layout_copy,
-        };
-    }
-
-    pub fn deinit(self: *RenderScene) void {
-        self.layout.deinit();
         self.graph.deinit();
         self.* = undefined;
     }
 };
 
-fn cloneGraphForRender(allocator: std.mem.Allocator, source: *const Graph) !Graph {
+fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Graph {
     var result = try Graph.init(allocator, .{
         .directed = source.directed,
         .strict = source.strict,
@@ -2799,37 +2843,8 @@ fn cloneGraphForRender(allocator: std.mem.Allocator, source: *const Graph) !Grap
     return result;
 }
 
-fn cloneLayoutForRender(allocator: std.mem.Allocator, source: *const Layout) !Layout {
-    const nodes = try allocator.dupe(NodeLayout, source.nodes);
-    errdefer allocator.free(nodes);
-    const clusters = try allocator.dupe(SubgraphLayout, source.subgraphs);
-    errdefer allocator.free(clusters);
-    const ranks = try allocator.dupe(usize, source.ranks);
-    errdefer allocator.free(ranks);
-    const rank_depths = try allocator.dupe(f64, source.rank_depths);
-    errdefer allocator.free(rank_depths);
-    const rank_heights = try allocator.dupe(f64, source.rank_heights);
-    errdefer allocator.free(rank_heights);
-    const edge_waypoints = try allocator.alloc(EdgeWaypoints, source.edge_waypoints.len);
-    errdefer allocator.free(edge_waypoints);
-    for (source.edge_waypoints, 0..) |waypoints, i| {
-        edge_waypoints[i] = .{ .points = try allocator.dupe(EdgeWaypoint, waypoints.points) };
-    }
-    return .{
-        .allocator = allocator,
-        .rankdir = source.rankdir,
-        .nodes = nodes,
-        .subgraphs = clusters,
-        .edge_waypoints = edge_waypoints,
-        .ranks = ranks,
-        .rank_depths = rank_depths,
-        .rank_heights = rank_heights,
-        .margin = source.margin,
-        .margin_x = source.margin_x,
-        .margin_y = source.margin_y,
-        .width = source.width,
-        .height = source.height,
-    };
+fn snapshotGraphForLayout(allocator: std.mem.Allocator, graph: *const Graph) !Graph {
+    return cloneGraphForLayout(allocator, graph);
 }
 
 const LayoutAxes = struct {
@@ -3036,6 +3051,8 @@ fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoin
 }
 
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
     const effective_options = layoutOptionsWithGraphAttrs(options, graph);
     const axes = LayoutAxes.init(graph.rankdir);
     const n = graph.nodes.items.len;
@@ -3057,6 +3074,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         errdefer allocator.free(empty_rank_heights);
         return .{
             .allocator = allocator,
+            .graph = graph_snapshot,
             .rankdir = axes.rankdir,
             .nodes = nodes,
             .subgraphs = cluster_layouts,
@@ -3230,6 +3248,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     const base_depth = total_depth + depth_margin * 2.0;
     return .{
         .allocator = allocator,
+        .graph = graph_snapshot,
         .rankdir = axes.rankdir,
         .nodes = nodes,
         .subgraphs = cluster_layouts,
@@ -3246,6 +3265,8 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 }
 
 pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
     const n = graph.nodes.items.len;
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
@@ -3270,6 +3291,7 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
     if (n == 0) {
         return .{
             .allocator = allocator,
+            .graph = graph_snapshot,
             .rankdir = graph.rankdir,
             .nodes = nodes,
             .subgraphs = cluster_layouts,
@@ -3354,6 +3376,7 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
     computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
     return .{
         .allocator = allocator,
+        .graph = graph_snapshot,
         .rankdir = graph.rankdir,
         .nodes = nodes,
         .subgraphs = cluster_layouts,
@@ -7551,8 +7574,8 @@ pub const RenderOptions = struct {
     svg: SvgOptions = .{},
 };
 
-pub fn render(writer: *Io.Writer, scene: *const RenderScene, format: OutputFormat, options: RenderOptions) Io.Writer.Error!void {
-    return renderLayout(writer, &scene.graph, &scene.layout, format, options);
+pub fn render(writer: *Io.Writer, layout: *const Layout, format: OutputFormat, options: RenderOptions) Io.Writer.Error!void {
+    return renderLayout(writer, &layout.graph, layout, format, options);
 }
 
 pub fn renderLayout(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, format: OutputFormat, options: RenderOptions) Io.Writer.Error!void {
@@ -7561,10 +7584,10 @@ pub fn renderLayout(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     };
 }
 
-pub fn renderAlloc(allocator: std.mem.Allocator, scene: *const RenderScene, format: OutputFormat, options: RenderOptions) ![]u8 {
+pub fn renderAlloc(allocator: std.mem.Allocator, layout: *const Layout, format: OutputFormat, options: RenderOptions) ![]u8 {
     var aw = Io.Writer.Allocating.init(allocator);
     errdefer aw.deinit();
-    try render(&aw.writer, scene, format, options);
+    try render(&aw.writer, layout, format, options);
     return aw.toOwnedSlice();
 }
 
@@ -12784,8 +12807,8 @@ test "code API builds graph and layered layout" {
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "api" });
     defer graph.deinit();
 
-    const a = try graph.addNodeWith("Start", .{ .shape = .box });
-    const b = try graph.addNode("B");
+    const a = try graph.addNode("Start", .{ .shape = .box });
+    const b = try graph.addNode("B", .{});
     _ = try graph.addEdge(a, b, .{ .label = "next" });
 
     var layout = try layoutLayered(allocator, &graph, .{});
@@ -12799,8 +12822,8 @@ test "code API allows duplicate node names and uses ids for identity" {
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "api" });
     defer graph.deinit();
 
-    const first = try graph.addNodeWith("Task A", .{ .shape = .box });
-    const second = try graph.addNodeWith("Task B", .{ .shape = .diamond });
+    const first = try graph.addNode("Task A", .{ .shape = .box });
+    const second = try graph.addNode("Task B", .{ .shape = .diamond });
     try std.testing.expect(first != second);
     try std.testing.expectEqual(@as(usize, 2), graph.nodes.items.len);
     try std.testing.expectEqualStrings("Task A", graph.nodes.items[first].label);
@@ -12815,13 +12838,117 @@ test "code API allows duplicate node names and uses ids for identity" {
     try std.testing.expectEqual(@as(usize, 2), layout.nodes.len);
 }
 
+test "code API sets typed node and edge options at creation" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "api" });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{
+        .label = "A",
+        .color = "#334155",
+        .fillcolor = "#dbeafe",
+        .fontcolor = "#0f172a",
+        .shape = .box,
+        .style = .filled,
+        .penwidth = 2,
+        .width = 1.25,
+        .height = 0.75,
+        .fixedsize = .fit_label,
+        .margin = "0.12,0.08",
+        .xlabel = "extra",
+        .labelloc = .bottom,
+        .labeljust = .left,
+        .url = "https://example.com/node",
+        .href = "https://example.com/node",
+        .tooltip = "node tip",
+        .title = "node title",
+        .ordering = .out,
+        .group = "main",
+    });
+    const b = try graph.addNode("b", .{ .shape = .diamond });
+    const edge = try graph.addEdge(a, b, .{
+        .label = "edge",
+        .color = "#16a34a",
+        .fontcolor = "#064e3b",
+        .style = .dashed,
+        .penwidth = 3,
+        .weight = 4,
+        .constraint = false,
+        .min_len = 2,
+        .url = "https://example.com/edge",
+        .href = "https://example.com/edge",
+        .tooltip = "edge tip",
+        .title = "edge title",
+        .arrowhead = .vee,
+        .arrowtail = .dot,
+        .dir = .both,
+        .taillabel = "tail",
+        .headlabel = "head",
+        .xlabel = "xedge",
+        .labelfontcolor = "#14532d",
+        .labelfontname = "Helvetica",
+        .labelfontsize = 11,
+        .labeldistance = 1.5,
+        .labelangle = 25,
+        .samehead = "h",
+        .sametail = "t",
+    });
+
+    const node_item = graph.nodes.items[a];
+    try std.testing.expectEqualStrings("A", node_item.label);
+    try std.testing.expectEqual(Shape.box, node_item.shape);
+    try std.testing.expectEqualStrings("#334155", node_item.color);
+    try std.testing.expectEqualStrings("#dbeafe", attrValue(node_item.attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#0f172a", attrValue(node_item.attrs.items, "fontcolor").?);
+    try std.testing.expectEqualStrings("filled", attrValue(node_item.attrs.items, "style").?);
+    try std.testing.expectEqualStrings("2", attrValue(node_item.attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("1.25", attrValue(node_item.attrs.items, "width").?);
+    try std.testing.expectEqualStrings("0.75", attrValue(node_item.attrs.items, "height").?);
+    try std.testing.expectEqualStrings("true", attrValue(node_item.attrs.items, "fixedsize").?);
+    try std.testing.expectEqualStrings("0.12,0.08", attrValue(node_item.attrs.items, "margin").?);
+    try std.testing.expectEqualStrings("extra", attrValue(node_item.attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("b", attrValue(node_item.attrs.items, "labelloc").?);
+    try std.testing.expectEqualStrings("l", attrValue(node_item.attrs.items, "labeljust").?);
+    try std.testing.expectEqualStrings("https://example.com/node", attrValue(node_item.attrs.items, "URL").?);
+    try std.testing.expectEqualStrings("node tip", attrValue(node_item.attrs.items, "tooltip").?);
+    try std.testing.expectEqualStrings("node title", attrValue(node_item.attrs.items, "title").?);
+    try std.testing.expectEqualStrings("out", attrValue(node_item.attrs.items, "ordering").?);
+    try std.testing.expectEqualStrings("main", attrValue(node_item.attrs.items, "group").?);
+
+    const edge_item = graph.edges.items[edge];
+    try std.testing.expectEqualStrings("edge", edge_item.label.?);
+    try std.testing.expectEqualStrings("#16a34a", edge_item.color);
+    try std.testing.expectEqual(@as(f64, 4), edge_item.weight);
+    try std.testing.expect(!edge_item.constraint);
+    try std.testing.expectEqual(@as(usize, 2), edge_item.min_len);
+    try std.testing.expectEqualStrings("#064e3b", attrValue(edge_item.attrs.items, "fontcolor").?);
+    try std.testing.expectEqualStrings("dashed", attrValue(edge_item.attrs.items, "style").?);
+    try std.testing.expectEqualStrings("3", attrValue(edge_item.attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("https://example.com/edge", attrValue(edge_item.attrs.items, "URL").?);
+    try std.testing.expectEqualStrings("edge tip", attrValue(edge_item.attrs.items, "tooltip").?);
+    try std.testing.expectEqualStrings("edge title", attrValue(edge_item.attrs.items, "title").?);
+    try std.testing.expectEqualStrings("vee", attrValue(edge_item.attrs.items, "arrowhead").?);
+    try std.testing.expectEqualStrings("dot", attrValue(edge_item.attrs.items, "arrowtail").?);
+    try std.testing.expectEqualStrings("both", attrValue(edge_item.attrs.items, "dir").?);
+    try std.testing.expectEqualStrings("tail", attrValue(edge_item.attrs.items, "taillabel").?);
+    try std.testing.expectEqualStrings("head", attrValue(edge_item.attrs.items, "headlabel").?);
+    try std.testing.expectEqualStrings("xedge", attrValue(edge_item.attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("#14532d", attrValue(edge_item.attrs.items, "labelfontcolor").?);
+    try std.testing.expectEqualStrings("Helvetica", attrValue(edge_item.attrs.items, "labelfontname").?);
+    try std.testing.expectEqualStrings("11", attrValue(edge_item.attrs.items, "labelfontsize").?);
+    try std.testing.expectEqualStrings("1.5", attrValue(edge_item.attrs.items, "labeldistance").?);
+    try std.testing.expectEqualStrings("25", attrValue(edge_item.attrs.items, "labelangle").?);
+    try std.testing.expectEqualStrings("h", attrValue(edge_item.attrs.items, "samehead").?);
+    try std.testing.expectEqualStrings("t", attrValue(edge_item.attrs.items, "sametail").?);
+}
+
 test "code API sets typed subgraph attrs" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "api" });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     const subgraph = try graph.addSubgraph("cluster_api", null, &.{ a, b }, .{
         .label = "API",
         .rankdir = .LR,
@@ -12870,9 +12997,9 @@ test "Fruchterman-Reingold layout places nodes within bounds" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = false, .name = "force" });
     defer graph.deinit();
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
     _ = try graph.addEdge(a, b, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -12891,9 +13018,9 @@ test "Fruchterman-Reingold layout pulls adjacent nodes closer" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = false, .name = "force" });
     defer graph.deinit();
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
     _ = try graph.addEdge(a, b, .{});
 
     var layout = try layoutFruchtermanReingold(allocator, &graph, .{ .width = 360, .height = 260, .margin = 30, .iterations = 100 });
@@ -13369,8 +13496,8 @@ test "render helper emits SVG and escapes labels" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "dispatch", .rankdir = .LR });
     defer graph.deinit();
-    const left = try graph.addNode("left");
-    const right = try graph.addNode("right");
+    const left = try graph.addNode("left", .{});
+    const right = try graph.addNode("right", .{});
     _ = try graph.addEdge(left, right, .{ .label = "go", .color = "#16a34a" });
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
@@ -13388,21 +13515,18 @@ test "render helper emits SVG and escapes labels" {
     try std.testing.expect(std.mem.indexOf(u8, escaped_svg, "&lt;&amp;&gt;") != null);
 }
 
-test "RenderScene is self-contained render input" {
+test "Layout owns render graph snapshot" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "scene", .rankdir = .LR });
     defer graph.deinit();
-    const a = try graph.addNodeWith("Original", .{ .shape = .box });
-    const b = try graph.addNodeWith("Target", .{ .shape = .box });
+    const a = try graph.addNode("Original", .{ .shape = .box });
+    const b = try graph.addNode("Target", .{ .shape = .box });
     _ = try graph.addEdge(a, b, .{ .label = "edge" });
 
     var layout = try layoutGraph(allocator, &graph, .{});
     defer layout.deinit();
-    var scene = try RenderScene.init(allocator, &graph, &layout);
-    defer scene.deinit();
-
     try graph.setNodeAttr(a, .{ .label = "Mutated" });
-    const svg = try renderAlloc(allocator, &scene, .svg, .{});
+    const svg = try renderAlloc(allocator, &layout, .svg, .{});
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Original") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Mutated") == null);
@@ -13530,12 +13654,12 @@ test "adjacent exchange bubbles successful swaps backward in one pass" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const x = try graph.addNode("x");
-    const y = try graph.addNode("y");
-    const z = try graph.addNode("z");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const x = try graph.addNode("x", .{});
+    const y = try graph.addNode("y", .{});
+    const z = try graph.addNode("z", .{});
     _ = try graph.addEdge(a, x, .{});
     _ = try graph.addEdge(b, y, .{});
     _ = try graph.addEdge(c, z, .{});
@@ -13575,14 +13699,14 @@ test "guarded median ordering refuses worse total crossings" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const p0 = try graph.addNode("p0");
-    const p1 = try graph.addNode("p1");
-    const x = try graph.addNode("x");
-    const y = try graph.addNode("y");
-    const z = try graph.addNode("z");
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
+    const p0 = try graph.addNode("p0", .{});
+    const p1 = try graph.addNode("p1", .{});
+    const x = try graph.addNode("x", .{});
+    const y = try graph.addNode("y", .{});
+    const z = try graph.addNode("z", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
     _ = try graph.addEdge(p0, z, .{});
     _ = try graph.addEdge(p1, x, .{});
     _ = try graph.addEdge(x, a, .{});
@@ -13641,11 +13765,11 @@ test "long edges contribute virtual segments to crossing score" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
-    const e = try graph.addNode("e");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const e = try graph.addNode("e", .{});
     _ = try graph.addEdge(a, e, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -13677,12 +13801,12 @@ test "adjacent exchange uses virtual long-edge crossings" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
-    const e = try graph.addNode("e");
-    const f = try graph.addNode("f");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const e = try graph.addNode("e", .{});
+    const f = try graph.addNode("f", .{});
     _ = try graph.addEdge(a, f, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -13717,10 +13841,10 @@ test "long-edge dummy positions influence coordinate refinement" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{ .weight = 4 });
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -13759,10 +13883,10 @@ test "simple adjacent edge straightening reduces chain wobble" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const side = try graph.addNode("side");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const side = try graph.addNode("side", .{});
     _ = try graph.addEdge(a, b, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -13805,9 +13929,9 @@ test "coordinate refinement centers nodes on adjacent neighbor spans" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const parent = try graph.addNode("parent");
-    const left = try graph.addNode("left");
-    const right = try graph.addNode("right");
+    const parent = try graph.addNode("parent", .{});
+    const left = try graph.addNode("left", .{});
+    const right = try graph.addNode("right", .{});
     _ = try graph.addEdge(parent, left, .{});
     _ = try graph.addEdge(parent, right, .{});
 
@@ -13840,9 +13964,9 @@ test "guarded span alignment accepts lower-stress layer move" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const p = try graph.addNode("p");
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const p = try graph.addNode("p", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(p, a, .{ .weight = 4 });
     _ = try graph.addEdge(p, b, .{ .weight = 4 });
 
@@ -13870,10 +13994,10 @@ test "guarded span alignment rejects wider layer move" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const p0 = try graph.addNode("p0");
-    const p1 = try graph.addNode("p1");
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const p0 = try graph.addNode("p0", .{});
+    const p1 = try graph.addNode("p1", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(p0, a, .{ .weight = 1 });
     _ = try graph.addEdge(p1, b, .{ .weight = 1 });
 
@@ -13904,9 +14028,9 @@ test "guarded span alignment preserves heavy edge proximity" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const left = try graph.addNode("left");
-    const right = try graph.addNode("right");
-    const child = try graph.addNode("child");
+    const left = try graph.addNode("left", .{});
+    const right = try graph.addNode("right", .{});
+    const child = try graph.addNode("child", .{});
     _ = try graph.addEdge(left, child, .{ .weight = 1 });
     _ = try graph.addEdge(right, child, .{ .weight = 8 });
 
@@ -13963,8 +14087,8 @@ test "coordinate edge stress rewards straighter edges" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(a, b, .{ .weight = 4 });
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -13995,10 +14119,10 @@ test "guarded symmetric compaction rejects wider or higher-stress changes" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const p = try graph.addNode("p");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const p = try graph.addNode("p", .{});
     _ = try graph.addEdge(p, b, .{ .weight = 5 });
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -14034,10 +14158,10 @@ test "virtual levels include dummy nodes for skip-rank edges" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14064,10 +14188,10 @@ test "virtual levels can extract real node levels" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14101,10 +14225,10 @@ test "virtual level median orders dummy nodes" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14130,11 +14254,11 @@ test "virtual level block ordering keeps cluster members adjacent" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const top_a = try graph.addNode("top_a");
-    const top_b = try graph.addNode("top_b");
-    const a = try graph.addNode("a");
-    const outside = try graph.addNode("outside");
-    const b = try graph.addNode("b");
+    const top_a = try graph.addNode("top_a", .{});
+    const top_b = try graph.addNode("top_b", .{});
+    const a = try graph.addNode("a", .{});
+    const outside = try graph.addNode("outside", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(top_a, a, .{});
     _ = try graph.addEdge(top_b, b, .{});
     _ = try graph.addSubgraph("cluster_pair", null, &.{ a, b }, .{});
@@ -14164,10 +14288,10 @@ test "virtual level block ordering sorts members by individual medians" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const top_a = try graph.addNode("top_a");
-    const top_b = try graph.addNode("top_b");
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const top_a = try graph.addNode("top_a", .{});
+    const top_b = try graph.addNode("top_b", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(top_a, a, .{});
     _ = try graph.addEdge(top_b, b, .{});
     _ = try graph.addSubgraph("cluster_pair", null, &.{ a, b }, .{});
@@ -14196,10 +14320,10 @@ test "virtual neighbor medians account for edge weights" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const left = try graph.addNode("left");
-    const mid = try graph.addNode("mid");
-    const right = try graph.addNode("right");
-    const child = try graph.addNode("child");
+    const left = try graph.addNode("left", .{});
+    const mid = try graph.addNode("mid", .{});
+    const right = try graph.addNode("right", .{});
+    const child = try graph.addNode("child", .{});
     _ = try graph.addEdge(left, child, .{ .weight = 1 });
     _ = try graph.addEdge(right, child, .{ .weight = 9 });
 
@@ -14226,9 +14350,9 @@ test "virtual block keys leave root nodes as singleton blocks" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const outside = try graph.addNode("outside");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const outside = try graph.addNode("outside", .{});
     _ = try graph.addEdge(a, b, .{});
     _ = try graph.addEdge(outside, b, .{});
     _ = try graph.addSubgraph("cluster_pair", null, &.{ a, b }, .{});
@@ -14243,10 +14367,10 @@ test "cross-cluster long-edge dummies attach to nearest endpoint block" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     const tail = try graph.addSubgraph("cluster_tail", null, &.{a}, .{});
     const head = try graph.addSubgraph("cluster_head", null, &.{d}, .{});
     const edge_id = try graph.addEdge(a, d, .{ .ltail = tail, .lhead = head });
@@ -14267,10 +14391,10 @@ test "implicit cross-cluster long-edge dummies attach to endpoint blocks" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     const edge_id = try graph.addEdge(a, d, .{});
     _ = try graph.addSubgraph("cluster_tail", null, &.{a}, .{});
     _ = try graph.addSubgraph("cluster_head", null, &.{d}, .{});
@@ -14291,11 +14415,11 @@ test "virtual adjacent exchange preserves cluster block boundaries" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const top_a = try graph.addNode("top_a");
-    const top_b = try graph.addNode("top_b");
-    const a = try graph.addNode("a");
-    const outside = try graph.addNode("outside");
-    const b = try graph.addNode("b");
+    const top_a = try graph.addNode("top_a", .{});
+    const top_b = try graph.addNode("top_b", .{});
+    const a = try graph.addNode("a", .{});
+    const outside = try graph.addNode("outside", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(top_a, a, .{});
     _ = try graph.addEdge(top_b, b, .{});
     _ = try graph.addSubgraph("cluster_pair", null, &.{ a, b }, .{});
@@ -14325,12 +14449,12 @@ test "virtual adjacent exchange reduces dummy crossings" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
-    const e = try graph.addNode("e");
-    const f = try graph.addNode("f");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const e = try graph.addNode("e", .{});
+    const f = try graph.addNode("f", .{});
     _ = try graph.addEdge(a, f, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14356,10 +14480,10 @@ test "virtual reducer real-node order can be extracted" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14386,10 +14510,10 @@ test "virtual levels sync real order without moving dummies" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14423,10 +14547,10 @@ test "virtual positions expose dummy along coordinates" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
-    const d = try graph.addNode("d");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
     _ = try graph.addEdge(a, d, .{});
     _ = try graph.addEdge(b, c, .{});
 
@@ -14457,9 +14581,9 @@ test "virtual positions use real node coordinate hints" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
-    const c = try graph.addNode("c");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
     _ = try graph.addEdge(a, c, .{});
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -14493,8 +14617,8 @@ test "virtual positions compact overlaps while preserving order" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(a, b, .{});
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -14568,8 +14692,8 @@ test "rankdir LR back-edge channel expands cluster along y axis" {
     var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
     defer graph.deinit();
 
-    const a0 = try graph.addNode("a0");
-    const a3 = try graph.addNode("a3");
+    const a0 = try graph.addNode("a0", .{});
+    const a3 = try graph.addNode("a3", .{});
     _ = try graph.addEdge(a3, a0, .{});
     _ = try graph.addSubgraph("cluster_loop", null, &.{ a0, a3 }, .{});
 
@@ -14590,8 +14714,8 @@ test "virtual position compaction honors node gap" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(a, b, .{});
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -14622,8 +14746,8 @@ test "virtual positions can update real node centers" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const a = try graph.addNode("a");
-    const b = try graph.addNode("b");
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
     _ = try graph.addEdge(a, b, .{});
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -14659,8 +14783,8 @@ test "virtual real center update preserves grouped nodes" {
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
 
-    const grouped = try graph.addNode("grouped");
-    const plain = try graph.addNode("plain");
+    const grouped = try graph.addNode("grouped", .{});
+    const plain = try graph.addNode("plain", .{});
     try graph.setNodeAttr(grouped, .{ .group = "main" });
 
     const ranks = try allocator.alloc(usize, graph.nodes.items.len);
@@ -16914,6 +17038,7 @@ test "long-edge waypoints avoid same-rank node boxes" {
     const allocator = std.testing.allocator;
     var layout = Layout{
         .allocator = allocator,
+        .graph = try Graph.init(allocator, .{ .directed = true }),
         .rankdir = .TB,
         .nodes = try allocator.alloc(NodeLayout, 3),
         .subgraphs = try allocator.alloc(SubgraphLayout, 0),
@@ -17053,6 +17178,7 @@ test "back-edge side channel prefers stable negative side for same column" {
     const allocator = std.testing.allocator;
     var layout = Layout{
         .allocator = allocator,
+        .graph = try Graph.init(allocator, .{ .directed = true }),
         .rankdir = .TB,
         .nodes = try allocator.alloc(NodeLayout, 2),
         .subgraphs = try allocator.alloc(SubgraphLayout, 0),
@@ -17727,11 +17853,11 @@ test "SVG canvas expands to fit shifted clusters and outside nodes" {
     defer graph.deinit();
     try graph.setGraphAttr(.{ .nodesep = 0.9 });
 
-    const start = try graph.addNodeWith("Start", .{ .shape = .mdiamond });
-    const a0 = try graph.addNode("a0");
-    const a1 = try graph.addNode("a1");
-    const b0 = try graph.addNode("b0");
-    const b1 = try graph.addNode("b1");
+    const start = try graph.addNode("Start", .{ .shape = .mdiamond });
+    const a0 = try graph.addNode("a0", .{});
+    const a1 = try graph.addNode("a1", .{});
+    const b0 = try graph.addNode("b0", .{});
+    const b1 = try graph.addNode("b1", .{});
     _ = try graph.addSubgraph("cluster_process_1", null, &.{ a0, a1 }, .{ .label = "process #1" });
     _ = try graph.addSubgraph("cluster_process_2", null, &.{ b0, b1 }, .{ .label = "process #2" });
     _ = try graph.addEdge(start, a0, .{});

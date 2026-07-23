@@ -12,13 +12,13 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = false, .name = "ForceLayout" });
     defer graph.deinit();
 
-    const ui = try graph.addNodeWith("UI", .{ .shape = .box });
-    const api = try graph.addNodeWith("API", .{ .shape = .box });
-    const auth = try graph.addNodeWith("Auth", .{ .shape = .box });
-    const jobs = try graph.addNodeWith("Jobs", .{ .shape = .box });
-    const cache = try graph.addNodeWith("Cache", .{ .shape = .cylinder });
-    const db = try graph.addNodeWith("DB", .{ .shape = .cylinder });
-    const metrics = try graph.addNodeWith("Metrics", .{ .shape = .ellipse });
+    const ui = try graph.addNode("UI", .{ .shape = .box });
+    const api = try graph.addNode("API", .{ .shape = .box });
+    const auth = try graph.addNode("Auth", .{ .shape = .box });
+    const jobs = try graph.addNode("Jobs", .{ .shape = .box });
+    const cache = try graph.addNode("Cache", .{ .shape = .cylinder });
+    const db = try graph.addNode("DB", .{ .shape = .cylinder });
+    const metrics = try graph.addNode("Metrics", .{ .shape = .ellipse });
 
     _ = try graph.addEdge(ui, api, .{ .label = "http" });
     _ = try graph.addEdge(api, auth, .{ .label = "token" });
@@ -35,11 +35,8 @@ pub fn main(init: std.process.Init) !void {
         .force = .{ .width = 620, .height = 360, .iterations = 180 },
     });
     defer result.deinit();
-    var scene = try vex.RenderScene.init(allocator, &graph, &result);
-    defer scene.deinit();
-
     var stdout_buffer: [16384]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &scene, .svg, .{});
+    try vex.render(&stdout.interface, &result, .svg, .{});
     try stdout.interface.flush();
 }

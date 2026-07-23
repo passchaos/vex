@@ -44,16 +44,13 @@ const vex = @import("vex");
 var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "G" });
 defer graph.deinit();
 
-const a = try graph.addNodeWith("Start", .{ .shape = .box });
-const b = try graph.addNode("B");
+const a = try graph.addNode("Start", .{ .shape = .box });
+const b = try graph.addNode("B", .{});
 _ = try graph.addEdge(a, b, .{ .label = "next" });
 
 var layout = try vex.layoutGraph(allocator, &graph, .{});
 defer layout.deinit();
-
-var scene = try vex.RenderScene.init(allocator, &graph, &layout);
-defer scene.deinit();
-try vex.render(writer, &scene, .svg, .{});
+try vex.render(writer, &layout, .svg, .{});
 ```
 
 ## API Examples

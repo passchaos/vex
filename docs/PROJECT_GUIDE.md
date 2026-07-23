@@ -36,8 +36,8 @@ Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Gr
 var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "G" });
 defer graph.deinit();
 
-const a = try graph.addNode("A");
-const b = try graph.addNode("B");
+const a = try graph.addNode("A", .{});
+const b = try graph.addNode("B", .{});
 try graph.addEdge(a, b, .{ .label = "A to B" });
 
 var layout = try vex.layoutSugiyama(allocator, graph);

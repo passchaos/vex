@@ -44,8 +44,12 @@ pub fn main(init: std.process.Init) !void {
 
     _ = try graph.addEdge(start_node_id, a0_node_id, .{});
     _ = try graph.addEdge(start_node_id, b0_node_id, .{});
-    const cross = try graph.addEdge(a1_node_id, b3_node_id, .{ .label = "handoff", .color = "#7c3aed", .constraint = false });
-    try graph.setEdgeAttr(cross, .{ .style = .dashed });
+    _ = try graph.addEdge(a1_node_id, b3_node_id, .{
+        .label = "handoff",
+        .color = "#7c3aed",
+        .constraint = false,
+        .style = .dashed,
+    });
 
     try outputFileAndStdout(init.gpa, init.io, graph, "zig-out/examples", "06.svg");
 }
@@ -53,10 +57,6 @@ pub fn main(init: std.process.Init) !void {
 fn outputFileAndStdout(gpa: std.mem.Allocator, io: std.Io, graph: vex.Graph, sub_dir: []const u8, file_name: []const u8) !void {
     var result = try vex.layoutGraph(gpa, &graph, .{});
     defer result.deinit();
-
-    var scene = try vex.RenderScene.init(gpa, &graph, &result);
-    defer scene.deinit();
-
     try std.Io.Dir.cwd().createDirPath(io, sub_dir);
 
     const sub_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub_dir, file_name });
@@ -67,7 +67,7 @@ fn outputFileAndStdout(gpa: std.mem.Allocator, io: std.Io, graph: vex.Graph, sub
 
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &scene, .svg, .{});
+    try vex.render(&file_writer.interface, &result, .svg, .{});
     try file_writer.interface.flush();
 
     var stdout_buffer: [8192]u8 = undefined;
@@ -79,9 +79,10 @@ fn outputFileAndStdout(gpa: std.mem.Allocator, io: std.Io, graph: vex.Graph, sub
 }
 
 fn styledNode(graph: *vex.Graph, label: []const u8, shape: vex.Shape, fill: []const u8) !vex.NodeId {
-    const id = try graph.addNodeWith(label, .{ .shape = shape });
-    try graph.setNodeAttr(id, .{ .style = .filled });
-    try graph.setNodeAttr(id, .{ .fillcolor = fill });
-    try graph.setNodeAttr(id, .{ .color = "#334155" });
-    return id;
+    return graph.addNode(label, .{
+        .shape = shape,
+        .style = .filled,
+        .fillcolor = fill,
+        .color = "#334155",
+    });
 }
