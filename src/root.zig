@@ -10016,6 +10016,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     try writer.print("<g id=\"clust{d}\" class=\"cluster\">\n", .{index + 1});
     try writeSvgTitle(writer, cluster.label);
     try writer.writeByte('\n');
+    const cluster_wrap = try writeSvgInteractiveOpen(writer, cluster.attrs.items);
     const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
@@ -10068,6 +10069,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     try writer.writeAll(">");
     try writeXmlEscaped(writer, cluster.label);
     try writer.writeAll("</text>\n");
+    try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
 }
 
@@ -13210,6 +13212,10 @@ test "code API sets typed subgraph attrs" {
         .peripheries = 0,
         .labelloc = .bottom,
         .labeljust = .left,
+        .url = "https://example.com/subgraph",
+        .href = "https://example.com/subgraph-href",
+        .tooltip = "subgraph tip",
+        .title = "subgraph title",
     });
 
     const item = graph.subgraphs.items[subgraph];
@@ -13234,6 +13240,10 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("0", attrValue(item.attrs.items, "peripheries").?);
     try std.testing.expectEqualStrings("b", attrValue(item.attrs.items, "labelloc").?);
     try std.testing.expectEqualStrings("l", attrValue(item.attrs.items, "labeljust").?);
+    try std.testing.expectEqualStrings("https://example.com/subgraph", attrValue(item.attrs.items, "URL").?);
+    try std.testing.expectEqualStrings("https://example.com/subgraph-href", attrValue(item.attrs.items, "href").?);
+    try std.testing.expectEqualStrings("subgraph tip", attrValue(item.attrs.items, "tooltip").?);
+    try std.testing.expectEqualStrings("subgraph title", attrValue(item.attrs.items, "title").?);
 }
 
 test "Fruchterman-Reingold layout places nodes within bounds" {
@@ -15658,6 +15668,12 @@ test "SVG renderer emits URL href and tooltip metadata" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
+        \\  subgraph cluster_api {
+        \\    label="API";
+        \\    URL="https://example.com/cluster";
+        \\    tooltip="Cluster API";
+        \\    c;
+        \\  }
         \\  a [URL="https://example.com/a", tooltip="Node A"];
         \\  b;
         \\  a -> b [href="https://example.com/e", tooltip="Edge A to B"];
@@ -15674,6 +15690,8 @@ test "SVG renderer emits URL href and tooltip metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Node A</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\"><title>Cluster API</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\">") != null);
 }
 
 test "SVG renderer emits default Graphviz-like node and edge titles" {
