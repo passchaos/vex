@@ -153,6 +153,9 @@ pub const RankSep = union(enum) {
     equally: f64,
 };
 
+const label_left_break: u8 = 0x1e;
+const label_right_break: u8 = 0x1f;
+
 pub const GraphAttr = union(enum) {
     label: []const u8,
     rankdir: RankDir,
@@ -2497,7 +2500,9 @@ fn dupeDotString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
         i += 1;
         const escaped = value[i];
         switch (escaped) {
-            'n', 'l', 'r' => try out.append(allocator, '\n'),
+            'n' => try out.append(allocator, '\n'),
+            'l' => try out.append(allocator, label_left_break),
+            'r' => try out.append(allocator, label_right_break),
             't' => try out.append(allocator, '\t'),
             '"' => try out.append(allocator, '"'),
             '\\' => try out.append(allocator, '\\'),
@@ -2552,6 +2557,9 @@ fn expandLabelEscapes(allocator: std.mem.Allocator, value: []const u8, context: 
         }
         i += 1;
         switch (value[i]) {
+            'n' => try out.append(allocator, '\n'),
+            'l' => try out.append(allocator, label_left_break),
+            'r' => try out.append(allocator, label_right_break),
             'G' => try out.appendSlice(allocator, context.graph_name),
             'N' => if (context.node_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\N"),
             'T' => if (context.tail_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\T"),
@@ -5872,7 +5880,7 @@ fn rankTighteningPinned(graph: *const Graph, node_id: NodeId) bool {
 fn labelLineCount(text: []const u8) usize {
     var count: usize = 1;
     for (text) |c| {
-        if (c == '\n') count += 1;
+        if (isLabelLineBreak(c)) count += 1;
     }
     return count;
 }
@@ -5881,7 +5889,7 @@ fn labelMaxLineLen(text: []const u8) usize {
     var current: usize = 0;
     var max_len: usize = 0;
     for (text) |c| {
-        if (c == '\n') {
+        if (isLabelLineBreak(c)) {
             max_len = @max(max_len, current);
             current = 0;
         } else if (c == '\t') {
@@ -5909,7 +5917,7 @@ fn labelEstimatedWidth(text: []const u8, font_size: f64) f64 {
     var current: f64 = 0;
     var max_width: f64 = 0;
     for (text) |c| {
-        if (c == '\n') {
+        if (isLabelLineBreak(c)) {
             max_width = @max(max_width, current);
             current = 0;
         } else if (c == '\t') {
@@ -5919,6 +5927,10 @@ fn labelEstimatedWidth(text: []const u8, font_size: f64) f64 {
         }
     }
     return @max(max_width, current);
+}
+
+fn isLabelLineBreak(c: u8) bool {
+    return c == '\n' or c == label_left_break or c == label_right_break;
 }
 
 fn labelCharWidth(c: u8, font_size: f64) f64 {
@@ -12701,20 +12713,27 @@ fn writeSvgTextOpen(writer: *Io.Writer, text_anchor: []const u8, x: f64, y: f64,
     try writer.print("\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ font_family, font_size });
 }
 
-fn writeSvgTspanOpen(writer: *Io.Writer, x: f64) Io.Writer.Error!void {
+fn writeSvgTspanOpen(writer: *Io.Writer, x: f64, anchor: ?[]const u8) Io.Writer.Error!void {
     try writer.writeAll("<tspan x=\"");
     try writeSvgNumber(writer, x);
-    try writer.writeAll("\">");
+    try writer.writeByte('"');
+    if (anchor) |value| try writer.print(" text-anchor=\"{s}\"", .{value});
+    try writer.writeByte('>');
 }
 
-fn writeSvgTspanOpenDy(writer: *Io.Writer, x: f64, dy: f64) Io.Writer.Error!void {
+fn writeSvgTspanOpenDy(writer: *Io.Writer, x: f64, dy: f64, anchor: ?[]const u8) Io.Writer.Error!void {
     try writer.writeAll("<tspan x=\"");
     try writeSvgNumber(writer, x);
-    try writer.print("\" dy=\"{d:.1}\">", .{dy});
+    try writer.print("\" dy=\"{d:.1}\"", .{dy});
+    if (anchor) |value| try writer.print(" text-anchor=\"{s}\"", .{value});
+    try writer.writeByte('>');
 }
 
 fn plainSingleLineLabel(text: []const u8) bool {
-    return std.mem.indexOfScalar(u8, text, '\n') == null;
+    for (text) |c| {
+        if (isLabelLineBreak(c)) return false;
+    }
+    return true;
 }
 
 fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font_family: []const u8, text_anchor: []const u8) Io.Writer.Error!void {
@@ -12750,17 +12769,28 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
 }
 
 fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_height: f64) Io.Writer.Error!void {
-    try writeSvgTspanOpen(writer, x);
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    var idx: usize = 0;
-    while (lines.next()) |line| : (idx += 1) {
-        if (idx > 0) {
+    var start: usize = 0;
+    var index: usize = 0;
+    var line_index: usize = 0;
+    while (index <= text.len) : (index += 1) {
+        if (index < text.len and !isLabelLineBreak(text[index])) continue;
+        if (line_index == 0) {
+            try writeSvgTspanOpen(writer, x, labelLineAnchor(if (index < text.len) text[index] else '\n'));
+        } else {
             try writer.writeAll("</tspan>");
-            try writeSvgTspanOpenDy(writer, x, line_height);
+            try writeSvgTspanOpenDy(writer, x, line_height, labelLineAnchor(if (index < text.len) text[index] else '\n'));
         }
+        const line = text[start..index];
         try writeXmlEscaped(writer, line);
+        if (index >= text.len) break;
+        start = index + 1;
+        line_index += 1;
     }
     try writer.writeAll("</tspan>");
+}
+
+fn labelLineAnchor(c: u8) ?[]const u8 {
+    return if (c == label_left_break) "start" else if (c == label_right_break) "end" else null;
 }
 
 fn maybeNodeIdByLabel(graph: *const Graph, label: []const u8) ?NodeId {
@@ -13602,6 +13632,26 @@ test "render helper emits SVG and escapes labels" {
     try std.testing.expect(std.mem.indexOf(u8, escaped_svg, "&lt;&amp;&gt;") != null);
 }
 
+test "SVG renderer honors DOT left and right line break label escapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a [label="left\lcenter\nright\r"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<tspan x=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">center</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">right</tspan>") != null);
+}
+
 test "Layout owns render graph snapshot" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "scene", .rankdir = .LR });
@@ -13652,7 +13702,10 @@ test "DOT parser handles mainstream node lists, string concat, and boolean attrs
     }
     try std.testing.expect(found_tooltip);
     const esc = nodeIdByLabel(&graph, "esc");
-    try std.testing.expectEqualStrings("left\nrightesc quote\" slash\\ keep\\x", graph.nodes.items[esc].label);
+    try std.testing.expect(std.mem.startsWith(u8, graph.nodes.items[esc].label, "left"));
+    try std.testing.expectEqual(label_left_break, graph.nodes.items[esc].label[4]);
+    try std.testing.expect(std.mem.endsWith(u8, graph.nodes.items[esc].label, "rightesc quote\" slash\\ keep\\x"));
+    try std.testing.expectEqual(@as(usize, 2), displayLabelLineCount(graph.nodes.items[esc].label));
 }
 
 test "DOT label escapes expand graph node and edge context" {
