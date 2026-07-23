@@ -371,6 +371,7 @@ pub const EdgeOptions = struct {
     labelfontsize: ?f64 = null,
     labeldistance: ?f64 = null,
     labelangle: ?f64 = null,
+    labelfloat: ?bool = null,
     decorate: ?bool = null,
     tailclip: ?bool = null,
     headclip: ?bool = null,
@@ -433,6 +434,7 @@ pub const EdgeAttr = union(enum) {
     labelfontsize: f64,
     labeldistance: f64,
     labelangle: f64,
+    labelfloat: bool,
     decorate: bool,
     tailclip: bool,
     headclip: bool,
@@ -990,6 +992,7 @@ pub const Graph = struct {
             .labelfontsize => |value| try self.setDefaultEdgeAttrFloat("labelfontsize", value),
             .labeldistance => |value| try self.setDefaultEdgeAttrFloat("labeldistance", value),
             .labelangle => |value| try self.setDefaultEdgeAttrFloat("labelangle", value),
+            .labelfloat => |value| try self.setDefaultEdgeAttrRaw("labelfloat", boolAttrValue(value)),
             .decorate => |value| try self.setDefaultEdgeAttrRaw("decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
@@ -1182,6 +1185,7 @@ pub const Graph = struct {
         if (options.labelfontsize) |value| try self.setEdgeAttr(id, .{ .labelfontsize = value });
         if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
         if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
+        if (options.labelfloat) |value| try self.setEdgeAttr(id, .{ .labelfloat = value });
         if (options.decorate) |value| try self.setEdgeAttr(id, .{ .decorate = value });
         if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
@@ -1247,6 +1251,7 @@ pub const Graph = struct {
             .labelfontsize => |value| try self.setEdgeAttrFloat(id, "labelfontsize", value),
             .labeldistance => |value| try self.setEdgeAttrFloat(id, "labeldistance", value),
             .labelangle => |value| try self.setEdgeAttrFloat(id, "labelangle", value),
+            .labelfloat => |value| try self.setEdgeAttrRaw(id, "labelfloat", boolAttrValue(value)),
             .decorate => |value| try self.setEdgeAttrRaw(id, "decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
@@ -7819,7 +7824,10 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
     var main_label_center: ?Point = null;
     if (edge_item.label) |label| {
-        const label_center = edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+        const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
+            Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+        else
+            edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
         main_label_center = label_center;
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font_family);
     }
@@ -8059,6 +8067,8 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
         if (edge_item.label) |label| {
             const center = if (edge_item.from == edge_item.to)
                 route.label
+            else if (edgeLabelFloatEnabled(edge_item.attrs.items))
+                Point{ .x = route.label.x, .y = route.label.y - 6.0 }
             else
                 edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
             bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
@@ -9154,6 +9164,11 @@ fn endpointLabelPosition(endpoint: Point, toward: Point, distance: f64, angle_de
 
 fn edgeDecorateEnabled(attrs: []const Attr) bool {
     const value = attrValue(attrs, "decorate") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn edgeLabelFloatEnabled(attrs: []const Attr) bool {
+    const value = attrValue(attrs, "labelfloat") orelse return false;
     return parseBool(value) orelse false;
 }
 
@@ -13422,6 +13437,7 @@ test "code API sets typed node and edge options at creation" {
         .labelfontsize = 11,
         .labeldistance = 1.5,
         .labelangle = 25,
+        .labelfloat = true,
         .decorate = true,
         .tailclip = false,
         .headclip = false,
@@ -13483,6 +13499,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("11", attrValue(edge_item.attrs.items, "labelfontsize").?);
     try std.testing.expectEqualStrings("1.5", attrValue(edge_item.attrs.items, "labeldistance").?);
     try std.testing.expectEqualStrings("25", attrValue(edge_item.attrs.items, "labelangle").?);
+    try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "labelfloat").?);
     try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "decorate").?);
     try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "tailclip").?);
     try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "headclip").?);
@@ -19277,6 +19294,16 @@ test "SVG edge labels avoid overlapping intervening nodes" {
     const after = edgeLabelRect(edge_item.label.?, label_center, visual.font_size);
     try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, after));
     try std.testing.expect(label_center.y != route.label.y - 6.0);
+    try graph.setEdgeAttr(edge_id, .{ .labelfloat = true });
+    const floating_edge = graph.edges.items[edge_id];
+    try std.testing.expect(edgeLabelFloatEnabled(floating_edge.attrs.items));
+    const floating_center = if (edgeLabelFloatEnabled(floating_edge.attrs.items))
+        Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+    else
+        edgeLabelCenterAvoidingNodes(&graph, &layout, floating_edge, route, visual, floating_edge.label.?);
+    const floating_rect = edgeLabelRect(floating_edge.label.?, floating_center, visual.font_size);
+    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, floating_edge, floating_rect));
+    try std.testing.expectEqual(route.label.y - 6.0, floating_center.y);
 
     const xlabel = attrValue(edge_item.attrs.items, "xlabel").?;
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
@@ -19293,9 +19320,9 @@ test "DOT parser propagates edge constraint and minlen controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  edge [constraint=false, minlen=2, weight=3];
+        \\  edge [constraint=false, minlen=2, weight=3, labelfloat=true];
         \\  a -> b;
-        \\  b -> c [constraint=true, min_len=4, weight=5];
+        \\  b -> c [constraint=true, min_len=4, weight=5, labelfloat=false];
         \\}
     );
     defer graph.deinit();
@@ -19304,9 +19331,11 @@ test "DOT parser propagates edge constraint and minlen controls" {
     try std.testing.expect(!graph.edges.items[0].constraint);
     try std.testing.expectEqual(@as(usize, 2), graph.edges.items[0].min_len);
     try std.testing.expectEqual(@as(f64, 3.0), graph.edges.items[0].weight);
+    try std.testing.expectEqualStrings("true", attrValue(graph.edges.items[0].attrs.items, "labelfloat").?);
     try std.testing.expect(graph.edges.items[1].constraint);
     try std.testing.expectEqual(@as(usize, 4), graph.edges.items[1].min_len);
     try std.testing.expectEqual(@as(f64, 5.0), graph.edges.items[1].weight);
+    try std.testing.expectEqualStrings("false", attrValue(graph.edges.items[1].attrs.items, "labelfloat").?);
 }
 
 test "DOT parser accepts Graphviz boolean aliases" {
