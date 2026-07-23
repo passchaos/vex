@@ -681,7 +681,10 @@ pub const Graph = struct {
             for (self.edges.items) |existing| {
                 const same_directed = existing.from == from and existing.to == to;
                 const same_undirected = !self.directed and existing.from == to and existing.to == from;
-                if (same_directed or same_undirected) return existing.id;
+                if (same_directed or same_undirected) {
+                    try self.applyEdgeOptions(existing.id, options);
+                    return existing.id;
+                }
             }
         }
 
@@ -13109,6 +13112,33 @@ test "code API applies default node and edge labels to new items" {
     try std.testing.expectEqualStrings("Explicit Edge", graph.edges.items[explicit_edge].label.?);
     try std.testing.expectEqualStrings("Default Node", attrValue(graph.nodes.items[a].attrs.items, "label").?);
     try std.testing.expectEqualStrings("Default Edge", attrValue(graph.edges.items[default_edge].attrs.items, "label").?);
+}
+
+test "code API merges strict duplicate edge options" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .strict = true, .name = "api" });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const first = try graph.addEdge(a, b, .{ .color = "#64748b" });
+    const second = try graph.addEdge(a, b, .{ .label = "merged", .color = "#2563eb", .min_len = 3 });
+
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.items.len);
+    try std.testing.expectEqualStrings("merged", graph.edges.items[first].label.?);
+    try std.testing.expectEqualStrings("#2563eb", graph.edges.items[first].color);
+    try std.testing.expectEqual(@as(usize, 3), graph.edges.items[first].min_len);
+
+    var undirected = try Graph.init(allocator, .{ .directed = false, .strict = true, .name = "api" });
+    defer undirected.deinit();
+    const left = try undirected.addNode("left", .{});
+    const right = try undirected.addNode("right", .{});
+    const forward = try undirected.addEdge(left, right, .{});
+    const reverse = try undirected.addEdge(right, left, .{ .label = "reverse merged" });
+    try std.testing.expectEqual(forward, reverse);
+    try std.testing.expectEqual(@as(usize, 1), undirected.edges.items.len);
+    try std.testing.expectEqualStrings("reverse merged", undirected.edges.items[forward].label.?);
 }
 
 test "code API allows duplicate node names and uses ids for identity" {
