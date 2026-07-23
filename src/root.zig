@@ -2183,6 +2183,7 @@ const Parser = struct {
                         .tail_record_port = from.record_port,
                         .head_record_port = to.record_port,
                     });
+                    try self.expandParsedEdgeDefaultLabelAttrs(graph, edge_id);
                     for (attrs.items) |attr| try self.setParsedEdgeAttr(graph, edge_id, attr.name, attr.value);
                 }
             }
@@ -2350,6 +2351,7 @@ const Parser = struct {
         if (self.node_index.get(text_id)) |id| return id;
         const id = try graph.addNode(text_id, .{});
         if (builtin.is_test) try graph.setNodeAttrRaw(id, "vex_text_id", text_id);
+        try self.expandParsedNodeDefaultLabelAttrs(graph, id);
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
         try self.node_index.put(owned_text_id, id);
@@ -2403,6 +2405,22 @@ const Parser = struct {
         try graph.setGraphAttrRaw(name, value);
     }
 
+    fn expandParsedNodeDefaultLabelAttrs(self: *Parser, graph: *Graph, id: NodeId) !void {
+        if (id >= graph.nodes.items.len) return error.InvalidNodeId;
+        const node_name = try self.allocator.dupe(u8, self.nodeTextId(graph, id));
+        defer self.allocator.free(node_name);
+        if (attrValue(graph.nodes.items[id].attrs.items, "label")) |value| {
+            const expanded = try expandNodeLabel(self.allocator, graph, node_name, value);
+            defer self.allocator.free(expanded);
+            try graph.setNodeAttrRaw(id, "label", expanded);
+        }
+        if (attrValue(graph.nodes.items[id].attrs.items, "xlabel")) |value| {
+            const expanded = try expandNodeLabel(self.allocator, graph, node_name, value);
+            defer self.allocator.free(expanded);
+            try graph.setNodeAttrRaw(id, "xlabel", expanded);
+        }
+    }
+
     fn setParsedNodeAttr(self: *Parser, graph: *Graph, id: NodeId, name: []const u8, value: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(name, "label") or std.ascii.eqlIgnoreCase(name, "xlabel")) {
             const expanded = try expandNodeLabel(self.allocator, graph, self.nodeTextId(graph, id), value);
@@ -2411,6 +2429,14 @@ const Parser = struct {
             return;
         }
         try graph.setNodeAttrRaw(id, name, value);
+    }
+
+    fn expandParsedEdgeDefaultLabelAttrs(self: *Parser, graph: *Graph, id: EdgeId) !void {
+        if (id >= graph.edges.items.len) return error.InvalidEdgeId;
+        if (attrValue(graph.edges.items[id].attrs.items, "label")) |value| try self.setParsedEdgeAttr(graph, id, "label", value);
+        if (attrValue(graph.edges.items[id].attrs.items, "xlabel")) |value| try self.setParsedEdgeAttr(graph, id, "xlabel", value);
+        if (attrValue(graph.edges.items[id].attrs.items, "headlabel")) |value| try self.setParsedEdgeAttr(graph, id, "headlabel", value);
+        if (attrValue(graph.edges.items[id].attrs.items, "taillabel")) |value| try self.setParsedEdgeAttr(graph, id, "taillabel", value);
     }
 
     fn setParsedEdgeAttr(self: *Parser, graph: *Graph, id: EdgeId, name: []const u8, value: []const u8) !void {
@@ -13817,6 +13843,36 @@ test "DOT label escapes expand external label attributes" {
     try std.testing.expectEqualStrings("x=node_a|node_b|node_a->node_b|Ctx", attrValue(graph.edges.items[0].attrs.items, "xlabel").?);
     try std.testing.expectEqualStrings("tail=node_a", attrValue(graph.edges.items[0].attrs.items, "taillabel").?);
     try std.testing.expectEqualStrings("head=node_b", attrValue(graph.edges.items[0].attrs.items, "headlabel").?);
+}
+
+test "DOT default label attrs expand per node and edge context" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Ctx {
+        \\  node [label="node=\N", xlabel="xnode=\N|\G"];
+        \\  edge [
+        \\    label="\T->\H",
+        \\    xlabel="xedge=\E|\G",
+        \\    taillabel="tail=\T",
+        \\    headlabel="head=\H"
+        \\  ];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    const a = nodeIdByLabel(&graph, "node=a");
+    const b = nodeIdByLabel(&graph, "node=b");
+    try std.testing.expectEqualStrings("node=a", graph.nodes.items[a].label);
+    try std.testing.expectEqualStrings("node=b", graph.nodes.items[b].label);
+    try std.testing.expectEqualStrings("xnode=a|Ctx", attrValue(graph.nodes.items[a].attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("xnode=b|Ctx", attrValue(graph.nodes.items[b].attrs.items, "xlabel").?);
+
+    const edge = graph.edges.items[0];
+    try std.testing.expectEqualStrings("a->b", edge.label.?);
+    try std.testing.expectEqualStrings("xedge=a->b|Ctx", attrValue(edge.attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("tail=a", attrValue(edge.attrs.items, "taillabel").?);
+    try std.testing.expectEqualStrings("head=b", attrValue(edge.attrs.items, "headlabel").?);
 }
 
 test "SVG renderer honors DOT line alignment in external labels" {
