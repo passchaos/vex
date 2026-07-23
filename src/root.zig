@@ -7652,7 +7652,7 @@ const svg_clip_padding: f64 = 4.0;
 pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
     const edge_routing = svgEdgeRoutingMode(graph);
     const concentrate = graphConcentrateEnabled(graph);
-    const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
+    const background = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "bgcolor") orelse options.background);
     const graph_pad = graphSvgPad(graph);
     var canvas_width = @ceil(layout.width);
     var canvas_height = @ceil(layout.height);
@@ -7723,7 +7723,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             layout.height - 16.0;
         const title_font = attrValue(graph.attrs.items, "fontname") orelse options.font_family;
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
-        const title_color = attrValue(graph.attrs.items, "fontcolor") orelse "black";
+        const title_color = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "fontcolor") orelse "black");
         const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
         try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor);
     }
@@ -16021,7 +16021,7 @@ test "SVG renderer resolves Graphviz bugn9 colorscheme colors" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [colorscheme=bugn9];
+        \\  graph [colorscheme=bugn9, bgcolor=1, label="Scheme", fontcolor=9];
         \\  node [shape=box, style=filled];
         \\  a [color=7, fillcolor=2, fontcolor=9];
         \\  b [colorscheme=X11, color=red];
@@ -16048,6 +16048,7 @@ test "SVG renderer resolves Graphviz bugn9 colorscheme colors" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#e5f5f9\" stroke=\"#238b45\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#00441b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#f7fcfd\" stroke=\"none\" points=") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#41ae76\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f7fcfd\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#99d8c9\"") != null);
