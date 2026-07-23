@@ -419,6 +419,8 @@ pub const EdgeAttr = union(enum) {
     headclip: bool,
     samehead: []const u8,
     sametail: []const u8,
+    ltail: SubgraphId,
+    lhead: SubgraphId,
 };
 
 pub const SubgraphAttr = union(enum) {
@@ -1154,6 +1156,8 @@ pub const Graph = struct {
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
         if (options.samehead) |value| try self.setEdgeAttr(id, .{ .samehead = value });
         if (options.sametail) |value| try self.setEdgeAttr(id, .{ .sametail = value });
+        if (options.ltail) |value| try self.setEdgeAttr(id, .{ .ltail = value });
+        if (options.lhead) |value| try self.setEdgeAttr(id, .{ .lhead = value });
     }
 
     pub fn setEdgeAttr(self: *Graph, id: EdgeId, attr: EdgeAttr) !void {
@@ -1215,7 +1219,20 @@ pub const Graph = struct {
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
             .samehead => |value| try self.setEdgeAttrRaw(id, "samehead", value),
             .sametail => |value| try self.setEdgeAttrRaw(id, "sametail", value),
+            .ltail => |value| try self.setEdgeSubgraphAttr(id, "ltail", value),
+            .lhead => |value| try self.setEdgeSubgraphAttr(id, "lhead", value),
         }
+    }
+
+    fn setEdgeSubgraphAttr(self: *Graph, id: EdgeId, name: []const u8, subgraph_id: SubgraphId) !void {
+        if (id >= self.edges.items.len) return error.InvalidEdgeId;
+        if (subgraph_id >= self.subgraphs.items.len) return error.InvalidSubgraphId;
+        if (std.ascii.eqlIgnoreCase(name, "ltail")) {
+            self.edges.items[id].ltail = subgraph_id;
+        } else if (std.ascii.eqlIgnoreCase(name, "lhead")) {
+            self.edges.items[id].lhead = subgraph_id;
+        }
+        try self.setEdgeAttrRaw(id, name, self.subgraphs.items[subgraph_id].label);
     }
 
     fn setEdgeAttrFloat(self: *Graph, id: EdgeId, name: []const u8, value: f64) !void {
@@ -19035,6 +19052,36 @@ test "DOT ltail and lhead are ignored unless graph compound is true" {
     try std.testing.expect(!pointOnRectBoundary(left, route.start));
     try std.testing.expect(!pointOnRectBoundary(right, route.end));
     try std.testing.expect(!graphCompoundEnabled(&graph));
+}
+
+test "code API exposes typed compound edge ltail and lhead" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .compound = true });
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const tail = try graph.addSubgraph("cluster_tail", null, &.{ a, b }, .{});
+    const head = try graph.addSubgraph("cluster_head", null, &.{ c, d }, .{});
+    const edge_id = try graph.addEdge(b, c, .{ .ltail = tail });
+    try graph.setEdgeAttr(edge_id, .{ .lhead = head });
+
+    const edge_item = graph.edges.items[edge_id];
+    try std.testing.expectEqual(tail, edge_item.ltail.?);
+    try std.testing.expectEqual(head, edge_item.lhead.?);
+    try std.testing.expectEqualStrings("cluster_tail", attrValue(edge_item.attrs.items, "ltail").?);
+    try std.testing.expectEqualStrings("cluster_head", attrValue(edge_item.attrs.items, "lhead").?);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    const tail_rect = subgraphRect(&graph, &layout, tail).?;
+    const head_rect = subgraphRect(&graph, &layout, head).?;
+    try std.testing.expect(pointOnRectBoundary(tail_rect, route.start));
+    try std.testing.expect(pointOnRectBoundary(head_rect, route.end));
 }
 
 test "DOT samehead and sametail route edges through shared ports" {
