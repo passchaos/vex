@@ -8024,7 +8024,31 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= layout.nodes.len) continue;
         if (resolveNodeVisual(node_item).hidden) continue;
-        bounds.includeRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)));
+        const node_layout = graphvizRenderNodeLayout(graph, layout, node_item);
+        const visual = resolveNodeVisual(node_item);
+        bounds.includeRect(nodeRect(node_layout));
+        if (nodeXLabelRect(node_item, node_layout, visual)) |rect| bounds.includeRect(rect);
+    }
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) continue;
+        const visual = resolveEdgeVisual(edge_item);
+        if (visual.hidden) continue;
+        const route = if (edge_item.from == edge_item.to)
+            selfLoopRoute(layout.nodes[edge_item.from])
+        else
+            edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, parallelEdgeOffset(graph, edge_item.id));
+        if (edge_item.label) |label| {
+            const center = if (edge_item.from == edge_item.to)
+                route.label
+            else
+                edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+            bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
+        }
+        if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
+            const font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
+            const center = edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, font_size);
+            bounds.includeRect(edgeLabelRect(label, center, font_size));
+        }
     }
     return bounds.rect();
 }
@@ -8803,9 +8827,20 @@ fn nodeLabelYOffset(node_item: Node) f64 {
 
 fn renderSvgNodeXLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const label = attrValue(node_item.attrs.items, "xlabel") orelse return;
-    const x = layout.center.x + layout.width / 2.0 + 10.0 + @as(f64, @floatFromInt(displayLabelMaxLineLen(label))) * visual.font_size * 0.18;
-    const y = layout.center.y - layout.height / 2.0 - visual.font_size * 0.6;
-    try renderSvgTextBlock(writer, label, x, y, visual.font_size, visual.font_color, visual.font_family, true, true);
+    const center = nodeXLabelCenter(label, layout, visual.font_size);
+    try renderSvgTextBlock(writer, label, center.x, center.y, visual.font_size, visual.font_color, visual.font_family, true, true);
+}
+
+fn nodeXLabelCenter(label: []const u8, layout: NodeLayout, font_size: f64) Point {
+    return .{
+        .x = layout.center.x + layout.width / 2.0 + 10.0 + @as(f64, @floatFromInt(displayLabelMaxLineLen(label))) * font_size * 0.18,
+        .y = layout.center.y - layout.height / 2.0 - font_size * 0.6,
+    };
+}
+
+fn nodeXLabelRect(node_item: Node, layout: NodeLayout, visual: NodeVisual) ?RectF {
+    const label = attrValue(node_item.attrs.items, "xlabel") orelse return null;
+    return edgeLabelRect(label, nodeXLabelCenter(label, layout, visual.font_size), visual.font_size);
 }
 
 const NodeLabelAnchor = struct {
@@ -8966,6 +9001,28 @@ const SvgTranslate = struct {
     x: f64 = 0,
     y: f64 = 0,
 };
+
+const SvgViewBox = struct {
+    width: f64,
+    height: f64,
+};
+
+fn svgViewBox(svg: []const u8) ?SvgViewBox {
+    const marker = " viewBox=\"";
+    const start = std.mem.indexOf(u8, svg, marker) orelse return null;
+    const value_start = start + marker.len;
+    const value_end_rel = std.mem.indexOfScalar(u8, svg[value_start..], '"') orelse return null;
+    const value = svg[value_start .. value_start + value_end_rel];
+    var parts = std.mem.tokenizeScalar(u8, value, ' ');
+    _ = parts.next() orelse return null;
+    _ = parts.next() orelse return null;
+    const width_text = parts.next() orelse return null;
+    const height_text = parts.next() orelse return null;
+    return .{
+        .width = std.fmt.parseFloat(f64, width_text) catch return null,
+        .height = std.fmt.parseFloat(f64, height_text) catch return null,
+    };
+}
 
 fn svgGraphvizTranslate(svg: []const u8) SvgTranslate {
     const marker = "translate(";
@@ -18081,6 +18138,30 @@ test "SVG canvas expands to fit shifted clusters and outside nodes" {
     const cluster_top = (svgPolygonBBoxY(cluster_fragment) orelse return error.MissingClusterRect) + svgGraphvizTranslate(svg).y;
     try std.testing.expect(start_left >= svg_clip_padding - 0.01);
     try std.testing.expect(cluster_top >= svg_clip_padding - 0.01);
+}
+
+test "SVG canvas expands to fit external node and edge labels" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .TB });
+    defer graph.deinit();
+
+    const a = try graph.addNode("A", .{ .xlabel = "external node label" });
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{
+        .label = "edge",
+        .xlabel = "large external edge label",
+        .labelfontsize = 22,
+    });
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const raw_bounds = svgGraphContentBounds(&graph, &layout) orelse return error.MissingSvgBounds;
+    try std.testing.expect(raw_bounds.x + raw_bounds.width > layout.width);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    try std.testing.expect(view_box.width >= raw_bounds.x + raw_bounds.width + svg_clip_padding - 0.01);
 }
 
 test "cluster layout uses compact padding while fitting labels" {
