@@ -211,6 +211,11 @@ pub const NodeAttr = union(enum) {
     styles: []const NodeStyle,
     penwidth: f64,
     peripheries: usize,
+    sides: usize,
+    regular: bool,
+    orientation: f64,
+    skew: f64,
+    distortion: f64,
     width: f64,
     height: f64,
     fixedsize: NodeFixedSize,
@@ -272,6 +277,11 @@ pub const NodeOptions = struct {
     styles: []const NodeStyle = &.{},
     penwidth: ?f64 = null,
     peripheries: ?usize = null,
+    sides: ?usize = null,
+    regular: ?bool = null,
+    orientation: ?f64 = null,
+    skew: ?f64 = null,
+    distortion: ?f64 = null,
     width: ?f64 = null,
     height: ?f64 = null,
     fixedsize: ?NodeFixedSize = null,
@@ -842,6 +852,15 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setDefaultNodeAttrRaw("peripheries", text);
             },
+            .sides => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setDefaultNodeAttrRaw("sides", text);
+            },
+            .regular => |value| try self.setDefaultNodeAttrRaw("regular", boolAttrValue(value)),
+            .orientation => |value| try self.setDefaultNodeAttrFloat("orientation", value),
+            .skew => |value| try self.setDefaultNodeAttrFloat("skew", value),
+            .distortion => |value| try self.setDefaultNodeAttrFloat("distortion", value),
             .width => |value| try self.setDefaultNodeAttrFloat("width", value),
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
@@ -973,6 +992,11 @@ pub const Graph = struct {
         if (options.styles.len > 0) try self.setNodeAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setNodeAttr(id, .{ .penwidth = value });
         if (options.peripheries) |value| try self.setNodeAttr(id, .{ .peripheries = value });
+        if (options.sides) |value| try self.setNodeAttr(id, .{ .sides = value });
+        if (options.regular) |value| try self.setNodeAttr(id, .{ .regular = value });
+        if (options.orientation) |value| try self.setNodeAttr(id, .{ .orientation = value });
+        if (options.skew) |value| try self.setNodeAttr(id, .{ .skew = value });
+        if (options.distortion) |value| try self.setNodeAttr(id, .{ .distortion = value });
         if (options.width) |value| try self.setNodeAttr(id, .{ .width = value });
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
@@ -1009,6 +1033,15 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setNodeAttrRaw(id, "peripheries", text);
             },
+            .sides => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setNodeAttrRaw(id, "sides", text);
+            },
+            .regular => |value| try self.setNodeAttrRaw(id, "regular", boolAttrValue(value)),
+            .orientation => |value| try self.setNodeAttrFloat(id, "orientation", value),
+            .skew => |value| try self.setNodeAttrFloat(id, "skew", value),
+            .distortion => |value| try self.setNodeAttrFloat(id, "distortion", value),
             .width => |value| try self.setNodeAttrFloat(id, "width", value),
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
@@ -18673,6 +18706,38 @@ test "DOT parser and SVG renderer support parameterized Graphviz polygon shape" 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "five") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "skewed") != null);
+}
+
+test "code API exposes typed polygon node parameters" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const pent = try graph.addNode("typed", .{
+        .shape = .polygon,
+        .sides = 5,
+        .orientation = 18,
+        .regular = true,
+    });
+    try graph.setNodeAttr(pent, .{ .skew = 0.4 });
+    try graph.setNodeAttr(pent, .{ .distortion = -0.2 });
+    const spec = customPolygonFromAttrs(graph.nodes.items[pent].attrs.items);
+
+    try std.testing.expectEqual(Shape.polygon, graph.nodes.items[pent].shape);
+    try std.testing.expectEqual(@as(usize, 5), spec.sides);
+    try std.testing.expect(spec.regular);
+    try std.testing.expect(spec.orientation_deg > 17.9);
+    try std.testing.expect(spec.skew > 0);
+    try std.testing.expect(spec.distortion < 0);
+    try std.testing.expectEqualStrings("5", attrValue(graph.nodes.items[pent].attrs.items, "sides").?);
+    try std.testing.expectEqualStrings("true", attrValue(graph.nodes.items[pent].attrs.items, "regular").?);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "typed") != null);
 }
 
 test "DOT doublecircle shape renders as two circle peripheries" {
