@@ -123,6 +123,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes including `true` / `false`, `yes` / `no`, `on` / `off`, and `1` / `0`. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; Graphviz object escapes include `\G`, `\N`, `\E`, `\T`, `\H`, and `\L`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.
 - SVG text rendering honors `nojustify=true` for graph, node, edge, and subgraph labels.
 - SVG rendering honors Graphviz `outputorder=edgesfirst|nodesfirst|breadthfirst`.
+- Node and cluster `peripheries=0` hide borders while preserving fills.
 - Line comments (`//`, `#`) and block comments (`/* ... */`).
 
 ## Output backends

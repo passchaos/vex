@@ -11600,18 +11600,20 @@ fn resolveNodeVisual(graph: *const Graph, node_item: Node) NodeVisual {
     const bold = styleHas(style, "bold");
     const color_attr = attrValue(node_item.attrs.items, "color");
     const color = resolveSvgColor(graph, node_item.attrs.items, color_attr orelse node_item.color);
+    const peripheries = parseAttrUsize(node_item.attrs.items, "peripheries", 1);
+    const borderless = peripheries == 0;
     const explicit_color = color_attr != null and !(std.ascii.eqlIgnoreCase(color_attr.?, "black") and std.ascii.eqlIgnoreCase(node_item.color, "black"));
     const fill = if (attrValue(node_item.attrs.items, "fillcolor")) |value| resolveSvgColor(graph, node_item.attrs.items, value) else if (filled) (if (explicit_color) color else "lightgrey") else "none";
     return .{
         .fill = fill,
-        .stroke = color,
+        .stroke = if (borderless) "none" else color,
         .font_color = resolveSvgColor(graph, node_item.attrs.items, attrValue(node_item.attrs.items, "fontcolor") orelse "black"),
         .font_family = attrValue(node_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = dashStyleFromAttr(style),
-        .peripheries = @max(parseAttrUsize(node_item.attrs.items, "peripheries", 1), 1),
+        .peripheries = @max(peripheries, 1),
         .hidden = invisible,
     };
 }
@@ -16237,6 +16239,27 @@ test "SVG renderer uses typed node peripheries attribute" {
 
     try std.testing.expectEqualStrings("3", attrValue(graph.nodes.items[0].attrs.items, "peripheries").?);
     try std.testing.expect(countSubstrings(svg, "<rect") >= 3);
+}
+
+test "SVG renderer honors node peripheries zero as borderless" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  filled [shape=box, style=filled, fillcolor="#dbeafe", color="#1d4ed8", peripheries=0];
+        \\  plain [shape=box, color="#dc2626", peripheries=0];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("0", attrValue(graph.nodes.items[nodeIdByLabel(&graph, "filled")].attrs.items, "peripheries").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#1d4ed8\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\"") == null);
 }
 
 test "SVG renderer honors Graphviz fillcolor gradients" {
