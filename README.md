@@ -107,6 +107,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
+- Graph, node, and subgraph margin attributes with zero and sub-inch values.
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.

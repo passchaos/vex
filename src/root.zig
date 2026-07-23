@@ -4663,6 +4663,12 @@ fn parseInchDimension(value: []const u8) ?f64 {
     return @max(12.0, inches * 72.0);
 }
 
+fn parseInchMargin(value: []const u8) ?f64 {
+    const inches = std.fmt.parseFloat(f64, value) catch return null;
+    if (inches < 0) return null;
+    return inches * 72.0;
+}
+
 const BoxMargin = struct {
     x: f64,
     y: f64,
@@ -4672,8 +4678,8 @@ fn attrMargin(attrs: []const Attr, fallback: f64) BoxMargin {
     const value = attrValue(attrs, "margin") orelse return .{ .x = fallback, .y = fallback };
     var parts = std.mem.tokenizeAny(u8, value, ", \t");
     const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
-    const x = parseInchDimension(first) orelse fallback;
-    const y = if (parts.next()) |second| parseInchDimension(second) orelse x else x;
+    const x = parseInchMargin(first) orelse fallback;
+    const y = if (parts.next()) |second| parseInchMargin(second) orelse x else x;
     return .{ .x = x, .y = y };
 }
 
@@ -13447,6 +13453,24 @@ test "layered layout honors graph margin attribute" {
     const a = nodeIdByLabel(&graph, "a");
     try std.testing.expect(layout.nodes[a].center.x >= layout.margin_x + layout.nodes[a].width / 2.0);
     try std.testing.expect(layout.nodes[a].center.y >= layout.margin_y + layout.nodes[a].height / 2.0);
+
+    var zero = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [margin=0];
+        \\  a -> b;
+        \\}
+    );
+    defer zero.deinit();
+
+    var zero_layout = try layoutLayered(allocator, &zero, .{});
+    defer zero_layout.deinit();
+    try std.testing.expectEqual(@as(f64, 0), zero_layout.margin_x);
+    try std.testing.expectEqual(@as(f64, 0), zero_layout.margin_y);
+
+    const attrs = [_]Attr{.{ .name = "margin", .value = "0.05,0.1" }};
+    const tiny = attrMargin(attrs[0..], 12);
+    try std.testing.expectApproxEqAbs(@as(f64, 3.6), tiny.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 7.2), tiny.y, 0.001);
 }
 
 test "DOT parser handles graphviz-like edge chain and attrs" {
