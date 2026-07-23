@@ -8211,9 +8211,15 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
         return .anchor;
     }
 
-    try writer.writeAll("<g>");
+    try writer.writeAll("<a");
+    if (expanded_tooltip) |tip| {
+        try writer.writeAll(" xlink:title=\"");
+        try writeXmlEscaped(writer, tip);
+        try writer.writeByte('"');
+    }
+    try writer.writeByte('>');
     if (expanded_tooltip) |tip| try writeSvgTitle(writer, tip);
-    return .group;
+    return .anchor;
 }
 
 fn interactiveHref(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
@@ -15409,6 +15415,34 @@ test "SVG renderer emits URL href and tooltip metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\"><title>Cluster API</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\">") != null);
+}
+
+test "SVG renderer emits anchors for tooltip-only metadata" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [tooltip="Graph only"];
+        \\  subgraph cluster_api {
+        \\    label="API";
+        \\    tooltip="Cluster only";
+        \\    a;
+        \\  }
+        \\  a [tooltip="Node only"];
+        \\  b;
+        \\  a -> b [tooltip="Edge only"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a xlink:title=\"Graph only\"><title>Graph only</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a xlink:title=\"Cluster only\"><title>Cluster only</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a xlink:title=\"Node only\"><title>Node only</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a xlink:title=\"Edge only\"><title>Edge only</title>") != null);
 }
 
 test "SVG renderer uses labels as URL tooltip fallback" {
