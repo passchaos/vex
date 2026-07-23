@@ -196,6 +196,7 @@ pub const NodeAttr = union(enum) {
     fontcolor: []const u8,
     shape: Shape,
     style: NodeStyle,
+    styles: []const NodeStyle,
     penwidth: f64,
     width: f64,
     height: f64,
@@ -251,6 +252,7 @@ pub const NodeOptions = struct {
     fontcolor: ?[]const u8 = null,
     shape: ?Shape = null,
     style: ?NodeStyle = null,
+    styles: []const NodeStyle = &.{},
     penwidth: ?f64 = null,
     width: ?f64 = null,
     height: ?f64 = null,
@@ -273,6 +275,7 @@ pub const EdgeOptions = struct {
     color: ?[]const u8 = null,
     fontcolor: ?[]const u8 = null,
     style: ?EdgeStyle = null,
+    styles: []const EdgeStyle = &.{},
     penwidth: ?f64 = null,
     weight: ?f64 = null,
     constraint: ?bool = null,
@@ -308,6 +311,7 @@ pub const EdgeAttr = union(enum) {
     color: []const u8,
     fontcolor: []const u8,
     style: EdgeStyle,
+    styles: []const EdgeStyle,
     penwidth: f64,
     weight: f64,
     constraint: bool,
@@ -745,6 +749,7 @@ pub const Graph = struct {
             .fontcolor => |value| try self.setDefaultNodeAttrRaw("fontcolor", value),
             .shape => |value| try self.setDefaultNodeAttrRaw("shape", shapeName(value)),
             .style => |value| try self.setDefaultNodeAttrRaw("style", nodeStyleName(value)),
+            .styles => |values| try setDefaultNodeStylesAttrRaw(self, values),
             .penwidth => |value| try self.setDefaultNodeAttrFloat("penwidth", value),
             .width => |value| try self.setDefaultNodeAttrFloat("width", value),
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
@@ -786,6 +791,7 @@ pub const Graph = struct {
             .color => |value| try self.setDefaultEdgeAttrRaw("color", value),
             .fontcolor => |value| try self.setDefaultEdgeAttrRaw("fontcolor", value),
             .style => |value| try self.setDefaultEdgeAttrRaw("style", edgeStyleName(value)),
+            .styles => |values| try setDefaultEdgeStylesAttrRaw(self, values),
             .penwidth => |value| try self.setDefaultEdgeAttrFloat("penwidth", value),
             .weight => |value| try self.setDefaultEdgeAttrFloat("weight", value),
             .constraint => |value| try self.setDefaultEdgeAttrRaw("constraint", boolAttrValue(value)),
@@ -844,6 +850,7 @@ pub const Graph = struct {
         if (options.fontcolor) |value| try self.setNodeAttr(id, .{ .fontcolor = value });
         if (options.shape) |value| try self.setNodeAttr(id, .{ .shape = value });
         if (options.style) |value| try self.setNodeAttr(id, .{ .style = value });
+        if (options.styles.len > 0) try self.setNodeAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setNodeAttr(id, .{ .penwidth = value });
         if (options.width) |value| try self.setNodeAttr(id, .{ .width = value });
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
@@ -870,6 +877,7 @@ pub const Graph = struct {
             .fontcolor => |value| try self.setNodeAttrRaw(id, "fontcolor", value),
             .shape => |value| try self.setNodeShape(id, value),
             .style => |value| try self.setNodeAttrRaw(id, "style", nodeStyleName(value)),
+            .styles => |values| try setNodeStylesAttrRaw(self, id, values),
             .penwidth => |value| try self.setNodeAttrFloat(id, "penwidth", value),
             .width => |value| try self.setNodeAttrFloat(id, "width", value),
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
@@ -922,6 +930,7 @@ pub const Graph = struct {
         if (options.color) |value| try self.setEdgeAttr(id, .{ .color = value });
         if (options.fontcolor) |value| try self.setEdgeAttr(id, .{ .fontcolor = value });
         if (options.style) |value| try self.setEdgeAttr(id, .{ .style = value });
+        if (options.styles.len > 0) try self.setEdgeAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setEdgeAttr(id, .{ .penwidth = value });
         if (options.weight) |value| try self.setEdgeAttr(id, .{ .weight = value });
         if (options.constraint) |value| try self.setEdgeAttr(id, .{ .constraint = value });
@@ -952,6 +961,7 @@ pub const Graph = struct {
             .color => |value| try self.setEdgeAttrRaw(id, "color", value),
             .fontcolor => |value| try self.setEdgeAttrRaw(id, "fontcolor", value),
             .style => |value| try self.setEdgeAttrRaw(id, "style", edgeStyleName(value)),
+            .styles => |values| try setEdgeStylesAttrRaw(self, id, values),
             .penwidth => |value| try self.setEdgeAttrFloat(id, "penwidth", value),
             .weight => |value| try self.setEdgeAttrFloat(id, "weight", value),
             .constraint => |value| try self.setEdgeAttrRaw(id, "constraint", boolAttrValue(value)),
@@ -1289,6 +1299,50 @@ fn nodeStyleName(style: NodeStyle) []const u8 {
         .radial => "radial",
         .invis => "invis",
     };
+}
+
+fn setNodeStylesAttrRaw(graph: *Graph, id: NodeId, values: []const NodeStyle) !void {
+    if (values.len == 0) return;
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(graph.allocator);
+    for (values, 0..) |value, index| {
+        if (index > 0) try text.append(graph.allocator, ',');
+        try text.appendSlice(graph.allocator, nodeStyleName(value));
+    }
+    try graph.setNodeAttrRaw(id, "style", text.items);
+}
+
+fn setDefaultNodeStylesAttrRaw(graph: *Graph, values: []const NodeStyle) !void {
+    if (values.len == 0) return;
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(graph.allocator);
+    for (values, 0..) |value, index| {
+        if (index > 0) try text.append(graph.allocator, ',');
+        try text.appendSlice(graph.allocator, nodeStyleName(value));
+    }
+    try graph.setDefaultNodeAttrRaw("style", text.items);
+}
+
+fn setEdgeStylesAttrRaw(graph: *Graph, id: EdgeId, values: []const EdgeStyle) !void {
+    if (values.len == 0) return;
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(graph.allocator);
+    for (values, 0..) |value, index| {
+        if (index > 0) try text.append(graph.allocator, ',');
+        try text.appendSlice(graph.allocator, edgeStyleName(value));
+    }
+    try graph.setEdgeAttrRaw(id, "style", text.items);
+}
+
+fn setDefaultEdgeStylesAttrRaw(graph: *Graph, values: []const EdgeStyle) !void {
+    if (values.len == 0) return;
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(graph.allocator);
+    for (values, 0..) |value, index| {
+        if (index > 0) try text.append(graph.allocator, ',');
+        try text.appendSlice(graph.allocator, edgeStyleName(value));
+    }
+    try graph.setDefaultEdgeAttrRaw("style", text.items);
 }
 
 fn subgraphStyleName(style: SubgraphStyle) []const u8 {
@@ -13128,7 +13182,7 @@ test "code API sets typed node and edge options at creation" {
         .gradientangle = 30,
         .fontcolor = "#0f172a",
         .shape = .box,
-        .style = .filled,
+        .styles = &.{ .filled, .rounded, .dashed },
         .penwidth = 2,
         .width = 1.25,
         .height = 0.75,
@@ -13150,7 +13204,7 @@ test "code API sets typed node and edge options at creation" {
         .label = "edge",
         .color = "#16a34a",
         .fontcolor = "#064e3b",
-        .style = .dashed,
+        .styles = &.{ .bold, .dashed },
         .penwidth = 3,
         .weight = 4,
         .constraint = false,
@@ -13182,7 +13236,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("#dbeafe", attrValue(node_item.attrs.items, "fillcolor").?);
     try std.testing.expectEqualStrings("30", attrValue(node_item.attrs.items, "gradientangle").?);
     try std.testing.expectEqualStrings("#0f172a", attrValue(node_item.attrs.items, "fontcolor").?);
-    try std.testing.expectEqualStrings("filled", attrValue(node_item.attrs.items, "style").?);
+    try std.testing.expectEqualStrings("filled,rounded,dashed", attrValue(node_item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("2", attrValue(node_item.attrs.items, "penwidth").?);
     try std.testing.expectEqualStrings("1.25", attrValue(node_item.attrs.items, "width").?);
     try std.testing.expectEqualStrings("0.75", attrValue(node_item.attrs.items, "height").?);
@@ -13205,7 +13259,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expect(!edge_item.constraint);
     try std.testing.expectEqual(@as(usize, 2), edge_item.min_len);
     try std.testing.expectEqualStrings("#064e3b", attrValue(edge_item.attrs.items, "fontcolor").?);
-    try std.testing.expectEqualStrings("dashed", attrValue(edge_item.attrs.items, "style").?);
+    try std.testing.expectEqualStrings("bold,dashed", attrValue(edge_item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("3", attrValue(edge_item.attrs.items, "penwidth").?);
     try std.testing.expectEqualStrings("https://example.com/edge", attrValue(edge_item.attrs.items, "URL").?);
     try std.testing.expectEqualStrings("edge tip", attrValue(edge_item.attrs.items, "tooltip").?);
@@ -15205,6 +15259,36 @@ test "SVG renderer honors common Graphviz visual attributes" {
     const second_offset = parallelEdgeOffset(&graph, 1);
     try std.testing.expect(first_offset < 0);
     try std.testing.expect(second_offset > 0);
+}
+
+test "SVG renderer uses typed node and edge style lists" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{
+        .shape = .box,
+        .fillcolor = "#dbeafe",
+        .color = "#1d4ed8",
+        .styles = &.{ .filled, .rounded, .dashed },
+    });
+    const b = try graph.addNode("b", .{ .shape = .box });
+    _ = try graph.addEdge(a, b, .{
+        .color = "#dc2626",
+        .styles = &.{ .bold, .dotted },
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") != null);
 }
 
 test "SVG renderer honors bold style and node peripheries" {
