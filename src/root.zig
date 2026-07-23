@@ -195,6 +195,7 @@ pub const NodeStyle = enum {
     rounded,
     striped,
     radial,
+    wedged,
     invis,
 };
 
@@ -1619,6 +1620,7 @@ fn nodeStyleName(style: NodeStyle) []const u8 {
         .rounded => "rounded",
         .striped => "striped",
         .radial => "radial",
+        .wedged => "wedged",
         .invis => "invis",
     };
 }
@@ -7945,7 +7947,14 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         try writer.writeByte('\n');
     }
     var fill_buf: [96]u8 = undefined;
-    if (stripedNodeFillEligible(node_item.shape)) {
+    if (wedgedNodeFillEligible(node_item.shape)) {
+        const fill_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, l));
+        if (try renderSvgWedgedEllipseFill(writer, "vex-node-wedges", node_item.id + 1, node_item.attrs.items, fill_layout, visual.fill, visual.stroke)) {
+            visual.fill = "none";
+        } else {
+            try resolveSvgGradientFill(writer, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
+        }
+    } else if (stripedNodeFillEligible(node_item.shape)) {
         if (try renderSvgStripedRectFill(writer, "vex-node-stripes", node_item.id + 1, node_item.attrs.items, nodeRect(l), visual.radius, visual.fill)) {
             visual.fill = "none";
         } else {
@@ -8272,6 +8281,92 @@ fn renderSvgStripedRectFill(writer: *Io.Writer, id_prefix: []const u8, id: usize
     return true;
 }
 
+fn renderSvgWedgedEllipseFill(writer: *Io.Writer, id_prefix: []const u8, id: usize, attrs: []const Attr, layout: NodeLayout, fallback_fill: []const u8, stroke: []const u8) Io.Writer.Error!bool {
+    if (!styleHas(attrValue(attrs, "style"), "wedged")) return false;
+    const fillcolor = attrValue(attrs, "fillcolor") orelse attrValue(attrs, "color") orelse fallback_fill;
+    const colors = parseColorList(fillcolor) orelse return false;
+    if (colors.len < 2) return false;
+
+    var has_visible_wedge = false;
+    for (colors.segments[0..colors.len]) |segment| {
+        if (segment.fraction > 0) {
+            has_visible_wedge = true;
+            break;
+        }
+    }
+    if (!has_visible_wedge) return false;
+
+    const rx = @max(1.0, layout.width / 2.0);
+    const ry = @max(1.0, layout.height / 2.0);
+    try writer.print("<g id=\"{s}-{d}\" class=\"wedged-fill\">\n", .{ id_prefix, id });
+    var cursor: f64 = 0.0;
+    var rendered = false;
+    for (colors.segments[0..colors.len], 0..) |segment, index| {
+        if (segment.fraction <= 0) continue;
+        const next = if (index + 1 == colors.len)
+            1.0
+        else
+            @min(1.0, cursor + segment.fraction);
+        if (next <= cursor) continue;
+        try writeSvgEllipseWedge(writer, layout.center, rx, ry, cursor, next, segment.color, stroke);
+        cursor = next;
+        rendered = true;
+        if (cursor >= 1.0) break;
+    }
+    try writer.writeAll("</g>\n");
+    return rendered;
+}
+
+fn writeSvgEllipseWedge(writer: *Io.Writer, center: Point, rx: f64, ry: f64, start_fraction: f64, end_fraction: f64, fill: []const u8, stroke: []const u8) Io.Writer.Error!void {
+    const start = std.math.clamp(start_fraction, 0.0, 1.0);
+    const end = std.math.clamp(end_fraction, start, 1.0);
+    if (end <= start) return;
+    if (start <= 0.00001 and end >= 0.99999) {
+        try writer.writeAll("<ellipse fill=\"");
+        try writer.writeAll(fill);
+        try writer.writeAll("\" stroke=\"");
+        try writer.writeAll(stroke);
+        try writer.writeAll("\" stroke-width=\"0.5\" cx=\"");
+        try writeSvgNumber(writer, center.x);
+        try writer.writeAll("\" cy=\"");
+        try writeSvgNumber(writer, center.y);
+        try writer.writeAll("\" rx=\"");
+        try writeSvgNumber(writer, rx);
+        try writer.writeAll("\" ry=\"");
+        try writeSvgNumber(writer, ry);
+        try writer.writeAll("\"/>\n");
+        return;
+    }
+
+    const start_angle = start * std.math.tau;
+    const end_angle = end * std.math.tau;
+    const start_point = Point{
+        .x = center.x + std.math.cos(start_angle) * rx,
+        .y = center.y + std.math.sin(start_angle) * ry,
+    };
+    const end_point = Point{
+        .x = center.x + std.math.cos(end_angle) * rx,
+        .y = center.y + std.math.sin(end_angle) * ry,
+    };
+    const large_arc: u8 = if (end - start > 0.5) '1' else '0';
+    try writer.writeAll("<path d=\"");
+    try writePathMove(writer, center);
+    try writePathLine(writer, start_point);
+    try writer.writeByte('A');
+    try writeSvgPathNumber(writer, rx);
+    try writer.writeByte(',');
+    try writeSvgPathNumber(writer, ry);
+    try writer.writeAll(" 0 ");
+    try writer.writeByte(large_arc);
+    try writer.writeAll(",1 ");
+    try writeSvgPathPoint(writer, end_point);
+    try writer.writeAll("Z\" fill=\"");
+    try writer.writeAll(fill);
+    try writer.writeAll("\" stroke=\"");
+    try writer.writeAll(stroke);
+    try writer.writeAll("\" stroke-width=\"0.5\"/>\n");
+}
+
 fn writeSvgLinearGradientDef(writer: *Io.Writer, id_prefix: []const u8, id: usize, rect: RectF, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
     const line = gradientLine(rect, angle_degrees);
     try writer.print("<defs><linearGradient id=\"{s}-{d}\" gradientUnits=\"userSpaceOnUse\" x1=\"{d:.1}\" y1=\"{d:.1}\" x2=\"{d:.1}\" y2=\"{d:.1}\">\n", .{
@@ -8307,6 +8402,13 @@ fn writeSvgGradientStop(writer: *Io.Writer, offset: f64, color: []const u8) Io.W
 fn stripedNodeFillEligible(shape: Shape) bool {
     return switch (shape) {
         .box, .square, .msquare, .record, .mrecord => true,
+        else => false,
+    };
+}
+
+fn wedgedNodeFillEligible(shape: Shape) bool {
+    return switch (shape) {
+        .ellipse, .circle, .doublecircle, .mcircle => true,
         else => false,
     };
 }
@@ -11291,7 +11393,7 @@ fn renderRecordFields(writer: *Io.Writer, node: RecordAst, rect: RectF, visual: 
 
 fn resolveNodeVisual(node_item: Node) NodeVisual {
     const style = attrValue(node_item.attrs.items, "style");
-    const filled = styleHas(style, "filled");
+    const filled = styleHas(style, "filled") or (styleHas(style, "wedged") and wedgedNodeFillEligible(node_item.shape));
     const invisible = styleHas(style, "invis");
     const rounded = styleHas(style, "rounded");
     const dashed = styleHas(style, "dashed");
@@ -15793,6 +15895,54 @@ test "SVG renderer keeps explicit zero striped fill fractions" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"red\" stroke=\"none\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"green\" stroke=\"none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"blue\" stroke=\"none\"") == null);
+}
+
+test "SVG renderer honors Graphviz wedged fills on ellipse nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  pie [shape=ellipse, style=wedged, fillcolor="red;0.25:green;0.25:blue", color="#111827"];
+        \\  single [shape=circle, style=wedged, fillcolor="#fef3c7"];
+        \\  box [shape=box, style=wedged, fillcolor="red:blue"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-node-wedges-1\" class=\"wedged-fill\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"red\" stroke=\"#111827\" stroke-width=\"0.5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"green\" stroke=\"#111827\" stroke-width=\"0.5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"blue\" stroke=\"#111827\" stroke-width=\"0.5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-node-wedges-2\" class=\"wedged-fill\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fef3c7\" stroke=\"black\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-node-wedges-3\" class=\"wedged-fill\"") == null);
+}
+
+test "SVG renderer uses typed wedged node style" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    _ = try graph.addNode("pie", .{
+        .shape = .circle,
+        .styles = &.{.wedged},
+        .fillcolor = "gold;0.5:lightblue",
+        .color = "#334155",
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("wedged", attrValue(graph.nodes.items[0].attrs.items, "style").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-node-wedges-1\" class=\"wedged-fill\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"gold\" stroke=\"#334155\" stroke-width=\"0.5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightblue\" stroke=\"#334155\" stroke-width=\"0.5\"") != null);
 }
 
 test "SVG node rendering separates Graphviz color and fillcolor semantics" {
