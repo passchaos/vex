@@ -5173,6 +5173,50 @@ fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
             else => {},
         }
     }
+
+    enforceExclusiveSourceSinkRanks(graph, ranks);
+}
+
+fn enforceExclusiveSourceSinkRanks(graph: *const Graph, ranks: []usize) void {
+    if (hasRankConstraintKind(graph, .source)) {
+        for (ranks, 0..) |*rank, node_id| {
+            if (rank.* == 0 and !nodeInRankConstraintKind(graph, node_id, .source)) rank.* = 1;
+        }
+    }
+
+    if (hasRankConstraintKind(graph, .sink)) {
+        var max_rank: usize = 0;
+        for (ranks) |rank| max_rank = @max(max_rank, rank);
+        var shared_max = false;
+        for (ranks, 0..) |rank, node_id| {
+            if (rank == max_rank and !nodeInRankConstraintKind(graph, node_id, .sink)) {
+                shared_max = true;
+                break;
+            }
+        }
+        if (shared_max) {
+            for (ranks, 0..) |*rank, node_id| {
+                if (nodeInRankConstraintKind(graph, node_id, .sink)) rank.* = max_rank + 1;
+            }
+        }
+    }
+}
+
+fn hasRankConstraintKind(graph: *const Graph, kind: RankKind) bool {
+    for (graph.rank_constraints.items) |constraint| {
+        if (constraint.kind == kind) return true;
+    }
+    return false;
+}
+
+fn nodeInRankConstraintKind(graph: *const Graph, node_id: NodeId, kind: RankKind) bool {
+    for (graph.rank_constraints.items) |constraint| {
+        if (constraint.kind != kind) continue;
+        for (constraint.node_ids) |id| {
+            if (id == node_id) return true;
+        }
+    }
+    return false;
 }
 
 fn rankConstraintsSatisfied(graph: *const Graph, ranks: []const usize) bool {
@@ -5202,6 +5246,16 @@ fn rankConstraintsSatisfied(graph: *const Graph, ranks: []const usize) bool {
                     if (id < ranks.len and ranks[id] != max_rank) return false;
                 }
             },
+        }
+    }
+    if (hasRankConstraintKind(graph, .source)) {
+        for (ranks, 0..) |rank, node_id| {
+            if (rank == 0 and !nodeInRankConstraintKind(graph, node_id, .source)) return false;
+        }
+    }
+    if (hasRankConstraintKind(graph, .sink)) {
+        for (ranks, 0..) |rank, node_id| {
+            if (rank == max_rank and !nodeInRankConstraintKind(graph, node_id, .sink)) return false;
         }
     }
     return true;
@@ -16548,6 +16602,36 @@ test "layered layout applies rank same and boundary constraints" {
     try std.testing.expect(layout.nodes[source].center.y < layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[archive].center.y > layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[source].center.y <= layout.nodes[free].center.y);
+}
+
+test "layered layout keeps source and sink ranks exclusive" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=source; source; }
+        \\  { rank=sink; sink; }
+        \\  source -> mid -> before_sink -> sink;
+        \\  free;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const source = nodeIdByLabel(&graph, "source");
+    const mid = nodeIdByLabel(&graph, "mid");
+    const before_sink = nodeIdByLabel(&graph, "before_sink");
+    const sink = nodeIdByLabel(&graph, "sink");
+    const free = nodeIdByLabel(&graph, "free");
+    var max_rank: usize = 0;
+    for (layout.ranks) |rank| max_rank = @max(max_rank, rank);
+
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[source]);
+    try std.testing.expectEqual(max_rank, layout.ranks[sink]);
+    try std.testing.expect(layout.ranks[mid] != 0);
+    try std.testing.expect(layout.ranks[free] != 0);
+    try std.testing.expect(layout.ranks[before_sink] != max_rank);
 }
 
 test "layered layout keeps back edges from expanding ranks" {

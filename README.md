@@ -104,6 +104,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
 - Comma node lists in node statements and edge operands: `a, b -- c, d`.
 - Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph group { c d }`.
+- Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.
