@@ -7804,7 +7804,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         if (edge_item.label) |label| {
             try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font_family);
         }
-        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual);
+        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, route.label);
         try writeSvgInteractiveClose(writer, edge_wrap);
         try writer.writeAll("</g>\n");
         return;
@@ -7817,11 +7817,13 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .head_msquare = graph.nodes.items[edge_item.to].shape == .msquare,
     };
     try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
+    var main_label_center: ?Point = null;
     if (edge_item.label) |label| {
         const label_center = edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+        main_label_center = label_center;
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font_family);
     }
-    try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual);
+    try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center);
     try writeSvgInteractiveClose(writer, edge_wrap);
     try writer.writeAll("</g>\n");
 }
@@ -8625,7 +8627,7 @@ fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Wri
     }
 }
 
-fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, main_label_center: ?Point) Io.Writer.Error!void {
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
     const label_font_color = attrValue(edge_item.attrs.items, "labelfontcolor") orelse visual.font_color;
     const label_font_family = attrValue(edge_item.attrs.items, "labelfontname") orelse visual.font_family;
@@ -8643,9 +8645,15 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
         const pos = edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size);
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, pos, label_font_size, label_font_color, label_font_family);
     }
-    if (edge_item.label != null and edgeDecorateEnabled(edge_item.attrs.items)) {
+    if (edge_item.label != null and main_label_center != null and edgeDecorateEnabled(edge_item.attrs.items)) {
+        const label = edge_item.label.?;
+        const label_rect = edgeLabelRect(label, main_label_center.?, visual.font_size);
         const anchor = lerpPoint(route.start, route.end, 0.5);
-        try writeSvgLine(writer, route.label.x, route.label.y - 3.0, anchor.x, anchor.y, .{
+        try writeSvgPolylinePath(writer, &.{
+            .{ .x = label_rect.x + 4.0, .y = label_rect.y + label_rect.height - 4.0 },
+            .{ .x = label_rect.x + label_rect.width - 4.0, .y = label_rect.y + label_rect.height - 4.0 },
+            anchor,
+        }, .{
             .fill = "none",
             .stroke = visual.stroke,
             .font_color = visual.font_color,
@@ -9509,6 +9517,18 @@ fn svgNumbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64
 fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
     const fragment = svgGroupFragmentByTitle(svg, title) orelse return 0;
     return svgNumbersInAttribute(fragment, "d", out);
+}
+
+fn lastSvgPathNumbersInFragment(fragment: []const u8, out: []f64) usize {
+    var search_start: usize = 0;
+    var last: ?[]const u8 = null;
+    while (std.mem.indexOf(u8, fragment[search_start..], "<path")) |rel| {
+        const path_start = search_start + rel;
+        const path_end_rel = std.mem.indexOf(u8, fragment[path_start..], "/>") orelse break;
+        last = fragment[path_start .. path_start + path_end_rel];
+        search_start = path_start + path_end_rel + 2;
+    }
+    return if (last) |path| svgNumbersInAttribute(path, "d", out) else 0;
 }
 
 fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, end: Point } {
@@ -16890,6 +16910,17 @@ test "SVG renderer honors edge label font position and decoration attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
     try std.testing.expect(countSubstrings(svg, "stroke=\"#2563eb\"") >= 2);
+
+    const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, resolveEdgeVisual(edge_item), edge_item.label.?);
+    const label_rect = edgeLabelRect(edge_item.label.?, label_center, resolveEdgeVisual(edge_item).font_size);
+    const edge_fragment = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingEdgeFragment;
+    var decorate_numbers: [16]f64 = undefined;
+    const decorate_count = lastSvgPathNumbersInFragment(edge_fragment, decorate_numbers[0..]);
+    try std.testing.expect(decorate_count >= 6);
+    try std.testing.expectApproxEqAbs(label_rect.x + 4.0, decorate_numbers[0], 0.1);
+    try std.testing.expectApproxEqAbs(label_rect.y + label_rect.height - 4.0, decorate_numbers[1], 0.1);
+    try std.testing.expectApproxEqAbs(label_rect.x + label_rect.width - 4.0, decorate_numbers[2], 0.1);
+    try std.testing.expectApproxEqAbs(label_rect.y + label_rect.height - 4.0, decorate_numbers[3], 0.1);
 }
 
 test "SVG renderer honors DOT fontname and fontsize attributes" {
