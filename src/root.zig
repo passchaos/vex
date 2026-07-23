@@ -7694,7 +7694,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const text_anchor: []const u8 = if (label_just) |value|
             if (std.ascii.eqlIgnoreCase(value, "r")) "end" else if (std.ascii.eqlIgnoreCase(value, "c")) "middle" else "start"
         else
-            "start";
+            "middle";
         const title_x = if (std.mem.eql(u8, text_anchor, "end"))
             layout.width - 16.0
         else if (std.mem.eql(u8, text_anchor, "middle"))
@@ -16467,6 +16467,12 @@ test "SVG renderer defaults root graph labels to bottom" {
     var bottom_y_buf: [64]u8 = undefined;
     const bottom_y = try std.fmt.bufPrint(&bottom_y_buf, "y=\"{s}\"", .{bottom_y_value});
     try std.testing.expect(std.mem.indexOf(u8, bottom_svg, bottom_y) != null);
+    try std.testing.expect(std.mem.indexOf(u8, bottom_svg, "text-anchor=\"middle\"") != null);
+    var bottom_x_value_buf: [32]u8 = undefined;
+    const bottom_x_value = try svgNumberForTest(&bottom_x_value_buf, bottom_layout.width / 2.0);
+    var bottom_x_buf: [64]u8 = undefined;
+    const bottom_x = try std.fmt.bufPrint(&bottom_x_buf, "x=\"{s}\"", .{bottom_x_value});
+    try std.testing.expect(std.mem.indexOf(u8, bottom_svg, bottom_x) != null);
 
     var top = try parseDot(allocator,
         \\digraph G {
