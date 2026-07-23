@@ -11483,18 +11483,27 @@ fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
     if (std.ascii.eqlIgnoreCase(text, "invempty")) return .oinv;
     if (std.ascii.eqlIgnoreCase(text, "curve")) return .curve;
     if (std.ascii.eqlIgnoreCase(text, "icurve")) return .icurve;
+    if (std.ascii.eqlIgnoreCase(text, "lcurve") or std.ascii.eqlIgnoreCase(text, "rcurve")) return .curve;
+    if (std.ascii.eqlIgnoreCase(text, "licurve") or std.ascii.eqlIgnoreCase(text, "ricurve")) return .icurve;
     if (std.ascii.eqlIgnoreCase(text, "vee")) return .vee;
+    if (std.ascii.eqlIgnoreCase(text, "lvee") or std.ascii.eqlIgnoreCase(text, "rvee")) return .vee;
     if (std.ascii.eqlIgnoreCase(text, "dot")) return .dot;
     if (std.ascii.eqlIgnoreCase(text, "invdot")) return .dot;
     if (std.ascii.eqlIgnoreCase(text, "odot")) return .odot;
     if (std.ascii.eqlIgnoreCase(text, "invodot") or std.ascii.eqlIgnoreCase(text, "oinvdot")) return .odot;
     if (std.ascii.eqlIgnoreCase(text, "box")) return .box;
+    if (std.ascii.eqlIgnoreCase(text, "lbox") or std.ascii.eqlIgnoreCase(text, "rbox")) return .box;
     if (std.ascii.eqlIgnoreCase(text, "obox")) return .obox;
+    if (std.ascii.eqlIgnoreCase(text, "olbox") or std.ascii.eqlIgnoreCase(text, "orbox")) return .obox;
     if (std.ascii.eqlIgnoreCase(text, "diamond")) return .diamond;
+    if (std.ascii.eqlIgnoreCase(text, "ldiamond") or std.ascii.eqlIgnoreCase(text, "rdiamond")) return .diamond;
     if (std.ascii.eqlIgnoreCase(text, "ediamond")) return .odiamond;
     if (std.ascii.eqlIgnoreCase(text, "odiamond")) return .odiamond;
+    if (std.ascii.eqlIgnoreCase(text, "oldiamond") or std.ascii.eqlIgnoreCase(text, "ordiamond")) return .odiamond;
     if (std.ascii.eqlIgnoreCase(text, "tee")) return .tee;
+    if (std.ascii.eqlIgnoreCase(text, "ltee") or std.ascii.eqlIgnoreCase(text, "rtee")) return .tee;
     if (std.ascii.eqlIgnoreCase(text, "crow")) return .crow;
+    if (std.ascii.eqlIgnoreCase(text, "lcrow") or std.ascii.eqlIgnoreCase(text, "rcrow")) return .crow;
     if (std.ascii.eqlIgnoreCase(text, "empty")) return .empty;
     return fallback;
 }
@@ -16537,6 +16546,33 @@ test "SVG renderer accepts Graphviz arrow marker aliases" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#f59e0b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#9333ea\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#0f172a\"") != null);
+}
+
+test "SVG renderer accepts Graphviz half-arrow marker aliases" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [arrowhead=lvee, color="#2563eb"];
+        \\  b -> c [arrowhead=rbox, color="#dc2626"];
+        \\  c -> d [arrowhead=oldiamond, color="#16a34a"];
+        \\  d -> e [arrowhead=ltee, color="#f59e0b"];
+        \\  e -> f [arrowhead=rcrow, color="#9333ea"];
+        \\  f -> g [arrowhead=ricurve, color="#0f172a"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1 L 8.5 9\" fill=\"none\" stroke=\"#f59e0b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9 M 1 5 L 9 5\" fill=\"none\" stroke=\"#9333ea\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1.2 C 1.5 1.2 1.5 8.8 8.5 8.8\" fill=\"none\" stroke=\"#0f172a\"") != null);
 }
 
 test "SVG renderer honors arrowsize and edge clipping attributes" {
