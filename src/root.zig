@@ -305,6 +305,8 @@ pub const EdgeOptions = struct {
     labelfontsize: ?f64 = null,
     labeldistance: ?f64 = null,
     labelangle: ?f64 = null,
+    tailclip: ?bool = null,
+    headclip: ?bool = null,
     samehead: ?[]const u8 = null,
     sametail: ?[]const u8 = null,
     tail_port: CompassPort = .auto,
@@ -343,6 +345,8 @@ pub const EdgeAttr = union(enum) {
     labelfontsize: f64,
     labeldistance: f64,
     labelangle: f64,
+    tailclip: bool,
+    headclip: bool,
     samehead: []const u8,
     sametail: []const u8,
 };
@@ -836,6 +840,8 @@ pub const Graph = struct {
             .labelfontsize => |value| try self.setDefaultEdgeAttrFloat("labelfontsize", value),
             .labeldistance => |value| try self.setDefaultEdgeAttrFloat("labeldistance", value),
             .labelangle => |value| try self.setDefaultEdgeAttrFloat("labelangle", value),
+            .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
+            .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
             .samehead => |value| try self.setDefaultEdgeAttrRaw("samehead", value),
             .sametail => |value| try self.setDefaultEdgeAttrRaw("sametail", value),
         }
@@ -973,6 +979,8 @@ pub const Graph = struct {
         if (options.labelfontsize) |value| try self.setEdgeAttr(id, .{ .labelfontsize = value });
         if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
         if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
+        if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
+        if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
         if (options.samehead) |value| try self.setEdgeAttr(id, .{ .samehead = value });
         if (options.sametail) |value| try self.setEdgeAttr(id, .{ .sametail = value });
     }
@@ -1010,6 +1018,8 @@ pub const Graph = struct {
             .labelfontsize => |value| try self.setEdgeAttrFloat(id, "labelfontsize", value),
             .labeldistance => |value| try self.setEdgeAttrFloat(id, "labeldistance", value),
             .labelangle => |value| try self.setEdgeAttrFloat(id, "labelangle", value),
+            .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
+            .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
             .samehead => |value| try self.setEdgeAttrRaw(id, "samehead", value),
             .sametail => |value| try self.setEdgeAttrRaw(id, "sametail", value),
         }
@@ -13273,6 +13283,8 @@ test "code API sets typed node and edge options at creation" {
         .labelfontsize = 11,
         .labeldistance = 1.5,
         .labelangle = 25,
+        .tailclip = false,
+        .headclip = false,
         .samehead = "h",
         .sametail = "t",
     });
@@ -13326,6 +13338,8 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("11", attrValue(edge_item.attrs.items, "labelfontsize").?);
     try std.testing.expectEqualStrings("1.5", attrValue(edge_item.attrs.items, "labeldistance").?);
     try std.testing.expectEqualStrings("25", attrValue(edge_item.attrs.items, "labelangle").?);
+    try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "tailclip").?);
+    try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "headclip").?);
     try std.testing.expectEqualStrings("h", attrValue(edge_item.attrs.items, "samehead").?);
     try std.testing.expectEqualStrings("t", attrValue(edge_item.attrs.items, "sametail").?);
 }
@@ -16377,10 +16391,12 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
         \\  c [shape=box];
         \\  a -> b [arrowsize=2.0, color="#2563eb"];
         \\  a -> c [arrowsize=0, color="#dc2626"];
-        \\  b -> c [tailclip=false, headclip=false, color="#16a34a"];
+        \\  b -> c [color="#16a34a"];
         \\}
     );
     defer graph.deinit();
+    try graph.setEdgeAttr(2, .{ .tailclip = false });
+    try graph.setEdgeAttr(2, .{ .headclip = false });
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
