@@ -179,6 +179,7 @@ pub const GraphAttr = union(enum) {
     id: []const u8,
     class: []const u8,
     stylesheet: []const u8,
+    comment: []const u8,
 };
 
 pub const NodeStyle = enum {
@@ -230,6 +231,7 @@ pub const NodeAttr = union(enum) {
     target: []const u8,
     id: []const u8,
     class: []const u8,
+    comment: []const u8,
     ordering: OrderingMode,
     group: []const u8,
 };
@@ -296,6 +298,7 @@ pub const NodeOptions = struct {
     target: ?[]const u8 = null,
     id: ?[]const u8 = null,
     class: ?[]const u8 = null,
+    comment: ?[]const u8 = null,
     ordering: ?OrderingMode = null,
     group: ?[]const u8 = null,
 };
@@ -320,6 +323,7 @@ pub const EdgeOptions = struct {
     target: ?[]const u8 = null,
     id: ?[]const u8 = null,
     class: ?[]const u8 = null,
+    comment: ?[]const u8 = null,
     edge_url: ?[]const u8 = null,
     edge_href: ?[]const u8 = null,
     edge_tooltip: ?[]const u8 = null,
@@ -381,6 +385,7 @@ pub const EdgeAttr = union(enum) {
     target: []const u8,
     id: []const u8,
     class: []const u8,
+    comment: []const u8,
     edge_url: []const u8,
     edge_href: []const u8,
     edge_tooltip: []const u8,
@@ -818,6 +823,7 @@ pub const Graph = struct {
             .id => |value| try self.setGraphAttrRaw("id", value),
             .class => |value| try self.setGraphAttrRaw("class", value),
             .stylesheet => |value| try self.setGraphAttrRaw("stylesheet", value),
+            .comment => |value| try self.setGraphAttrRaw("comment", value),
         }
     }
 
@@ -875,6 +881,7 @@ pub const Graph = struct {
             .target => |value| try self.setDefaultNodeAttrRaw("target", value),
             .id => |value| try self.setDefaultNodeAttrRaw("id", value),
             .class => |value| try self.setDefaultNodeAttrRaw("class", value),
+            .comment => |value| try self.setDefaultNodeAttrRaw("comment", value),
             .ordering => |value| try self.setDefaultNodeAttrRaw("ordering", orderingModeName(value)),
             .group => |value| try self.setDefaultNodeAttrRaw("group", value),
         }
@@ -922,6 +929,7 @@ pub const Graph = struct {
             .target => |value| try self.setDefaultEdgeAttrRaw("target", value),
             .id => |value| try self.setDefaultEdgeAttrRaw("id", value),
             .class => |value| try self.setDefaultEdgeAttrRaw("class", value),
+            .comment => |value| try self.setDefaultEdgeAttrRaw("comment", value),
             .edge_url => |value| try self.setDefaultEdgeAttrRaw("edgeURL", value),
             .edge_href => |value| try self.setDefaultEdgeAttrRaw("edgehref", value),
             .edge_tooltip => |value| try self.setDefaultEdgeAttrRaw("edgetooltip", value),
@@ -1011,6 +1019,7 @@ pub const Graph = struct {
         if (options.target) |value| try self.setNodeAttr(id, .{ .target = value });
         if (options.id) |value| try self.setNodeAttr(id, .{ .id = value });
         if (options.class) |value| try self.setNodeAttr(id, .{ .class = value });
+        if (options.comment) |value| try self.setNodeAttr(id, .{ .comment = value });
         if (options.ordering) |value| try self.setNodeAttr(id, .{ .ordering = value });
         if (options.group) |value| try self.setNodeAttr(id, .{ .group = value });
     }
@@ -1056,6 +1065,7 @@ pub const Graph = struct {
             .target => |value| try self.setNodeAttrRaw(id, "target", value),
             .id => |value| try self.setNodeAttrRaw(id, "id", value),
             .class => |value| try self.setNodeAttrRaw(id, "class", value),
+            .comment => |value| try self.setNodeAttrRaw(id, "comment", value),
             .ordering => |value| try self.setNodeAttrRaw(id, "ordering", orderingModeName(value)),
             .group => |value| try self.setNodeAttrRaw(id, "group", value),
         }
@@ -1110,6 +1120,7 @@ pub const Graph = struct {
         if (options.target) |value| try self.setEdgeAttr(id, .{ .target = value });
         if (options.id) |value| try self.setEdgeAttr(id, .{ .id = value });
         if (options.class) |value| try self.setEdgeAttr(id, .{ .class = value });
+        if (options.comment) |value| try self.setEdgeAttr(id, .{ .comment = value });
         if (options.edge_url) |value| try self.setEdgeAttr(id, .{ .edge_url = value });
         if (options.edge_href) |value| try self.setEdgeAttr(id, .{ .edge_href = value });
         if (options.edge_tooltip) |value| try self.setEdgeAttr(id, .{ .edge_tooltip = value });
@@ -1170,6 +1181,7 @@ pub const Graph = struct {
             .target => |value| try self.setEdgeAttrRaw(id, "target", value),
             .id => |value| try self.setEdgeAttrRaw(id, "id", value),
             .class => |value| try self.setEdgeAttrRaw(id, "class", value),
+            .comment => |value| try self.setEdgeAttrRaw(id, "comment", value),
             .edge_url => |value| try self.setEdgeAttrRaw(id, "edgeURL", value),
             .edge_href => |value| try self.setEdgeAttrRaw(id, "edgehref", value),
             .edge_tooltip => |value| try self.setEdgeAttrRaw(id, "edgetooltip", value),
@@ -7346,6 +7358,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeByte(' ');
     try writeSvgNumber(writer, content_translate.y);
     try writer.writeAll(")\">\n");
+    if (attrValue(graph.attrs.items, "comment")) |comment| {
+        if (comment.len > 0) try writeSvgComment(writer, comment);
+    }
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
@@ -7828,6 +7843,10 @@ fn writeSvgNodeCommentRef(writer: *Io.Writer, node_item: Node) Io.Writer.Error!v
 }
 
 fn writeSvgNodeNameComment(writer: *Io.Writer, node_item: Node) Io.Writer.Error!void {
+    if (attrValue(node_item.attrs.items, "comment")) |comment| {
+        try writeSvgComment(writer, comment);
+        return;
+    }
     try writer.writeAll("<!-- ");
     try writeSvgNodeCommentRef(writer, node_item);
     try writer.writeAll(" -->\n");
@@ -7835,6 +7854,10 @@ fn writeSvgNodeNameComment(writer: *Io.Writer, node_item: Node) Io.Writer.Error!
 
 fn writeSvgEdgeComment(writer: *Io.Writer, graph: *const Graph, edge_item: Edge) Io.Writer.Error!void {
     if (edge_item.from >= graph.nodes.items.len or edge_item.to >= graph.nodes.items.len) return;
+    if (attrValue(edge_item.attrs.items, "comment")) |comment| {
+        try writeSvgComment(writer, comment);
+        return;
+    }
     try writer.writeAll("<!-- ");
     try writeSvgNodeCommentRef(writer, graph.nodes.items[edge_item.from]);
     try writer.writeAll(if (graph.directed) "&#45;&gt;" else "&#45;&#45;");
@@ -15262,6 +15285,45 @@ test "SVG renderer honors typed id and class metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge-a-b\" class=\"edge critical flow\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"cluster-custom\" class=\"cluster lane hot\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node2\" class=\"node\">") != null);
+}
+
+test "SVG renderer honors graph node and edge comment metadata" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "comments" });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .comment = "graph-comment" });
+
+    const a = try graph.addNode("A", .{ .comment = "node-comment" });
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{ .comment = "edge-a->b" });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- graph&#45;comment -->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- node&#45;comment -->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- edge&#45;a&#45;&gt;b -->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- A -->") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<!-- A&#45;&gt;B -->") == null);
+
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [comment="graph raw"];
+        \\  a [comment="node raw"];
+        \\  a -> b [comment="edge raw"];
+        \\}
+    );
+    defer parsed.deinit();
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "<!-- graph raw -->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "<!-- node raw -->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "<!-- edge raw -->") != null);
 }
 
 test "SVG renderer honors edge label URL tooltip target metadata" {
