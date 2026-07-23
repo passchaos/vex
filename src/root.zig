@@ -8168,9 +8168,9 @@ fn interactiveHref(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
     return switch (kind) {
         .default => attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url"),
         .edge => attrValue(attrs, "edgehref") orelse attrValue(attrs, "edgeURL") orelse attrValue(attrs, "edgeurl") orelse attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url"),
-        .label => attrValue(attrs, "labelhref") orelse attrValue(attrs, "labelURL") orelse attrValue(attrs, "labelurl"),
-        .head => attrValue(attrs, "headhref") orelse attrValue(attrs, "headURL") orelse attrValue(attrs, "headurl"),
-        .tail => attrValue(attrs, "tailhref") orelse attrValue(attrs, "tailURL") orelse attrValue(attrs, "tailurl"),
+        .label => attrValue(attrs, "labelhref") orelse attrValue(attrs, "labelURL") orelse attrValue(attrs, "labelurl") orelse interactiveHref(attrs, .edge),
+        .head => attrValue(attrs, "headhref") orelse attrValue(attrs, "headURL") orelse attrValue(attrs, "headurl") orelse interactiveHref(attrs, .edge),
+        .tail => attrValue(attrs, "tailhref") orelse attrValue(attrs, "tailURL") orelse attrValue(attrs, "tailurl") orelse interactiveHref(attrs, .edge),
     };
 }
 
@@ -8178,9 +8178,9 @@ fn interactiveTooltip(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8
     return switch (kind) {
         .default => attrValue(attrs, "tooltip") orelse attrValue(attrs, "title"),
         .edge => attrValue(attrs, "edgetooltip") orelse attrValue(attrs, "tooltip") orelse attrValue(attrs, "title"),
-        .label => attrValue(attrs, "labeltooltip"),
-        .head => attrValue(attrs, "headtooltip"),
-        .tail => attrValue(attrs, "tailtooltip"),
+        .label => attrValue(attrs, "labeltooltip") orelse interactiveTooltip(attrs, .edge),
+        .head => attrValue(attrs, "headtooltip") orelse interactiveTooltip(attrs, .edge),
+        .tail => attrValue(attrs, "tailtooltip") orelse interactiveTooltip(attrs, .edge),
     };
 }
 
@@ -8188,9 +8188,9 @@ fn interactiveTarget(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 
     return switch (kind) {
         .default => attrValue(attrs, "target"),
         .edge => attrValue(attrs, "edgetarget") orelse attrValue(attrs, "target"),
-        .label => attrValue(attrs, "labeltarget"),
-        .head => attrValue(attrs, "headtarget"),
-        .tail => attrValue(attrs, "tailtarget"),
+        .label => attrValue(attrs, "labeltarget") orelse interactiveTarget(attrs, .edge),
+        .head => attrValue(attrs, "headtarget") orelse interactiveTarget(attrs, .edge),
+        .tail => attrValue(attrs, "tailtarget") orelse interactiveTarget(attrs, .edge),
     };
 }
 
@@ -15458,6 +15458,30 @@ test "SVG renderer honors edge label URL tooltip target metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">tail</tspan>") != null);
+
+    var inherited = try Graph.init(allocator, .{ .directed = true });
+    defer inherited.deinit();
+    const ia = try inherited.addNode("A", .{});
+    const ib = try inherited.addNode("B", .{});
+    _ = try inherited.addEdge(ia, ib, .{
+        .label = "main",
+        .xlabel = "external",
+        .headlabel = "head",
+        .taillabel = "tail",
+        .edge_url = "https://example.com/inherited",
+        .edge_tooltip = "Inherited edge",
+        .edge_target = "_self",
+    });
+    var inherited_layout = try layoutLayered(allocator, &inherited, .{});
+    defer inherited_layout.deinit();
+    const inherited_svg = try renderSvgAlloc(allocator, &inherited, &inherited_layout, .{});
+    defer allocator.free(inherited_svg);
+
+    try std.testing.expect(countSubstrings(inherited_svg, "<a href=\"https://example.com/inherited\" target=\"_self\"><title>Inherited edge</title>") >= 5);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">main</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">external</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">head</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">tail</tspan>") != null);
 }
 
 test "SVG renderer emits default Graphviz-like node and edge titles" {
