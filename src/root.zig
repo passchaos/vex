@@ -1719,8 +1719,14 @@ fn boolAttrValue(value: bool) []const u8 {
 }
 
 fn parseBool(value: []const u8) ?bool {
-    if (std.ascii.eqlIgnoreCase(value, "true") or std.mem.eql(u8, value, "1")) return true;
-    if (std.ascii.eqlIgnoreCase(value, "false") or std.mem.eql(u8, value, "0")) return false;
+    if (std.ascii.eqlIgnoreCase(value, "true") or
+        std.ascii.eqlIgnoreCase(value, "yes") or
+        std.ascii.eqlIgnoreCase(value, "on") or
+        std.mem.eql(u8, value, "1")) return true;
+    if (std.ascii.eqlIgnoreCase(value, "false") or
+        std.ascii.eqlIgnoreCase(value, "no") or
+        std.ascii.eqlIgnoreCase(value, "off") or
+        std.mem.eql(u8, value, "0")) return false;
     return null;
 }
 
@@ -18502,6 +18508,28 @@ test "DOT parser propagates edge constraint and minlen controls" {
     try std.testing.expect(graph.edges.items[1].constraint);
     try std.testing.expectEqual(@as(usize, 4), graph.edges.items[1].min_len);
     try std.testing.expectEqual(@as(f64, 5.0), graph.edges.items[1].weight);
+}
+
+test "DOT parser accepts Graphviz boolean aliases" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [compound=yes, concentrate=on];
+        \\  node [shape=polygon, regular=yes, fixedsize=off];
+        \\  edge [constraint=no];
+        \\  a -> b;
+        \\  b -> c [constraint=on];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(graphCompoundEnabled(&graph));
+    try std.testing.expect(graphConcentrateEnabled(&graph));
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expect(customPolygonFromAttrs(graph.nodes.items[a].attrs.items).regular);
+    try std.testing.expect(fixedsizeMode(graph.nodes.items[a].attrs.items) == .false);
+    try std.testing.expect(!graph.edges.items[0].constraint);
+    try std.testing.expect(graph.edges.items[1].constraint);
 }
 
 test "layered layout respects edge constraint false and minlen" {
