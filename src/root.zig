@@ -11502,7 +11502,8 @@ const SvgEdgeRouting = enum {
 
 fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
     const value = attrValue(graph.attrs.items, "splines") orelse return .curved;
-    if (std.ascii.eqlIgnoreCase(value, "false") or std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "line")) return .line;
+    if (parseBool(value)) |enabled| return if (enabled) .curved else .line;
+    if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "line")) return .line;
     if (std.ascii.eqlIgnoreCase(value, "polyline")) return .polyline;
     if (std.ascii.eqlIgnoreCase(value, "ortho")) return .ortho;
     return .curved;
@@ -18376,6 +18377,33 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer allocator.free(false_svg);
     try std.testing.expect(svgPathCommandCount(false_svg, 'C') == 0);
     try std.testing.expect(svgPathCommandCount(false_svg, 'L') >= 1);
+
+    var no_splines = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=no];
+        \\  a -> b [label="no"];
+        \\}
+    );
+    defer no_splines.deinit();
+    var no_layout = try layoutLayered(allocator, &no_splines, .{});
+    defer no_layout.deinit();
+    const no_svg = try renderSvgAlloc(allocator, &no_splines, &no_layout, .{});
+    defer allocator.free(no_svg);
+    try std.testing.expect(svgPathCommandCount(no_svg, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(no_svg, 'L') >= 1);
+
+    var yes_splines = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=yes];
+        \\  a -> b [label="yes"];
+        \\}
+    );
+    defer yes_splines.deinit();
+    var yes_layout = try layoutLayered(allocator, &yes_splines, .{});
+    defer yes_layout.deinit();
+    const yes_svg = try renderSvgAlloc(allocator, &yes_splines, &yes_layout, .{});
+    defer allocator.free(yes_svg);
+    try std.testing.expect(svgPathCommandCount(yes_svg, 'C') != 0);
 
     var none = try parseDot(allocator,
         \\digraph G {

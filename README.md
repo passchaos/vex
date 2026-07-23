@@ -108,6 +108,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
+- `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes including `true` / `false`, `yes` / `no`, `on` / `off`, and `1` / `0`. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.
 - Line comments (`//`, `#`) and block comments (`/* ... */`).
 
