@@ -17,7 +17,7 @@ Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Gr
 - 支持有向边 `->` 和无向边 `--`。
 - 支持节点语句、边语句和图/节点/边属性。
 - 支持常见属性：`label`、`color`、`shape`、`rankdir`、`weight` 等。
-- 当前应覆盖实用 DOT 子集：`strict`、具名 subgraph 分组、subgraph 作为边操作数、ports、HTML-like labels/IDs 文本化、Graphviz 常见字符串转义（`\n`/`\l`/`\r`、引号、反斜杠、续行）、quoted string `+` 拼接、逗号节点列表、UTF-8 ID、简单布尔属性；后续再扩展完整 subgraph 布局、HTML label 渲染和完整 DOT 语义。
+- 当前应覆盖实用 DOT 子集：`strict`、具名 subgraph 分组、subgraph 作为边操作数、ports、angle-bracket labels/IDs 文本化、Graphviz 常见字符串转义（`\n`/`\l`/`\r`、引号、反斜杠、续行）、quoted string `+` 拼接、逗号节点列表、UTF-8 ID、简单布尔属性；后续再扩展完整 subgraph 布局和完整 DOT 语义。
 
 ## 编码接口要求
 

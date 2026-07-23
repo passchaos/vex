@@ -18,14 +18,8 @@ pub fn main(init: std.process.Init) !void {
     const order = try graph.addNode("{<id> id|<user_id> user_id|<total> total}", .{
         .shape = .record,
     });
-    const payment = try graph.addNode(
-        \\<TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0">
-        \\  <TR><TD PORT="id"><B>id</B></TD><TD>uuid</TD></TR>
-        \\  <TR><TD PORT="order_id">order_id</TD><TD>uuid</TD></TR>
-        \\  <TR><TD PORT="status">status</TD><TD><I>enum</I></TD></TR>
-        \\</TABLE>
-    , .{
-        .shape = .plaintext,
+    const payment = try graph.addNode("{<id> id|<order_id> order_id|<status> status}", .{
+        .shape = .mrecord,
     });
 
     _ = try graph.addEdge(user, order, .{

@@ -74,7 +74,7 @@ They progress from small SVG output to broader feature coverage:
 - `02_undirected_svg.zig`: undirected API graph, `rankdir=LR`, and SVG rendering.
 - `03_clusters_compound.zig`: `addSubgraph`, graph attributes, compound edge hints, and SVG output.
 - `04_svg_output.zig`: one API graph rendered through the SVG output dispatch path.
-- `05_records_ports_svg.zig`: record labels, record ports, HTML-like table labels, and SVG output.
+- `05_records_ports_svg.zig`: record labels, record ports, and SVG output.
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, and SVG output.
 - `07_force_layout_svg.zig`: cyclic undirected graph rendered with Sugiyama to exercise edge-label avoidance.
 
@@ -104,7 +104,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph group { c d }`.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
-- Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, HTML-like IDs/labels as text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes.
+- Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes.
 - Line comments (`//`, `#`) and block comments (`/* ... */`).
 
 ## Output backends
@@ -113,5 +113,5 @@ The parser currently supports a practical, mainstream DOT subset:
 
 The public render API keeps an `OutputFormat` dispatch layer so output backends can be added or removed without changing call sites that already pass a format.
 
-Future work should expand remaining non-MVP DOT details—full cluster layout semantics, complete HTML-label rendering, and all Graphviz edge cases—toward the full grammar in Graphviz's local source at
+Future work should expand remaining non-MVP DOT details—full cluster layout semantics and Graphviz edge cases—toward the full grammar in Graphviz's local source at
 `~/Work/graphviz/lib/cgraph/grammar.y` and `~/Work/graphviz/doc/infosrc/grammar`.
