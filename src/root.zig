@@ -4192,12 +4192,12 @@ fn parseInchDimension(value: []const u8) ?f64 {
     return @max(12.0, inches * 72.0);
 }
 
-const NodeMargin = struct {
+const BoxMargin = struct {
     x: f64,
     y: f64,
 };
 
-fn nodeMargin(attrs: []const Attr, fallback: f64) NodeMargin {
+fn attrMargin(attrs: []const Attr, fallback: f64) BoxMargin {
     const value = attrValue(attrs, "margin") orelse return .{ .x = fallback, .y = fallback };
     var parts = std.mem.tokenizeAny(u8, value, ", \t");
     const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
@@ -4206,13 +4206,16 @@ fn nodeMargin(attrs: []const Attr, fallback: f64) NodeMargin {
     return .{ .x = x, .y = y };
 }
 
+fn nodeMargin(attrs: []const Attr, fallback: f64) BoxMargin {
+    return attrMargin(attrs, fallback);
+}
+
 fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
     return LayoutAxes.init(rankdir).orientSize(size);
 }
 
 fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []SubgraphLayout) void {
     const pad_x: f64 = 12;
-    const pad_y: f64 = 12;
     const label_pad_x: f64 = 6;
     const label_band: f64 = 18;
     const child_gap: f64 = 12;
@@ -4250,18 +4253,21 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
         }
         const label_font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0);
         const label_min_width = displayLabelEstimatedWidth(cluster.label, label_font_size) + label_pad_x * 2.0;
-        var x = min_x - pad_x;
-        var width = (max_x - min_x) + pad_x * 2.0;
+        const margin = attrMargin(cluster.attrs.items, pad_x);
+        const cluster_pad_x = margin.x;
+        const cluster_pad_y = margin.y;
+        var x = min_x - cluster_pad_x;
+        var width = (max_x - min_x) + cluster_pad_x * 2.0;
         if (boundary_inputs_available) {
-            if (solveClusterBoundary(cluster, center_buf[0..nodes.len], size_buf[0..nodes.len], pad_x)) |boundary| {
+            if (solveClusterBoundary(cluster, center_buf[0..nodes.len], size_buf[0..nodes.len], cluster_pad_x)) |boundary| {
                 x = boundary.left;
                 width = boundary.right - boundary.left;
             }
         }
-        var y = min_y - pad_y - label_band;
-        var height = (max_y - min_y) + pad_y * 2.0 + label_band;
+        var y = min_y - cluster_pad_y - label_band;
+        var height = (max_y - min_y) + cluster_pad_y * 2.0 + label_band;
         if (boundary_inputs_available) {
-            if (solveClusterBoundary(cluster, center_y_buf[0..nodes.len], size_y_buf[0..nodes.len], pad_y)) |boundary| {
+            if (solveClusterBoundary(cluster, center_y_buf[0..nodes.len], size_y_buf[0..nodes.len], cluster_pad_y)) |boundary| {
                 y = boundary.left - label_band;
                 height = boundary.right - boundary.left + label_band;
             }
@@ -13211,6 +13217,7 @@ test "code API sets typed subgraph attrs" {
         .fontcolor = "#1e3a8a",
         .penwidth = 2,
         .peripheries = 0,
+        .margin = "0.25",
         .labelloc = .bottom,
         .labeljust = .left,
         .url = "https://example.com/subgraph",
@@ -13239,6 +13246,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("#1e3a8a", attrValue(item.attrs.items, "fontcolor").?);
     try std.testing.expectEqualStrings("2", attrValue(item.attrs.items, "penwidth").?);
     try std.testing.expectEqualStrings("0", attrValue(item.attrs.items, "peripheries").?);
+    try std.testing.expectEqualStrings("0.25", attrValue(item.attrs.items, "margin").?);
     try std.testing.expectEqualStrings("b", attrValue(item.attrs.items, "labelloc").?);
     try std.testing.expectEqualStrings("l", attrValue(item.attrs.items, "labeljust").?);
     try std.testing.expectEqualStrings("https://example.com/subgraph", attrValue(item.attrs.items, "URL").?);
@@ -18237,6 +18245,31 @@ test "cluster layout uses compact padding while fitting labels" {
     try std.testing.expect(cluster_box.width <= 96.0);
     try std.testing.expect(cluster_box.height >= node.height + 42.0);
     try std.testing.expect(cluster_box.height <= node.height + 48.0);
+}
+
+test "cluster layout honors margin attribute for member padding" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_roomy {
+        \\    margin=0.5;
+        \\    a;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const cluster_box = layout.subgraphs[0];
+    const a = nodeIdByLabel(&graph, "a");
+    const node = layout.nodes[a];
+    const left_padding = node.center.x - node.width / 2.0 - cluster_box.x;
+    const right_padding = cluster_box.x + cluster_box.width - (node.center.x + node.width / 2.0);
+    try std.testing.expect(left_padding >= 35.0);
+    try std.testing.expect(right_padding >= 35.0);
+    try std.testing.expect(cluster_box.width >= node.width + 72.0);
 }
 
 test "cluster fill follows Graphviz style filled color semantics" {
