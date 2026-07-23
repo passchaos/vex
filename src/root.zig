@@ -10389,8 +10389,8 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         }
         try writer.writeAll("/>\n");
     }
-    const label_just = attrValue(cluster.attrs.items, "labeljust");
-    const label_loc = attrValue(cluster.attrs.items, "labelloc");
+    const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
+    const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
     const text_anchor: []const u8 = if (label_just) |value|
         if (std.ascii.eqlIgnoreCase(value, "l")) "start" else if (std.ascii.eqlIgnoreCase(value, "r")) "end" else "middle"
     else
@@ -10418,6 +10418,10 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     }
     try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
+}
+
+fn inheritedClusterLabelAttr(graph: *const Graph, cluster: Subgraph, name: []const u8) ?[]const u8 {
+    return attrValue(cluster.attrs.items, name) orelse attrValue(graph.attrs.items, name);
 }
 
 fn clusterVisualRect(graph: *const Graph, layout: *const Layout, index: usize) RectF {
@@ -19840,6 +19844,44 @@ test "cluster labels honor labelloc and labeljust" {
     var expected_buf: [64]u8 = undefined;
     const expected_y = try std.fmt.bufPrint(&expected_buf, "y=\"{s}\"", .{expected_y_value});
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
+}
+
+test "cluster labels inherit root graph labelloc and labeljust" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [labelloc=b, labeljust=r];
+        \\  subgraph cluster_inherited {
+        \\    label="Inherited";
+        \\    a;
+        \\  }
+        \\  subgraph cluster_explicit {
+        \\    label="Explicit";
+        \\    labelloc=t;
+        \\    labeljust=l;
+        \\    b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inherited_fragment = svgGroupFragmentByTitle(svg, "Inherited") orelse return error.MissingInheritedCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inherited_fragment, "text-anchor=\"end\"") != null);
+    const inherited_box = layout.subgraphs[0];
+    var inherited_y_value_buf: [32]u8 = undefined;
+    const inherited_y_value = try svgNumberForTest(&inherited_y_value_buf, inherited_box.y + inherited_box.height - 10.0);
+    var inherited_y_buf: [64]u8 = undefined;
+    const inherited_y = try std.fmt.bufPrint(&inherited_y_buf, "y=\"{s}\"", .{inherited_y_value});
+    try std.testing.expect(std.mem.indexOf(u8, inherited_fragment, inherited_y) != null);
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "text-anchor=\"start\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, inherited_y) == null);
 }
 
 test "cluster labels honor DOT left and right line breaks" {
