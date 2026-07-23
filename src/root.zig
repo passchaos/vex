@@ -7478,18 +7478,15 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             layout.width / 2.0
         else
             16.0;
-        const title_y = if (label_loc) |value|
+        const title_baseline_y = if (label_loc) |value|
             if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
         else
             24.0;
         const title_font = attrValue(graph.attrs.items, "fontname") orelse options.font_family;
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = attrValue(graph.attrs.items, "fontcolor") orelse "black";
-        try writeSvgTextOpen(writer, text_anchor, title_x, title_y, title_font, title_size);
-        try writeSvgTextFill(writer, title_color);
-        try writer.writeAll(">");
-        try writeXmlEscaped(writer, graph_label);
-        try writer.writeAll("</text>\n");
+        const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
+        try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor);
     }
     try writeSvgInteractiveClose(writer, graph_wrap);
     if (svgNeedsMarkerDefs(graph, concentrate)) {
@@ -7506,6 +7503,17 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try renderSvgClusters(writer, graph, layout);
     try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate);
     try writer.writeAll("</g>\n</svg>");
+}
+
+fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, label_loc: ?[]const u8) f64 {
+    const line_height = font_size * 1.25;
+    const line_count = displayLabelLineCount(label);
+    const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
+    const first_baseline_y = if (label_loc) |value|
+        if (std.ascii.eqlIgnoreCase(value, "b")) baseline_y - @as(f64, @floatFromInt(line_count - 1)) * line_height else baseline_y
+    else
+        baseline_y;
+    return first_baseline_y + block_height / 2.0 - line_height * 0.72;
 }
 
 fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
@@ -15380,7 +15388,28 @@ test "SVG renderer keeps graph name as metadata unless graph label is explicit" 
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" transform=\"scale(1 1) rotate(0) translate(0 0)\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>G</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, ">G</text>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">G</tspan></text>") == null);
+}
+
+test "SVG renderer honors DOT left and right line breaks in graph labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [label="left\lcenter\nright\r", labeljust=c];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"middle\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">center</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">right</tspan>") != null);
 }
 
 test "SVG renderer honors graph labelloc and labeljust attributes" {
