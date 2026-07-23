@@ -2603,6 +2603,9 @@ fn dupeDotString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
             '"' => try out.append(allocator, '"'),
             '\\' => try out.append(allocator, '\\'),
             '\n' => {},
+            '\r' => {
+                if (i + 1 < value.len and value[i + 1] == '\n') i += 1;
+            },
             else => {
                 try out.append(allocator, '\\');
                 try out.append(allocator, escaped);
@@ -13975,6 +13978,15 @@ test "SVG renderer honors DOT left and right line break label escapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">left</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">center</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">right</tspan>") != null);
+}
+
+test "DOT parser handles CRLF quoted string line continuations" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "digraph G { a [label=\"left\\\r\nright\"]; }");
+    defer graph.deinit();
+
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expectEqualStrings("leftright", graph.nodes.items[a].label);
 }
 
 test "Layout owns render graph snapshot" {
