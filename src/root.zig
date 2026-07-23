@@ -8196,6 +8196,11 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
         try writer.writeAll("\" xlink:href=\"");
         try writeXmlEscaped(writer, expanded_href);
         try writer.writeByte('"');
+        if (expanded_tooltip) |tip| {
+            try writer.writeAll(" xlink:title=\"");
+            try writeXmlEscaped(writer, tip);
+            try writer.writeByte('"');
+        }
         if (expanded_target) |value| {
             try writer.writeAll(" target=\"");
             try writeXmlEscaped(writer, value);
@@ -15265,7 +15270,7 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     try std.testing.expectEqualStrings("0.25", attrValue(graph.attrs.items, "pad").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0,0 0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph-href\" xlink:href=\"https://example.com/graph-href\" target=\"_top\"><title>Graph tip</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph-href\" xlink:href=\"https://example.com/graph-href\" xlink:title=\"Graph tip\" target=\"_top\"><title>Graph tip</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
     try std.testing.expect(layout.margin_y >= 26.0);
 }
@@ -15398,12 +15403,12 @@ test "SVG renderer emits URL href and tooltip metadata" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\" xlink:href=\"https://example.com/a\" target=\"_blank\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\" xlink:href=\"https://example.com/a\" xlink:title=\"Node A\" target=\"_blank\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Node A</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" target=\"_self\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" xlink:title=\"Edge A to B\" target=\"_self\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" target=\"_parent\"><title>Cluster API</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" target=\"_parent\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\"><title>Cluster API</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\">") != null);
 }
 
 test "SVG renderer uses labels as URL tooltip fallback" {
@@ -15428,13 +15433,13 @@ test "SVG renderer uses labels as URL tooltip fallback" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph\" xlink:href=\"https://example.com/graph\"><title>Graph Label</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\" xlink:href=\"https://example.com/a\"><title>a</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\"><title>API</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\"><title>edge label</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\"><title>external</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\"><title>head</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\"><title>tail</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph\" xlink:href=\"https://example.com/graph\" xlink:title=\"Graph Label\"><title>Graph Label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\" xlink:href=\"https://example.com/a\" xlink:title=\"a\"><title>a</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"API\"><title>API</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" xlink:title=\"edge label\"><title>edge label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" xlink:title=\"external\"><title>external</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" xlink:title=\"head\"><title>head</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" xlink:title=\"tail\"><title>tail</title>") != null);
 }
 
 test "SVG renderer expands URL escape sequences with object context" {
@@ -15471,13 +15476,13 @@ test "SVG renderer expands URL escape sequences with object context" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName\" xlink:href=\"https://example.com/GraphName\" target=\"frame-GraphName\"><title>graph GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\" xlink:href=\"https://example.com/node/a/GraphName\" target=\"node-a\"><title>node a GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\" xlink:href=\"https://example.com/cluster/API/GraphName\" target=\"cluster-API\"><title>cluster API GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" xlink:href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/a-&gt;b\" xlink:href=\"https://example.com/label/go/a-&gt;b\" target=\"edge-a-&gt;b\"><title>go</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/a-&gt;b\" xlink:href=\"https://example.com/head/head/a-&gt;b\" target=\"edge-a-&gt;b\"><title>head</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/a-&gt;b\" xlink:href=\"https://example.com/tail/tail/a-&gt;b\" target=\"edge-a-&gt;b\"><title>tail</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName\" xlink:href=\"https://example.com/GraphName\" xlink:title=\"graph GraphName\" target=\"frame-GraphName\"><title>graph GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\" xlink:href=\"https://example.com/node/a/GraphName\" xlink:title=\"node a GraphName\" target=\"node-a\"><title>node a GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\" xlink:href=\"https://example.com/cluster/API/GraphName\" xlink:title=\"cluster API GraphName\" target=\"cluster-API\"><title>cluster API GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" xlink:href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" xlink:title=\"edge a-&gt;b a b GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/a-&gt;b\" xlink:href=\"https://example.com/label/go/a-&gt;b\" xlink:title=\"go\" target=\"edge-a-&gt;b\"><title>go</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/a-&gt;b\" xlink:href=\"https://example.com/head/head/a-&gt;b\" xlink:title=\"head\" target=\"edge-a-&gt;b\"><title>head</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/a-&gt;b\" xlink:href=\"https://example.com/tail/tail/a-&gt;b\" xlink:title=\"tail\" target=\"edge-a-&gt;b\"><title>tail</title>") != null);
 }
 
 test "SVG renderer honors typed id and class metadata" {
@@ -15574,10 +15579,10 @@ test "SVG renderer honors edge label URL tooltip target metadata" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge\" xlink:href=\"https://example.com/edge\" target=\"_self\"><title>Edge path</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label\" xlink:href=\"https://example.com/label\" target=\"_blank\"><title>Main label</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head\" xlink:href=\"https://example.com/head\" target=\"_parent\"><title>Head label</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail\" xlink:href=\"https://example.com/tail\" target=\"_top\"><title>Tail label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge\" xlink:href=\"https://example.com/edge\" xlink:title=\"Edge path\" target=\"_self\"><title>Edge path</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label\" xlink:href=\"https://example.com/label\" xlink:title=\"Main label\" target=\"_blank\"><title>Main label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head\" xlink:href=\"https://example.com/head\" xlink:title=\"Head label\" target=\"_parent\"><title>Head label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail\" xlink:href=\"https://example.com/tail\" xlink:title=\"Tail label\" target=\"_top\"><title>Tail label</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">main</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
@@ -15601,11 +15606,11 @@ test "SVG renderer honors edge label URL tooltip target metadata" {
     const inherited_svg = try renderSvgAlloc(allocator, &inherited, &inherited_layout, .{});
     defer allocator.free(inherited_svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" target=\"_self\"><title>Inherited edge</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" target=\"_self\"><title>main</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" target=\"_self\"><title>external</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" target=\"_self\"><title>head</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" target=\"_self\"><title>tail</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" xlink:title=\"Inherited edge\" target=\"_self\"><title>Inherited edge</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" xlink:title=\"main\" target=\"_self\"><title>main</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" xlink:title=\"external\" target=\"_self\"><title>external</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" xlink:title=\"head\" target=\"_self\"><title>head</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inherited_svg, "<a href=\"https://example.com/inherited\" xlink:href=\"https://example.com/inherited\" xlink:title=\"tail\" target=\"_self\"><title>tail</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">main</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">external</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">head</tspan>") != null);
