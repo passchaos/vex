@@ -266,6 +266,11 @@ pub const EdgeDir = enum {
     none,
 };
 
+pub const EdgePort = struct {
+    record: ?[]const u8 = null,
+    compass: CompassPort = .auto,
+};
+
 pub const NodeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
@@ -419,6 +424,8 @@ pub const EdgeAttr = union(enum) {
     headclip: bool,
     samehead: []const u8,
     sametail: []const u8,
+    tail_port: EdgePort,
+    head_port: EdgePort,
     ltail: SubgraphId,
     lhead: SubgraphId,
 };
@@ -1156,6 +1163,8 @@ pub const Graph = struct {
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
         if (options.samehead) |value| try self.setEdgeAttr(id, .{ .samehead = value });
         if (options.sametail) |value| try self.setEdgeAttr(id, .{ .sametail = value });
+        if (options.tail_port != .auto or options.tail_record_port != null) try self.setEdgeAttr(id, .{ .tail_port = .{ .record = options.tail_record_port, .compass = options.tail_port } });
+        if (options.head_port != .auto or options.head_record_port != null) try self.setEdgeAttr(id, .{ .head_port = .{ .record = options.head_record_port, .compass = options.head_port } });
         if (options.ltail) |value| try self.setEdgeAttr(id, .{ .ltail = value });
         if (options.lhead) |value| try self.setEdgeAttr(id, .{ .lhead = value });
     }
@@ -1219,9 +1228,38 @@ pub const Graph = struct {
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
             .samehead => |value| try self.setEdgeAttrRaw(id, "samehead", value),
             .sametail => |value| try self.setEdgeAttrRaw(id, "sametail", value),
+            .tail_port => |value| try self.setEdgePortAttr(id, "tailport", value),
+            .head_port => |value| try self.setEdgePortAttr(id, "headport", value),
             .ltail => |value| try self.setEdgeSubgraphAttr(id, "ltail", value),
             .lhead => |value| try self.setEdgeSubgraphAttr(id, "lhead", value),
         }
+    }
+
+    fn setEdgePortAttr(self: *Graph, id: EdgeId, name: []const u8, port: EdgePort) !void {
+        if (id >= self.edges.items.len) return error.InvalidEdgeId;
+        var edge = &self.edges.items[id];
+        const owned_record = if (port.record) |record| try self.allocator.dupe(u8, record) else null;
+        errdefer if (owned_record) |record| self.allocator.free(record);
+        var text_buf: [128]u8 = undefined;
+        const text = edgePortAttrText(&text_buf, port) catch return error.PortNameTooLong;
+        if (std.ascii.eqlIgnoreCase(name, "tailport")) {
+            if (edge.tail_record_port) |old| self.allocator.free(old);
+            edge.tail_record_port = owned_record;
+            edge.tail_port = port.compass;
+        } else if (std.ascii.eqlIgnoreCase(name, "headport")) {
+            if (edge.head_record_port) |old| self.allocator.free(old);
+            edge.head_record_port = owned_record;
+            edge.head_port = port.compass;
+        }
+        try self.setEdgeAttrRaw(id, name, text);
+    }
+
+    fn edgePortAttrText(buffer: []u8, port: EdgePort) ![]const u8 {
+        if (port.record) |record| {
+            if (port.compass == .auto) return record;
+            return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, compassPortName(port.compass) });
+        }
+        return compassPortName(port.compass);
     }
 
     fn setEdgeSubgraphAttr(self: *Graph, id: EdgeId, name: []const u8, subgraph_id: SubgraphId) !void {
@@ -1525,6 +1563,21 @@ fn labelLocName(loc: LabelLoc) []const u8 {
     return switch (loc) {
         .top => "t",
         .bottom => "b",
+    };
+}
+
+fn compassPortName(port: CompassPort) []const u8 {
+    return switch (port) {
+        .auto => "_",
+        .center => "c",
+        .north => "n",
+        .north_east => "ne",
+        .east => "e",
+        .south_east => "se",
+        .south => "s",
+        .south_west => "sw",
+        .west => "w",
+        .north_west => "nw",
     };
 }
 
@@ -18960,6 +19013,40 @@ test "DOT compass ports route edge endpoints to requested sides" {
     const head_rect = recordFieldRect(graph.nodes.items[record_edge.to].label, layout.nodes[record_edge.to], "id").?;
     try std.testing.expectEqual(tail_rect.x + tail_rect.width, record_route.start.x);
     try std.testing.expectEqual(head_rect.x, record_route.end.x);
+}
+
+test "code API exposes typed edge compass and record ports" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const edge_id = try graph.addEdge(a, b, .{ .tail_port = .east, .head_port = .west });
+    try std.testing.expectEqualStrings("e", attrValue(graph.edges.items[edge_id].attrs.items, "tailport").?);
+    try std.testing.expectEqualStrings("w", attrValue(graph.edges.items[edge_id].attrs.items, "headport").?);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    var route = edgeRouteForEdge(&graph, &layout, graph.edges.items[edge_id], layout.rankdir, 0);
+    try std.testing.expectEqual(layout.nodes[a].center.x + layout.nodes[a].width / 2.0, route.start.x);
+    try std.testing.expectEqual(layout.nodes[b].center.x - layout.nodes[b].width / 2.0, route.end.x);
+
+    const customer = try graph.addNode("<id> Customer|<orders> orders[]", .{ .shape = .mrecord });
+    const order = try graph.addNode("<id> Order|total", .{ .shape = .record });
+    const record_edge_id = try graph.addEdge(customer, order, .{});
+    try graph.setEdgeAttr(record_edge_id, .{ .tail_port = .{ .record = "orders", .compass = .east } });
+    try graph.setEdgeAttr(record_edge_id, .{ .head_port = .{ .record = "id", .compass = .west } });
+    try std.testing.expectEqualStrings("orders:e", attrValue(graph.edges.items[record_edge_id].attrs.items, "tailport").?);
+    try std.testing.expectEqualStrings("id:w", attrValue(graph.edges.items[record_edge_id].attrs.items, "headport").?);
+
+    var record_layout = try layoutLayered(allocator, &graph, .{});
+    defer record_layout.deinit();
+    route = edgeRouteForEdge(&graph, &record_layout, graph.edges.items[record_edge_id], record_layout.rankdir, 0);
+    const tail_rect = recordFieldRect(graph.nodes.items[customer].label, record_layout.nodes[customer], "orders").?;
+    const head_rect = recordFieldRect(graph.nodes.items[order].label, record_layout.nodes[order], "id").?;
+    try std.testing.expectEqual(tail_rect.x + tail_rect.width, route.start.x);
+    try std.testing.expectEqual(head_rect.x, route.end.x);
 }
 
 test "DOT nested record groups alternate field orientation" {
