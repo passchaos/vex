@@ -338,6 +338,7 @@ pub const SubgraphAttr = union(enum) {
     bgcolor: []const u8,
     ordering: OrderingMode,
     color: []const u8,
+    pencolor: []const u8,
     fillcolor: []const u8,
     fontcolor: []const u8,
     fontname: []const u8,
@@ -366,6 +367,7 @@ pub const SubgraphOptions = struct {
     bgcolor: ?[]const u8 = null,
     ordering: ?OrderingMode = null,
     color: ?[]const u8 = null,
+    pencolor: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
     fontcolor: ?[]const u8 = null,
     fontname: ?[]const u8 = null,
@@ -997,6 +999,7 @@ pub const Graph = struct {
         if (options.bgcolor) |value| try self.setSubgraphAttr(id, .{ .bgcolor = value });
         if (options.ordering) |value| try self.setSubgraphAttr(id, .{ .ordering = value });
         if (options.color) |value| try self.setSubgraphAttr(id, .{ .color = value });
+        if (options.pencolor) |value| try self.setSubgraphAttr(id, .{ .pencolor = value });
         if (options.fillcolor) |value| try self.setSubgraphAttr(id, .{ .fillcolor = value });
         if (options.fontcolor) |value| try self.setSubgraphAttr(id, .{ .fontcolor = value });
         if (options.fontname) |value| try self.setSubgraphAttr(id, .{ .fontname = value });
@@ -1033,6 +1036,7 @@ pub const Graph = struct {
             .bgcolor => |value| try self.setSubgraphAttrRaw(id, "bgcolor", value),
             .ordering => |value| try self.setSubgraphAttrRaw(id, "ordering", orderingModeName(value)),
             .color => |value| try self.setSubgraphAttrRaw(id, "color", value),
+            .pencolor => |value| try self.setSubgraphAttrRaw(id, "pencolor", value),
             .fillcolor => |value| try self.setSubgraphAttrRaw(id, "fillcolor", value),
             .fontcolor => |value| try self.setSubgraphAttrRaw(id, "fontcolor", value),
             .fontname => |value| try self.setSubgraphAttrRaw(id, "fontname", value),
@@ -11286,6 +11290,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
     const rounded = styleHas(style, "rounded");
     const color_attr = attrValue(cluster.attrs.items, "color");
     const color = color_attr orelse "#94a3b8";
+    const stroke = attrValue(cluster.attrs.items, "pencolor") orelse color;
     const fillcolor = attrValue(cluster.attrs.items, "fillcolor");
     const bgcolor = attrValue(cluster.attrs.items, "bgcolor");
     const fill = if (bgcolor) |value|
@@ -11296,7 +11301,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
         "none";
     return .{
         .fill = fill,
-        .stroke = color,
+        .stroke = stroke,
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0),
@@ -13180,6 +13185,7 @@ test "code API sets typed subgraph attrs" {
         .bgcolor = "transparent",
         .ordering = .out,
         .color = "#2563eb",
+        .pencolor = "#1d4ed8",
         .fillcolor = "#dbeafe",
         .styles = &.{ .filled, .rounded },
         .fontname = "Helvetica",
@@ -13202,6 +13208,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("transparent", attrValue(item.attrs.items, "bgcolor").?);
     try std.testing.expectEqualStrings("out", attrValue(item.attrs.items, "ordering").?);
     try std.testing.expectEqualStrings("#2563eb", attrValue(item.attrs.items, "color").?);
+    try std.testing.expectEqualStrings("#1d4ed8", attrValue(item.attrs.items, "pencolor").?);
     try std.testing.expectEqualStrings("#dbeafe", attrValue(item.attrs.items, "fillcolor").?);
     try std.testing.expectEqualStrings("filled,rounded", attrValue(item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("Helvetica", attrValue(item.attrs.items, "fontname").?);
@@ -18258,6 +18265,35 @@ test "cluster bgcolor fills background with Graphviz precedence" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fee2e2\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\" stroke=\"#2563eb\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f1f5f9\"") == null);
+}
+
+test "cluster pencolor overrides stroke without changing fill" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_color {
+        \\    style=filled;
+        \\    color="#2563eb";
+        \\    pencolor="#dc2626";
+        \\    a;
+        \\  }
+        \\  subgraph cluster_fill {
+        \\    style=filled;
+        \\    fillcolor="#dbeafe";
+        \\    pencolor="#1d4ed8";
+        \\    b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
 }
 
 test "cluster labels honor labelloc and labeljust" {
