@@ -163,6 +163,7 @@ pub const GraphAttr = union(enum) {
     ranksep: RankSep,
     splines: SplineMode,
     bgcolor: []const u8,
+    pad: []const u8,
     fontname: []const u8,
     fontsize: f64,
     fontcolor: []const u8,
@@ -723,6 +724,7 @@ pub const Graph = struct {
             },
             .splines => |value| try self.setGraphAttrRaw("splines", splineModeName(value)),
             .bgcolor => |value| try self.setGraphAttrRaw("bgcolor", value),
+            .pad => |value| try self.setGraphAttrRaw("pad", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
             .fontsize => |value| try self.setGraphAttrFloat("fontsize", value),
             .fontcolor => |value| try self.setGraphAttrRaw("fontcolor", value),
@@ -7755,12 +7757,13 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const edge_routing = svgEdgeRoutingMode(graph);
     const concentrate = graphConcentrateEnabled(graph);
     const background = attrValue(graph.attrs.items, "bgcolor") orelse options.background;
+    const graph_pad = graphSvgPad(graph);
     var canvas_width = @ceil(layout.width);
     var canvas_height = @ceil(layout.height);
     var content_translate = Point{ .x = svgGraphContentTranslate(layout), .y = 0 };
     if (svgGraphContentBounds(graph, layout)) |content_bounds| {
-        fitSvgContentAxis(content_bounds.x, content_bounds.x + content_bounds.width, &canvas_width, &content_translate.x);
-        fitSvgContentAxis(content_bounds.y, content_bounds.y + content_bounds.height, &canvas_height, &content_translate.y);
+        fitSvgContentAxis(content_bounds.x, content_bounds.x + content_bounds.width, graph_pad.x, &canvas_width, &content_translate.x);
+        fitSvgContentAxis(content_bounds.y, content_bounds.y + content_bounds.height, graph_pad.y, &canvas_height, &content_translate.y);
     }
     canvas_width = @ceil(canvas_width);
     canvas_height = @ceil(canvas_height);
@@ -8112,13 +8115,18 @@ fn svgGraphContentTranslate(layout: *const Layout) f64 {
     return if (@abs(shift) < 0.05) 0 else shift;
 }
 
-fn fitSvgContentAxis(content_min: f64, content_max: f64, canvas_size: *f64, translate: *f64) void {
+fn graphSvgPad(graph: *const Graph) BoxMargin {
+    const parsed = attrMargin(graph.attrs.items, svg_clip_padding);
+    return .{ .x = @max(svg_clip_padding, parsed.x), .y = @max(svg_clip_padding, parsed.y) };
+}
+
+fn fitSvgContentAxis(content_min: f64, content_max: f64, padding: f64, canvas_size: *f64, translate: *f64) void {
     const screen_min = content_min + translate.*;
     const screen_max = content_max + translate.*;
-    const left_deficit = svg_clip_padding - screen_min;
+    const left_deficit = padding - screen_min;
     const left_adjust = @max(0.0, left_deficit);
     translate.* += left_adjust;
-    const right_deficit = screen_max + left_adjust + svg_clip_padding - canvas_size.*;
+    const right_deficit = screen_max + left_adjust + padding - canvas_size.*;
     if (right_deficit > 0) canvas_size.* += right_deficit;
 }
 
@@ -15749,6 +15757,7 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     defer graph.deinit();
     try graph.setGraphAttr(.{ .href = "https://example.com/graph-href" });
     try graph.setGraphAttr(.{ .title = "Graph title" });
+    try graph.setGraphAttr(.{ .pad = "0.25" });
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
@@ -15757,11 +15766,37 @@ test "SVG renderer honors graph label and bgcolor attributes" {
 
     try std.testing.expectEqualStrings("https://example.com/graph-href", attrValue(graph.attrs.items, "href").?);
     try std.testing.expectEqualStrings("Graph title", attrValue(graph.attrs.items, "title").?);
+    try std.testing.expectEqualStrings("0.25", attrValue(graph.attrs.items, "pad").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0,0 0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph-href\" target=\"_top\"><title>Graph tip</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
     try std.testing.expect(layout.margin_y >= 26.0);
+}
+
+test "SVG renderer honors graph pad attribute in canvas bounds" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .TB });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .pad = "0.5" });
+
+    const a = try graph.addNode("A", .{ .xlabel = "external node label" });
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{
+        .label = "edge",
+        .xlabel = "large external edge label",
+        .labelfontsize = 22,
+    });
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const raw_bounds = svgGraphContentBounds(&graph, &layout) orelse return error.MissingSvgBounds;
+    try std.testing.expect(raw_bounds.x + raw_bounds.width > layout.width);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    try std.testing.expect(view_box.width >= raw_bounds.x + raw_bounds.width + 36.0 - 0.01);
 }
 
 test "SVG renderer keeps graph name as metadata unless graph label is explicit" {
