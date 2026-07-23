@@ -176,6 +176,8 @@ pub const GraphAttr = union(enum) {
     samplepoints: usize,
     bgcolor: []const u8,
     colorscheme: []const u8,
+    fillcolor: []const u8,
+    pencolor: []const u8,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -867,6 +869,8 @@ pub const Graph = struct {
             },
             .bgcolor => |value| try self.setGraphAttrRaw("bgcolor", value),
             .colorscheme => |value| try self.setGraphAttrRaw("colorscheme", value),
+            .fillcolor => |value| try self.setGraphAttrRaw("fillcolor", value),
+            .pencolor => |value| try self.setGraphAttrRaw("pencolor", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -11650,14 +11654,22 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
     const color_attr = attrValue(cluster.attrs.items, "color");
-    const color = resolveSvgColor(graph, cluster.attrs.items, color_attr orelse "#94a3b8");
-    const stroke = if (attrValue(cluster.attrs.items, "pencolor")) |value| resolveSvgColor(graph, cluster.attrs.items, value) else color;
-    const fillcolor = attrValue(cluster.attrs.items, "fillcolor");
     const bgcolor = attrValue(cluster.attrs.items, "bgcolor");
+    const inherited_fillcolor = attrValue(cluster.attrs.items, "fillcolor") orelse attrValue(graph.attrs.items, "fillcolor");
+    const inherited_pencolor = attrValue(cluster.attrs.items, "pencolor") orelse attrValue(graph.attrs.items, "pencolor");
+    const color = resolveSvgColor(graph, cluster.attrs.items, color_attr orelse "#94a3b8");
+    const stroke = if (inherited_pencolor) |value|
+        resolveSvgColor(graph, cluster.attrs.items, value)
+    else if (color_attr) |_|
+        color
+    else if (bgcolor) |value|
+        resolveSvgColor(graph, cluster.attrs.items, value)
+    else
+        color;
     const fill = if (bgcolor) |value|
-        if (!filled or (fillcolor == null and color_attr == null)) resolveSvgColor(graph, cluster.attrs.items, value) else if (fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
+        if (!filled or (inherited_fillcolor == null and color_attr == null)) resolveSvgColor(graph, cluster.attrs.items, value) else if (inherited_fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
     else if (filled)
-        if (fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
+        if (inherited_fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
     else
         "none";
     return .{
@@ -20072,9 +20084,40 @@ test "cluster bgcolor fills background with Graphviz precedence" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fef3c7\" stroke=\"#92400e\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#94a3b8\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#fee2e2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fee2e2\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\" stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f1f5f9\"") == null);
+}
+
+test "cluster colors inherit root graph fillcolor and pencolor" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [fillcolor="#fee2e2", pencolor="#7c3aed"];
+        \\  subgraph cluster_inherited {
+        \\    style=filled;
+        \\    color="#2563eb";
+        \\    bgcolor="#f1f5f9";
+        \\    a;
+        \\  }
+        \\  subgraph cluster_explicit {
+        \\    style=filled;
+        \\    fillcolor="#dcfce7";
+        \\    pencolor="#16a34a";
+        \\    b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fee2e2\" stroke=\"#7c3aed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f1f5f9\"") == null);
 }
 

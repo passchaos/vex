@@ -116,6 +116,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Edge `labelfloat=true` keeps the main edge label at its unconstrained route position.
 - M-shape nodes render `toplabel` and `bottomlabel` auxiliary labels where Graphviz defines them.
 - Root graph labels default to bottom-center while cluster labels default to top-center; clusters inherit root `labelloc` / `labeljust` unless overridden.
+- Clusters inherit root graph `fillcolor` / `pencolor` unless they set their own values.
 - SVG color and color-list attributes resolve Graphviz `colorscheme=bugn9` numeric ColorBrewer colors.
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
