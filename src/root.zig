@@ -8164,24 +8164,33 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
     const link_target = interactiveTarget(attrs, kind);
     if (href == null and tooltip == null) return .none;
 
+    const expanded_tooltip = if (tooltip) |tip| expandLabelEscapes(allocator, tip, context) catch tip else null;
+    defer if (expanded_tooltip) |tip| {
+        if (tooltip != null and tip.ptr != tooltip.?.ptr) allocator.free(tip);
+    };
+    const expanded_target = if (link_target) |target| expandLabelEscapes(allocator, target, context) catch target else null;
+    defer if (expanded_target) |target| {
+        if (link_target != null and target.ptr != link_target.?.ptr) allocator.free(target);
+    };
+
     if (href) |target_href| {
         const expanded_href = expandLabelEscapes(allocator, target_href, context) catch target_href;
         defer if (expanded_href.ptr != target_href.ptr) allocator.free(expanded_href);
         try writer.writeAll("<a href=\"");
         try writeXmlEscaped(writer, expanded_href);
         try writer.writeByte('"');
-        if (link_target) |value| {
+        if (expanded_target) |value| {
             try writer.writeAll(" target=\"");
             try writeXmlEscaped(writer, value);
             try writer.writeByte('"');
         }
         try writer.writeByte('>');
-        if (tooltip) |tip| try writeSvgTitle(writer, tip);
+        if (expanded_tooltip) |tip| try writeSvgTitle(writer, tip);
         return .anchor;
     }
 
     try writer.writeAll("<g>");
-    if (tooltip) |tip| try writeSvgTitle(writer, tip);
+    if (expanded_tooltip) |tip| try writeSvgTitle(writer, tip);
     return .group;
 }
 
@@ -15382,15 +15391,17 @@ test "SVG renderer expands URL escape sequences with object context" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph GraphName {
-        \\  graph [URL="https://example.com/\G"];
+        \\  graph [URL="https://example.com/\G", tooltip="graph \G", target="frame-\G"];
         \\  subgraph cluster_api {
         \\    label="API";
         \\    URL="https://example.com/cluster/\N/\G";
+        \\    tooltip="cluster \N \G";
+        \\    target="cluster-\N";
         \\    a;
         \\  }
-        \\  a [URL="https://example.com/node/\N/\G"];
+        \\  a [URL="https://example.com/node/\N/\G", tooltip="node \N \G", target="node-\N"];
         \\  b;
-        \\  a -> b [URL="https://example.com/edge/\E/\T/\H/\G", label="go"];
+        \\  a -> b [URL="https://example.com/edge/\E/\T/\H/\G", tooltip="edge \E \T \H \G", target="edge-\E", label="go"];
         \\}
     );
     defer graph.deinit();
@@ -15400,10 +15411,10 @@ test "SVG renderer expands URL escape sequences with object context" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a/b/GraphName\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName\" target=\"frame-GraphName\"><title>graph GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\" target=\"node-a\"><title>node a GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\" target=\"cluster-API\"><title>cluster API GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a/b/GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
 }
 
 test "SVG renderer honors typed id and class metadata" {
