@@ -2,12 +2,12 @@ strict digraph Fancy {
   graph [rankdir=BT label=<Fancy Graph>];
   node [shape=box color="#fee2e2"];
 
-  subgraph cluster_left {
+  subgraph left_group {
     a:out [label="hello\nworld"];
     b;
   }
 
-  { c d } -> subgraph cluster_right { e f } [label="fanout"];
+  { c d } -> subgraph right_group { e f } [label="fanout"];
   a:out:e -> b:in:w [label="port edge"];
   -1 [label="<&>"];
 }

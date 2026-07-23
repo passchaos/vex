@@ -12,14 +12,14 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "ApiPipeline" });
     defer graph.deinit();
 
-    const parse = try graph.nodeWith("Parse DOT", .{ .shape = .box });
-    const model = try graph.nodeWith("Graph model", .{ .shape = .box });
-    const layout = try graph.nodeWith("Layered layout", .{ .shape = .box });
-    const svg = try graph.nodeWith("SVG", .{ .shape = .box });
+    const parse = try graph.addNodeWith("Parse DOT", .{ .shape = .box });
+    const model = try graph.addNodeWith("Graph model", .{ .shape = .box });
+    const layout = try graph.addNodeWith("Layered layout", .{ .shape = .box });
+    const svg = try graph.addNodeWith("SVG", .{ .shape = .box });
 
-    _ = try graph.edge(parse, model, .{ .label = "tokens" });
-    _ = try graph.edge(model, layout, .{ .label = "nodes + edges" });
-    _ = try graph.edge(layout, svg, .{ .label = "document" });
+    _ = try graph.addEdge(parse, model, .{ .label = "tokens" });
+    _ = try graph.addEdge(model, layout, .{ .label = "nodes + edges" });
+    _ = try graph.addEdge(layout, svg, .{ .label = "document" });
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();

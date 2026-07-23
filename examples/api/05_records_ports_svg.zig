@@ -12,13 +12,13 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "RecordsPorts", .rankdir = .LR });
     defer graph.deinit();
 
-    const user = try graph.nodeWith("{<id> id|<name> name|<email> email}", .{
+    const user = try graph.addNodeWith("{<id> id|<name> name|<email> email}", .{
         .shape = .record,
     });
-    const order = try graph.nodeWith("{<id> id|<user_id> user_id|<total> total}", .{
+    const order = try graph.addNodeWith("{<id> id|<user_id> user_id|<total> total}", .{
         .shape = .record,
     });
-    const payment = try graph.nodeWith(
+    const payment = try graph.addNodeWith(
         \\<TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0">
         \\  <TR><TD PORT="id"><B>id</B></TD><TD>uuid</TD></TR>
         \\  <TR><TD PORT="order_id">order_id</TD><TD>uuid</TD></TR>
@@ -28,12 +28,12 @@ pub fn main(init: std.process.Init) !void {
         .shape = .plaintext,
     });
 
-    _ = try graph.edge(user, order, .{
+    _ = try graph.addEdge(user, order, .{
         .label = "owns",
         .tail_record_port = "id",
         .head_record_port = "user_id",
     });
-    _ = try graph.edge(order, payment, .{
+    _ = try graph.addEdge(order, payment, .{
         .label = "paid by",
         .tail_record_port = "id",
         .head_record_port = "order_id",

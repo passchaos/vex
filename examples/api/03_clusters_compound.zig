@@ -13,29 +13,29 @@ pub fn main(init: std.process.Init) !void {
     defer graph.deinit();
     try graph.setGraphAttr(.{ .compound = true });
 
-    const browser = try graph.nodeWith("Browser", .{ .shape = .box, .color = "#dbeafe" });
-    const edge = try graph.nodeWith("Edge", .{ .shape = .box, .color = "#dbeafe" });
-    const api = try graph.nodeWith("API", .{ .shape = .box, .color = "#dcfce7" });
-    const worker = try graph.nodeWith("Worker", .{ .shape = .box, .color = "#dcfce7" });
-    const store = try graph.nodeWith("Store", .{ .shape = .box, .color = "#dcfce7" });
+    const browser = try graph.addNodeWith("Browser", .{ .shape = .box, .color = "#dbeafe" });
+    const edge = try graph.addNodeWith("Edge", .{ .shape = .box, .color = "#dbeafe" });
+    const api = try graph.addNodeWith("API", .{ .shape = .box, .color = "#dcfce7" });
+    const worker = try graph.addNodeWith("Worker", .{ .shape = .box, .color = "#dcfce7" });
+    const store = try graph.addNodeWith("Store", .{ .shape = .box, .color = "#dcfce7" });
 
-    const frontend = try graph.addSubgraph("Frontend", null, &.{ browser, edge }, &.{
-        .{ .name = "color", .value = "#2563eb" },
-        .{ .name = "fillcolor", .value = "#dbeafe" },
-        .{ .name = "style", .value = "filled" },
+    const frontend = try graph.addSubgraph("Frontend", null, &.{ browser, edge }, .{
+        .color = "#2563eb",
+        .fillcolor = "#dbeafe",
+        .style = .filled,
     });
-    const backend = try graph.addSubgraph("Backend", null, &.{ api, worker, store }, &.{
-        .{ .name = "color", .value = "#16a34a" },
-        .{ .name = "fillcolor", .value = "#dcfce7" },
-        .{ .name = "style", .value = "filled" },
+    const backend = try graph.addSubgraph("Backend", null, &.{ api, worker, store }, .{
+        .color = "#16a34a",
+        .fillcolor = "#dcfce7",
+        .style = .filled,
     });
 
-    _ = try graph.edge(browser, edge, .{ .label = "https" });
-    const cross = try graph.edge(edge, api, .{ .label = "json", .ltail = frontend, .lhead = backend });
+    _ = try graph.addEdge(browser, edge, .{ .label = "https" });
+    const cross = try graph.addEdge(edge, api, .{ .label = "json", .ltail = frontend, .lhead = backend });
     try graph.setEdgeAttr(cross, .{ .penwidth = 2 });
-    _ = try graph.edge(api, worker, .{ .label = "job" });
-    _ = try graph.edge(worker, store, .{ .label = "write" });
-    _ = try graph.edge(api, store, .{ .label = "read", .constraint = false });
+    _ = try graph.addEdge(api, worker, .{ .label = "job" });
+    _ = try graph.addEdge(worker, store, .{ .label = "write" });
+    _ = try graph.addEdge(api, store, .{ .label = "read", .constraint = false });
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();

@@ -24,27 +24,27 @@ pub fn main(init: std.process.Init) !void {
     const b2_node_id = try styledNode(&graph, "b2", .ellipse, "#dcfce7");
     const b3_node_id = try styledNode(&graph, "b3", .ellipse, "#dcfce7");
 
-    _ = try graph.addSubgraph("process #1", null, &.{ a0_node_id, a1_node_id, a2_node_id, a3_node_id }, &.{
-        .{ .name = "color", .value = "#2563eb" },
-        .{ .name = "fillcolor", .value = "#dbeafe" },
-        .{ .name = "style", .value = "filled" },
+    _ = try graph.addSubgraph("process #1", null, &.{ a0_node_id, a1_node_id, a2_node_id, a3_node_id }, .{
+        .color = "#2563eb",
+        .fillcolor = "#dbeafe",
+        .styles = &.{ .filled, .rounded },
     });
-    _ = try graph.addSubgraph("process #2", null, &.{ b0_node_id, b1_node_id, b2_node_id, b3_node_id }, &.{
-        .{ .name = "color", .value = "#16a34a" },
-        .{ .name = "fillcolor", .value = "#dcfce7" },
-        .{ .name = "style", .value = "filled" },
+    _ = try graph.addSubgraph("process #2", null, &.{ b0_node_id, b1_node_id, b2_node_id, b3_node_id }, .{
+        .color = "#16a34a",
+        .fillcolor = "#dcfce7",
+        .styles = &.{ .filled, .rounded },
     });
 
-    _ = try graph.edge(a0_node_id, a1_node_id, .{ .color = "#2563eb" });
-    _ = try graph.edge(a1_node_id, a2_node_id, .{ .color = "#2563eb" });
-    _ = try graph.edge(a2_node_id, a3_node_id, .{ .color = "#2563eb" });
-    _ = try graph.edge(b0_node_id, b1_node_id, .{ .color = "#16a34a" });
-    _ = try graph.edge(b1_node_id, b2_node_id, .{ .color = "#16a34a" });
-    _ = try graph.edge(b2_node_id, b3_node_id, .{ .color = "#16a34a" });
+    _ = try graph.addEdge(a0_node_id, a1_node_id, .{ .color = "#2563eb" });
+    _ = try graph.addEdge(a1_node_id, a2_node_id, .{ .color = "#2563eb" });
+    _ = try graph.addEdge(a2_node_id, a3_node_id, .{ .color = "#2563eb" });
+    _ = try graph.addEdge(b0_node_id, b1_node_id, .{ .color = "#16a34a" });
+    _ = try graph.addEdge(b1_node_id, b2_node_id, .{ .color = "#16a34a" });
+    _ = try graph.addEdge(b2_node_id, b3_node_id, .{ .color = "#16a34a" });
 
-    _ = try graph.edge(start_node_id, a0_node_id, .{});
-    _ = try graph.edge(start_node_id, b0_node_id, .{});
-    const cross = try graph.edge(a1_node_id, b3_node_id, .{ .label = "handoff", .color = "#7c3aed", .constraint = false });
+    _ = try graph.addEdge(start_node_id, a0_node_id, .{});
+    _ = try graph.addEdge(start_node_id, b0_node_id, .{});
+    const cross = try graph.addEdge(a1_node_id, b3_node_id, .{ .label = "handoff", .color = "#7c3aed", .constraint = false });
     try graph.setEdgeAttr(cross, .{ .style = .dashed });
 
     try outputFileAndStdout(init.gpa, init.io, graph, "zig-out/examples", "06.svg");
@@ -79,7 +79,7 @@ fn outputFileAndStdout(gpa: std.mem.Allocator, io: std.Io, graph: vex.Graph, sub
 }
 
 fn styledNode(graph: *vex.Graph, label: []const u8, shape: vex.Shape, fill: []const u8) !vex.NodeId {
-    const id = try graph.nodeWith(label, .{ .shape = shape });
+    const id = try graph.addNodeWith(label, .{ .shape = shape });
     try graph.setNodeAttr(id, .{ .style = .filled });
     try graph.setNodeAttr(id, .{ .fillcolor = fill });
     try graph.setNodeAttr(id, .{ .color = "#334155" });

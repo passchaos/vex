@@ -44,9 +44,9 @@ const vex = @import("vex");
 var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "G" });
 defer graph.deinit();
 
-const a = try graph.nodeWith("Start", .{ .shape = .box });
-const b = try graph.node("B");
-_ = try graph.edge(a, b, .{ .label = "next" });
+const a = try graph.addNodeWith("Start", .{ .shape = .box });
+const b = try graph.addNode("B");
+_ = try graph.addEdge(a, b, .{ .label = "next" });
 
 var layout = try vex.layoutGraph(allocator, &graph, .{});
 defer layout.deinit();

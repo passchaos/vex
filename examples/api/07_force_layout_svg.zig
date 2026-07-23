@@ -12,23 +12,23 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = false, .name = "ForceLayout" });
     defer graph.deinit();
 
-    const ui = try graph.nodeWith("UI", .{ .shape = .box });
-    const api = try graph.nodeWith("API", .{ .shape = .box });
-    const auth = try graph.nodeWith("Auth", .{ .shape = .box });
-    const jobs = try graph.nodeWith("Jobs", .{ .shape = .box });
-    const cache = try graph.nodeWith("Cache", .{ .shape = .cylinder });
-    const db = try graph.nodeWith("DB", .{ .shape = .cylinder });
-    const metrics = try graph.nodeWith("Metrics", .{ .shape = .ellipse });
+    const ui = try graph.addNodeWith("UI", .{ .shape = .box });
+    const api = try graph.addNodeWith("API", .{ .shape = .box });
+    const auth = try graph.addNodeWith("Auth", .{ .shape = .box });
+    const jobs = try graph.addNodeWith("Jobs", .{ .shape = .box });
+    const cache = try graph.addNodeWith("Cache", .{ .shape = .cylinder });
+    const db = try graph.addNodeWith("DB", .{ .shape = .cylinder });
+    const metrics = try graph.addNodeWith("Metrics", .{ .shape = .ellipse });
 
-    _ = try graph.edge(ui, api, .{ .label = "http" });
-    _ = try graph.edge(api, auth, .{ .label = "token" });
-    _ = try graph.edge(api, jobs, .{ .label = "enqueue" });
-    _ = try graph.edge(api, cache, .{ .label = "read" });
-    _ = try graph.edge(api, db, .{ .label = "write" });
-    _ = try graph.edge(jobs, db, .{ .label = "batch" });
-    _ = try graph.edge(jobs, metrics, .{ .label = "events" });
-    _ = try graph.edge(cache, db, .{ .label = "warm" });
-    _ = try graph.edge(metrics, ui, .{ .label = "dash" });
+    _ = try graph.addEdge(ui, api, .{ .label = "http" });
+    _ = try graph.addEdge(api, auth, .{ .label = "token" });
+    _ = try graph.addEdge(api, jobs, .{ .label = "enqueue" });
+    _ = try graph.addEdge(api, cache, .{ .label = "read" });
+    _ = try graph.addEdge(api, db, .{ .label = "write" });
+    _ = try graph.addEdge(jobs, db, .{ .label = "batch" });
+    _ = try graph.addEdge(jobs, metrics, .{ .label = "events" });
+    _ = try graph.addEdge(cache, db, .{ .label = "warm" });
+    _ = try graph.addEdge(metrics, ui, .{ .label = "dash" });
 
     var result = try vex.layoutGraph(allocator, &graph, .{
         .algorithm = .fruchterman_reingold,

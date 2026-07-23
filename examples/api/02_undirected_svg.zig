@@ -16,17 +16,17 @@ pub fn main(init: std.process.Init) !void {
     });
     defer graph.deinit();
 
-    const client = try graph.nodeWith("Client", .{ .shape = .ellipse });
-    const gateway = try graph.nodeWith("Gateway", .{ .shape = .box });
-    const api = try graph.nodeWith("API", .{ .shape = .box });
-    const cache = try graph.nodeWith("Cache", .{ .shape = .cylinder });
-    const db = try graph.nodeWith("DB", .{ .shape = .cylinder });
+    const client = try graph.addNodeWith("Client", .{ .shape = .ellipse });
+    const gateway = try graph.addNodeWith("Gateway", .{ .shape = .box });
+    const api = try graph.addNodeWith("API", .{ .shape = .box });
+    const cache = try graph.addNodeWith("Cache", .{ .shape = .cylinder });
+    const db = try graph.addNodeWith("DB", .{ .shape = .cylinder });
 
-    _ = try graph.edge(client, gateway, .{ .label = "tls" });
-    _ = try graph.edge(gateway, api, .{ .label = "http" });
-    _ = try graph.edge(api, db, .{ .label = "sql" });
-    _ = try graph.edge(gateway, cache, .{ .label = "lookup" });
-    _ = try graph.edge(cache, db, .{ .label = "warm" });
+    _ = try graph.addEdge(client, gateway, .{ .label = "tls" });
+    _ = try graph.addEdge(gateway, api, .{ .label = "http" });
+    _ = try graph.addEdge(api, db, .{ .label = "sql" });
+    _ = try graph.addEdge(gateway, cache, .{ .label = "lookup" });
+    _ = try graph.addEdge(cache, db, .{ .label = "warm" });
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();

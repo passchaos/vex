@@ -12,13 +12,13 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "SvgOutput", .rankdir = .LR });
     defer graph.deinit();
 
-    const source = try graph.nodeWith("Source", .{ .shape = .box, .color = "#dbeafe" });
-    const layout = try graph.nodeWith("Layout", .{ .shape = .diamond, .color = "#fef3c7" });
-    const svg = try graph.nodeWith("SVG", .{ .shape = .folder, .color = "#dcfce7" });
+    const source = try graph.addNodeWith("Source", .{ .shape = .box, .color = "#dbeafe" });
+    const layout = try graph.addNodeWith("Layout", .{ .shape = .diamond, .color = "#fef3c7" });
+    const svg = try graph.addNodeWith("SVG", .{ .shape = .folder, .color = "#dcfce7" });
     try graph.setNodeAttr(svg, .{ .url = "https://example.com/vex/svg" });
 
-    _ = try graph.edge(source, layout, .{ .label = "model" });
-    _ = try graph.edge(layout, svg, .{ .label = "vector" });
+    _ = try graph.addEdge(source, layout, .{ .label = "model" });
+    _ = try graph.addEdge(layout, svg, .{ .label = "vector" });
 
     var result = try vex.layoutGraph(allocator, &graph, .{});
     defer result.deinit();
