@@ -346,6 +346,7 @@ pub const SubgraphAttr = union(enum) {
     style: SubgraphStyle,
     styles: []const SubgraphStyle,
     penwidth: f64,
+    peripheries: usize,
     margin: []const u8,
     labelloc: LabelLoc,
     labeljust: LabelJust,
@@ -375,6 +376,7 @@ pub const SubgraphOptions = struct {
     style: ?SubgraphStyle = null,
     styles: []const SubgraphStyle = &.{},
     penwidth: ?f64 = null,
+    peripheries: ?usize = null,
     margin: ?[]const u8 = null,
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
@@ -1007,6 +1009,7 @@ pub const Graph = struct {
         if (options.style) |value| try self.setSubgraphAttr(id, .{ .style = value });
         if (options.styles.len > 0) try self.setSubgraphAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setSubgraphAttr(id, .{ .penwidth = value });
+        if (options.peripheries) |value| try self.setSubgraphAttr(id, .{ .peripheries = value });
         if (options.margin) |value| try self.setSubgraphAttr(id, .{ .margin = value });
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setSubgraphAttr(id, .{ .labeljust = value });
@@ -1053,6 +1056,11 @@ pub const Graph = struct {
                 try self.setSubgraphAttrRaw(id, "style", text.items);
             },
             .penwidth => |value| try self.setSubgraphAttrFloat(id, "penwidth", value),
+            .peripheries => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setSubgraphAttrRaw(id, "peripheries", text);
+            },
             .margin => |value| try self.setSubgraphAttrRaw(id, "margin", value),
             .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", labelLocName(value)),
             .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", labelJustName(value)),
@@ -9982,6 +9990,7 @@ const ClusterVisual = struct {
     radius: f64,
     dash: DashStyle,
     fill_opacity: []const u8,
+    peripheries: usize,
     hidden: bool,
 };
 
@@ -10014,22 +10023,27 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         var fill_buf: [96]u8 = undefined;
         try resolveSvgGradientFill(writer, "vex-cluster-fill", index + 1, cluster.attrs.items, rect, &visual.fill, &fill_buf);
     }
+    const stroke = if (visual.peripheries == 0) "none" else visual.stroke;
     if (visual.radius <= 0.001) {
         try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
             visual.fill,
-            visual.stroke,
+            stroke,
         });
         try writeSvgRectPolygonPoints(writer, rect, .bottom_left_clockwise, false);
         try writer.writeByte('"');
         try writeSvgFillOpacity(writer, visual.fill_opacity);
-        try writeSvgStrokeWidth(writer, visual.width);
-        try writeSvgDash(writer, visual.dash);
+        if (visual.peripheries != 0) {
+            try writeSvgStrokeWidth(writer, visual.width);
+            try writeSvgDash(writer, visual.dash);
+        }
         try writer.writeAll("/>\n");
     } else {
         try writeSvgRectOpen(writer, rect, visual.radius);
-        try writer.print(" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.fill_opacity, visual.stroke });
-        try writeSvgStrokeWidth(writer, visual.width);
-        try writeSvgDash(writer, visual.dash);
+        try writer.print(" fill=\"{s}\" fill-opacity=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.fill_opacity, stroke });
+        if (visual.peripheries != 0) {
+            try writeSvgStrokeWidth(writer, visual.width);
+            try writeSvgDash(writer, visual.dash);
+        }
         try writer.writeAll("/>\n");
     }
     const label_just = attrValue(cluster.attrs.items, "labeljust");
@@ -11309,6 +11323,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
         .fill_opacity = "1.0",
+        .peripheries = parseAttrUsize(cluster.attrs.items, "peripheries", 1),
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -13192,6 +13207,7 @@ test "code API sets typed subgraph attrs" {
         .fontsize = 16,
         .fontcolor = "#1e3a8a",
         .penwidth = 2,
+        .peripheries = 0,
         .labelloc = .bottom,
         .labeljust = .left,
     });
@@ -13215,6 +13231,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("16", attrValue(item.attrs.items, "fontsize").?);
     try std.testing.expectEqualStrings("#1e3a8a", attrValue(item.attrs.items, "fontcolor").?);
     try std.testing.expectEqualStrings("2", attrValue(item.attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("0", attrValue(item.attrs.items, "peripheries").?);
     try std.testing.expectEqualStrings("b", attrValue(item.attrs.items, "labelloc").?);
     try std.testing.expectEqualStrings("l", attrValue(item.attrs.items, "labeljust").?);
 }
@@ -18294,6 +18311,31 @@ test "cluster pencolor overrides stroke without changing fill" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\" stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+}
+
+test "cluster peripheries zero hides border while preserving fill" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_borderless {
+        \\    style=filled;
+        \\    fillcolor="#dbeafe";
+        \\    pencolor="#1d4ed8";
+        \\    peripheries=0;
+        \\    a;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("0", attrValue(graph.subgraphs.items[0].attrs.items, "peripheries").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#1d4ed8\"") == null);
 }
 
 test "cluster labels honor labelloc and labeljust" {
