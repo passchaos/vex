@@ -11476,10 +11476,15 @@ fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
     const text = value orelse return fallback;
     if (std.ascii.eqlIgnoreCase(text, "none")) return .none;
     if (std.ascii.eqlIgnoreCase(text, "normal")) return .normal;
+    if (std.ascii.eqlIgnoreCase(text, "lnormal") or std.ascii.eqlIgnoreCase(text, "rnormal")) return .normal;
     if (std.ascii.eqlIgnoreCase(text, "open")) return .open;
+    if (std.ascii.eqlIgnoreCase(text, "halfopen")) return .open;
     if (std.ascii.eqlIgnoreCase(text, "onormal")) return .empty;
+    if (std.ascii.eqlIgnoreCase(text, "olnormal") or std.ascii.eqlIgnoreCase(text, "ornormal")) return .empty;
     if (std.ascii.eqlIgnoreCase(text, "inv")) return .inv;
+    if (std.ascii.eqlIgnoreCase(text, "linv") or std.ascii.eqlIgnoreCase(text, "rinv")) return .inv;
     if (std.ascii.eqlIgnoreCase(text, "oinv")) return .oinv;
+    if (std.ascii.eqlIgnoreCase(text, "olinv") or std.ascii.eqlIgnoreCase(text, "orinv")) return .oinv;
     if (std.ascii.eqlIgnoreCase(text, "invempty")) return .oinv;
     if (std.ascii.eqlIgnoreCase(text, "curve")) return .curve;
     if (std.ascii.eqlIgnoreCase(text, "icurve")) return .icurve;
@@ -16558,6 +16563,10 @@ test "SVG renderer accepts Graphviz half-arrow marker aliases" {
         \\  d -> e [arrowhead=ltee, color="#f59e0b"];
         \\  e -> f [arrowhead=rcrow, color="#9333ea"];
         \\  f -> g [arrowhead=ricurve, color="#0f172a"];
+        \\  g -> h [arrowhead=lnormal, color="#14b8a6"];
+        \\  h -> i [arrowhead=halfopen, color="#a855f7"];
+        \\  i -> j [arrowhead=rinv, color="#ef4444"];
+        \\  j -> k [arrowhead=olinv, color="#64748b"];
         \\}
     );
     defer graph.deinit();
@@ -16573,6 +16582,10 @@ test "SVG renderer accepts Graphviz half-arrow marker aliases" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1 L 8.5 9\" fill=\"none\" stroke=\"#f59e0b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9 M 1 5 L 9 5\" fill=\"none\" stroke=\"#9333ea\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1.2 C 1.5 1.2 1.5 8.8 8.5 8.8\" fill=\"none\" stroke=\"#0f172a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#14b8a6\" stroke=\"#14b8a6\" points=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#a855f7\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ef4444\" stroke=\"#ef4444\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"#64748b\"") != null);
 }
 
 test "SVG renderer honors arrowsize and edge clipping attributes" {
