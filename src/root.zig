@@ -8291,7 +8291,9 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
 
 fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_item: Edge, kind: SvgInteractiveKind, label: []const u8, pos: Point, font_size: f64, font_color: []const u8, font_family: []const u8) Io.Writer.Error!void {
     var edge_name_buf: [256]u8 = undefined;
-    const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, svgEdgeEscapeContext(graph, edge_item, &edge_name_buf), label);
+    var context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
+    context.node_name = label;
+    const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label);
     try renderSvgTextBlock(writer, label, pos.x, pos.y, font_size, font_color, font_family, true, true);
     try writeSvgInteractiveClose(writer, wrap);
 }
@@ -15434,7 +15436,17 @@ test "SVG renderer expands URL escape sequences with object context" {
         \\  }
         \\  a [URL="https://example.com/node/\N/\G", tooltip="node \N \G", target="node-\N"];
         \\  b;
-        \\  a -> b [URL="https://example.com/edge/\E/\T/\H/\G", tooltip="edge \E \T \H \G", target="edge-\E", label="go"];
+        \\  a -> b [
+        \\    URL="https://example.com/edge/\E/\T/\H/\G",
+        \\    labelURL="https://example.com/label/\N/\E",
+        \\    headURL="https://example.com/head/\N/\E",
+        \\    tailURL="https://example.com/tail/\N/\E",
+        \\    tooltip="edge \E \T \H \G",
+        \\    target="edge-\E",
+        \\    label="go",
+        \\    headlabel="head",
+        \\    taillabel="tail"
+        \\  ];
         \\}
     );
     defer graph.deinit();
@@ -15448,6 +15460,9 @@ test "SVG renderer expands URL escape sequences with object context" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\" target=\"node-a\"><title>node a GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\" target=\"cluster-API\"><title>cluster API GraphName</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a/b/GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/a-&gt;b\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/a-&gt;b\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/a-&gt;b\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
 }
 
 test "SVG renderer honors typed id and class metadata" {
