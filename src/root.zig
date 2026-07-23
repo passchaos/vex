@@ -4603,7 +4603,6 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
 fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []SubgraphLayout) void {
     const pad_x: f64 = 12;
     const label_pad_x: f64 = 6;
-    const label_band: f64 = 18;
     const child_gap: f64 = 12;
     var center_buf: [256]f64 = undefined;
     var size_buf: [256]NodeSize = undefined;
@@ -4639,6 +4638,7 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
         }
         const label_font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0);
         const label_min_width = displayLabelEstimatedWidth(cluster.label, label_font_size) + label_pad_x * 2.0;
+        const label_band = subgraphLabelBand(cluster);
         const margin = attrMargin(cluster.attrs.items, pad_x);
         const cluster_pad_x = margin.x;
         const cluster_pad_y = margin.y;
@@ -4678,6 +4678,7 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
         const child = clusters[index];
         if (child.width <= 0 or child.height <= 0) continue;
         var parent = &clusters[parent_index];
+        const label_band = subgraphLabelBand(graph.subgraphs.items[parent_index]);
         if (parent.width <= 0 or parent.height <= 0) {
             parent.* = .{
                 .id = graph.subgraphs.items[parent_index].id,
@@ -4699,6 +4700,14 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
     }
 
     expandSubgraphLayoutsForBackEdges(graph, axes, nodes, clusters);
+}
+
+fn subgraphLabelBand(cluster: Subgraph) f64 {
+    const font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0);
+    const line_height = font_size * 1.25;
+    const line_count = displayLabelLineCount(cluster.label);
+    if (line_count <= 1) return 18.0;
+    return @as(f64, @floatFromInt(line_count)) * line_height + 1.0;
 }
 
 fn expandClusterBoxesForNodes(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []SubgraphLayout) void {
@@ -7885,6 +7894,7 @@ fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
         '>' => try writer.writeAll("&gt;"),
         '"' => try writer.writeAll("&quot;"),
         0x27 => try writer.writeAll("&apos;"),
+        label_left_break, label_right_break => try writer.writeByte('\n'),
         else => try writer.writeByte(c),
     };
 }
@@ -9683,10 +9693,10 @@ fn nextSvgTextPosition(svg: []const u8, index: *usize) ?SvgTextPosition {
         const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
         index.* = content_start + close_rel + "</text>".len;
         const content = svg[content_start .. content_start + close_rel];
-        if (std.mem.indexOfScalar(u8, content, '<') != null) continue;
+        const text = svgTextVisibleContent(content) orelse continue;
         const x = svgNumberAfter(tag, " x=\"") orelse return null;
         const y = svgNumberAfter(tag, " y=\"") orelse return null;
-        return .{ .text = content, .point = .{ .x = x, .y = y } };
+        return .{ .text = text, .point = .{ .x = x, .y = y } };
     }
     return null;
 }
@@ -9699,9 +9709,20 @@ fn nextSvgTextContent(svg: []const u8, index: *usize) ?[]const u8 {
         const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
         index.* = content_start + close_rel + "</text>".len;
         const content = svg[content_start .. content_start + close_rel];
-        if (std.mem.indexOfScalar(u8, content, '<') == null) return content;
+        if (svgTextVisibleContent(content)) |text| return text;
     }
     return null;
+}
+
+fn svgTextVisibleContent(content: []const u8) ?[]const u8 {
+    if (std.mem.indexOfScalar(u8, content, '<') == null) return content;
+    const tspan_start_rel = std.mem.indexOf(u8, content, "<tspan") orelse return null;
+    const tspan_open_end_rel = std.mem.indexOfScalar(u8, content[tspan_start_rel..], '>') orelse return null;
+    const text_start = tspan_start_rel + tspan_open_end_rel + 1;
+    const text_end_rel = std.mem.indexOf(u8, content[text_start..], "</tspan>") orelse return null;
+    const text = content[text_start .. text_start + text_end_rel];
+    if (std.mem.indexOfScalar(u8, text, '<') != null) return null;
+    return text;
 }
 
 fn expectSvgElementSequenceEqual(svg: []const u8, oracle: []const u8) !void {
@@ -10000,11 +10021,16 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         if (std.ascii.eqlIgnoreCase(value, "b")) rect.y + rect.height - 10.0 else rect.y + top_label_offset
     else
         rect.y + top_label_offset;
-    try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font_family, visual.font_size);
-    try writeSvgTextFill(writer, visual.font_color);
-    try writer.writeAll(">");
-    try writeXmlEscaped(writer, cluster.label);
-    try writer.writeAll("</text>\n");
+    if (plainSingleLineLabel(cluster.label)) {
+        try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font_family, visual.font_size);
+        try writeSvgTextFill(writer, visual.font_color);
+        try writer.writeAll(">");
+        try writeXmlEscaped(writer, cluster.label);
+        try writer.writeAll("</text>\n");
+    } else {
+        const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
+        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font_family, false, false, text_anchor);
+    }
     try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
 }
@@ -18563,6 +18589,38 @@ test "cluster labels honor labelloc and labeljust" {
     var expected_buf: [64]u8 = undefined;
     const expected_y = try std.fmt.bufPrint(&expected_buf, "y=\"{s}\"", .{expected_y_value});
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
+}
+
+test "cluster labels honor DOT left and right line breaks" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_multiline {
+        \\    label="left\lcenter\nright\r";
+        \\    labeljust=c;
+        \\    a -> b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>left\ncenter\nright\n</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"middle\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">center</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">right</tspan>") != null);
+
+    const cluster = graph.subgraphs.items[0];
+    const band = subgraphLabelBand(cluster);
+    try std.testing.expect(band > 18.0);
+    const box = layout.subgraphs[0];
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expect(layout.nodes[a].center.y - layout.nodes[a].height / 2.0 >= box.y + band - 0.01);
 }
 
 test "nested cluster layout expands parent around child cluster" {
