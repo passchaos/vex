@@ -8346,19 +8346,19 @@ fn parseColorList(value: []const u8) ?ColorList {
     if (left > 0) {
         var unspecified: usize = 0;
         for (result.segments[0..result.len]) |segment| {
-            if (!segment.has_fraction or segment.fraction <= 0) unspecified += 1;
+            if (!segment.has_fraction) unspecified += 1;
         }
         if (unspecified > 0) {
             const delta = left / @as(f64, @floatFromInt(unspecified));
             for (result.segments[0..result.len]) |*segment| {
-                if (!segment.has_fraction or segment.fraction <= 0) segment.fraction = delta;
+                if (!segment.has_fraction) segment.fraction = delta;
             }
-        } else {
+        } else if (result.segments[result.len - 1].fraction > 0) {
             result.segments[result.len - 1].fraction += left;
         }
     }
 
-    while (result.len > 0 and result.segments[result.len - 1].fraction <= 0) result.len -= 1;
+    while (result.len > 0 and result.segments[result.len - 1].fraction <= 0 and !result.segments[result.len - 1].has_fraction) result.len -= 1;
     return if (result.len >= 2) result else null;
 }
 
@@ -15680,6 +15680,40 @@ test "SVG renderer honors Graphviz fillcolor gradients" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"url(#vex-node-fill-2)\"") != null);
 }
 
+test "color lists keep explicit zero fractions" {
+    const colors = parseColorList("red;0:green:blue;0").?;
+
+    try std.testing.expectEqual(@as(usize, 3), colors.len);
+    try std.testing.expectEqualStrings("red", colors.segments[0].color);
+    try std.testing.expect(colors.segments[0].has_fraction);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), colors.segments[0].fraction, 0.0001);
+    try std.testing.expectEqualStrings("green", colors.segments[1].color);
+    try std.testing.expect(!colors.segments[1].has_fraction);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), colors.segments[1].fraction, 0.0001);
+    try std.testing.expectEqualStrings("blue", colors.segments[2].color);
+    try std.testing.expect(colors.segments[2].has_fraction);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), colors.segments[2].fraction, 0.0001);
+}
+
+test "SVG renderer keeps explicit zero gradient fractions" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  zero [shape=box, style=filled, fillcolor="yellow;0:blue"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<linearGradient id=\"vex-node-fill-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "offset=\"0.0%\" stop-color=\"yellow\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "offset=\"0.0%\" stop-color=\"blue\"") != null);
+}
+
 test "SVG renderer uses typed gradientangle attributes" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
@@ -15738,6 +15772,27 @@ test "SVG renderer honors Graphviz striped fills on box nodes and clusters" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-cluster-stripes-1\" class=\"striped-fill\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"gold\" stroke=\"none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightblue\" stroke=\"none\"") != null);
+}
+
+test "SVG renderer keeps explicit zero striped fill fractions" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=box];
+        \\  a [style=striped, fillcolor="red;0:green:blue;0"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-node-stripes-1\" class=\"striped-fill\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"red\" stroke=\"none\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"green\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"blue\" stroke=\"none\"") == null);
 }
 
 test "SVG node rendering separates Graphviz color and fillcolor semantics" {
