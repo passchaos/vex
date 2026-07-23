@@ -280,6 +280,7 @@ pub const NodeOptions = struct {
 pub const EdgeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
+    fillcolor: ?[]const u8 = null,
     fontcolor: ?[]const u8 = null,
     style: ?EdgeStyle = null,
     styles: []const EdgeStyle = &.{},
@@ -317,6 +318,7 @@ pub const EdgeOptions = struct {
 pub const EdgeAttr = union(enum) {
     label: []const u8,
     color: []const u8,
+    fillcolor: []const u8,
     fontcolor: []const u8,
     style: EdgeStyle,
     styles: []const EdgeStyle,
@@ -805,6 +807,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setDefaultEdgeAttrRaw("label", value),
             .color => |value| try self.setDefaultEdgeAttrRaw("color", value),
+            .fillcolor => |value| try self.setDefaultEdgeAttrRaw("fillcolor", value),
             .fontcolor => |value| try self.setDefaultEdgeAttrRaw("fontcolor", value),
             .style => |value| try self.setDefaultEdgeAttrRaw("style", edgeStyleName(value)),
             .styles => |values| try setDefaultEdgeStylesAttrRaw(self, values),
@@ -945,6 +948,7 @@ pub const Graph = struct {
     fn applyEdgeOptions(self: *Graph, id: EdgeId, options: EdgeOptions) !void {
         if (options.label) |value| try self.setEdgeAttr(id, .{ .label = value });
         if (options.color) |value| try self.setEdgeAttr(id, .{ .color = value });
+        if (options.fillcolor) |value| try self.setEdgeAttr(id, .{ .fillcolor = value });
         if (options.fontcolor) |value| try self.setEdgeAttr(id, .{ .fontcolor = value });
         if (options.style) |value| try self.setEdgeAttr(id, .{ .style = value });
         if (options.styles.len > 0) try self.setEdgeAttr(id, .{ .styles = options.styles });
@@ -977,6 +981,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setEdgeAttrRaw(id, "label", value),
             .color => |value| try self.setEdgeAttrRaw(id, "color", value),
+            .fillcolor => |value| try self.setEdgeAttrRaw(id, "fillcolor", value),
             .fontcolor => |value| try self.setEdgeAttrRaw(id, "fontcolor", value),
             .style => |value| try self.setEdgeAttrRaw(id, "style", edgeStyleName(value)),
             .styles => |values| try setEdgeStylesAttrRaw(self, id, values),
@@ -7840,8 +7845,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         for (graph.edges.items) |edge_item| {
             if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(edge_item);
-            if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), visual.marker_scale);
-            if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), visual.marker_scale);
+            if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(edge_item, visual, true), edgeMarkerFill(edge_item, visual, true), visual.marker_scale);
+            if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(edge_item, visual, false), edgeMarkerFill(edge_item, visual, false), visual.marker_scale);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -8797,9 +8802,15 @@ fn edgeMarkerColor(edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
     return colors.segments[0].color;
 }
 
+fn edgeMarkerFill(edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
+    if (attrValue(edge_item.attrs.items, "fillcolor")) |fillcolor| return fillcolor;
+    return edgeMarkerColor(edge_item, visual, head);
+}
+
 fn edgeVisualForSegment(edge_item: Edge, visual: EdgeVisual, color: []const u8, index: usize, color_count: usize) EdgeVisual {
     var result = visual;
     result.stroke = color;
+    if (attrValue(edge_item.attrs.items, "fillcolor") == null) result.fill = color;
     if (index != 0) result.marker_end = .none;
     if (index != @min(color_count - 1, 1)) result.marker_start = .none;
     if (result.marker_start != .none) result.stroke = edgeMarkerColor(edge_item, visual, false);
@@ -10091,6 +10102,7 @@ const NodeVisual = struct {
 
 const EdgeVisual = struct {
     stroke: []const u8,
+    fill: []const u8,
     font_color: []const u8,
     font_family: []const u8,
     font_size: f64,
@@ -11406,8 +11418,10 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
     const tail_enabled = markerEnabledByDir(dir, false);
     const raw_stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color;
     const stroke = if (parseColorList(raw_stroke)) |colors| colors.segments[0].color else raw_stroke;
+    const fill = attrValue(edge_item.attrs.items, "fillcolor") orelse stroke;
     return .{
         .stroke = stroke,
+        .fill = fill,
         .font_color = attrValue(edge_item.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
@@ -11493,7 +11507,7 @@ fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
     }
 }
 
-fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, color: []const u8, scale: f64) Io.Writer.Error!void {
+fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, stroke: []const u8, fill: []const u8, scale: f64) Io.Writer.Error!void {
     if (scale <= 0) return;
     const marker_size = 7.0 * scale;
     try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 10 10\" refX=\"{d:.1}\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, markerRefX(shape), marker_size, marker_size });
@@ -11501,17 +11515,17 @@ fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, sh
     try writer.writeAll("\">");
     switch (shape) {
         .none => {},
-        .normal => try writer.print("<path d=\"M 1.2 1.4 L 9.2 5 L 1.2 8.6 z\" fill=\"{s}\"/>", .{color}),
-        .vee => try writer.print("<path d=\"M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{color}),
-        .dot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"{s}\"/>", .{color}),
-        .odot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
-        .box => try writer.print("<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"{s}\"/>", .{color}),
-        .obox => try writer.print("<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
-        .diamond => try writer.print("<path d=\"M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"{s}\"/>", .{color}),
-        .odiamond => try writer.print("<path d=\"M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
-        .tee => try writer.print("<path d=\"M 8.5 1 L 8.5 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"2\" stroke-linecap=\"round\"/>", .{color}),
-        .crow => try writer.print("<path d=\"M 9 1 L 1 5 L 9 9 M 1 5 L 9 5\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{color}),
-        .empty => try writer.print("<path d=\"M 0.8 0.8 L 9.2 5 L 0.8 9.2 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{color}),
+        .normal => try writer.print("<path d=\"M 1.2 1.4 L 9.2 5 L 1.2 8.6 z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
+        .vee => try writer.print("<path d=\"M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{stroke}),
+        .dot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
+        .odot => try writer.print("<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{stroke}),
+        .box => try writer.print("<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
+        .obox => try writer.print("<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{stroke}),
+        .diamond => try writer.print("<path d=\"M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"{s}\" stroke=\"{s}\" stroke-width=\"0.5\"/>", .{ fill, stroke }),
+        .odiamond => try writer.print("<path d=\"M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{stroke}),
+        .tee => try writer.print("<path d=\"M 8.5 1 L 8.5 9\" fill=\"none\" stroke=\"{s}\" stroke-width=\"2\" stroke-linecap=\"round\"/>", .{stroke}),
+        .crow => try writer.print("<path d=\"M 9 1 L 1 5 L 9 9 M 1 5 L 9 5\" fill=\"none\" stroke=\"{s}\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", .{stroke}),
+        .empty => try writer.print("<path d=\"M 0.8 0.8 L 9.2 5 L 0.8 9.2 z\" fill=\"#ffffff\" stroke=\"{s}\" stroke-width=\"1.5\"/>", .{stroke}),
     }
     try writer.writeAll("</marker>\n");
 }
@@ -11547,10 +11561,10 @@ const InlineArrowOptions = struct {
 fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual, options: InlineArrowOptions) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
     if (visual.marker_end == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .tip_x_shift = options.head_tip_x_shift, .tip_y_shift = options.head_tip_y_shift, .right_x_shift = options.head_right_x_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
+        try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.fill, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .tip_x_shift = options.head_tip_x_shift, .tip_y_shift = options.head_tip_y_shift, .right_x_shift = options.head_right_x_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
     }
     if (visual.marker_start == .normal) {
-        try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.marker_scale, options.tail_length_scale, true, .{});
+        try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.fill, visual.marker_scale, options.tail_length_scale, true, .{});
     }
 }
 
@@ -11566,7 +11580,7 @@ const InlineNormalArrowPointAdjust = struct {
     tip_precise: bool = true,
 };
 
-fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, color: []const u8, scale: f64, length_scale: f64, reverse: bool, adjust: InlineNormalArrowPointAdjust) Io.Writer.Error!void {
+fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, stroke: []const u8, fill: []const u8, scale: f64, length_scale: f64, reverse: bool, adjust: InlineNormalArrowPointAdjust) Io.Writer.Error!void {
     var dx = tip.x - toward.x;
     var dy = tip.y - toward.y;
     if (reverse) {
@@ -11586,8 +11600,8 @@ fn writeSvgInlineNormalArrow(writer: *Io.Writer, tip: Point, toward: Point, colo
     const right = Point{ .x = base.x - px * arrow_half + adjust.right_x_shift, .y = base.y - py * arrow_half + adjust.right_y_shift + adjust.y_shift };
     const adjusted_tip = Point{ .x = tip.x + adjust.tip_x_shift, .y = tip.y + adjust.y_shift + adjust.tip_y_shift };
     try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
-        color,
-        color,
+        fill,
+        stroke,
     });
     try writeSvgArrowPoint(writer, right, adjust.precise);
     try writer.writeByte(' ');
@@ -13235,6 +13249,7 @@ test "code API sets typed node and edge options at creation" {
     const edge = try graph.addEdge(a, b, .{
         .label = "edge",
         .color = "#16a34a",
+        .fillcolor = "#bbf7d0",
         .fontcolor = "#064e3b",
         .styles = &.{ .bold, .dashed },
         .penwidth = 3,
@@ -13291,6 +13306,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqual(@as(f64, 4), edge_item.weight);
     try std.testing.expect(!edge_item.constraint);
     try std.testing.expectEqual(@as(usize, 2), edge_item.min_len);
+    try std.testing.expectEqualStrings("#bbf7d0", attrValue(edge_item.attrs.items, "fillcolor").?);
     try std.testing.expectEqualStrings("#064e3b", attrValue(edge_item.attrs.items, "fontcolor").?);
     try std.testing.expectEqualStrings("bold,dashed", attrValue(edge_item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("3", attrValue(edge_item.attrs.items, "penwidth").?);
@@ -16214,6 +16230,31 @@ test "SVG renderer honors common Graphviz arrow marker attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-3-head)\"") == null);
 }
 
+test "SVG renderer honors edge fillcolor for filled arrow shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  a -> b [color="#2563eb", fillcolor="#bfdbfe"];
+        \\  b -> c [dir=both, arrowtail=dot, arrowhead=box, color="#dc2626", fillcolor="#fecaca"];
+        \\  c -> d [arrowhead=diamond, color="#16a34a", fillcolor="#bbf7d0"];
+        \\  d -> e [arrowhead=vee, color="#9333ea", fillcolor="#e9d5ff"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#bfdbfe\" stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#fecaca\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect x=\"1.5\" y=\"1.5\" width=\"7\" height=\"7\" fill=\"#fecaca\" stroke=\"#dc2626\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#bbf7d0\" stroke=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#9333ea\"") != null);
+}
+
 test "SVG renderer honors Graphviz edge color lists" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -16238,7 +16279,7 @@ test "SVG renderer honors Graphviz edge color lists" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-0-head)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-0-tail)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"red\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"blue\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"blue\" stroke=\"blue\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "multi") != null);
 }
 
@@ -18252,6 +18293,7 @@ test "SVG marker path route shortens arrow endpoints" {
     };
     const none = routeForPathMarkers(route, .{
         .stroke = "black",
+        .fill = "black",
         .font_color = "black",
         .font_family = default_svg_font_family,
         .font_size = 14,
@@ -18266,6 +18308,7 @@ test "SVG marker path route shortens arrow endpoints" {
 
     const shortened = routeForPathMarkers(route, .{
         .stroke = "black",
+        .fill = "black",
         .font_color = "black",
         .font_family = default_svg_font_family,
         .font_size = 14,
