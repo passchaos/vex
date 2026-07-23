@@ -2060,8 +2060,8 @@ const Parser = struct {
             try self.parseAttrLists(&attrs);
             for (attrs.items) |attr| {
                 if (try self.recordRankAttr(attr.name, attr.value)) continue;
-                if (try self.recordSubgraphAttr(attr.name, attr.value)) continue;
-                try graph.setGraphAttrRaw(attr.name, attr.value);
+                if (try self.recordSubgraphAttr(graph, attr.name, attr.value)) continue;
+                try self.setParsedGraphAttr(graph, attr.name, attr.value);
             }
             return;
         }
@@ -2104,8 +2104,8 @@ const Parser = struct {
             const value = try self.parseIdText();
             defer self.allocator.free(value);
             if (try self.recordRankAttr(first_name, value)) return;
-            if (try self.recordSubgraphAttr(first_name, value)) return;
-            try graph.setGraphAttrRaw(first_name, value);
+            if (try self.recordSubgraphAttr(graph, first_name, value)) return;
+            try self.setParsedGraphAttr(graph, first_name, value);
             return;
         }
 
@@ -2332,9 +2332,16 @@ const Parser = struct {
         return true;
     }
 
-    fn recordSubgraphAttr(self: *Parser, name: []const u8, value: []const u8) !bool {
+    fn recordSubgraphAttr(self: *Parser, graph: *Graph, name: []const u8, value: []const u8) !bool {
         if (self.subgraph_scopes.items.len == 0) return false;
         const attrs = self.subgraph_scopes.items[self.subgraph_scopes.items.len - 1] orelse return false;
+        if (std.ascii.eqlIgnoreCase(name, "label")) {
+            const subgraph_name = self.currentSubgraphTextId(graph);
+            const expanded = try expandNodeLabel(self.allocator, graph, subgraph_name, value);
+            defer self.allocator.free(expanded);
+            try setAttrInList(self.allocator, attrs, name, expanded);
+            return true;
+        }
         try setAttrInList(self.allocator, attrs, name, value);
         return true;
     }
@@ -2371,8 +2378,33 @@ const Parser = struct {
         return graph.nodes.items[id].label;
     }
 
-    fn setParsedNodeAttr(self: *Parser, graph: *Graph, id: NodeId, name: []const u8, value: []const u8) !void {
+    fn subgraphTextId(self: *Parser, graph: *const Graph, id: SubgraphId) []const u8 {
+        var it = self.subgraph_index.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == id) return entry.key_ptr.*;
+        }
+        return graph.subgraphs.items[id].label;
+    }
+
+    fn currentSubgraphTextId(self: *Parser, graph: *const Graph) []const u8 {
+        if (self.subgraph_stack.items.len == 0) return graph.name;
+        const id = self.subgraph_stack.items[self.subgraph_stack.items.len - 1];
+        if (id >= graph.subgraphs.items.len) return graph.name;
+        return self.subgraphTextId(graph, id);
+    }
+
+    fn setParsedGraphAttr(self: *Parser, graph: *Graph, name: []const u8, value: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(name, "label")) {
+            const expanded = try expandLabelEscapes(self.allocator, value, .{ .graph_name = graph.name });
+            defer self.allocator.free(expanded);
+            try graph.setGraphAttrRaw(name, expanded);
+            return;
+        }
+        try graph.setGraphAttrRaw(name, value);
+    }
+
+    fn setParsedNodeAttr(self: *Parser, graph: *Graph, id: NodeId, name: []const u8, value: []const u8) !void {
+        if (std.ascii.eqlIgnoreCase(name, "label") or std.ascii.eqlIgnoreCase(name, "xlabel")) {
             const expanded = try expandNodeLabel(self.allocator, graph, self.nodeTextId(graph, id), value);
             defer self.allocator.free(expanded);
             try graph.setNodeAttrRaw(id, name, expanded);
@@ -2382,7 +2414,7 @@ const Parser = struct {
     }
 
     fn setParsedEdgeAttr(self: *Parser, graph: *Graph, id: EdgeId, name: []const u8, value: []const u8) !void {
-        if (std.ascii.eqlIgnoreCase(name, "label")) {
+        if (edgeLabelLikeAttr(name)) {
             const edge_item = graph.edges.items[id];
             const expanded = try expandEdgeLabel(self.allocator, graph, self.nodeTextId(graph, edge_item.from), self.nodeTextId(graph, edge_item.to), value);
             defer self.allocator.free(expanded);
@@ -2395,6 +2427,13 @@ const Parser = struct {
             if (self.subgraph_index.get(value)) |subgraph_id| graph.edges.items[id].lhead = subgraph_id;
         }
         try graph.setEdgeAttrRaw(id, name, value);
+    }
+
+    fn edgeLabelLikeAttr(name: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(name, "label") or
+            std.ascii.eqlIgnoreCase(name, "xlabel") or
+            std.ascii.eqlIgnoreCase(name, "headlabel") or
+            std.ascii.eqlIgnoreCase(name, "taillabel");
     }
 
     fn parseAttrLists(self: *Parser, attrs: *AttrList) !void {
@@ -13755,6 +13794,50 @@ test "DOT label escapes expand graph node and edge context" {
     const node_a = nodeIdByLabel(&graph, "node_a");
     try std.testing.expectEqualStrings("node=node_a graph=Ctx", graph.nodes.items[node_a].label);
     try std.testing.expectEqualStrings("node_a|node_b|node_a->node_b|Ctx", graph.edges.items[0].label.?);
+}
+
+test "DOT label escapes expand external label attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Ctx {
+        \\  graph [label="graph=\G"];
+        \\  node_a [xlabel="node=\N graph=\G"];
+        \\  node_a -> node_b [
+        \\    xlabel="x=\T|\H|\E|\G",
+        \\    taillabel="tail=\T",
+        \\    headlabel="head=\H"
+        \\  ];
+        \\}
+    );
+    defer graph.deinit();
+
+    const node_a = nodeIdByLabel(&graph, "node_a");
+    try std.testing.expectEqualStrings("graph=Ctx", attrValue(graph.attrs.items, "label").?);
+    try std.testing.expectEqualStrings("node=node_a graph=Ctx", attrValue(graph.nodes.items[node_a].attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("x=node_a|node_b|node_a->node_b|Ctx", attrValue(graph.edges.items[0].attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("tail=node_a", attrValue(graph.edges.items[0].attrs.items, "taillabel").?);
+    try std.testing.expectEqualStrings("head=node_b", attrValue(graph.edges.items[0].attrs.items, "headlabel").?);
+}
+
+test "SVG renderer honors DOT line alignment in external labels" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a [xlabel="node left\lnode right\r"];
+        \\  a -> b [xlabel="edge left\ledge right\r"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">node left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">node right</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"start\">edge left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "text-anchor=\"end\">edge right</tspan>") != null);
 }
 
 test "layered layout uses crossing reduction and variable label sizes" {
