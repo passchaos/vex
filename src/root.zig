@@ -7948,8 +7948,16 @@ fn svgGraphContentTranslate(layout: *const Layout) f64 {
 }
 
 fn graphSvgPad(graph: *const Graph) BoxMargin {
-    const parsed = attrMargin(graph.attrs.items, svg_clip_padding);
-    return .{ .x = @max(svg_clip_padding, parsed.x), .y = @max(svg_clip_padding, parsed.y) };
+    return attrPad(graph.attrs.items, svg_clip_padding);
+}
+
+fn attrPad(attrs: []const Attr, fallback: f64) BoxMargin {
+    const value = attrValue(attrs, "pad") orelse return .{ .x = fallback, .y = fallback };
+    var parts = std.mem.tokenizeAny(u8, value, ", \t");
+    const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
+    const x = parseInchMargin(first) orelse fallback;
+    const y = if (parts.next()) |second| parseInchMargin(second) orelse x else x;
+    return .{ .x = x, .y = y };
 }
 
 fn fitSvgContentAxis(content_min: f64, content_max: f64, padding: f64, canvas_size: *f64, translate: *f64) void {
@@ -15738,6 +15746,32 @@ test "SVG renderer honors graph pad attribute in canvas bounds" {
     defer allocator.free(svg);
     const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
     try std.testing.expect(view_box.width >= raw_bounds.x + raw_bounds.width + 36.0 - 0.01);
+
+    var zero_pad = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [pad=0];
+        \\  a -> b;
+        \\}
+    );
+    defer zero_pad.deinit();
+    const zero_graph_pad = graphSvgPad(&zero_pad);
+    try std.testing.expectEqual(@as(f64, 0), zero_graph_pad.x);
+    try std.testing.expectEqual(@as(f64, 0), zero_graph_pad.y);
+
+    var default_pad = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer default_pad.deinit();
+    const default_graph_pad = graphSvgPad(&default_pad);
+    try std.testing.expectEqual(svg_clip_padding, default_graph_pad.x);
+    try std.testing.expectEqual(svg_clip_padding, default_graph_pad.y);
+
+    const attrs = [_]Attr{.{ .name = "pad", .value = "0.05,0.1" }};
+    const tiny = attrPad(attrs[0..], svg_clip_padding);
+    try std.testing.expectApproxEqAbs(@as(f64, 3.6), tiny.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 7.2), tiny.y, 0.001);
 }
 
 test "SVG renderer keeps graph name as metadata unless graph label is explicit" {
