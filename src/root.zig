@@ -11284,9 +11284,18 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
     const dashed = styleHas(style, "dashed");
     const dotted = styleHas(style, "dotted");
     const rounded = styleHas(style, "rounded");
-    const color = attrValue(cluster.attrs.items, "color") orelse "#94a3b8";
+    const color_attr = attrValue(cluster.attrs.items, "color");
+    const color = color_attr orelse "#94a3b8";
+    const fillcolor = attrValue(cluster.attrs.items, "fillcolor");
+    const bgcolor = attrValue(cluster.attrs.items, "bgcolor");
+    const fill = if (bgcolor) |value|
+        if (!filled or (fillcolor == null and color_attr == null)) value else (fillcolor orelse color)
+    else if (filled)
+        fillcolor orelse color
+    else
+        "none";
     return .{
-        .fill = attrValue(cluster.attrs.items, "fillcolor") orelse if (filled) color else "none",
+        .fill = fill,
         .stroke = color,
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
@@ -11294,7 +11303,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
-        .fill_opacity = if (filled or attrValue(cluster.attrs.items, "fillcolor") != null) "1.0" else "1.0",
+        .fill_opacity = "1.0",
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -18212,6 +18221,43 @@ test "cluster fill follows Graphviz style filled color semantics" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"lightgrey\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"blue\"") != null);
+}
+
+test "cluster bgcolor fills background with Graphviz precedence" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_bg {
+        \\    bgcolor="#fef3c7";
+        \\    color="#92400e";
+        \\    a;
+        \\  }
+        \\  subgraph cluster_fill_trumps_bg {
+        \\    style=filled;
+        \\    bgcolor="#fee2e2";
+        \\    fillcolor="#dcfce7";
+        \\    b;
+        \\  }
+        \\  subgraph cluster_color_trumps_bg_when_filled {
+        \\    style=filled;
+        \\    bgcolor="#f1f5f9";
+        \\    color="#2563eb";
+        \\    c;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fef3c7\" stroke=\"#92400e\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#94a3b8\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fee2e2\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\" stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f1f5f9\"") == null);
 }
 
 test "cluster labels honor labelloc and labeljust" {
