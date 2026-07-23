@@ -164,6 +164,7 @@ pub const GraphAttr = union(enum) {
     splines: SplineMode,
     bgcolor: []const u8,
     pad: []const u8,
+    margin: []const u8,
     fontname: []const u8,
     fontsize: f64,
     fontcolor: []const u8,
@@ -725,6 +726,7 @@ pub const Graph = struct {
             .splines => |value| try self.setGraphAttrRaw("splines", splineModeName(value)),
             .bgcolor => |value| try self.setGraphAttrRaw("bgcolor", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
+            .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
             .fontsize => |value| try self.setGraphAttrFloat("fontsize", value),
             .fontcolor => |value| try self.setGraphAttrRaw("fontcolor", value),
@@ -3157,6 +3159,11 @@ fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) Layo
     }
     if (attrValue(graph.attrs.items, "nodesep")) |value| {
         result.node_gap = parseGraphSpacing(value, result.node_gap);
+    }
+    if (attrValue(graph.attrs.items, "margin") != null) {
+        const margin = attrMargin(graph.attrs.items, result.margin);
+        result.margin = margin.x;
+        result.margin_y = margin.y;
     }
     if (attrValue(graph.attrs.items, "label") != null) {
         const font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
@@ -13488,6 +13495,26 @@ test "layered layout default margin is compact and overrideable" {
     try std.testing.expectEqual(@as(f64, 40), roomy.margin);
     try std.testing.expect(roomy.width > compact.width);
     try std.testing.expect(roomy.height > compact.height);
+}
+
+test "layered layout honors graph margin attribute" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [margin="0.5,0.25"];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    try std.testing.expectEqual(@as(f64, 36), layout.margin_x);
+    try std.testing.expectEqual(@as(f64, 18), layout.margin_y);
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expect(layout.nodes[a].center.x >= layout.margin_x + layout.nodes[a].width / 2.0);
+    try std.testing.expect(layout.nodes[a].center.y >= layout.margin_y + layout.nodes[a].height / 2.0);
 }
 
 test "DOT parser handles graphviz-like edge chain and attrs" {
