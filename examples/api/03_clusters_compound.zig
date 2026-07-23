@@ -4,10 +4,10 @@
 
 const std = @import("std");
 const vex = @import("vex");
+const common = @import("common.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-    const io = init.io;
 
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "SubgraphApi", .rankdir = .LR });
     defer graph.deinit();
@@ -41,10 +41,5 @@ pub fn main(init: std.process.Init) !void {
     _ = try graph.addEdge(worker, store, .{ .label = "write" });
     _ = try graph.addEdge(api, store, .{ .label = "read", .constraint = false });
 
-    var result = try vex.layoutGraph(allocator, &graph, .{});
-    defer result.deinit();
-    var stdout_buffer: [16384]u8 = undefined;
-    var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &result, .svg, .{});
-    try stdout.interface.flush();
+    try common.writeSvg(init.gpa, init.io, &graph, "03.svg", .{});
 }

@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const vex = @import("vex");
+const common = @import("common.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -51,31 +52,7 @@ pub fn main(init: std.process.Init) !void {
         .style = .dashed,
     });
 
-    try outputFileAndStdout(init.gpa, init.io, graph, "zig-out/examples", "06.svg");
-}
-
-fn outputFileAndStdout(gpa: std.mem.Allocator, io: std.Io, graph: vex.Graph, sub_dir: []const u8, file_name: []const u8) !void {
-    var result = try vex.layoutGraph(gpa, &graph, .{});
-    defer result.deinit();
-    try std.Io.Dir.cwd().createDirPath(io, sub_dir);
-
-    const sub_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub_dir, file_name });
-    defer gpa.free(sub_path);
-
-    var file = try std.Io.Dir.cwd().createFile(io, sub_path, .{ .truncate = true });
-    defer file.close(io);
-
-    var file_buffer: [8192]u8 = undefined;
-    var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &result, .svg, .{});
-    try file_writer.interface.flush();
-
-    var stdout_buffer: [8192]u8 = undefined;
-    var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try stdout.interface.writeAll("wrote ");
-    try stdout.interface.writeAll(sub_path);
-    try stdout.interface.writeAll("\n");
-    try stdout.interface.flush();
+    try common.writeSvg(init.gpa, init.io, &graph, "06.svg", .{});
 }
 
 fn styledNode(graph: *vex.Graph, label: []const u8, shape: vex.Shape, fill: []const u8) !vex.NodeId {

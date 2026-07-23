@@ -4,10 +4,10 @@
 
 const std = @import("std");
 const vex = @import("vex");
+const common = @import("common.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-    const io = init.io;
 
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "ApiPipeline" });
     defer graph.deinit();
@@ -21,10 +21,5 @@ pub fn main(init: std.process.Init) !void {
     _ = try graph.addEdge(model, layout, .{ .label = "nodes + edges" });
     _ = try graph.addEdge(layout, svg, .{ .label = "document" });
 
-    var result = try vex.layoutGraph(allocator, &graph, .{});
-    defer result.deinit();
-    var stdout_buffer: [8192]u8 = undefined;
-    var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try vex.render(&stdout.interface, &result, .svg, .{});
-    try stdout.interface.flush();
+    try common.writeSvg(init.gpa, init.io, &graph, "01.svg", .{});
 }

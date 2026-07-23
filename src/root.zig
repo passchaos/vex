@@ -241,6 +241,63 @@ pub const EdgeDir = enum {
     none,
 };
 
+pub const NodeOptions = struct {
+    label: ?[]const u8 = null,
+    color: ?[]const u8 = null,
+    fillcolor: ?[]const u8 = null,
+    fontcolor: ?[]const u8 = null,
+    shape: ?Shape = null,
+    style: ?NodeStyle = null,
+    penwidth: ?f64 = null,
+    width: ?f64 = null,
+    height: ?f64 = null,
+    fixedsize: ?NodeFixedSize = null,
+    margin: ?[]const u8 = null,
+    xlabel: ?[]const u8 = null,
+    labelloc: ?LabelLoc = null,
+    labeljust: ?LabelJust = null,
+    url: ?[]const u8 = null,
+    href: ?[]const u8 = null,
+    tooltip: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    ordering: ?OrderingMode = null,
+    group: ?[]const u8 = null,
+};
+
+pub const EdgeOptions = struct {
+    label: ?[]const u8 = null,
+    color: ?[]const u8 = null,
+    fontcolor: ?[]const u8 = null,
+    style: ?EdgeStyle = null,
+    penwidth: ?f64 = null,
+    weight: ?f64 = null,
+    constraint: ?bool = null,
+    min_len: ?usize = null,
+    url: ?[]const u8 = null,
+    href: ?[]const u8 = null,
+    tooltip: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+    arrowhead: ?ArrowShape = null,
+    arrowtail: ?ArrowShape = null,
+    dir: ?EdgeDir = null,
+    taillabel: ?[]const u8 = null,
+    headlabel: ?[]const u8 = null,
+    xlabel: ?[]const u8 = null,
+    labelfontcolor: ?[]const u8 = null,
+    labelfontname: ?[]const u8 = null,
+    labelfontsize: ?f64 = null,
+    labeldistance: ?f64 = null,
+    labelangle: ?f64 = null,
+    samehead: ?[]const u8 = null,
+    sametail: ?[]const u8 = null,
+    tail_port: CompassPort = .auto,
+    head_port: CompassPort = .auto,
+    tail_record_port: ?[]const u8 = null,
+    head_record_port: ?[]const u8 = null,
+    ltail: ?SubgraphId = null,
+    lhead: ?SubgraphId = null,
+};
+
 pub const EdgeAttr = union(enum) {
     label: []const u8,
     color: []const u8,
@@ -297,50 +354,33 @@ pub const SubgraphAttr = union(enum) {
     title: []const u8,
 };
 
-pub const NodeOptions = AttrOptions(NodeAttr);
-pub const EdgeOptions = AttrOptionsWithExtra(EdgeAttr, &.{
-    .{ .name = "tail_port", .type = CompassPort, .default_value_ptr = &@as(CompassPort, .auto) },
-    .{ .name = "head_port", .type = CompassPort, .default_value_ptr = &@as(CompassPort, .auto) },
-    .{ .name = "tail_record_port", .type = ?[]const u8, .default_value_ptr = &@as(?[]const u8, null) },
-    .{ .name = "head_record_port", .type = ?[]const u8, .default_value_ptr = &@as(?[]const u8, null) },
-    .{ .name = "ltail", .type = ?SubgraphId, .default_value_ptr = &@as(?SubgraphId, null) },
-    .{ .name = "lhead", .type = ?SubgraphId, .default_value_ptr = &@as(?SubgraphId, null) },
-});
-pub const SubgraphOptions = AttrOptions(SubgraphAttr);
-
-fn AttrOptions(comptime Attrs: type) type {
-    return AttrOptionsWithExtra(Attrs, &.{});
-}
-
-const OptionExtraField = struct {
-    name: [:0]const u8,
-    type: type,
-    default_value_ptr: ?*const anyopaque,
+pub const SubgraphOptions = struct {
+    label: ?[]const u8 = null,
+    rankdir: ?RankDir = null,
+    layout: ?LayoutAlgorithm = null,
+    compound: ?bool = null,
+    concentrate: ?bool = null,
+    nodesep: ?f64 = null,
+    ranksep: ?RankSep = null,
+    splines: ?SplineMode = null,
+    bgcolor: ?[]const u8 = null,
+    ordering: ?OrderingMode = null,
+    color: ?[]const u8 = null,
+    fillcolor: ?[]const u8 = null,
+    fontcolor: ?[]const u8 = null,
+    fontname: ?[]const u8 = null,
+    fontsize: ?f64 = null,
+    style: ?SubgraphStyle = null,
+    styles: []const SubgraphStyle = &.{},
+    penwidth: ?f64 = null,
+    margin: ?[]const u8 = null,
+    labelloc: ?LabelLoc = null,
+    labeljust: ?LabelJust = null,
+    url: ?[]const u8 = null,
+    href: ?[]const u8 = null,
+    tooltip: ?[]const u8 = null,
+    title: ?[]const u8 = null,
 };
-
-fn AttrOptionsWithExtra(comptime Attrs: type, comptime extra_fields: []const OptionExtraField) type {
-    const attr_fields = @typeInfo(Attrs).@"union".fields;
-    const field_count = attr_fields.len + extra_fields.len;
-    comptime var names: [field_count][:0]const u8 = undefined;
-    comptime var types: [field_count]type = undefined;
-    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
-
-    inline for (attr_fields, 0..) |field, index| {
-        names[index] = field.name;
-        types[index] = ?field.type;
-        const default_value: ?field.type = null;
-        field_attrs[index] = .{ .default_value_ptr = &default_value };
-    }
-
-    inline for (extra_fields, 0..) |field, extra_index| {
-        const index = attr_fields.len + extra_index;
-        names[index] = field.name;
-        types[index] = field.type;
-        field_attrs[index] = .{ .default_value_ptr = field.default_value_ptr };
-    }
-
-    return @Struct(.auto, null, &names, &types, &field_attrs);
-}
 
 pub const Node = struct {
     id: NodeId,
@@ -962,7 +1002,7 @@ pub const Graph = struct {
         if (options.fontname) |value| try self.setSubgraphAttr(id, .{ .fontname = value });
         if (options.fontsize) |value| try self.setSubgraphAttr(id, .{ .fontsize = value });
         if (options.style) |value| try self.setSubgraphAttr(id, .{ .style = value });
-        if (options.styles) |value| try self.setSubgraphAttr(id, .{ .styles = value });
+        if (options.styles.len > 0) try self.setSubgraphAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setSubgraphAttr(id, .{ .penwidth = value });
         if (options.margin) |value| try self.setSubgraphAttr(id, .{ .margin = value });
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });

@@ -4,10 +4,10 @@
 
 const std = @import("std");
 const vex = @import("vex");
+const common = @import("common.zig");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-    const io = init.io;
 
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "RecordsPorts", .rankdir = .LR });
     defer graph.deinit();
@@ -40,18 +40,5 @@ pub fn main(init: std.process.Init) !void {
         .head_port = .east,
     });
 
-    var result = try vex.layoutGraph(allocator, &graph, .{});
-    defer result.deinit();
-    try std.Io.Dir.cwd().createDirPath(io, "zig-out/examples");
-    var file = try std.Io.Dir.cwd().createFile(io, "zig-out/examples/api_records_ports.svg", .{ .truncate = true });
-    defer file.close(io);
-    var file_buffer: [8192]u8 = undefined;
-    var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &result, .svg, .{});
-    try file_writer.interface.flush();
-
-    var stdout_buffer: [8192]u8 = undefined;
-    var stdout = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
-    try stdout.interface.writeAll("wrote zig-out/examples/api_records_ports.svg\n");
-    try stdout.interface.flush();
+    try common.writeSvg(init.gpa, init.io, &graph, "05.svg", .{});
 }
