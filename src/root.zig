@@ -207,6 +207,7 @@ pub const NodeAttr = union(enum) {
     style: NodeStyle,
     styles: []const NodeStyle,
     penwidth: f64,
+    peripheries: usize,
     width: f64,
     height: f64,
     fixedsize: NodeFixedSize,
@@ -265,6 +266,7 @@ pub const NodeOptions = struct {
     style: ?NodeStyle = null,
     styles: []const NodeStyle = &.{},
     penwidth: ?f64 = null,
+    peripheries: ?usize = null,
     width: ?f64 = null,
     height: ?f64 = null,
     fixedsize: ?NodeFixedSize = null,
@@ -785,6 +787,11 @@ pub const Graph = struct {
             .style => |value| try self.setDefaultNodeAttrRaw("style", nodeStyleName(value)),
             .styles => |values| try setDefaultNodeStylesAttrRaw(self, values),
             .penwidth => |value| try self.setDefaultNodeAttrFloat("penwidth", value),
+            .peripheries => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setDefaultNodeAttrRaw("peripheries", text);
+            },
             .width => |value| try self.setDefaultNodeAttrFloat("width", value),
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
@@ -895,6 +902,7 @@ pub const Graph = struct {
         if (options.style) |value| try self.setNodeAttr(id, .{ .style = value });
         if (options.styles.len > 0) try self.setNodeAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setNodeAttr(id, .{ .penwidth = value });
+        if (options.peripheries) |value| try self.setNodeAttr(id, .{ .peripheries = value });
         if (options.width) |value| try self.setNodeAttr(id, .{ .width = value });
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
@@ -924,6 +932,11 @@ pub const Graph = struct {
             .style => |value| try self.setNodeAttrRaw(id, "style", nodeStyleName(value)),
             .styles => |values| try setNodeStylesAttrRaw(self, id, values),
             .penwidth => |value| try self.setNodeAttrFloat(id, "penwidth", value),
+            .peripheries => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setNodeAttrRaw(id, "peripheries", text);
+            },
             .width => |value| try self.setNodeAttrFloat(id, "width", value),
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
@@ -13267,6 +13280,7 @@ test "code API sets typed node and edge options at creation" {
         .shape = .box,
         .styles = &.{ .filled, .rounded, .dashed },
         .penwidth = 2,
+        .peripheries = 2,
         .width = 1.25,
         .height = 0.75,
         .fixedsize = .fit_label,
@@ -13330,6 +13344,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("22", attrValue(node_item.attrs.items, "fontsize").?);
     try std.testing.expectEqualStrings("filled,rounded,dashed", attrValue(node_item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("2", attrValue(node_item.attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("2", attrValue(node_item.attrs.items, "peripheries").?);
     try std.testing.expectEqualStrings("1.25", attrValue(node_item.attrs.items, "width").?);
     try std.testing.expectEqualStrings("0.75", attrValue(node_item.attrs.items, "height").?);
     try std.testing.expectEqualStrings("true", attrValue(node_item.attrs.items, "fixedsize").?);
@@ -15431,6 +15446,22 @@ test "SVG renderer honors bold style and node peripheries" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2.6\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\"") != null);
+}
+
+test "SVG renderer uses typed node peripheries attribute" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    _ = try graph.addNode("a", .{ .shape = .box, .peripheries = 3 });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("3", attrValue(graph.nodes.items[0].attrs.items, "peripheries").?);
+    try std.testing.expect(countSubstrings(svg, "<rect") >= 3);
 }
 
 test "SVG renderer honors Graphviz fillcolor gradients" {
