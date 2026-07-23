@@ -107,6 +107,7 @@ pub const CompassPort = enum {
 };
 
 pub const SubgraphStyle = enum {
+    solid,
     filled,
     bold,
     dashed,
@@ -188,6 +189,7 @@ pub const GraphAttr = union(enum) {
 };
 
 pub const NodeStyle = enum {
+    solid,
     filled,
     bold,
     dashed,
@@ -1614,6 +1616,7 @@ fn orderingModeName(mode: OrderingMode) []const u8 {
 
 fn nodeStyleName(style: NodeStyle) []const u8 {
     return switch (style) {
+        .solid => "solid",
         .filled => "filled",
         .bold => "bold",
         .dashed => "dashed",
@@ -1673,6 +1676,7 @@ fn setDefaultEdgeStylesAttrRaw(graph: *Graph, values: []const EdgeStyle) !void {
 
 fn subgraphStyleName(style: SubgraphStyle) []const u8 {
     return switch (style) {
+        .solid => "solid",
         .filled => "filled",
         .bold => "bold",
         .dashed => "dashed",
@@ -9252,6 +9256,10 @@ fn svgGroupFragmentByTitle(svg: []const u8, title: []const u8) ?[]const u8 {
     return svg[title_pos .. title_pos + end_rel];
 }
 
+fn svgFragmentHasDash(fragment: []const u8) bool {
+    return std.mem.indexOf(u8, fragment, "stroke-dasharray=") != null;
+}
+
 fn svgRootFragment(svg: []const u8) ?[]const u8 {
     const title_pos = std.mem.indexOf(u8, svg, "<title>") orelse return null;
     const end_rel = std.mem.indexOf(u8, svg[title_pos..], "</g>") orelse return null;
@@ -11435,8 +11443,6 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
     const filled = styleHas(style, "filled") or (styleHas(style, "wedged") and wedgedNodeFillEligible(node_item.shape));
     const invisible = styleHas(style, "invis");
     const rounded = styleHas(style, "rounded");
-    const dashed = styleHas(style, "dashed");
-    const dotted = styleHas(style, "dotted");
     const bold = styleHas(style, "bold");
     const color_attr = attrValue(node_item.attrs.items, "color");
     const color = color_attr orelse node_item.color;
@@ -11450,7 +11456,7 @@ fn resolveNodeVisual(node_item: Node) NodeVisual {
         .font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(node_item.attrs.items, "penwidth", if (bold) 2.6 else 1.0),
         .radius = if (rounded) 10 else 0,
-        .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
+        .dash = dashStyleFromAttr(style),
         .peripheries = @max(parseAttrUsize(node_item.attrs.items, "peripheries", 1), 1),
         .hidden = invisible,
     };
@@ -11474,7 +11480,7 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
         .font_family = attrValue(edge_item.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
-        .dash = if (styleHas(style, "dotted")) .dotted else if (styleHas(style, "dashed")) .dashed else .none,
+        .dash = dashStyleFromAttr(style),
         .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
         .marker_end = if (head_enabled) parseMarkerShape(arrowhead, .normal) else .none,
         .marker_scale = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "arrowsize", 1.0), 0.0, 8.0),
@@ -11485,8 +11491,6 @@ fn resolveEdgeVisual(edge_item: Edge) EdgeVisual {
 fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
     const style = attrValue(cluster.attrs.items, "style");
     const filled = styleHas(style, "filled");
-    const dashed = styleHas(style, "dashed");
-    const dotted = styleHas(style, "dotted");
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
     const color_attr = attrValue(cluster.attrs.items, "color");
@@ -11508,7 +11512,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(cluster.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .radius = if (rounded) 10 else 0,
-        .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
+        .dash = dashStyleFromAttr(style),
         .fill_opacity = "1.0",
         .peripheries = parseAttrUsize(cluster.attrs.items, "peripheries", 1),
         .hidden = styleHas(style, "invis"),
@@ -11545,6 +11549,22 @@ fn styleHas(style: ?[]const u8, needle: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(part, needle)) return true;
     }
     return false;
+}
+
+fn dashStyleFromAttr(style: ?[]const u8) DashStyle {
+    const value = style orelse return .none;
+    var result = DashStyle.none;
+    var parts = std.mem.tokenizeAny(u8, value, ",; \t\r\n");
+    while (parts.next()) |part| {
+        if (std.ascii.eqlIgnoreCase(part, "dotted")) {
+            result = .dotted;
+        } else if (std.ascii.eqlIgnoreCase(part, "dashed")) {
+            result = .dashed;
+        } else if (std.ascii.eqlIgnoreCase(part, "solid")) {
+            result = .none;
+        }
+    }
+    return result;
 }
 
 fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
@@ -15724,6 +15744,42 @@ test "SVG renderer accepts semicolon separated style lists" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
 }
 
+test "SVG renderer treats solid as ordered line style" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=box];
+        \\  solid_node [style="dashed,solid", color="#16a34a"];
+        \\  dashed_node [style="solid,dashed", color="#1d4ed8"];
+        \\  subgraph cluster_solid {
+        \\    style="dotted,solid";
+        \\    color="#f59e0b";
+        \\    member;
+        \\  }
+        \\  solid_node -> dashed_node [style="dotted,solid", color="#dc2626"];
+        \\  dashed_node -> member [style="solid,dotted", color="#7c3aed"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const solid_node = svgGroupFragmentByTitle(svg, "solid_node") orelse return error.MissingSolidNode;
+    const dashed_node = svgGroupFragmentByTitle(svg, "dashed_node") orelse return error.MissingDashedNode;
+    const solid_cluster = svgGroupFragmentByTitle(svg, "cluster_solid") orelse return error.MissingSolidCluster;
+    const solid_edge = svgGroupFragmentByTitle(svg, "solid_node-&gt;dashed_node") orelse return error.MissingSolidEdge;
+    const dotted_edge = svgGroupFragmentByTitle(svg, "dashed_node-&gt;member") orelse return error.MissingDottedEdge;
+
+    try std.testing.expect(!svgFragmentHasDash(solid_node));
+    try std.testing.expect(svgFragmentHasDash(dashed_node));
+    try std.testing.expect(!svgFragmentHasDash(solid_cluster));
+    try std.testing.expect(!svgFragmentHasDash(solid_edge));
+    try std.testing.expect(svgFragmentHasDash(dotted_edge));
+}
+
 test "SVG renderer uses typed node and edge style lists" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
@@ -15752,6 +15808,41 @@ test "SVG renderer uses typed node and edge style lists" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") != null);
+}
+
+test "SVG renderer uses typed solid node edge and subgraph styles" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{
+        .shape = .box,
+        .styles = &.{ .dashed, .solid },
+        .color = "#16a34a",
+    });
+    const b = try graph.addNode("b", .{ .shape = .box });
+    _ = try graph.addEdge(a, b, .{
+        .styles = &.{ .dotted, .solid },
+        .color = "#dc2626",
+    });
+    _ = try graph.addSubgraph("solid", null, &.{a}, .{
+        .styles = &.{ .dotted, .solid },
+        .color = "#f59e0b",
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("dashed,solid", attrValue(graph.nodes.items[a].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("dotted,solid", attrValue(graph.edges.items[0].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("dotted,solid", attrValue(graph.subgraphs.items[0].attrs.items, "style").?);
+    try std.testing.expectEqual(DashStyle.none, resolveNodeVisual(graph.nodes.items[a]).dash);
+    try std.testing.expectEqual(DashStyle.none, resolveEdgeVisual(graph.edges.items[0]).dash);
+    try std.testing.expectEqual(DashStyle.none, resolveClusterVisual(graph.subgraphs.items[0]).dash);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") == null);
 }
 
 test "SVG renderer honors Graphviz diagonals node style" {
