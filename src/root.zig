@@ -208,6 +208,7 @@ pub const NodeAttr = union(enum) {
     href: []const u8,
     tooltip: []const u8,
     title: []const u8,
+    target: []const u8,
     ordering: OrderingMode,
     group: []const u8,
 };
@@ -262,6 +263,7 @@ pub const NodeOptions = struct {
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
     title: ?[]const u8 = null,
+    target: ?[]const u8 = null,
     ordering: ?OrderingMode = null,
     group: ?[]const u8 = null,
 };
@@ -279,6 +281,7 @@ pub const EdgeOptions = struct {
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
     title: ?[]const u8 = null,
+    target: ?[]const u8 = null,
     arrowhead: ?ArrowShape = null,
     arrowtail: ?ArrowShape = null,
     dir: ?EdgeDir = null,
@@ -313,6 +316,7 @@ pub const EdgeAttr = union(enum) {
     href: []const u8,
     tooltip: []const u8,
     title: []const u8,
+    target: []const u8,
     arrowhead: ArrowShape,
     arrowtail: ArrowShape,
     dir: EdgeDir,
@@ -357,6 +361,7 @@ pub const SubgraphAttr = union(enum) {
     href: []const u8,
     tooltip: []const u8,
     title: []const u8,
+    target: []const u8,
 };
 
 pub const SubgraphOptions = struct {
@@ -388,6 +393,7 @@ pub const SubgraphOptions = struct {
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
     title: ?[]const u8 = null,
+    target: ?[]const u8 = null,
 };
 
 pub const Node = struct {
@@ -751,6 +757,7 @@ pub const Graph = struct {
             .href => |value| try self.setDefaultNodeAttrRaw("href", value),
             .tooltip => |value| try self.setDefaultNodeAttrRaw("tooltip", value),
             .title => |value| try self.setDefaultNodeAttrRaw("title", value),
+            .target => |value| try self.setDefaultNodeAttrRaw("target", value),
             .ordering => |value| try self.setDefaultNodeAttrRaw("ordering", orderingModeName(value)),
             .group => |value| try self.setDefaultNodeAttrRaw("group", value),
         }
@@ -791,6 +798,7 @@ pub const Graph = struct {
             .href => |value| try self.setDefaultEdgeAttrRaw("href", value),
             .tooltip => |value| try self.setDefaultEdgeAttrRaw("tooltip", value),
             .title => |value| try self.setDefaultEdgeAttrRaw("title", value),
+            .target => |value| try self.setDefaultEdgeAttrRaw("target", value),
             .arrowhead => |value| try self.setDefaultEdgeAttrRaw("arrowhead", arrowShapeName(value)),
             .arrowtail => |value| try self.setDefaultEdgeAttrRaw("arrowtail", arrowShapeName(value)),
             .dir => |value| try self.setDefaultEdgeAttrRaw("dir", edgeDirName(value)),
@@ -848,6 +856,7 @@ pub const Graph = struct {
         if (options.href) |value| try self.setNodeAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setNodeAttr(id, .{ .tooltip = value });
         if (options.title) |value| try self.setNodeAttr(id, .{ .title = value });
+        if (options.target) |value| try self.setNodeAttr(id, .{ .target = value });
         if (options.ordering) |value| try self.setNodeAttr(id, .{ .ordering = value });
         if (options.group) |value| try self.setNodeAttr(id, .{ .group = value });
     }
@@ -873,6 +882,7 @@ pub const Graph = struct {
             .href => |value| try self.setNodeAttrRaw(id, "href", value),
             .tooltip => |value| try self.setNodeAttrRaw(id, "tooltip", value),
             .title => |value| try self.setNodeAttrRaw(id, "title", value),
+            .target => |value| try self.setNodeAttrRaw(id, "target", value),
             .ordering => |value| try self.setNodeAttrRaw(id, "ordering", orderingModeName(value)),
             .group => |value| try self.setNodeAttrRaw(id, "group", value),
         }
@@ -920,6 +930,7 @@ pub const Graph = struct {
         if (options.href) |value| try self.setEdgeAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setEdgeAttr(id, .{ .tooltip = value });
         if (options.title) |value| try self.setEdgeAttr(id, .{ .title = value });
+        if (options.target) |value| try self.setEdgeAttr(id, .{ .target = value });
         if (options.arrowhead) |value| try self.setEdgeAttr(id, .{ .arrowhead = value });
         if (options.arrowtail) |value| try self.setEdgeAttr(id, .{ .arrowtail = value });
         if (options.dir) |value| try self.setEdgeAttr(id, .{ .dir = value });
@@ -953,6 +964,7 @@ pub const Graph = struct {
             .href => |value| try self.setEdgeAttrRaw(id, "href", value),
             .tooltip => |value| try self.setEdgeAttrRaw(id, "tooltip", value),
             .title => |value| try self.setEdgeAttrRaw(id, "title", value),
+            .target => |value| try self.setEdgeAttrRaw(id, "target", value),
             .arrowhead => |value| try self.setEdgeAttrRaw(id, "arrowhead", arrowShapeName(value)),
             .arrowtail => |value| try self.setEdgeAttrRaw(id, "arrowtail", arrowShapeName(value)),
             .dir => |value| try self.setEdgeAttrRaw(id, "dir", edgeDirName(value)),
@@ -1025,6 +1037,7 @@ pub const Graph = struct {
         if (options.href) |value| try self.setSubgraphAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setSubgraphAttr(id, .{ .tooltip = value });
         if (options.title) |value| try self.setSubgraphAttr(id, .{ .title = value });
+        if (options.target) |value| try self.setSubgraphAttr(id, .{ .target = value });
     }
 
     pub fn setSubgraphAttr(self: *Graph, id: SubgraphId, attr: SubgraphAttr) !void {
@@ -1077,6 +1090,7 @@ pub const Graph = struct {
             .href => |value| try self.setSubgraphAttrRaw(id, "href", value),
             .tooltip => |value| try self.setSubgraphAttrRaw(id, "tooltip", value),
             .title => |value| try self.setSubgraphAttrRaw(id, "title", value),
+            .target => |value| try self.setSubgraphAttrRaw(id, "target", value),
         }
     }
 
@@ -8359,12 +8373,19 @@ fn gradientStopEndOffset(start: ColorSegment, stop: ColorSegment) f64 {
 fn writeSvgInteractiveOpen(writer: *Io.Writer, attrs: []const Attr) Io.Writer.Error!SvgInteractiveWrap {
     const href = attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url");
     const tooltip = attrValue(attrs, "tooltip") orelse attrValue(attrs, "title");
+    const link_target = attrValue(attrs, "target");
     if (href == null and tooltip == null) return .none;
 
-    if (href) |target| {
+    if (href) |target_href| {
         try writer.writeAll("<a href=\"");
-        try writeXmlEscaped(writer, target);
-        try writer.writeAll("\">");
+        try writeXmlEscaped(writer, target_href);
+        try writer.writeByte('"');
+        if (link_target) |value| {
+            try writer.writeAll(" target=\"");
+            try writeXmlEscaped(writer, value);
+            try writer.writeByte('"');
+        }
+        try writer.writeByte('>');
         if (tooltip) |tip| try writeSvgTitle(writer, tip);
         return .anchor;
     }
@@ -13120,6 +13141,7 @@ test "code API sets typed node and edge options at creation" {
         .href = "https://example.com/node",
         .tooltip = "node tip",
         .title = "node title",
+        .target = "_blank",
         .ordering = .out,
         .group = "main",
     });
@@ -13137,6 +13159,7 @@ test "code API sets typed node and edge options at creation" {
         .href = "https://example.com/edge",
         .tooltip = "edge tip",
         .title = "edge title",
+        .target = "_self",
         .arrowhead = .vee,
         .arrowtail = .dot,
         .dir = .both,
@@ -13171,6 +13194,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("https://example.com/node", attrValue(node_item.attrs.items, "URL").?);
     try std.testing.expectEqualStrings("node tip", attrValue(node_item.attrs.items, "tooltip").?);
     try std.testing.expectEqualStrings("node title", attrValue(node_item.attrs.items, "title").?);
+    try std.testing.expectEqualStrings("_blank", attrValue(node_item.attrs.items, "target").?);
     try std.testing.expectEqualStrings("out", attrValue(node_item.attrs.items, "ordering").?);
     try std.testing.expectEqualStrings("main", attrValue(node_item.attrs.items, "group").?);
 
@@ -13186,6 +13210,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("https://example.com/edge", attrValue(edge_item.attrs.items, "URL").?);
     try std.testing.expectEqualStrings("edge tip", attrValue(edge_item.attrs.items, "tooltip").?);
     try std.testing.expectEqualStrings("edge title", attrValue(edge_item.attrs.items, "title").?);
+    try std.testing.expectEqualStrings("_self", attrValue(edge_item.attrs.items, "target").?);
     try std.testing.expectEqualStrings("vee", attrValue(edge_item.attrs.items, "arrowhead").?);
     try std.testing.expectEqualStrings("dot", attrValue(edge_item.attrs.items, "arrowtail").?);
     try std.testing.expectEqualStrings("both", attrValue(edge_item.attrs.items, "dir").?);
@@ -13236,6 +13261,7 @@ test "code API sets typed subgraph attrs" {
         .href = "https://example.com/subgraph-href",
         .tooltip = "subgraph tip",
         .title = "subgraph title",
+        .target = "_parent",
     });
 
     const item = graph.subgraphs.items[subgraph];
@@ -13266,6 +13292,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("https://example.com/subgraph-href", attrValue(item.attrs.items, "href").?);
     try std.testing.expectEqualStrings("subgraph tip", attrValue(item.attrs.items, "tooltip").?);
     try std.testing.expectEqualStrings("subgraph title", attrValue(item.attrs.items, "title").?);
+    try std.testing.expectEqualStrings("_parent", attrValue(item.attrs.items, "target").?);
 }
 
 test "Fruchterman-Reingold layout places nodes within bounds" {
@@ -15724,11 +15751,12 @@ test "SVG renderer emits URL href and tooltip metadata" {
         \\    label="API";
         \\    URL="https://example.com/cluster";
         \\    tooltip="Cluster API";
+        \\    target="_parent";
         \\    c;
         \\  }
-        \\  a [URL="https://example.com/a", tooltip="Node A"];
+        \\  a [URL="https://example.com/a", tooltip="Node A", target="_blank"];
         \\  b;
-        \\  a -> b [href="https://example.com/e", tooltip="Edge A to B"];
+        \\  a -> b [href="https://example.com/e", tooltip="Edge A to B", target="_self"];
         \\}
     );
     defer graph.deinit();
@@ -15738,12 +15766,12 @@ test "SVG renderer emits URL href and tooltip metadata" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\" target=\"_blank\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Node A</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" target=\"_self\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\"><title>Cluster API</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" target=\"_parent\"><title>Cluster API</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\" target=\"_parent\">") != null);
 }
 
 test "SVG renderer emits default Graphviz-like node and edge titles" {
