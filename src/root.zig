@@ -11313,7 +11313,7 @@ fn parseAttrUsize(attrs: []const Attr, name: []const u8, fallback: usize) usize 
 
 fn styleHas(style: ?[]const u8, needle: []const u8) bool {
     const value = style orelse return false;
-    var parts = std.mem.tokenizeAny(u8, value, ", ");
+    var parts = std.mem.tokenizeAny(u8, value, ",; \t\r\n");
     while (parts.next()) |part| {
         if (std.ascii.eqlIgnoreCase(part, needle)) return true;
     }
@@ -15292,6 +15292,35 @@ test "SVG renderer honors common Graphviz visual attributes" {
     const second_offset = parallelEdgeOffset(&graph, 1);
     try std.testing.expect(first_offset < 0);
     try std.testing.expect(second_offset > 0);
+}
+
+test "SVG renderer accepts semicolon separated style lists" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=box];
+        \\  a [style="filled;rounded;dashed", fillcolor="#dbeafe", color="#1d4ed8"];
+        \\  subgraph cluster_s {
+        \\    style="filled;rounded;dashed";
+        \\    fillcolor="#dcfce7";
+        \\    b;
+        \\  }
+        \\  a -> b [style="dashed;bold", color="#dc2626"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<rect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
 }
 
 test "SVG renderer uses typed node and edge style lists" {
