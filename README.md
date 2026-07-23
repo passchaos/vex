@@ -53,6 +53,8 @@ defer layout.deinit();
 try vex.render(writer, &layout, .svg, .{});
 ```
 
+Default node and edge label attributes set through the API apply to subsequently added items, with per-item options taking precedence.
+
 ## API Examples
 
 The `examples/api` programs build graphs directly with the Zig API and then

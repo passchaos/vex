@@ -629,9 +629,6 @@ pub const Graph = struct {
     }
 
     pub fn addNode(self: *Graph, label: []const u8, options: NodeOptions) !NodeId {
-        const owned_label = try self.allocator.dupe(u8, label);
-        errdefer self.allocator.free(owned_label);
-
         const owned_color = try self.allocator.dupe(u8, self.node_defaults.color);
         errdefer self.allocator.free(owned_color);
 
@@ -643,6 +640,9 @@ pub const Graph = struct {
             }
             attrs.deinit(self.allocator);
         }
+        const default_label = attrValue(attrs.items, "label") orelse label;
+        const owned_label = try self.allocator.dupe(u8, default_label);
+        errdefer self.allocator.free(owned_label);
         try setAttrInList(self.allocator, &attrs, "color", owned_color);
         try setAttrInList(self.allocator, &attrs, "shape", shapeName(self.node_defaults.shape));
 
@@ -679,14 +679,6 @@ pub const Graph = struct {
             }
         }
 
-        const owned_label = if (options.label) |label| try self.allocator.dupe(u8, label) else null;
-        errdefer if (owned_label) |label| self.allocator.free(label);
-        const owned_color = try self.allocator.dupe(u8, options.color orelse self.edge_defaults.color);
-        errdefer self.allocator.free(owned_color);
-        const owned_tail_record_port = if (options.tail_record_port) |port| try self.allocator.dupe(u8, port) else null;
-        errdefer if (owned_tail_record_port) |port| self.allocator.free(port);
-        const owned_head_record_port = if (options.head_record_port) |port| try self.allocator.dupe(u8, port) else null;
-        errdefer if (owned_head_record_port) |port| self.allocator.free(port);
         var attrs = try copyAttrList(self.allocator, self.edge_default_attrs.items);
         errdefer {
             for (attrs.items) |attr| {
@@ -695,6 +687,15 @@ pub const Graph = struct {
             }
             attrs.deinit(self.allocator);
         }
+        const default_label = attrValue(attrs.items, "label");
+        const owned_label = if (options.label) |label| try self.allocator.dupe(u8, label) else if (default_label) |label| try self.allocator.dupe(u8, label) else null;
+        errdefer if (owned_label) |label| self.allocator.free(label);
+        const owned_color = try self.allocator.dupe(u8, options.color orelse self.edge_defaults.color);
+        errdefer self.allocator.free(owned_color);
+        const owned_tail_record_port = if (options.tail_record_port) |port| try self.allocator.dupe(u8, port) else null;
+        errdefer if (owned_tail_record_port) |port| self.allocator.free(port);
+        const owned_head_record_port = if (options.head_record_port) |port| try self.allocator.dupe(u8, port) else null;
+        errdefer if (owned_head_record_port) |port| self.allocator.free(port);
         try setAttrInList(self.allocator, &attrs, "color", owned_color);
         if (owned_label) |label| try setAttrInList(self.allocator, &attrs, "label", label);
 
@@ -981,6 +982,7 @@ pub const Graph = struct {
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
             .samehead => |value| try self.setDefaultEdgeAttrRaw("samehead", value),
             .sametail => |value| try self.setDefaultEdgeAttrRaw("sametail", value),
+            .tail_port, .head_port, .ltail, .lhead => {},
         }
     }
 
@@ -2351,12 +2353,12 @@ const Parser = struct {
         if (self.node_index.get(text_id)) |id| return id;
         const id = try graph.addNode(text_id, .{});
         if (builtin.is_test) try graph.setNodeAttrRaw(id, "vex_text_id", text_id);
-        try self.expandParsedNodeDefaultLabelAttrs(graph, id);
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
         try self.node_index.put(owned_text_id, id);
         errdefer _ = self.node_index.remove(owned_text_id);
         try self.node_index_keys.append(self.allocator, owned_text_id);
+        try self.expandParsedNodeDefaultLabelAttrs(graph, id);
         return id;
     }
 
@@ -12919,6 +12921,27 @@ test "code API builds graph and layered layout" {
     defer layout.deinit();
     try std.testing.expectEqual(@as(usize, 2), layout.nodes.len);
     try std.testing.expect(layout.height > 0);
+}
+
+test "code API applies default node and edge labels to new items" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "api" });
+    defer graph.deinit();
+
+    try graph.setDefaultNodeAttr(.{ .label = "Default Node" });
+    try graph.setDefaultEdgeAttr(.{ .label = "Default Edge" });
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{ .label = "Explicit Node" });
+    const default_edge = try graph.addEdge(a, b, .{});
+    const explicit_edge = try graph.addEdge(b, a, .{ .label = "Explicit Edge" });
+
+    try std.testing.expectEqualStrings("Default Node", graph.nodes.items[a].label);
+    try std.testing.expectEqualStrings("Explicit Node", graph.nodes.items[b].label);
+    try std.testing.expectEqualStrings("Default Edge", graph.edges.items[default_edge].label.?);
+    try std.testing.expectEqualStrings("Explicit Edge", graph.edges.items[explicit_edge].label.?);
+    try std.testing.expectEqualStrings("Default Node", attrValue(graph.nodes.items[a].attrs.items, "label").?);
+    try std.testing.expectEqualStrings("Default Edge", attrValue(graph.edges.items[default_edge].attrs.items, "label").?);
 }
 
 test "code API allows duplicate node names and uses ids for identity" {
