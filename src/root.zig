@@ -11304,6 +11304,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
     const dashed = styleHas(style, "dashed");
     const dotted = styleHas(style, "dotted");
     const rounded = styleHas(style, "rounded");
+    const bold = styleHas(style, "bold");
     const color_attr = attrValue(cluster.attrs.items, "color");
     const color = color_attr orelse "#94a3b8";
     const stroke = attrValue(cluster.attrs.items, "pencolor") orelse color;
@@ -11321,7 +11322,7 @@ fn resolveClusterVisual(cluster: Subgraph) ClusterVisual {
         .font_color = attrValue(cluster.attrs.items, "fontcolor") orelse "black",
         .font_family = attrValue(cluster.attrs.items, "fontname") orelse default_svg_font_family,
         .font_size = parsePositiveAttrFloat(cluster.attrs.items, "fontsize", 14.0),
-        .width = parseAttrFloat(cluster.attrs.items, "penwidth", 1.0),
+        .width = parseAttrFloat(cluster.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = if (dotted) .dotted else if (dashed) .dashed else .none,
         .fill_opacity = "1.0",
@@ -13204,7 +13205,7 @@ test "code API sets typed subgraph attrs" {
         .color = "#2563eb",
         .pencolor = "#1d4ed8",
         .fillcolor = "#dbeafe",
-        .styles = &.{ .filled, .rounded },
+        .styles = &.{ .filled, .rounded, .bold },
         .fontname = "Helvetica",
         .fontsize = 16,
         .fontcolor = "#1e3a8a",
@@ -13232,7 +13233,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("#2563eb", attrValue(item.attrs.items, "color").?);
     try std.testing.expectEqualStrings("#1d4ed8", attrValue(item.attrs.items, "pencolor").?);
     try std.testing.expectEqualStrings("#dbeafe", attrValue(item.attrs.items, "fillcolor").?);
-    try std.testing.expectEqualStrings("filled,rounded", attrValue(item.attrs.items, "style").?);
+    try std.testing.expectEqualStrings("filled,rounded,bold", attrValue(item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("Helvetica", attrValue(item.attrs.items, "fontname").?);
     try std.testing.expectEqualStrings("16", attrValue(item.attrs.items, "fontsize").?);
     try std.testing.expectEqualStrings("#1e3a8a", attrValue(item.attrs.items, "fontcolor").?);
@@ -18329,6 +18330,36 @@ test "cluster pencolor overrides stroke without changing fill" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#2563eb\" stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+}
+
+test "cluster bold style thickens stroke unless penwidth is explicit" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_bold {
+        \\    style=bold;
+        \\    color="#2563eb";
+        \\    a;
+        \\  }
+        \\  subgraph cluster_explicit {
+        \\    style=bold;
+        \\    color="#16a34a";
+        \\    penwidth=2;
+        \\    b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"#2563eb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2\"") != null);
 }
 
 test "cluster peripheries zero hides border while preserving fill" {
