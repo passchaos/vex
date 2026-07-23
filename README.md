@@ -109,6 +109,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
 - Graph `pad` plus graph, node, and subgraph margin attributes with zero and sub-inch values.
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
+- SVG rendering for Graphviz-style node `diagonals` on polygonal and ellipse-like shapes.
 - SVG rendering for Graphviz-style multicolor fills including box/node/subgraph `striped` fills and ellipse/circle `wedged` fills.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.

@@ -193,6 +193,7 @@ pub const NodeStyle = enum {
     dashed,
     dotted,
     rounded,
+    diagonals,
     striped,
     radial,
     wedged,
@@ -1618,6 +1619,7 @@ fn nodeStyleName(style: NodeStyle) []const u8 {
         .dashed => "dashed",
         .dotted => "dotted",
         .rounded => "rounded",
+        .diagonals => "diagonals",
         .striped => "striped",
         .radial => "radial",
         .wedged => "wedged",
@@ -10420,6 +10422,7 @@ fn writeSvgStrokeWidth(writer: *Io.Writer, width: f64) Io.Writer.Error!void {
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {
     var shape_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, layout));
     if (node_item.shape == .msquare) shape_layout.center.y += 0.1;
+    const diagonals = styleHas(attrValue(node_item.attrs.items, "style"), "diagonals");
     switch (node_item.shape) {
         .point => {
             try writeSvgCircleOpen(writer, shape_layout.center, @min(shape_layout.width, shape_layout.height) / 2.0);
@@ -10449,7 +10452,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                     try renderSvgBoxShape(writer, rect, ring_visual, radius);
                 }
             }
-            if (node_item.shape == .msquare) try renderSvgCornerDiagonals(writer, shape_layout, visual);
+            if (node_item.shape == .msquare or (diagonals and visual.radius <= 0.001)) try renderSvgRectCornerDiagonals(writer, shape_layout, visual);
         },
         .circle, .doublecircle, .mcircle => {
             var ring: usize = 0;
@@ -10465,7 +10468,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
-            if (node_item.shape == .mcircle) try renderSvgCircleDiagonals(writer, shape_layout, visual);
+            if (node_item.shape == .mcircle or diagonals) try renderSvgCircleDiagonals(writer, shape_layout, visual);
         },
         .ellipse => {
             var ring: usize = 0;
@@ -10487,32 +10490,33 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
                 try writeSvgDash(writer, visual.dash);
                 try writer.writeAll("/>\n");
             }
+            if (diagonals) try renderSvgCircleDiagonals(writer, shape_layout, visual);
         },
         .egg => try renderSvgEggShape(writer, shape_layout, visual),
-        .polygon => try renderSvgCustomPolygon(writer, node_item, shape_layout, visual),
-        .diamond => try renderSvgPolygonRings(6, writer, shape_layout, visual, diamondPoints),
+        .polygon => try renderSvgCustomPolygon(writer, node_item, shape_layout, visual, diagonals),
+        .diamond => try renderSvgPolygonRings(6, writer, shape_layout, visual, diamondPoints, diagonals),
         .mdiamond => {
-            try renderSvgPolygonRingsPrecise(6, writer, shape_layout, visual, diamondPoints);
+            try renderSvgPolygonRingsPrecise(6, writer, shape_layout, visual, diamondPoints, false);
             try renderSvgDiamondDiagonals(writer, shape_layout, visual);
         },
-        .triangle => try renderSvgPolygonRings(6, writer, shape_layout, visual, trianglePoints),
-        .invtriangle => try renderSvgPolygonRings(6, writer, shape_layout, visual, invTrianglePoints),
-        .parallelogram => try renderSvgPolygonRings(6, writer, shape_layout, visual, parallelogramPoints),
-        .trapezium => try renderSvgPolygonRings(6, writer, shape_layout, visual, trapeziumPoints),
-        .invtrapezium => try renderSvgPolygonRings(6, writer, shape_layout, visual, invTrapeziumPoints),
-        .house => try renderSvgPolygonRings(6, writer, shape_layout, visual, housePoints),
-        .invhouse => try renderSvgPolygonRings(6, writer, shape_layout, visual, invHousePoints),
-        .pentagon => try renderSvgPolygonRings(5, writer, shape_layout, visual, pentagonPoints),
-        .hexagon => try renderSvgPolygonRings(6, writer, shape_layout, visual, hexagonPoints),
-        .septagon => try renderSvgPolygonRings(7, writer, shape_layout, visual, septagonPoints),
-        .octagon => try renderSvgPolygonRings(8, writer, shape_layout, visual, octagonPoints),
+        .triangle => try renderSvgPolygonRings(6, writer, shape_layout, visual, trianglePoints, diagonals),
+        .invtriangle => try renderSvgPolygonRings(6, writer, shape_layout, visual, invTrianglePoints, diagonals),
+        .parallelogram => try renderSvgPolygonRings(6, writer, shape_layout, visual, parallelogramPoints, diagonals),
+        .trapezium => try renderSvgPolygonRings(6, writer, shape_layout, visual, trapeziumPoints, diagonals),
+        .invtrapezium => try renderSvgPolygonRings(6, writer, shape_layout, visual, invTrapeziumPoints, diagonals),
+        .house => try renderSvgPolygonRings(6, writer, shape_layout, visual, housePoints, diagonals),
+        .invhouse => try renderSvgPolygonRings(6, writer, shape_layout, visual, invHousePoints, diagonals),
+        .pentagon => try renderSvgPolygonRings(5, writer, shape_layout, visual, pentagonPoints, diagonals),
+        .hexagon => try renderSvgPolygonRings(6, writer, shape_layout, visual, hexagonPoints, diagonals),
+        .septagon => try renderSvgPolygonRings(7, writer, shape_layout, visual, septagonPoints, diagonals),
+        .octagon => try renderSvgPolygonRings(8, writer, shape_layout, visual, octagonPoints, diagonals),
         .doubleoctagon, .tripleoctagon => {
             var ring_visual = visual;
             const default_peripheries: usize = if (node_item.shape == .tripleoctagon) 3 else 2;
             ring_visual.peripheries = @max(visual.peripheries, default_peripheries);
-            try renderSvgPolygonRings(8, writer, shape_layout, ring_visual, octagonPoints);
+            try renderSvgPolygonRings(8, writer, shape_layout, ring_visual, octagonPoints, diagonals);
         },
-        .star => try renderSvgPolygonRings(10, writer, shape_layout, visual, starPoints),
+        .star => try renderSvgPolygonRings(10, writer, shape_layout, visual, starPoints, diagonals),
         .note => try renderSvgNoteShape(writer, shape_layout, visual),
         .tab => try renderSvgTabShape(writer, shape_layout, visual),
         .folder => try renderSvgFolderShape(writer, shape_layout, visual),
@@ -10592,7 +10596,7 @@ fn renderSvgPolygonWithPrecision(writer: *Io.Writer, points: []const Point, visu
     try writer.writeAll("/>\n");
 }
 
-fn renderSvgPolygonRings(comptime N: usize, writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual, pointsFn: fn (NodeLayout) [N]Point) Io.Writer.Error!void {
+fn renderSvgPolygonRings(comptime N: usize, writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual, pointsFn: fn (NodeLayout) [N]Point, diagonals: bool) Io.Writer.Error!void {
     var ring: usize = 0;
     while (ring < visual.peripheries) : (ring += 1) {
         const inset = @as(f64, @floatFromInt(ring)) * 5.0;
@@ -10605,10 +10609,11 @@ fn renderSvgPolygonRings(comptime N: usize, writer: *Io.Writer, layout: NodeLayo
         if (ring > 0) ring_visual.fill = "none";
         const points = pointsFn(ring_layout);
         try renderSvgPolygon(writer, &points, ring_visual);
+        if (diagonals and ring == 0) try renderSvgPolygonDiagonals(writer, &points, visual);
     }
 }
 
-fn renderSvgPolygonRingsPrecise(comptime N: usize, writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual, pointsFn: fn (NodeLayout) [N]Point) Io.Writer.Error!void {
+fn renderSvgPolygonRingsPrecise(comptime N: usize, writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual, pointsFn: fn (NodeLayout) [N]Point, diagonals: bool) Io.Writer.Error!void {
     var ring: usize = 0;
     while (ring < visual.peripheries) : (ring += 1) {
         const inset = @as(f64, @floatFromInt(ring)) * 5.0;
@@ -10621,6 +10626,7 @@ fn renderSvgPolygonRingsPrecise(comptime N: usize, writer: *Io.Writer, layout: N
         if (ring > 0) ring_visual.fill = "none";
         const points = pointsFn(ring_layout);
         try renderSvgPolygonPrecise(writer, &points, ring_visual);
+        if (diagonals and ring == 0) try renderSvgPolygonDiagonals(writer, &points, visual);
     }
 }
 
@@ -10644,7 +10650,7 @@ fn customPolygonFromAttrs(attrs: []const Attr) CustomPolygon {
     };
 }
 
-fn renderSvgCustomPolygon(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+fn renderSvgCustomPolygon(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, diagonals: bool) Io.Writer.Error!void {
     const spec = customPolygonFromAttrs(node_item.attrs.items);
     var ring: usize = 0;
     while (ring < visual.peripheries) : (ring += 1) {
@@ -10659,6 +10665,7 @@ fn renderSvgCustomPolygon(writer: *Io.Writer, node_item: Node, layout: NodeLayou
         var ring_visual = visual;
         if (ring > 0) ring_visual.fill = "none";
         try renderSvgPolygon(writer, points[0..spec.sides], ring_visual);
+        if (diagonals and ring == 0) try renderSvgPolygonDiagonals(writer, points[0..spec.sides], visual);
     }
 }
 
@@ -10966,13 +10973,45 @@ fn renderSvgDiamondDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: Nod
     try writeSvgPolylineLineYPrecise(writer, cx + short_x, cy - inner_y - 0.03, cx - short_x, cy - inner_y - 0.03, visual);
 }
 
-fn renderSvgCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+fn renderSvgRectCornerDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const rect = nodeRect(layout);
     const d = @min(@max(1, @min(rect.width, rect.height) - 0.2) / 3.0, 18);
     try writeSvgPolylineLinePrecise(writer, rect.x + d, rect.y, rect.x, rect.y + d, visual);
     try writeSvgPolylineLinePrecise(writer, rect.x, rect.y + rect.height - d + 0.005, rect.x + d, rect.y + rect.height, visual);
     try writeSvgPolylineLinePrecise(writer, rect.x + rect.width - d + 0.01, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height - d + 0.005, visual);
     try writeSvgPolylineLinePrecise(writer, rect.x + rect.width, rect.y + d, rect.x + rect.width - d + 0.01, rect.y, visual);
+}
+
+fn renderSvgPolygonDiagonals(writer: *Io.Writer, raw_points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
+    var points: [32]Point = undefined;
+    var len: usize = 0;
+    for (raw_points) |point| {
+        if (point.x < 0 and point.y < 0) continue;
+        if (len >= points.len) break;
+        points[len] = point;
+        len += 1;
+    }
+    if (len < 3) return;
+
+    var corner_offset: f64 = 12.0;
+    for (0..len) |index| {
+        const current = points[index];
+        const next = points[(index + 1) % len];
+        const side = distanceBetween(current, next);
+        if (side > 0.001) corner_offset = @min(corner_offset, side / 3.0);
+    }
+
+    for (0..len) |index| {
+        const previous = points[(index + len - 1) % len];
+        const current = points[index];
+        const next = points[(index + 1) % len];
+        const prev_len = distanceBetween(current, previous);
+        const next_len = distanceBetween(current, next);
+        if (prev_len <= 0.001 or next_len <= 0.001) continue;
+        const from = lerpPoint(current, previous, @min(1.0, corner_offset / prev_len));
+        const to = lerpPoint(current, next, @min(1.0, corner_offset / next_len));
+        try writeSvgPolylineLinePrecise(writer, from.x, from.y, to.x, to.y, visual);
+    }
 }
 
 fn renderSvgCircleDiagonals(writer: *Io.Writer, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
@@ -15713,6 +15752,50 @@ test "SVG renderer uses typed node and edge style lists" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#dc2626\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"2,5\"") != null);
+}
+
+test "SVG renderer honors Graphviz diagonals node style" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  box [shape=box, style=diagonals, color="#1d4ed8"];
+        \\  poly [shape=polygon, sides=5, style="filled,diagonals", fillcolor="#dbeafe"];
+        \\  round [shape=box, style="rounded,diagonals"];
+        \\  circle [shape=circle, style=diagonals];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"#1d4ed8\"") >= 4);
+    try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"black\"") >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "rx=\"10\"") != null);
+}
+
+test "SVG renderer uses typed diagonals node style" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    _ = try graph.addNode("api", .{
+        .shape = .hexagon,
+        .styles = &.{ .filled, .diagonals },
+        .fillcolor = "#dcfce7",
+        .color = "#15803d",
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("filled,diagonals", attrValue(graph.nodes.items[0].attrs.items, "style").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#15803d\"") != null);
+    try std.testing.expect(countSubstrings(svg, "<polyline fill=\"none\" stroke=\"#15803d\"") >= 6);
 }
 
 test "SVG renderer honors bold style and node peripheries" {
