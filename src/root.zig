@@ -192,6 +192,7 @@ pub const NodeAttr = union(enum) {
     label: []const u8,
     color: []const u8,
     fillcolor: []const u8,
+    gradientangle: f64,
     fontcolor: []const u8,
     shape: Shape,
     style: NodeStyle,
@@ -245,6 +246,7 @@ pub const NodeOptions = struct {
     label: ?[]const u8 = null,
     color: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
+    gradientangle: ?f64 = null,
     fontcolor: ?[]const u8 = null,
     shape: ?Shape = null,
     style: ?NodeStyle = null,
@@ -340,6 +342,7 @@ pub const SubgraphAttr = union(enum) {
     color: []const u8,
     pencolor: []const u8,
     fillcolor: []const u8,
+    gradientangle: f64,
     fontcolor: []const u8,
     fontname: []const u8,
     fontsize: f64,
@@ -370,6 +373,7 @@ pub const SubgraphOptions = struct {
     color: ?[]const u8 = null,
     pencolor: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
+    gradientangle: ?f64 = null,
     fontcolor: ?[]const u8 = null,
     fontname: ?[]const u8 = null,
     fontsize: ?f64 = null,
@@ -731,6 +735,7 @@ pub const Graph = struct {
             .label => |value| try self.setDefaultNodeAttrRaw("label", value),
             .color => |value| try self.setDefaultNodeAttrRaw("color", value),
             .fillcolor => |value| try self.setDefaultNodeAttrRaw("fillcolor", value),
+            .gradientangle => |value| try self.setDefaultNodeAttrFloat("gradientangle", value),
             .fontcolor => |value| try self.setDefaultNodeAttrRaw("fontcolor", value),
             .shape => |value| try self.setDefaultNodeAttrRaw("shape", shapeName(value)),
             .style => |value| try self.setDefaultNodeAttrRaw("style", nodeStyleName(value)),
@@ -827,6 +832,7 @@ pub const Graph = struct {
         if (options.label) |value| try self.setNodeAttr(id, .{ .label = value });
         if (options.color) |value| try self.setNodeAttr(id, .{ .color = value });
         if (options.fillcolor) |value| try self.setNodeAttr(id, .{ .fillcolor = value });
+        if (options.gradientangle) |value| try self.setNodeAttr(id, .{ .gradientangle = value });
         if (options.fontcolor) |value| try self.setNodeAttr(id, .{ .fontcolor = value });
         if (options.shape) |value| try self.setNodeAttr(id, .{ .shape = value });
         if (options.style) |value| try self.setNodeAttr(id, .{ .style = value });
@@ -851,6 +857,7 @@ pub const Graph = struct {
             .label => |value| try self.setNodeAttrRaw(id, "label", value),
             .color => |value| try self.setNodeAttrRaw(id, "color", value),
             .fillcolor => |value| try self.setNodeAttrRaw(id, "fillcolor", value),
+            .gradientangle => |value| try self.setNodeAttrFloat(id, "gradientangle", value),
             .fontcolor => |value| try self.setNodeAttrRaw(id, "fontcolor", value),
             .shape => |value| try self.setNodeShape(id, value),
             .style => |value| try self.setNodeAttrRaw(id, "style", nodeStyleName(value)),
@@ -1003,6 +1010,7 @@ pub const Graph = struct {
         if (options.color) |value| try self.setSubgraphAttr(id, .{ .color = value });
         if (options.pencolor) |value| try self.setSubgraphAttr(id, .{ .pencolor = value });
         if (options.fillcolor) |value| try self.setSubgraphAttr(id, .{ .fillcolor = value });
+        if (options.gradientangle) |value| try self.setSubgraphAttr(id, .{ .gradientangle = value });
         if (options.fontcolor) |value| try self.setSubgraphAttr(id, .{ .fontcolor = value });
         if (options.fontname) |value| try self.setSubgraphAttr(id, .{ .fontname = value });
         if (options.fontsize) |value| try self.setSubgraphAttr(id, .{ .fontsize = value });
@@ -1041,6 +1049,7 @@ pub const Graph = struct {
             .color => |value| try self.setSubgraphAttrRaw(id, "color", value),
             .pencolor => |value| try self.setSubgraphAttrRaw(id, "pencolor", value),
             .fillcolor => |value| try self.setSubgraphAttrRaw(id, "fillcolor", value),
+            .gradientangle => |value| try self.setSubgraphAttrFloat(id, "gradientangle", value),
             .fontcolor => |value| try self.setSubgraphAttrRaw(id, "fontcolor", value),
             .fontname => |value| try self.setSubgraphAttrRaw(id, "fontname", value),
             .fontsize => |value| try self.setSubgraphAttrFloat(id, "fontsize", value),
@@ -13095,6 +13104,7 @@ test "code API sets typed node and edge options at creation" {
         .label = "A",
         .color = "#334155",
         .fillcolor = "#dbeafe",
+        .gradientangle = 30,
         .fontcolor = "#0f172a",
         .shape = .box,
         .style = .filled,
@@ -13147,6 +13157,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqual(Shape.box, node_item.shape);
     try std.testing.expectEqualStrings("#334155", node_item.color);
     try std.testing.expectEqualStrings("#dbeafe", attrValue(node_item.attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("30", attrValue(node_item.attrs.items, "gradientangle").?);
     try std.testing.expectEqualStrings("#0f172a", attrValue(node_item.attrs.items, "fontcolor").?);
     try std.testing.expectEqualStrings("filled", attrValue(node_item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("2", attrValue(node_item.attrs.items, "penwidth").?);
@@ -13211,6 +13222,7 @@ test "code API sets typed subgraph attrs" {
         .color = "#2563eb",
         .pencolor = "#1d4ed8",
         .fillcolor = "#dbeafe",
+        .gradientangle = 45,
         .styles = &.{ .filled, .rounded, .bold },
         .fontname = "Helvetica",
         .fontsize = 16,
@@ -13240,6 +13252,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("#2563eb", attrValue(item.attrs.items, "color").?);
     try std.testing.expectEqualStrings("#1d4ed8", attrValue(item.attrs.items, "pencolor").?);
     try std.testing.expectEqualStrings("#dbeafe", attrValue(item.attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("45", attrValue(item.attrs.items, "gradientangle").?);
     try std.testing.expectEqualStrings("filled,rounded,bold", attrValue(item.attrs.items, "style").?);
     try std.testing.expectEqualStrings("Helvetica", attrValue(item.attrs.items, "fontname").?);
     try std.testing.expectEqualStrings("16", attrValue(item.attrs.items, "fontsize").?);
@@ -15216,6 +15229,36 @@ test "SVG renderer honors Graphviz fillcolor gradients" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fx=\"50%\" fy=\"0%\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"white\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"url(#vex-node-fill-2)\"") != null);
+}
+
+test "SVG renderer uses typed gradientangle attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+
+    const a = try graph.addNode("linear", .{
+        .shape = .box,
+        .style = .filled,
+        .fillcolor = "yellow;0.5:blue",
+        .gradientangle = 45,
+    });
+    const b = try graph.addNode("clustered", .{ .shape = .box });
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addSubgraph("cluster_gradient", null, &.{b}, .{
+        .label = "gradient",
+        .styles = &.{ .filled, .radial },
+        .fillcolor = "white:#2563eb",
+        .gradientangle = 90,
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<linearGradient id=\"vex-node-fill-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<radialGradient id=\"vex-cluster-fill-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fx=\"50%\" fy=\"0%\"") != null);
 }
 
 test "SVG renderer honors Graphviz striped fills on box nodes and clusters" {
