@@ -169,6 +169,11 @@ pub const GraphAttr = union(enum) {
     labeljust: LabelJust,
     labelloc: LabelLoc,
     ordering: OrderingMode,
+    url: []const u8,
+    href: []const u8,
+    tooltip: []const u8,
+    title: []const u8,
+    target: []const u8,
 };
 
 pub const NodeStyle = enum {
@@ -724,6 +729,11 @@ pub const Graph = struct {
             .labeljust => |value| try self.setGraphAttrRaw("labeljust", labelJustName(value)),
             .labelloc => |value| try self.setGraphAttrRaw("labelloc", labelLocName(value)),
             .ordering => |value| try self.setGraphAttrRaw("ordering", orderingModeName(value)),
+            .url => |value| try self.setGraphAttrRaw("URL", value),
+            .href => |value| try self.setGraphAttrRaw("href", value),
+            .tooltip => |value| try self.setGraphAttrRaw("tooltip", value),
+            .title => |value| try self.setGraphAttrRaw("title", value),
+            .target => |value| try self.setGraphAttrRaw("target", value),
         }
     }
 
@@ -7770,6 +7780,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
+    const graph_wrap = try writeSvgInteractiveOpen(writer, graph.attrs.items);
     try writer.print("<polygon fill=\"{s}\" stroke=\"none\" points=\"", .{background});
     try writeSvgPoint(writer, .{ .x = background_left, .y = background_top });
     try writer.writeByte(' ');
@@ -7808,6 +7819,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeXmlEscaped(writer, graph_label);
         try writer.writeAll("</text>\n");
     }
+    try writeSvgInteractiveClose(writer, graph_wrap);
     if (svgNeedsMarkerDefs(graph, concentrate)) {
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
@@ -15730,19 +15742,24 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph InternalName {
-        \\  graph [label="Visible Title", bgcolor=lightgrey];
+        \\  graph [label="Visible Title", bgcolor=lightgrey, URL="https://example.com/graph", tooltip="Graph tip", target="_top"];
         \\  a -> b;
         \\}
     );
     defer graph.deinit();
+    try graph.setGraphAttr(.{ .href = "https://example.com/graph-href" });
+    try graph.setGraphAttr(.{ .title = "Graph title" });
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
+    try std.testing.expectEqualStrings("https://example.com/graph-href", attrValue(graph.attrs.items, "href").?);
+    try std.testing.expectEqualStrings("Graph title", attrValue(graph.attrs.items, "title").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0,0 0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph-href\" target=\"_top\"><title>Graph tip</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
     try std.testing.expect(layout.margin_y >= 26.0);
 }
