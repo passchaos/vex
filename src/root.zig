@@ -8441,6 +8441,10 @@ fn writeSvgRadialGradientDef(writer: *Io.Writer, graph: *const Graph, attrs: []c
 }
 
 fn writeSvgGradientStop(writer: *Io.Writer, offset: f64, color: []const u8) Io.Writer.Error!void {
+    if (std.mem.eql(u8, color, "none")) {
+        try writer.print("<stop offset=\"{d:.1}%\" stop-color=\"#ffffff\" stop-opacity=\"0\"/>\n", .{std.math.clamp(offset, 0.0, 1.0) * 100.0});
+        return;
+    }
     try writer.print("<stop offset=\"{d:.1}%\" stop-color=\"{s}\"/>\n", .{ std.math.clamp(offset, 0.0, 1.0) * 100.0, color });
 }
 
@@ -16186,6 +16190,25 @@ test "SVG renderer keeps explicit zero gradient fractions" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<linearGradient id=\"vex-node-fill-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "offset=\"0.0%\" stop-color=\"yellow\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "offset=\"0.0%\" stop-color=\"blue\"") != null);
+}
+
+test "SVG renderer emits transparent gradient stops with opacity" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  faded [shape=box, style=filled, fillcolor="transparent:blue"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"#ffffff\" stop-opacity=\"0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"none\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"blue\"") != null);
 }
 
 test "SVG renderer uses typed gradientangle attributes" {
