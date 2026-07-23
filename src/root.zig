@@ -305,6 +305,7 @@ pub const EdgeOptions = struct {
     labelfontsize: ?f64 = null,
     labeldistance: ?f64 = null,
     labelangle: ?f64 = null,
+    decorate: ?bool = null,
     tailclip: ?bool = null,
     headclip: ?bool = null,
     samehead: ?[]const u8 = null,
@@ -345,6 +346,7 @@ pub const EdgeAttr = union(enum) {
     labelfontsize: f64,
     labeldistance: f64,
     labelangle: f64,
+    decorate: bool,
     tailclip: bool,
     headclip: bool,
     samehead: []const u8,
@@ -840,6 +842,7 @@ pub const Graph = struct {
             .labelfontsize => |value| try self.setDefaultEdgeAttrFloat("labelfontsize", value),
             .labeldistance => |value| try self.setDefaultEdgeAttrFloat("labeldistance", value),
             .labelangle => |value| try self.setDefaultEdgeAttrFloat("labelangle", value),
+            .decorate => |value| try self.setDefaultEdgeAttrRaw("decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
             .samehead => |value| try self.setDefaultEdgeAttrRaw("samehead", value),
@@ -979,6 +982,7 @@ pub const Graph = struct {
         if (options.labelfontsize) |value| try self.setEdgeAttr(id, .{ .labelfontsize = value });
         if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
         if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
+        if (options.decorate) |value| try self.setEdgeAttr(id, .{ .decorate = value });
         if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
         if (options.samehead) |value| try self.setEdgeAttr(id, .{ .samehead = value });
@@ -1018,6 +1022,7 @@ pub const Graph = struct {
             .labelfontsize => |value| try self.setEdgeAttrFloat(id, "labelfontsize", value),
             .labeldistance => |value| try self.setEdgeAttrFloat(id, "labeldistance", value),
             .labelangle => |value| try self.setEdgeAttrFloat(id, "labelangle", value),
+            .decorate => |value| try self.setEdgeAttrRaw(id, "decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
             .samehead => |value| try self.setEdgeAttrRaw(id, "samehead", value),
@@ -13283,6 +13288,7 @@ test "code API sets typed node and edge options at creation" {
         .labelfontsize = 11,
         .labeldistance = 1.5,
         .labelangle = 25,
+        .decorate = true,
         .tailclip = false,
         .headclip = false,
         .samehead = "h",
@@ -13338,6 +13344,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("11", attrValue(edge_item.attrs.items, "labelfontsize").?);
     try std.testing.expectEqualStrings("1.5", attrValue(edge_item.attrs.items, "labeldistance").?);
     try std.testing.expectEqualStrings("25", attrValue(edge_item.attrs.items, "labelangle").?);
+    try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "decorate").?);
     try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "tailclip").?);
     try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "headclip").?);
     try std.testing.expectEqualStrings("h", attrValue(edge_item.attrs.items, "samehead").?);
@@ -16157,12 +16164,12 @@ test "SVG renderer honors edge label font position and decoration attributes" {
         \\    labelfontcolor="#7c3aed",
         \\    labeldistance=2.0,
         \\    labelangle=45,
-        \\    decorate=true,
         \\    color="#2563eb"
         \\  ];
         \\}
     );
     defer graph.deinit();
+    try graph.setEdgeAttr(0, .{ .decorate = true });
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
