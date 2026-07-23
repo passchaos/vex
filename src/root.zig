@@ -301,6 +301,22 @@ pub const EdgeOptions = struct {
     tooltip: ?[]const u8 = null,
     title: ?[]const u8 = null,
     target: ?[]const u8 = null,
+    edge_url: ?[]const u8 = null,
+    edge_href: ?[]const u8 = null,
+    edge_tooltip: ?[]const u8 = null,
+    edge_target: ?[]const u8 = null,
+    label_url: ?[]const u8 = null,
+    label_href: ?[]const u8 = null,
+    label_tooltip: ?[]const u8 = null,
+    label_target: ?[]const u8 = null,
+    head_url: ?[]const u8 = null,
+    head_href: ?[]const u8 = null,
+    head_tooltip: ?[]const u8 = null,
+    head_target: ?[]const u8 = null,
+    tail_url: ?[]const u8 = null,
+    tail_href: ?[]const u8 = null,
+    tail_tooltip: ?[]const u8 = null,
+    tail_target: ?[]const u8 = null,
     arrowhead: ?ArrowShape = null,
     arrowtail: ?ArrowShape = null,
     arrowsize: ?f64 = null,
@@ -344,6 +360,22 @@ pub const EdgeAttr = union(enum) {
     tooltip: []const u8,
     title: []const u8,
     target: []const u8,
+    edge_url: []const u8,
+    edge_href: []const u8,
+    edge_tooltip: []const u8,
+    edge_target: []const u8,
+    label_url: []const u8,
+    label_href: []const u8,
+    label_tooltip: []const u8,
+    label_target: []const u8,
+    head_url: []const u8,
+    head_href: []const u8,
+    head_tooltip: []const u8,
+    head_target: []const u8,
+    tail_url: []const u8,
+    tail_href: []const u8,
+    tail_tooltip: []const u8,
+    tail_target: []const u8,
     arrowhead: ArrowShape,
     arrowtail: ArrowShape,
     arrowsize: f64,
@@ -849,6 +881,22 @@ pub const Graph = struct {
             .tooltip => |value| try self.setDefaultEdgeAttrRaw("tooltip", value),
             .title => |value| try self.setDefaultEdgeAttrRaw("title", value),
             .target => |value| try self.setDefaultEdgeAttrRaw("target", value),
+            .edge_url => |value| try self.setDefaultEdgeAttrRaw("edgeURL", value),
+            .edge_href => |value| try self.setDefaultEdgeAttrRaw("edgehref", value),
+            .edge_tooltip => |value| try self.setDefaultEdgeAttrRaw("edgetooltip", value),
+            .edge_target => |value| try self.setDefaultEdgeAttrRaw("edgetarget", value),
+            .label_url => |value| try self.setDefaultEdgeAttrRaw("labelURL", value),
+            .label_href => |value| try self.setDefaultEdgeAttrRaw("labelhref", value),
+            .label_tooltip => |value| try self.setDefaultEdgeAttrRaw("labeltooltip", value),
+            .label_target => |value| try self.setDefaultEdgeAttrRaw("labeltarget", value),
+            .head_url => |value| try self.setDefaultEdgeAttrRaw("headURL", value),
+            .head_href => |value| try self.setDefaultEdgeAttrRaw("headhref", value),
+            .head_tooltip => |value| try self.setDefaultEdgeAttrRaw("headtooltip", value),
+            .head_target => |value| try self.setDefaultEdgeAttrRaw("headtarget", value),
+            .tail_url => |value| try self.setDefaultEdgeAttrRaw("tailURL", value),
+            .tail_href => |value| try self.setDefaultEdgeAttrRaw("tailhref", value),
+            .tail_tooltip => |value| try self.setDefaultEdgeAttrRaw("tailtooltip", value),
+            .tail_target => |value| try self.setDefaultEdgeAttrRaw("tailtarget", value),
             .arrowhead => |value| try self.setDefaultEdgeAttrRaw("arrowhead", arrowShapeName(value)),
             .arrowtail => |value| try self.setDefaultEdgeAttrRaw("arrowtail", arrowShapeName(value)),
             .arrowsize => |value| try self.setDefaultEdgeAttrFloat("arrowsize", value),
@@ -1001,6 +1049,22 @@ pub const Graph = struct {
         if (options.tooltip) |value| try self.setEdgeAttr(id, .{ .tooltip = value });
         if (options.title) |value| try self.setEdgeAttr(id, .{ .title = value });
         if (options.target) |value| try self.setEdgeAttr(id, .{ .target = value });
+        if (options.edge_url) |value| try self.setEdgeAttr(id, .{ .edge_url = value });
+        if (options.edge_href) |value| try self.setEdgeAttr(id, .{ .edge_href = value });
+        if (options.edge_tooltip) |value| try self.setEdgeAttr(id, .{ .edge_tooltip = value });
+        if (options.edge_target) |value| try self.setEdgeAttr(id, .{ .edge_target = value });
+        if (options.label_url) |value| try self.setEdgeAttr(id, .{ .label_url = value });
+        if (options.label_href) |value| try self.setEdgeAttr(id, .{ .label_href = value });
+        if (options.label_tooltip) |value| try self.setEdgeAttr(id, .{ .label_tooltip = value });
+        if (options.label_target) |value| try self.setEdgeAttr(id, .{ .label_target = value });
+        if (options.head_url) |value| try self.setEdgeAttr(id, .{ .head_url = value });
+        if (options.head_href) |value| try self.setEdgeAttr(id, .{ .head_href = value });
+        if (options.head_tooltip) |value| try self.setEdgeAttr(id, .{ .head_tooltip = value });
+        if (options.head_target) |value| try self.setEdgeAttr(id, .{ .head_target = value });
+        if (options.tail_url) |value| try self.setEdgeAttr(id, .{ .tail_url = value });
+        if (options.tail_href) |value| try self.setEdgeAttr(id, .{ .tail_href = value });
+        if (options.tail_tooltip) |value| try self.setEdgeAttr(id, .{ .tail_tooltip = value });
+        if (options.tail_target) |value| try self.setEdgeAttr(id, .{ .tail_target = value });
         if (options.arrowhead) |value| try self.setEdgeAttr(id, .{ .arrowhead = value });
         if (options.arrowtail) |value| try self.setEdgeAttr(id, .{ .arrowtail = value });
         if (options.arrowsize) |value| try self.setEdgeAttr(id, .{ .arrowsize = value });
@@ -1043,6 +1107,22 @@ pub const Graph = struct {
             .tooltip => |value| try self.setEdgeAttrRaw(id, "tooltip", value),
             .title => |value| try self.setEdgeAttrRaw(id, "title", value),
             .target => |value| try self.setEdgeAttrRaw(id, "target", value),
+            .edge_url => |value| try self.setEdgeAttrRaw(id, "edgeURL", value),
+            .edge_href => |value| try self.setEdgeAttrRaw(id, "edgehref", value),
+            .edge_tooltip => |value| try self.setEdgeAttrRaw(id, "edgetooltip", value),
+            .edge_target => |value| try self.setEdgeAttrRaw(id, "edgetarget", value),
+            .label_url => |value| try self.setEdgeAttrRaw(id, "labelURL", value),
+            .label_href => |value| try self.setEdgeAttrRaw(id, "labelhref", value),
+            .label_tooltip => |value| try self.setEdgeAttrRaw(id, "labeltooltip", value),
+            .label_target => |value| try self.setEdgeAttrRaw(id, "labeltarget", value),
+            .head_url => |value| try self.setEdgeAttrRaw(id, "headURL", value),
+            .head_href => |value| try self.setEdgeAttrRaw(id, "headhref", value),
+            .head_tooltip => |value| try self.setEdgeAttrRaw(id, "headtooltip", value),
+            .head_target => |value| try self.setEdgeAttrRaw(id, "headtarget", value),
+            .tail_url => |value| try self.setEdgeAttrRaw(id, "tailURL", value),
+            .tail_href => |value| try self.setEdgeAttrRaw(id, "tailhref", value),
+            .tail_tooltip => |value| try self.setEdgeAttrRaw(id, "tailtooltip", value),
+            .tail_target => |value| try self.setEdgeAttrRaw(id, "tailtarget", value),
             .arrowhead => |value| try self.setEdgeAttrRaw(id, "arrowhead", arrowShapeName(value)),
             .arrowtail => |value| try self.setEdgeAttrRaw(id, "arrowtail", arrowShapeName(value)),
             .arrowsize => |value| try self.setEdgeAttrFloat(id, "arrowsize", value),
@@ -7315,7 +7395,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     if (visual.hidden) return;
     try writeSvgEdgeComment(writer, graph, edge_item);
     try writer.print("<g id=\"edge{d}\" class=\"edge\">\n", .{edge_item.id + 1});
-    const edge_wrap = try writeSvgInteractiveOpen(writer, edge_item.attrs.items);
+    const edge_wrap = try writeSvgInteractiveOpenKind(writer, edge_item.attrs.items, .edge);
     if (edge_wrap == .none) {
         try writeSvgEdgeTitle(writer, graph, edge_item);
         try writer.writeByte('\n');
@@ -7324,7 +7404,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         const route = selfLoopRoute(layout.nodes[edge_item.from]);
         try renderSvgSelfLoopPaths(writer, graph.directed, edge_item, route, visual);
         if (edge_item.label) |label| {
-            try renderSvgTextBlock(writer, label, route.label.x, route.label.y, visual.font_size, visual.font_color, visual.font_family, true, true);
+            try renderSvgEdgeInteractiveLabel(writer, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font_family);
         }
         try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual);
         try writeSvgInteractiveClose(writer, edge_wrap);
@@ -7341,7 +7421,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     try renderSvgEdgePaths(writer, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
     if (edge_item.label) |label| {
         const label_center = edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
-        try renderSvgTextBlock(writer, label, label_center.x, label_center.y, visual.font_size, visual.font_color, visual.font_family, true, true);
+        try renderSvgEdgeInteractiveLabel(writer, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font_family);
     }
     try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual);
     try writeSvgInteractiveClose(writer, edge_wrap);
@@ -7669,6 +7749,14 @@ const SvgInteractiveWrap = enum {
     group,
 };
 
+const SvgInteractiveKind = enum {
+    default,
+    edge,
+    label,
+    head,
+    tail,
+};
+
 const ColorSegment = struct {
     color: []const u8,
     fraction: f64,
@@ -7850,9 +7938,13 @@ fn gradientStopEndOffset(start: ColorSegment, stop: ColorSegment) f64 {
 }
 
 fn writeSvgInteractiveOpen(writer: *Io.Writer, attrs: []const Attr) Io.Writer.Error!SvgInteractiveWrap {
-    const href = attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url");
-    const tooltip = attrValue(attrs, "tooltip") orelse attrValue(attrs, "title");
-    const link_target = attrValue(attrs, "target");
+    return writeSvgInteractiveOpenKind(writer, attrs, .default);
+}
+
+fn writeSvgInteractiveOpenKind(writer: *Io.Writer, attrs: []const Attr, kind: SvgInteractiveKind) Io.Writer.Error!SvgInteractiveWrap {
+    const href = interactiveHref(attrs, kind);
+    const tooltip = interactiveTooltip(attrs, kind);
+    const link_target = interactiveTarget(attrs, kind);
     if (href == null and tooltip == null) return .none;
 
     if (href) |target_href| {
@@ -7872,6 +7964,36 @@ fn writeSvgInteractiveOpen(writer: *Io.Writer, attrs: []const Attr) Io.Writer.Er
     try writer.writeAll("<g>");
     if (tooltip) |tip| try writeSvgTitle(writer, tip);
     return .group;
+}
+
+fn interactiveHref(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
+    return switch (kind) {
+        .default => attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url"),
+        .edge => attrValue(attrs, "edgehref") orelse attrValue(attrs, "edgeURL") orelse attrValue(attrs, "edgeurl") orelse attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url"),
+        .label => attrValue(attrs, "labelhref") orelse attrValue(attrs, "labelURL") orelse attrValue(attrs, "labelurl"),
+        .head => attrValue(attrs, "headhref") orelse attrValue(attrs, "headURL") orelse attrValue(attrs, "headurl"),
+        .tail => attrValue(attrs, "tailhref") orelse attrValue(attrs, "tailURL") orelse attrValue(attrs, "tailurl"),
+    };
+}
+
+fn interactiveTooltip(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
+    return switch (kind) {
+        .default => attrValue(attrs, "tooltip") orelse attrValue(attrs, "title"),
+        .edge => attrValue(attrs, "edgetooltip") orelse attrValue(attrs, "tooltip") orelse attrValue(attrs, "title"),
+        .label => attrValue(attrs, "labeltooltip"),
+        .head => attrValue(attrs, "headtooltip"),
+        .tail => attrValue(attrs, "tailtooltip"),
+    };
+}
+
+fn interactiveTarget(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
+    return switch (kind) {
+        .default => attrValue(attrs, "target"),
+        .edge => attrValue(attrs, "edgetarget") orelse attrValue(attrs, "target"),
+        .label => attrValue(attrs, "labeltarget"),
+        .head => attrValue(attrs, "headtarget"),
+        .tail => attrValue(attrs, "tailtarget"),
+    };
 }
 
 fn writeSvgTitle(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
@@ -7911,15 +8033,15 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
     const label_angle = parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0);
     if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
         const pos = endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
-        try renderSvgTextBlock(writer, label, pos.x, pos.y, label_font_size, label_font_color, label_font_family, true, true);
+        try renderSvgEdgeInteractiveLabel(writer, edge_item, .tail, label, pos, label_font_size, label_font_color, label_font_family);
     }
     if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
         const pos = endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
-        try renderSvgTextBlock(writer, label, pos.x, pos.y, label_font_size, label_font_color, label_font_family, true, true);
+        try renderSvgEdgeInteractiveLabel(writer, edge_item, .head, label, pos, label_font_size, label_font_color, label_font_family);
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
         const pos = edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size);
-        try renderSvgTextBlock(writer, label, pos.x, pos.y, label_font_size, label_font_color, label_font_family, true, true);
+        try renderSvgEdgeInteractiveLabel(writer, edge_item, .label, label, pos, label_font_size, label_font_color, label_font_family);
     }
     if (edge_item.label != null and edgeDecorateEnabled(edge_item.attrs.items)) {
         const anchor = lerpPoint(route.start, route.end, 0.5);
@@ -7936,6 +8058,12 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
             .hidden = false,
         });
     }
+}
+
+fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, edge_item: Edge, kind: SvgInteractiveKind, label: []const u8, pos: Point, font_size: f64, font_color: []const u8, font_family: []const u8) Io.Writer.Error!void {
+    const wrap = try writeSvgInteractiveOpenKind(writer, edge_item.attrs.items, kind);
+    try renderSvgTextBlock(writer, label, pos.x, pos.y, font_size, font_color, font_family, true, true);
+    try writeSvgInteractiveClose(writer, wrap);
 }
 
 fn renderSvgEdgePaths(writer: *Io.Writer, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
@@ -14978,6 +15106,47 @@ test "SVG renderer emits URL href and tooltip metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" target=\"_parent\"><title>Cluster API</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\" target=\"_parent\">") != null);
+}
+
+test "SVG renderer honors edge label URL tooltip target metadata" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("A", .{});
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{
+        .label = "main",
+        .xlabel = "external",
+        .headlabel = "head",
+        .taillabel = "tail",
+        .edge_url = "https://example.com/edge",
+        .edge_tooltip = "Edge path",
+        .edge_target = "_self",
+        .label_url = "https://example.com/label",
+        .label_tooltip = "Main label",
+        .label_target = "_blank",
+        .head_url = "https://example.com/head",
+        .head_tooltip = "Head label",
+        .head_target = "_parent",
+        .tail_url = "https://example.com/tail",
+        .tail_tooltip = "Tail label",
+        .tail_target = "_top",
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge\" target=\"_self\"><title>Edge path</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label\" target=\"_blank\"><title>Main label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head\" target=\"_parent\"><title>Head label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail\" target=\"_top\"><title>Tail label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">main</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">external</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">head</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">tail</tspan>") != null);
 }
 
 test "SVG renderer emits default Graphviz-like node and edge titles" {
