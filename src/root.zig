@@ -178,6 +178,7 @@ pub const GraphAttr = union(enum) {
     target: []const u8,
     id: []const u8,
     class: []const u8,
+    stylesheet: []const u8,
 };
 
 pub const NodeStyle = enum {
@@ -806,6 +807,7 @@ pub const Graph = struct {
             .target => |value| try self.setGraphAttrRaw("target", value),
             .id => |value| try self.setGraphAttrRaw("id", value),
             .class => |value| try self.setGraphAttrRaw("class", value),
+            .stylesheet => |value| try self.setGraphAttrRaw("stylesheet", value),
         }
     }
 
@@ -7294,6 +7296,13 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const background_top = -content_translate.y;
     const background_right = canvas_width - content_translate.x;
     const background_bottom = canvas_height - content_translate.y;
+    if (attrValue(graph.attrs.items, "stylesheet")) |stylesheet| {
+        if (stylesheet.len > 0) {
+            try writer.writeAll("<?xml-stylesheet href=\"");
+            try writeXmlEscaped(writer, stylesheet);
+            try writer.writeAll("\" type=\"text/css\"?>\n");
+        }
+    }
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
         .{ canvas_width, canvas_height, canvas_width, canvas_height },
@@ -13154,6 +13163,37 @@ test "SVG renderer emits document" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.startsWith(u8, svg, "<svg"));
     try std.testing.expect(std.mem.indexOf(u8, svg, "test") != null);
+}
+
+test "SVG renderer emits graph stylesheet processing instruction" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .stylesheet = "theme&print.css" });
+    const a = try graph.addNode("A", .{});
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{});
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.startsWith(u8, svg, "<?xml-stylesheet href=\"theme&amp;print.css\" type=\"text/css\"?>\n<svg"));
+
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [stylesheet="screen.css"];
+        \\  a -> b;
+        \\}
+    );
+    defer parsed.deinit();
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+
+    try std.testing.expect(std.mem.startsWith(u8, parsed_svg, "<?xml-stylesheet href=\"screen.css\" type=\"text/css\"?>\n<svg"));
 }
 
 test "SVG geometry parser reads Graphviz-style path and polygon numbers" {
