@@ -2417,7 +2417,7 @@ const Parser = struct {
 
     fn setParsedGraphAttr(self: *Parser, graph: *Graph, name: []const u8, value: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(name, "label")) {
-            const expanded = try expandLabelEscapes(self.allocator, value, .{ .graph_name = graph.name });
+            const expanded = try expandLabelEscapes(self.allocator, value, .{ .graph_name = graph.name, .label_name = value });
             defer self.allocator.free(expanded);
             try graph.setGraphAttrRaw(name, expanded);
             return;
@@ -2605,6 +2605,7 @@ fn expandNodeLabel(allocator: std.mem.Allocator, graph: *const Graph, node_name:
     return expandLabelEscapes(allocator, value, .{
         .graph_name = graph.name,
         .node_name = node_name,
+        .label_name = value,
     });
 }
 
@@ -2618,6 +2619,7 @@ fn expandEdgeLabel(allocator: std.mem.Allocator, graph: *const Graph, tail: []co
         .tail_name = tail,
         .head_name = head,
         .edge_name = edge_name,
+        .label_name = value,
     });
 }
 
@@ -2627,6 +2629,7 @@ const LabelEscapeContext = struct {
     tail_name: ?[]const u8 = null,
     head_name: ?[]const u8 = null,
     edge_name: ?[]const u8 = null,
+    label_name: ?[]const u8 = null,
 };
 
 fn expandLabelEscapes(allocator: std.mem.Allocator, value: []const u8, context: LabelEscapeContext) ![]u8 {
@@ -2650,6 +2653,7 @@ fn expandLabelEscapes(allocator: std.mem.Allocator, value: []const u8, context: 
             'T' => if (context.tail_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\T"),
             'H' => if (context.head_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\H"),
             'E' => if (context.edge_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\E"),
+            'L' => if (context.label_name) |name| try out.appendSlice(allocator, name) else try out.appendSlice(allocator, "\\L"),
             else => |escaped| {
                 try out.append(allocator, '\\');
                 try out.append(allocator, escaped);
@@ -7606,7 +7610,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
-    const graph_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, graph.attrs.items, .{ .graph_name = graph.name }, graphFallbackTitle(graph));
+    const graph_fallback_title = graphFallbackTitle(graph);
+    const graph_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, graph.attrs.items, .{ .graph_name = graph.name, .label_name = graph_fallback_title }, graph_fallback_title);
     try writer.print("<polygon fill=\"{s}\" stroke=\"none\" points=\"", .{background});
     try writeSvgPoint(writer, .{ .x = background_left, .y = background_top });
     try writer.writeByte(' ');
@@ -7892,7 +7897,8 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const default_id = std.fmt.bufPrint(&default_id_buf, "node{d}", .{node_item.id + 1}) catch unreachable;
     try writeSvgGroupOpen(writer, node_item.attrs.items, default_id, "node");
     const node_name = svgNodeName(node_item);
-    const node_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, node_item.attrs.items, .{ .graph_name = graph.name, .node_name = node_name }, nodeFallbackTitle(node_item));
+    const node_fallback_title = nodeFallbackTitle(node_item);
+    const node_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, node_item.attrs.items, .{ .graph_name = graph.name, .node_name = node_name, .label_name = node_fallback_title }, node_fallback_title);
     if (node_wrap == .none) {
         try writeSvgNodeNameTitle(writer, node_item);
         try writer.writeByte('\n');
@@ -8132,6 +8138,7 @@ fn svgEdgeEscapeContext(graph: *const Graph, edge_item: Edge, edge_name_buf: *[2
         .tail_name = tail,
         .head_name = head,
         .edge_name = edge_name,
+        .label_name = edgeFallbackTitle(edge_item, edge_name),
     };
 }
 
@@ -8508,6 +8515,7 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
     var edge_name_buf: [256]u8 = undefined;
     var context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
     context.node_name = label;
+    context.label_name = label;
     const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label);
     try renderSvgTextBlock(writer, label, pos.x, pos.y, font_size, font_color, font_family, true, true);
     try writeSvgInteractiveClose(writer, wrap);
@@ -10131,7 +10139,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     try writeSvgGroupOpen(writer, cluster.attrs.items, default_id, "cluster");
     try writeSvgTitle(writer, cluster.label);
     try writer.writeByte('\n');
-    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, .{ .graph_name = graph.name, .node_name = cluster.label }, cluster.label);
+    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, .{ .graph_name = graph.name, .node_name = cluster.label, .label_name = cluster.label }, cluster.label);
     const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgStripedRectFill(writer, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
@@ -13994,15 +14002,17 @@ test "DOT label escapes expand graph node and edge context" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph Ctx {
-        \\  node_a [label="node=\N graph=\G"];
-        \\  node_a -> node_b [label="\T|\H|\E|\G"];
+        \\  graph [label="graph-label:\L:\G"];
+        \\  node_a [label="node=\N graph=\G label=\L"];
+        \\  node_a -> node_b [label="\T|\H|\E|\G|\L"];
         \\}
     );
     defer graph.deinit();
 
     const node_a = nodeIdByLabel(&graph, "node_a");
-    try std.testing.expectEqualStrings("node=node_a graph=Ctx", graph.nodes.items[node_a].label);
-    try std.testing.expectEqualStrings("node_a|node_b|node_a->node_b|Ctx", graph.edges.items[0].label.?);
+    try std.testing.expectEqualStrings("graph-label:graph-label:\\L:\\G:Ctx", attrValue(graph.attrs.items, "label").?);
+    try std.testing.expectEqualStrings("node=node_a graph=Ctx label=node=\\N graph=\\G label=\\L", graph.nodes.items[node_a].label);
+    try std.testing.expectEqualStrings("node_a|node_b|node_a->node_b|Ctx|\\T|\\H|\\E|\\G|\\L", graph.edges.items[0].label.?);
 }
 
 test "DOT parser decodes quoted graph names for label escapes" {
@@ -16022,22 +16032,22 @@ test "SVG renderer expands URL escape sequences with object context" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph GraphName {
-        \\  graph [URL="https://example.com/\G", tooltip="graph \G", target="frame-\G"];
+        \\  graph [URL="https://example.com/\G/\L", tooltip="graph \G \L", target="frame-\G"];
         \\  subgraph cluster_api {
         \\    label="API";
-        \\    URL="https://example.com/cluster/\N/\G";
-        \\    tooltip="cluster \N \G";
+        \\    URL="https://example.com/cluster/\N/\L/\G";
+        \\    tooltip="cluster \N \L \G";
         \\    target="cluster-\N";
         \\    a;
         \\  }
-        \\  a [URL="https://example.com/node/\N/\G", tooltip="node \N \G", target="node-\N"];
+        \\  a [URL="https://example.com/node/\N/\L/\G", tooltip="node \N \L \G", target="node-\N"];
         \\  b;
         \\  a -> b [
-        \\    URL="https://example.com/edge/\N/\E/\T/\H/\G",
-        \\    labelURL="https://example.com/label/\N/\E",
-        \\    headURL="https://example.com/head/\N/\E",
-        \\    tailURL="https://example.com/tail/\N/\E",
-        \\    tooltip="edge \E \T \H \G",
+        \\    URL="https://example.com/edge/\N/\E/\T/\H/\G/\L",
+        \\    labelURL="https://example.com/label/\N/\L/\E",
+        \\    headURL="https://example.com/head/\N/\L/\E",
+        \\    tailURL="https://example.com/tail/\N/\L/\E",
+        \\    tooltip="edge \E \T \H \G \L",
         \\    target="edge-\E",
         \\    label="go",
         \\    headlabel="head",
@@ -16052,13 +16062,13 @@ test "SVG renderer expands URL escape sequences with object context" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName\" xlink:href=\"https://example.com/GraphName\" xlink:title=\"graph GraphName\" target=\"frame-GraphName\"><title>graph GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/GraphName\" xlink:href=\"https://example.com/node/a/GraphName\" xlink:title=\"node a GraphName\" target=\"node-a\"><title>node a GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/GraphName\" xlink:href=\"https://example.com/cluster/API/GraphName\" xlink:title=\"cluster API GraphName\" target=\"cluster-API\"><title>cluster API GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" xlink:href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName\" xlink:title=\"edge a-&gt;b a b GraphName\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/a-&gt;b\" xlink:href=\"https://example.com/label/go/a-&gt;b\" xlink:title=\"go\" target=\"edge-a-&gt;b\"><title>go</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/a-&gt;b\" xlink:href=\"https://example.com/head/head/a-&gt;b\" xlink:title=\"head\" target=\"edge-a-&gt;b\"><title>head</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/a-&gt;b\" xlink:href=\"https://example.com/tail/tail/a-&gt;b\" xlink:title=\"tail\" target=\"edge-a-&gt;b\"><title>tail</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/GraphName/GraphName\" xlink:href=\"https://example.com/GraphName/GraphName\" xlink:title=\"graph GraphName GraphName\" target=\"frame-GraphName\"><title>graph GraphName GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/node/a/a/GraphName\" xlink:href=\"https://example.com/node/a/a/GraphName\" xlink:title=\"node a a GraphName\" target=\"node-a\"><title>node a a GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster/API/API/GraphName\" xlink:href=\"https://example.com/cluster/API/API/GraphName\" xlink:title=\"cluster API API GraphName\" target=\"cluster-API\"><title>cluster API API GraphName</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName/go\" xlink:href=\"https://example.com/edge/a-&gt;b/a-&gt;b/a/b/GraphName/go\" xlink:title=\"edge a-&gt;b a b GraphName go\" target=\"edge-a-&gt;b\"><title>edge a-&gt;b a b GraphName go</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/go/a-&gt;b\" xlink:href=\"https://example.com/label/go/go/a-&gt;b\" xlink:title=\"go\" target=\"edge-a-&gt;b\"><title>go</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/head/a-&gt;b\" xlink:href=\"https://example.com/head/head/head/a-&gt;b\" xlink:title=\"head\" target=\"edge-a-&gt;b\"><title>head</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/tail/a-&gt;b\" xlink:href=\"https://example.com/tail/tail/tail/a-&gt;b\" xlink:title=\"tail\" target=\"edge-a-&gt;b\"><title>tail</title>") != null);
 }
 
 test "SVG renderer honors typed id and class metadata" {
