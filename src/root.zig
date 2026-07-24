@@ -13069,12 +13069,11 @@ fn edgeRouteForEdge(graph: *const Graph, layout: *const Layout, edge_item: Edge,
         samePortBoundaryPoint(graph, layout, edge_item, true) orelse recordBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_record_port, edge_item.head_port, false) orelse nodePortBoundaryPoint(graph.nodes.items[edge_item.to], to, end_toward, edge_item.head_port, rankdir, false)
     else
         to.center;
-    const compound = graphCompoundEnabled(graph);
-    const start = if (compound and edge_item.ltail != null)
+    const start = if (edgeTailCompoundEnabled(graph, edge_item))
         clusterBoundaryPoint(graph, layout, edge_item.ltail.?, raw_start, raw_end) orelse raw_start
     else
         raw_start;
-    const end = if (compound and edge_item.lhead != null)
+    const end = if (edgeHeadCompoundEnabled(graph, edge_item))
         clusterBoundaryPoint(graph, layout, edge_item.lhead.?, raw_end, raw_start) orelse raw_end
     else
         raw_end;
@@ -13113,6 +13112,22 @@ fn backEdgeEllipseToward(graph: *const Graph, layout: *const Layout, edge_item: 
 
 fn graphCompoundEnabled(graph: *const Graph) bool {
     const value = attrValue(graph.attrs.items, "compound") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn edgeTailCompoundEnabled(graph: *const Graph, edge_item: Edge) bool {
+    const subgraph_id = edge_item.ltail orelse return false;
+    return graphCompoundEnabled(graph) or subgraphCompoundEnabled(graph, subgraph_id);
+}
+
+fn edgeHeadCompoundEnabled(graph: *const Graph, edge_item: Edge) bool {
+    const subgraph_id = edge_item.lhead orelse return false;
+    return graphCompoundEnabled(graph) or subgraphCompoundEnabled(graph, subgraph_id);
+}
+
+fn subgraphCompoundEnabled(graph: *const Graph, id: SubgraphId) bool {
+    if (id >= graph.subgraphs.items.len) return false;
+    const value = attrValue(graph.subgraphs.items[id].attrs.items, "compound") orelse return false;
     return parseBool(value) orelse false;
 }
 
@@ -22150,6 +22165,37 @@ test "DOT ltail and lhead are ignored unless graph compound is true" {
     try std.testing.expect(!pointOnRectBoundary(left, route.start));
     try std.testing.expect(!pointOnRectBoundary(right, route.end));
     try std.testing.expect(!graphCompoundEnabled(&graph));
+}
+
+test "subgraph compound clips edges touching that subgraph" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_left {
+        \\    compound=true;
+        \\    a -> b;
+        \\  }
+        \\  subgraph cluster_right {
+        \\    compound=true;
+        \\    c -> d;
+        \\  }
+        \\  b -> c [ltail=cluster_left, lhead=cluster_right];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const edge_item = graph.edges.items[2];
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    const left = subgraphRect(&graph, &layout, edge_item.ltail.?).?;
+    const right = subgraphRect(&graph, &layout, edge_item.lhead.?).?;
+    try std.testing.expect(pointOnRectBoundary(left, route.start));
+    try std.testing.expect(pointOnRectBoundary(right, route.end));
+    try std.testing.expect(!graphCompoundEnabled(&graph));
+    try std.testing.expect(subgraphCompoundEnabled(&graph, edge_item.ltail.?));
+    try std.testing.expect(subgraphCompoundEnabled(&graph, edge_item.lhead.?));
 }
 
 test "code API exposes typed compound edge ltail and lhead" {
