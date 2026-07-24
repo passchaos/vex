@@ -10401,6 +10401,14 @@ const FontAlias = struct {
 };
 
 fn postscriptFontAlias(fontname: []const u8) ?FontAlias {
+    if (std.ascii.eqlIgnoreCase(fontname, "AvantGarde-Book")) return .{ .ps_family = "AvantGarde-Book,sans-Serif", .gd_family = "URW Gothic L,sans-Serif", .svg_family = "sans-Serif", .weight = "book" };
+    if (std.ascii.eqlIgnoreCase(fontname, "AvantGarde-BookOblique")) return .{ .ps_family = "AvantGarde-BookOblique,sans-Serif", .gd_family = "URW Gothic L,sans-Serif", .svg_family = "sans-Serif", .weight = "book", .style = "oblique", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "AvantGarde-Demi")) return .{ .ps_family = "AvantGarde-Demi,sans-Serif", .gd_family = "URW Gothic L,sans-Serif", .svg_family = "sans-Serif", .weight = "demi", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "AvantGarde-DemiOblique")) return .{ .ps_family = "AvantGarde-DemiOblique,sans-Serif", .gd_family = "URW Gothic L,sans-Serif", .svg_family = "sans-Serif", .weight = "demi", .style = "oblique", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Bookman-Demi")) return .{ .ps_family = "Bookman-Demi,serif", .gd_family = "URW Bookman L,serif", .svg_family = "serif", .weight = "demi", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Bookman-DemiItalic")) return .{ .ps_family = "Bookman-DemiItalic,serif", .gd_family = "URW Bookman L,serif", .svg_family = "serif", .weight = "demi", .style = "italic", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Bookman-Light")) return .{ .ps_family = "Bookman-Light,serif", .gd_family = "URW Bookman L,serif", .svg_family = "serif", .weight = "light" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Bookman-LightItalic")) return .{ .ps_family = "Bookman-LightItalic,serif", .gd_family = "URW Bookman L,serif", .svg_family = "serif", .weight = "light", .style = "italic", .svg_style = "italic" };
     if (std.ascii.eqlIgnoreCase(fontname, "Times-Roman")) return .{ .ps_family = "Times-Roman,serif", .gd_family = "Times,serif", .svg_family = "serif" };
     if (std.ascii.eqlIgnoreCase(fontname, "Times-Bold")) return .{ .ps_family = "Times-Bold,serif", .gd_family = "Times,serif", .svg_family = "serif", .weight = "bold", .svg_weight = "bold" };
     if (std.ascii.eqlIgnoreCase(fontname, "Times-Italic")) return .{ .ps_family = "Times-Italic,serif", .gd_family = "Times,serif", .svg_family = "serif", .style = "italic", .svg_style = "italic" };
@@ -10417,7 +10425,16 @@ fn postscriptFontAlias(fontname: []const u8) ?FontAlias {
     if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow-Bold")) return .{ .ps_family = "Helvetica-Narrow-Bold,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .weight = "bold", .stretch = "condensed", .svg_weight = "bold" };
     if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow-Oblique")) return .{ .ps_family = "Helvetica-Narrow-Oblique,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .stretch = "condensed", .style = "oblique", .svg_style = "italic" };
     if (std.ascii.eqlIgnoreCase(fontname, "Helvetica-Narrow-BoldOblique")) return .{ .ps_family = "Helvetica-Narrow-BoldOblique,sans-Serif", .gd_family = "Helvetica,sans-Serif", .svg_family = "sans-Serif", .weight = "bold", .stretch = "condensed", .style = "oblique", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "NewCenturySchlbk-Bold")) return .{ .ps_family = "NewCenturySchlbk-Bold,serif", .gd_family = "Century Schoolbook L,serif", .svg_family = "serif", .weight = "bold", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "NewCenturySchlbk-BoldItalic")) return .{ .ps_family = "NewCenturySchlbk-BoldItalic,serif", .gd_family = "Century Schoolbook L,serif", .svg_family = "serif", .weight = "bold", .style = "italic", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "NewCenturySchlbk-Italic")) return .{ .ps_family = "NewCenturySchlbk-Italic,serif", .gd_family = "Century Schoolbook L,serif", .svg_family = "serif", .style = "italic", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "NewCenturySchlbk-Roman")) return .{ .ps_family = "NewCenturySchlbk-Roman,serif", .gd_family = "Century Schoolbook L,serif", .svg_family = "serif", .weight = "roman" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Palatino-Bold")) return .{ .ps_family = "Palatino-Bold,serif", .gd_family = "Palatino Linotype,serif", .svg_family = "serif", .weight = "bold", .svg_weight = "bold" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Palatino-BoldItalic")) return .{ .ps_family = "Palatino-BoldItalic,serif", .gd_family = "Palatino Linotype,serif", .svg_family = "serif", .weight = "bold", .style = "italic", .svg_weight = "bold", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Palatino-Italic")) return .{ .ps_family = "Palatino-Italic,serif", .gd_family = "Palatino Linotype,serif", .svg_family = "serif", .style = "italic", .svg_style = "italic" };
+    if (std.ascii.eqlIgnoreCase(fontname, "Palatino-Roman")) return .{ .ps_family = "Palatino-Roman,serif", .gd_family = "Palatino Linotype,serif", .svg_family = "serif", .weight = "roman" };
     if (std.ascii.eqlIgnoreCase(fontname, "Symbol")) return .{ .ps_family = "Symbol,fantasy", .gd_family = "Symbol,fantasy", .svg_family = "fantasy" };
+    if (std.ascii.eqlIgnoreCase(fontname, "ZapfChancery-MediumItalic")) return .{ .ps_family = "ZapfChancery-MediumItalic,serif", .gd_family = "URW Chancery L,serif", .svg_family = "serif", .weight = "medium", .style = "italic", .svg_style = "italic" };
     if (std.ascii.eqlIgnoreCase(fontname, "ZapfDingbats")) return .{ .ps_family = "ZapfDingbats,fantasy", .gd_family = "Dingbats,fantasy", .svg_family = "fantasy" };
     return null;
 }
@@ -17350,6 +17367,7 @@ test "SVG renderer honors Graphviz fontnames modes" {
         \\    fontname="Helvetica-Narrow";
         \\    a;
         \\  }
+        \\  avant [fontname="AvantGarde-DemiOblique"];
         \\  a -> b [label="edge", labelfontname="Times-Roman", xlabel="external"];
         \\}
     );
@@ -17361,6 +17379,7 @@ test "SVG renderer honors Graphviz fontnames modes" {
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"serif\" font-size=\"14.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"monospace\" font-size=\"14.00\" font-weight=\"bold\" font-style=\"italic\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"sans-Serif\" font-size=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"sans-Serif\" font-size=\"14.00\" font-weight=\"bold\" font-style=\"italic\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-stretch=\"condensed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_svg_output, "font-family=\"Times-Roman") == null);
 
@@ -17368,6 +17387,8 @@ test "SVG renderer honors Graphviz fontnames modes" {
         \\digraph G {
         \\  graph [fontnames=ps, label="Graph", fontname="Times-Roman"];
         \\  node [fontname="Courier"];
+        \\  book [fontname="Bookman-LightItalic"];
+        \\  century [fontname="NewCenturySchlbk-Roman"];
         \\  a -> b [label="edge", fontname="Helvetica", labelfontname="Times-Roman", xlabel="external"];
         \\}
     );
@@ -17379,11 +17400,15 @@ test "SVG renderer honors Graphviz fontnames modes" {
     try std.testing.expect(std.mem.indexOf(u8, ps_svg, "font-family=\"Times-Roman,serif\" font-size=\"14.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ps_svg, "font-family=\"Courier,monospace\" font-size=\"14.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ps_svg, "font-family=\"Helvetica,sans-Serif\" font-size=\"14.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ps_svg, "font-family=\"Bookman-LightItalic,serif\" font-size=\"14.00\" font-weight=\"light\" font-style=\"italic\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ps_svg, "font-family=\"NewCenturySchlbk-Roman,serif\" font-size=\"14.00\" font-weight=\"roman\"") != null);
 
     var gd = try parseDot(allocator,
         \\digraph G {
         \\  graph [fontnames=gd, label="Graph", fontname="Times-Roman"];
         \\  node [fontname="Courier-Bold"];
+        \\  pal [fontname="Palatino-BoldItalic"];
+        \\  chancery [fontname="ZapfChancery-MediumItalic"];
         \\  a -> b [label="edge", fontname="Helvetica-Narrow-BoldOblique", labelfontname="Times-Roman", xlabel="external"];
         \\}
     );
@@ -17395,6 +17420,8 @@ test "SVG renderer honors Graphviz fontnames modes" {
     try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Times,serif\" font-size=\"14.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Courier,monospace\" font-size=\"14.00\" font-weight=\"bold\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Helvetica,sans-Serif\" font-size=\"14.00\" font-weight=\"bold\" font-stretch=\"condensed\" font-style=\"oblique\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"Palatino Linotype,serif\" font-size=\"14.00\" font-weight=\"bold\" font-style=\"italic\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gd_svg, "font-family=\"URW Chancery L,serif\" font-size=\"14.00\" font-weight=\"medium\" font-style=\"italic\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
