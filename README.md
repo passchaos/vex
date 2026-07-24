@@ -126,6 +126,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG font output honors Graphviz `fontnames=svg|ps|gd` for standard PostScript font aliases, including family, weight, style, and stretch.
 - SVG color and color-list attributes resolve Graphviz `colorscheme=bugn9` numeric ColorBrewer colors.
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
+- SVG output honors Graphviz `size` for physical output dimensions while preserving layout coordinates in the `viewBox`.
 - SVG output honors Graphviz `rotate=90`, `landscape=true`, and `orientation=landscape`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.

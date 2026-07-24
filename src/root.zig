@@ -208,6 +208,7 @@ pub const GraphAttr = union(enum) {
     colorscheme: []const u8,
     fillcolor: []const u8,
     pencolor: []const u8,
+    size: []const u8,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -935,6 +936,7 @@ pub const Graph = struct {
             .colorscheme => |value| try self.setGraphAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setGraphAttrRaw("fillcolor", value),
             .pencolor => |value| try self.setGraphAttrRaw("pencolor", value),
+            .size => |value| try self.setGraphAttrRaw("size", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -7858,8 +7860,11 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     canvas_width = @ceil(canvas_width);
     canvas_height = @ceil(canvas_height);
     const landscape = graphSvgLandscape(graph);
-    const svg_width = if (landscape) canvas_height else canvas_width;
-    const svg_height = if (landscape) canvas_width else canvas_height;
+    const natural_svg_size = Point{
+        .x = if (landscape) canvas_height else canvas_width,
+        .y = if (landscape) canvas_width else canvas_height,
+    };
+    const svg_size = graphSvgOutputSize(graph, natural_svg_size);
     const background_left = -content_translate.x;
     const background_top = -content_translate.y;
     const background_right = canvas_width - content_translate.x;
@@ -7873,7 +7878,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     }
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
-        .{ svg_width, svg_height, svg_width, svg_height },
+        .{ svg_size.x, svg_size.y, natural_svg_size.x, natural_svg_size.y },
     );
     try writeSvgGroupOpenStart(writer, .{
         .graph = graph,
@@ -8349,6 +8354,42 @@ fn graphSvgLandscape(graph: *const Graph) bool {
         return std.ascii.startsWithIgnoreCase(value, "l");
     }
     return false;
+}
+
+const GraphSvgSize = struct {
+    width: f64,
+    height: f64,
+    exact: bool,
+};
+
+fn graphSvgOutputSize(graph: *const Graph, natural: Point) Point {
+    const requested = graphSvgSizeAttr(graph.attrs.items) orelse return natural;
+    if (requested.width <= 0 or requested.height <= 0 or natural.x <= 0 or natural.y <= 0) return natural;
+    const scale = if (requested.exact)
+        @min(requested.width / natural.x, requested.height / natural.y)
+    else
+        @min(@min(requested.width / natural.x, requested.height / natural.y), 1.0);
+    return .{
+        .x = @max(1.0, natural.x * scale),
+        .y = @max(1.0, natural.y * scale),
+    };
+}
+
+fn graphSvgSizeAttr(attrs: []const Attr) ?GraphSvgSize {
+    var raw = attrValue(attrs, "size") orelse return null;
+    raw = std.mem.trim(u8, raw, " \t\r\n");
+    var exact = false;
+    if (std.mem.endsWith(u8, raw, "!")) {
+        exact = true;
+        raw = std.mem.trim(u8, raw[0 .. raw.len - 1], " \t\r\n");
+    }
+    var parts = std.mem.tokenizeAny(u8, raw, ", \t");
+    const first = parts.next() orelse return null;
+    const second = parts.next() orelse first;
+    const width = parseInchMargin(first) orelse return null;
+    const height = parseInchMargin(second) orelse return null;
+    if (width <= 0 or height <= 0) return null;
+    return .{ .width = width, .height = height, .exact = exact };
 }
 
 fn attrPad(attrs: []const Attr, fallback: f64) BoxMargin {
@@ -17819,6 +17860,38 @@ test "SVG renderer honors graph pad attribute in canvas bounds" {
     const tiny = attrPad(attrs[0..], svg_clip_padding);
     try std.testing.expectApproxEqAbs(@as(f64, 3.6), tiny.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 7.2), tiny.y, 0.001);
+}
+
+test "SVG renderer honors Graphviz graph size output attributes" {
+    const allocator = std.testing.allocator;
+    var large = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [size="1,1"];
+        \\  a -> b -> c -> d;
+        \\}
+    );
+    defer large.deinit();
+
+    var large_layout = try layoutLayered(allocator, &large, .{});
+    defer large_layout.deinit();
+    const large_svg = try renderSvgAlloc(allocator, &large, &large_layout, .{});
+    defer allocator.free(large_svg);
+    const large_view_box = svgViewBox(large_svg) orelse return error.MissingViewBox;
+    try std.testing.expect(large_view_box.width > 72.0 or large_view_box.height > 72.0);
+    try std.testing.expect(std.mem.indexOf(u8, large_svg, "width=\"72pt\" height=\"") != null or std.mem.indexOf(u8, large_svg, "height=\"72pt\"") != null);
+
+    var exact = try Graph.init(allocator, .{ .directed = true });
+    defer exact.deinit();
+    try exact.setGraphAttr(.{ .size = "4,4!" });
+    const a = try exact.addNode("A", .{});
+    const b = try exact.addNode("B", .{});
+    _ = try exact.addEdge(a, b, .{});
+    var exact_layout = try layoutLayered(allocator, &exact, .{});
+    defer exact_layout.deinit();
+    const exact_svg = try renderSvgAlloc(allocator, &exact, &exact_layout, .{});
+    defer allocator.free(exact_svg);
+    try std.testing.expectEqualStrings("4,4!", attrValue(exact.attrs.items, "size").?);
+    try std.testing.expect(std.mem.indexOf(u8, exact_svg, "width=\"288pt\"") != null or std.mem.indexOf(u8, exact_svg, "height=\"288pt\"") != null);
 }
 
 test "SVG renderer honors Graphviz landscape orientation attributes" {
