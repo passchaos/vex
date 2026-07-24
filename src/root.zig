@@ -6894,7 +6894,7 @@ fn applyOrderingHints(graph: *const Graph, levels: []std.ArrayList(NodeId), rank
 
 fn subgraphOrderingModeForNode(graph: *const Graph, node_id: NodeId) OrderingMode {
     const cluster_index = clusterIndexContainingNode(graph, node_id) orelse return .none;
-    return orderingMode(attrValue(graph.subgraphs.items[cluster_index].attrs.items, "ordering"));
+    return orderingMode(layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster_index, "ordering"));
 }
 
 fn orderingMode(value: ?[]const u8) OrderingMode {
@@ -21464,6 +21464,36 @@ test "layered layout honors subgraph ordering hints for members" {
     defer typed_layout.deinit();
     try std.testing.expect(typed_layout.nodes[tc].center.x < typed_layout.nodes[ta].center.x);
     try std.testing.expect(typed_layout.nodes[ta].center.x < typed_layout.nodes[tb].center.x);
+}
+
+test "layered layout inherits subgraph ordering from parents" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB];
+        \\  subgraph cluster_outer {
+        \\    ordering=out;
+        \\    subgraph cluster_inner {
+        \\      source -> c;
+        \\      source -> a;
+        \\      source -> b;
+        \\    }
+        \\  }
+        \\  { rank=same; a; b; c; }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    const inner = subgraphIndexByLabel(&graph, "cluster_inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner].attrs.items, "ordering") == null);
+    try std.testing.expectEqual(OrderingMode.out, subgraphOrderingModeForNode(&graph, a));
+    try std.testing.expect(layout.nodes[c].center.x < layout.nodes[a].center.x);
+    try std.testing.expect(layout.nodes[a].center.x < layout.nodes[b].center.x);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {

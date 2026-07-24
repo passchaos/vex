@@ -69,6 +69,16 @@ pub fn attrValue(attrs: anytype, name: []const u8) ?[]const u8 {
     return null;
 }
 
+pub fn attrValueInChain(subgraphs: anytype, id: usize, name: []const u8) ?[]const u8 {
+    var current: ?usize = id;
+    while (current) |index| {
+        if (index >= subgraphs.len) return null;
+        if (attrValue(subgraphs[index].attrs.items, name)) |value| return value;
+        current = subgraphs[index].parent;
+    }
+    return null;
+}
+
 fn depthOf(subgraphs: anytype, index: usize) usize {
     var depth: usize = 0;
     var current = if (index < subgraphs.len) subgraphs[index].parent else null;
