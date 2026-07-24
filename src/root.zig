@@ -10470,7 +10470,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
 }
 
 fn inheritedClusterLabelAttr(graph: *const Graph, cluster: Subgraph, name: []const u8) ?[]const u8 {
-    return attrValue(cluster.attrs.items, name) orelse attrValue(graph.attrs.items, name);
+    return layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, name) orelse attrValue(graph.attrs.items, name);
 }
 
 fn clusterVisualRect(graph: *const Graph, layout: *const Layout, index: usize) RectF {
@@ -21055,6 +21055,53 @@ test "cluster labels inherit root graph labelloc and labeljust" {
     const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "text-anchor=\"start\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, inherited_y) == null);
+}
+
+test "cluster labels inherit parent subgraph labelloc and labeljust" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [labelloc=t, labeljust=l];
+        \\  subgraph cluster_outer {
+        \\    label="Outer";
+        \\    labelloc=b;
+        \\    labeljust=r;
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      labelloc=t;
+        \\      labeljust=l;
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "labelloc") == null);
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "labeljust") == null);
+
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "text-anchor=\"end\"") != null);
+    const inner_box = layout.subgraphs[inner_index];
+    var inner_y_value_buf: [32]u8 = undefined;
+    const inner_y_value = try svgNumberForTest(&inner_y_value_buf, inner_box.y + inner_box.height - 10.0);
+    var inner_y_buf: [64]u8 = undefined;
+    const inner_y = try std.fmt.bufPrint(&inner_y_buf, "y=\"{s}\"", .{inner_y_value});
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, inner_y) != null);
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "text-anchor=\"start\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, inner_y) == null);
 }
 
 test "cluster label layout inherits root graph fontsize" {
