@@ -110,6 +110,9 @@ explicit rank-constraint index for `same`, `min`, `max`, `source`, and `sink`
 groups. Edge metadata records effective `weight`, `constraint`, and `minlen`
 values even when they come from built-in defaults rather than explicit DOT
 attributes.
+The v1 schema and additive compatibility policy are documented in
+[`docs/SVG_METADATA_V1.md`](docs/SVG_METADATA_V1.md); consumers can discover
+the schema URI, major version, and feature tokens directly in generated SVG.
 DOT can enable the same index with
 `graph [vex_svg_metadata=true]`, and the Zig API can pass
 `.{ .svg = .{ .metadata = true } }`.

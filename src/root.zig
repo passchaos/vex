@@ -144,6 +144,9 @@ pub const GraphRatio = union(enum) {
 const label_left_break: u8 = 0x1e;
 const label_right_break: u8 = 0x1f;
 const svg_label_breaks = svg_mod.text.LabelBreaks{ .left = label_left_break, .right = label_right_break };
+const svg_metadata_schema_version = "1";
+const svg_metadata_schema_uri = "https://vex.graph/svg-metadata/1";
+const svg_metadata_features = "attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy";
 
 pub const GraphAttr = union(enum) {
     label: []const u8,
@@ -8612,6 +8615,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         .object_node_count = graph_node_count,
         .object_edge_count = graph_edge_count,
         .object_subgraph_count = graph_subgraph_count,
+        .object_schema_version = if (write_svg_metadata) svg_metadata_schema_version else null,
+        .object_schema_uri = if (write_svg_metadata) svg_metadata_schema_uri else null,
+        .object_schema_features = if (write_svg_metadata) svg_metadata_features else null,
     });
     try writer.writeAll(" transform=\"scale(");
     try writeSvgNumber(writer, svg_canvas.scale);
@@ -8800,10 +8806,20 @@ fn svgMetadataEnabled(graph: *const Graph, options: SvgOptions) bool {
 }
 
 fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, canvas: GraphSvgCanvas) Io.Writer.Error!void {
-    try writer.writeAll("<metadata id=\"vex-metadata\">\n");
+    try writer.writeAll("<metadata id=\"vex-metadata\" data-vex-schema-version=\"");
+    try writer.writeAll(svg_metadata_schema_version);
+    try writer.writeAll("\" data-vex-schema-uri=\"");
+    try writer.writeAll(svg_metadata_schema_uri);
+    try writer.writeAll("\">\n");
     const graph_title = graphFallbackTitle(graph);
     const graph_context = LabelEscapeContext{ .graph_name = graph.name, .label_name = graph_title };
-    try writer.print("<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"", .{});
+    try writer.writeAll("<vex:graph xmlns:vex=\"");
+    try writer.writeAll(svg_metadata_schema_uri);
+    try writer.writeAll("\" schema-version=\"");
+    try writer.writeAll(svg_metadata_schema_version);
+    try writer.writeAll("\" features=\"");
+    try writer.writeAll(svg_metadata_features);
+    try writer.writeAll("\" name=\"");
     try writeXmlEscaped(writer, graph.name);
     try writer.print("\" directed=\"{s}\" strict=\"{s}\" rankdir=\"{s}\" nodes=\"{d}\" edges=\"{d}\" subgraphs=\"{d}\"", .{
         if (graph.directed) "true" else "false",
@@ -10927,6 +10943,9 @@ const SvgGroupOpenOptions = struct {
     object_node_count: ?[]const u8 = null,
     object_edge_count: ?[]const u8 = null,
     object_subgraph_count: ?[]const u8 = null,
+    object_schema_version: ?[]const u8 = null,
+    object_schema_uri: ?[]const u8 = null,
+    object_schema_features: ?[]const u8 = null,
     object_parent: ?[]const u8 = null,
     object_nodes: ?[]const NodeId = null,
     object_rank: ?[]const u8 = null,
@@ -11039,6 +11058,9 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         try writeSvgObjectStringAttr(writer, "nodes", options.object_node_count);
         try writeSvgObjectStringAttr(writer, "edges", options.object_edge_count);
         try writeSvgObjectStringAttr(writer, "subgraphs", options.object_subgraph_count);
+        try writeSvgObjectStringAttr(writer, "schema-version", options.object_schema_version);
+        try writeSvgObjectStringAttr(writer, "schema-uri", options.object_schema_uri);
+        try writeSvgObjectStringAttr(writer, "schema-features", options.object_schema_features);
         try writeSvgObjectStringAttr(writer, "parent", options.object_parent);
         if (options.object_nodes) |node_ids| {
             try writer.writeAll(" data-vex-object-nodes=\"");
@@ -17781,6 +17803,8 @@ test "SVG renderer emits opt-in metadata index" {
     defer allocator.free(static_svg);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-metadata") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-kind=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-schema-version=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-schema-version=") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "<g id=\"graph0\" class=\"graph\" transform=") != null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-directed=") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-waypoints=") == null);
@@ -17788,8 +17812,8 @@ test "SVG renderer emits opt-in metadata index" {
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"Meta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\" data-vex-schema-version=\"1\" data-vex-schema-uri=\"https://vex.graph/svg-metadata/1\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"Meta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "layout-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "layout-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-width=\"") != null);
@@ -17798,6 +17822,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"Meta\" data-vex-object-label=\"Meta\" data-vex-object-x=\"0.00\" data-vex-object-y=\"0.00\" data-vex-object-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-directed=\"true\" data-vex-object-strict=\"false\" data-vex-object-rankdir=\"TB\" data-vex-object-nodes=\"3\" data-vex-object-edges=\"2\" data-vex-object-subgraphs=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-schema-version=\"1\" data-vex-object-schema-uri=\"https://vex.graph/svg-metadata/1\" data-vex-object-schema-features=\"attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" rank=\"0\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
@@ -17867,7 +17892,7 @@ test "SVG metadata index records effective link attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"LinkMeta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"LinkMeta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"LinkMeta\" data-vex-object-label=\"Graph Label\" data-vex-object-href=\"https://example.com/graph/LinkMeta/Graph Label\" data-vex-object-tooltip=\"Graph LinkMeta Graph Label\" data-vex-object-target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-directed=\"true\" data-vex-object-strict=\"false\" data-vex-object-rankdir=\"TB\" data-vex-object-nodes=\"2\" data-vex-object-edges=\"1\" data-vex-object-subgraphs=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A &amp; B\" shape=\"ellipse\" href=\"https://example.com/node/A &amp; B/A &amp; B/LinkMeta\" tooltip=\"Node A &amp; B A &amp; B LinkMeta\" target=\"node-A &amp; B\"") != null);
