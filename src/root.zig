@@ -21,6 +21,13 @@ pub const NodePosition = struct {
     pinned: bool = false,
 };
 
+pub const BoundingBox = struct {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+};
+
 pub const EdgeSplineSegmentInput = struct {
     points: []const Point,
     start_tip: ?Point = null,
@@ -174,6 +181,7 @@ const svg_metadata_features = "attributes edge-geometry edge-layout edge-paths e
 
 pub const GraphAttr = union(enum) {
     label: []const u8,
+    label_position: Point,
     rankdir: RankDir,
     layout: LayoutAlgorithm,
     rotate: f64,
@@ -252,6 +260,7 @@ pub const ImagePosition = svg_mod.image.Position;
 
 pub const NodeAttr = union(enum) {
     label: []const u8,
+    external_label_position: Point,
     color: []const u8,
     colorscheme: []const u8,
     fillcolor: []const u8,
@@ -311,6 +320,7 @@ pub const EdgePort = struct {
 
 pub const NodeOptions = struct {
     label: ?[]const u8 = null,
+    external_label_position: ?Point = null,
     color: ?[]const u8 = null,
     colorscheme: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
@@ -360,6 +370,7 @@ pub const NodeOptions = struct {
 
 pub const EdgeOptions = struct {
     label: ?[]const u8 = null,
+    label_position: ?Point = null,
     color: ?[]const u8 = null,
     colorscheme: ?[]const u8 = null,
     fillcolor: ?[]const u8 = null,
@@ -402,8 +413,11 @@ pub const EdgeOptions = struct {
     arrowsize: ?f64 = null,
     dir: ?EdgeDir = null,
     taillabel: ?[]const u8 = null,
+    tail_label_position: ?Point = null,
     headlabel: ?[]const u8 = null,
+    head_label_position: ?Point = null,
     xlabel: ?[]const u8 = null,
+    external_label_position: ?Point = null,
     labelfontcolor: ?[]const u8 = null,
     labelfontname: ?[]const u8 = null,
     labelfontsize: ?f64 = null,
@@ -428,6 +442,7 @@ pub const EdgeOptions = struct {
 
 pub const EdgeAttr = union(enum) {
     label: []const u8,
+    label_position: Point,
     color: []const u8,
     colorscheme: []const u8,
     fillcolor: []const u8,
@@ -470,8 +485,11 @@ pub const EdgeAttr = union(enum) {
     arrowsize: f64,
     dir: EdgeDir,
     taillabel: []const u8,
+    tail_label_position: Point,
     headlabel: []const u8,
+    head_label_position: Point,
     xlabel: []const u8,
+    external_label_position: Point,
     labelfontcolor: []const u8,
     labelfontname: []const u8,
     labelfontsize: f64,
@@ -494,6 +512,8 @@ pub const EdgeAttr = union(enum) {
 
 pub const SubgraphAttr = union(enum) {
     label: []const u8,
+    label_position: Point,
+    bounding_box: BoundingBox,
     rankdir: RankDir,
     layout: LayoutAlgorithm,
     compound: bool,
@@ -535,6 +555,8 @@ pub const SubgraphAttr = union(enum) {
 
 pub const SubgraphOptions = struct {
     label: ?[]const u8 = null,
+    label_position: ?Point = null,
+    bounding_box: ?BoundingBox = null,
     rankdir: ?RankDir = null,
     layout: ?LayoutAlgorithm = null,
     compound: ?bool = null,
@@ -913,6 +935,7 @@ pub const Graph = struct {
     pub fn setGraphAttr(self: *Graph, attr: GraphAttr) !void {
         switch (attr) {
             .label => |value| try self.setGraphAttrRaw("label", value),
+            .label_position => |value| try self.setGraphPointAttr("lp", value),
             .rankdir => |value| {
                 self.rankdir = value;
                 try self.setGraphAttrRaw("rankdir", value.name());
@@ -1017,6 +1040,11 @@ pub const Graph = struct {
         try self.setGraphAttrRaw(name, text);
     }
 
+    fn setGraphPointAttr(self: *Graph, name: []const u8, point: Point) !void {
+        var buffer: [160]u8 = undefined;
+        try self.setGraphAttrRaw(name, try pointAttrText(&buffer, point));
+    }
+
     fn setGraphAttrRaw(self: *Graph, name: []const u8, value: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(name, "rankdir")) {
             if (RankDir.fromString(value)) |rankdir| self.rankdir = rankdir;
@@ -1027,6 +1055,10 @@ pub const Graph = struct {
     pub fn setDefaultNodeAttr(self: *Graph, attr: NodeAttr) !void {
         switch (attr) {
             .label => |value| try self.setDefaultNodeAttrRaw("label", value),
+            .external_label_position => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setDefaultNodeAttrRaw("xlp", try pointAttrText(&buffer, value));
+            },
             .color => |value| try self.setDefaultNodeAttrRaw("color", value),
             .colorscheme => |value| try self.setDefaultNodeAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setDefaultNodeAttrRaw("fillcolor", value),
@@ -1111,6 +1143,10 @@ pub const Graph = struct {
     pub fn setDefaultEdgeAttr(self: *Graph, attr: EdgeAttr) !void {
         switch (attr) {
             .label => |value| try self.setDefaultEdgeAttrRaw("label", value),
+            .label_position => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setDefaultEdgeAttrRaw("lp", try pointAttrText(&buffer, value));
+            },
             .color => |value| try self.setDefaultEdgeAttrRaw("color", value),
             .colorscheme => |value| try self.setDefaultEdgeAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setDefaultEdgeAttrRaw("fillcolor", value),
@@ -1162,8 +1198,20 @@ pub const Graph = struct {
             .arrowsize => |value| try self.setDefaultEdgeAttrFloat("arrowsize", value),
             .dir => |value| try self.setDefaultEdgeAttrRaw("dir", value.name()),
             .taillabel => |value| try self.setDefaultEdgeAttrRaw("taillabel", value),
+            .tail_label_position => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setDefaultEdgeAttrRaw("tail_lp", try pointAttrText(&buffer, value));
+            },
             .headlabel => |value| try self.setDefaultEdgeAttrRaw("headlabel", value),
+            .head_label_position => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setDefaultEdgeAttrRaw("head_lp", try pointAttrText(&buffer, value));
+            },
             .xlabel => |value| try self.setDefaultEdgeAttrRaw("xlabel", value),
+            .external_label_position => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setDefaultEdgeAttrRaw("xlp", try pointAttrText(&buffer, value));
+            },
             .labelfontcolor => |value| try self.setDefaultEdgeAttrRaw("labelfontcolor", value),
             .labelfontname => |value| try self.setDefaultEdgeAttrRaw("labelfontname", value),
             .labelfontsize => |value| try self.setDefaultEdgeAttrFloat("labelfontsize", value),
@@ -1205,6 +1253,7 @@ pub const Graph = struct {
 
     fn applyNodeOptions(self: *Graph, id: NodeId, options: NodeOptions) !void {
         if (options.label) |value| try self.setNodeAttr(id, .{ .label = value });
+        if (options.external_label_position) |value| try self.setNodeAttr(id, .{ .external_label_position = value });
         if (options.color) |value| try self.setNodeAttr(id, .{ .color = value });
         if (options.colorscheme) |value| try self.setNodeAttr(id, .{ .colorscheme = value });
         if (options.fillcolor) |value| try self.setNodeAttr(id, .{ .fillcolor = value });
@@ -1255,6 +1304,7 @@ pub const Graph = struct {
     pub fn setNodeAttr(self: *Graph, id: NodeId, attr: NodeAttr) !void {
         switch (attr) {
             .label => |value| try self.setNodeAttrRaw(id, "label", value),
+            .external_label_position => |value| try self.setNodePointAttr(id, "xlp", value),
             .color => |value| try self.setNodeAttrRaw(id, "color", value),
             .colorscheme => |value| try self.setNodeAttrRaw(id, "colorscheme", value),
             .fillcolor => |value| try self.setNodeAttrRaw(id, "fillcolor", value),
@@ -1325,6 +1375,11 @@ pub const Graph = struct {
         try self.setNodeAttrRaw(id, name, text);
     }
 
+    fn setNodePointAttr(self: *Graph, id: NodeId, name: []const u8, point: Point) !void {
+        var buffer: [160]u8 = undefined;
+        try self.setNodeAttrRaw(id, name, try pointAttrText(&buffer, point));
+    }
+
     fn nodePositionAttrText(buffer: []u8, value: NodePosition) ![]const u8 {
         if (!std.math.isFinite(value.x) or !std.math.isFinite(value.y)) return error.InvalidPosition;
         return std.fmt.bufPrint(buffer, "{d},{d}{s}", .{ value.x, value.y, if (value.pinned) "!" else "" });
@@ -1355,6 +1410,7 @@ pub const Graph = struct {
 
     fn applyEdgeOptions(self: *Graph, id: EdgeId, options: EdgeOptions) !void {
         if (options.label) |value| try self.setEdgeAttr(id, .{ .label = value });
+        if (options.label_position) |value| try self.setEdgeAttr(id, .{ .label_position = value });
         if (options.color) |value| try self.setEdgeAttr(id, .{ .color = value });
         if (options.colorscheme) |value| try self.setEdgeAttr(id, .{ .colorscheme = value });
         if (options.fillcolor) |value| try self.setEdgeAttr(id, .{ .fillcolor = value });
@@ -1397,8 +1453,11 @@ pub const Graph = struct {
         if (options.arrowsize) |value| try self.setEdgeAttr(id, .{ .arrowsize = value });
         if (options.dir) |value| try self.setEdgeAttr(id, .{ .dir = value });
         if (options.taillabel) |value| try self.setEdgeAttr(id, .{ .taillabel = value });
+        if (options.tail_label_position) |value| try self.setEdgeAttr(id, .{ .tail_label_position = value });
         if (options.headlabel) |value| try self.setEdgeAttr(id, .{ .headlabel = value });
+        if (options.head_label_position) |value| try self.setEdgeAttr(id, .{ .head_label_position = value });
         if (options.xlabel) |value| try self.setEdgeAttr(id, .{ .xlabel = value });
+        if (options.external_label_position) |value| try self.setEdgeAttr(id, .{ .external_label_position = value });
         if (options.labelfontcolor) |value| try self.setEdgeAttr(id, .{ .labelfontcolor = value });
         if (options.labelfontname) |value| try self.setEdgeAttr(id, .{ .labelfontname = value });
         if (options.labelfontsize) |value| try self.setEdgeAttr(id, .{ .labelfontsize = value });
@@ -1422,6 +1481,7 @@ pub const Graph = struct {
     pub fn setEdgeAttr(self: *Graph, id: EdgeId, attr: EdgeAttr) !void {
         switch (attr) {
             .label => |value| try self.setEdgeAttrRaw(id, "label", value),
+            .label_position => |value| try self.setEdgePointAttr(id, "lp", value),
             .color => |value| try self.setEdgeAttrRaw(id, "color", value),
             .colorscheme => |value| try self.setEdgeAttrRaw(id, "colorscheme", value),
             .fillcolor => |value| try self.setEdgeAttrRaw(id, "fillcolor", value),
@@ -1468,8 +1528,11 @@ pub const Graph = struct {
             .arrowsize => |value| try self.setEdgeAttrFloat(id, "arrowsize", value),
             .dir => |value| try self.setEdgeAttrRaw(id, "dir", value.name()),
             .taillabel => |value| try self.setEdgeAttrRaw(id, "taillabel", value),
+            .tail_label_position => |value| try self.setEdgePointAttr(id, "tail_lp", value),
             .headlabel => |value| try self.setEdgeAttrRaw(id, "headlabel", value),
+            .head_label_position => |value| try self.setEdgePointAttr(id, "head_lp", value),
             .xlabel => |value| try self.setEdgeAttrRaw(id, "xlabel", value),
+            .external_label_position => |value| try self.setEdgePointAttr(id, "xlp", value),
             .labelfontcolor => |value| try self.setEdgeAttrRaw(id, "labelfontcolor", value),
             .labelfontname => |value| try self.setEdgeAttrRaw(id, "labelfontname", value),
             .labelfontsize => |value| try self.setEdgeAttrFloat(id, "labelfontsize", value),
@@ -1535,6 +1598,11 @@ pub const Graph = struct {
         try self.setEdgeAttrRaw(id, name, text);
     }
 
+    fn setEdgePointAttr(self: *Graph, id: EdgeId, name: []const u8, point: Point) !void {
+        var buffer: [160]u8 = undefined;
+        try self.setEdgeAttrRaw(id, name, try pointAttrText(&buffer, point));
+    }
+
     fn setEdgeSplineAttr(self: *Graph, id: EdgeId, segments: []const EdgeSplineSegmentInput) !void {
         var text = std.ArrayList(u8).empty;
         defer text.deinit(self.allocator);
@@ -1591,6 +1659,8 @@ pub const Graph = struct {
 
     fn applySubgraphOptions(self: *Graph, id: SubgraphId, options: SubgraphOptions) !void {
         if (options.label) |value| try self.setSubgraphAttr(id, .{ .label = value });
+        if (options.label_position) |value| try self.setSubgraphAttr(id, .{ .label_position = value });
+        if (options.bounding_box) |value| try self.setSubgraphAttr(id, .{ .bounding_box = value });
         if (options.rankdir) |value| try self.setSubgraphAttr(id, .{ .rankdir = value });
         if (options.layout) |value| try self.setSubgraphAttr(id, .{ .layout = value });
         if (options.compound) |value| try self.setSubgraphAttr(id, .{ .compound = value });
@@ -1633,6 +1703,11 @@ pub const Graph = struct {
     pub fn setSubgraphAttr(self: *Graph, id: SubgraphId, attr: SubgraphAttr) !void {
         switch (attr) {
             .label => |value| try self.setSubgraphAttrRaw(id, "label", value),
+            .label_position => |value| try self.setSubgraphPointAttr(id, "lp", value),
+            .bounding_box => |value| {
+                var buffer: [256]u8 = undefined;
+                try self.setSubgraphAttrRaw(id, "bb", try boundingBoxAttrText(&buffer, value));
+            },
             .rankdir => |value| try self.setSubgraphAttrRaw(id, "rankdir", value.name()),
             .layout => |value| try self.setSubgraphAttrRaw(id, "layout", value.name()),
             .compound => |value| try self.setSubgraphAttrRaw(id, "compound", boolAttrValue(value)),
@@ -1701,6 +1776,11 @@ pub const Graph = struct {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
         try self.setSubgraphAttrRaw(id, name, text);
+    }
+
+    fn setSubgraphPointAttr(self: *Graph, id: SubgraphId, name: []const u8, point: Point) !void {
+        var buffer: [160]u8 = undefined;
+        try self.setSubgraphAttrRaw(id, name, try pointAttrText(&buffer, point));
     }
 
     fn setSubgraphAttrRaw(self: *Graph, id: SubgraphId, name: []const u8, value: []const u8) !void {
@@ -1928,6 +2008,27 @@ fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
 
 fn boolAttrValue(value: bool) []const u8 {
     return if (value) "true" else "false";
+}
+
+fn pointAttrText(buffer: []u8, point: Point) ![]const u8 {
+    if (!std.math.isFinite(point.x) or !std.math.isFinite(point.y)) return error.InvalidPosition;
+    return std.fmt.bufPrint(buffer, "{d},{d}", .{ point.x, point.y });
+}
+
+fn boundingBoxAttrText(buffer: []u8, box: BoundingBox) ![]const u8 {
+    if (!std.math.isFinite(box.min_x) or
+        !std.math.isFinite(box.min_y) or
+        !std.math.isFinite(box.max_x) or
+        !std.math.isFinite(box.max_y))
+    {
+        return error.InvalidBoundingBox;
+    }
+    return std.fmt.bufPrint(buffer, "{d},{d},{d},{d}", .{
+        box.min_x,
+        box.min_y,
+        box.max_x,
+        box.max_y,
+    });
 }
 
 fn parseBool(value: []const u8) ?bool {
@@ -3764,6 +3865,7 @@ pub const Layout = struct {
     subgraphs: []SubgraphLayout,
     edge_waypoints: []EdgeWaypoints,
     edge_splines: ?[]EdgeSpline = null,
+    position_transform: ?Point = null,
     ranks: []usize,
     rank_depths: []f64,
     rank_heights: []f64,
@@ -5418,6 +5520,7 @@ fn layoutPositionedWithControl(
             }
         }
     }
+    try appendPositionedAuxiliaryPoints(allocator, graph, &preserved_spline_points);
 
     const translate = if (attrValue(graph.attrs.items, "notranslate")) |value|
         !(parseBool(value) orelse false)
@@ -5446,6 +5549,7 @@ fn layoutPositionedWithControl(
     const subgraph_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
     errdefer allocator.free(subgraph_layouts);
     computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), node_layouts, subgraph_layouts);
+    applyPositionedSubgraphBounds(graph, positioned.shift, subgraph_layouts);
 
     const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
     errdefer allocator.free(edge_waypoints);
@@ -5478,6 +5582,7 @@ fn layoutPositionedWithControl(
         .subgraphs = subgraph_layouts,
         .edge_waypoints = edge_waypoints,
         .edge_splines = edge_splines,
+        .position_transform = positioned.shift,
         .ranks = ranks,
         .rank_depths = rank_depths,
         .rank_heights = rank_heights,
@@ -5487,6 +5592,49 @@ fn layoutPositionedWithControl(
         .width = positioned.width,
         .height = positioned.height,
     };
+}
+
+fn appendPositionedAuxiliaryPoints(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    points: *std.ArrayList(Point),
+) !void {
+    try appendPositionAttrPoint(allocator, points, graph.attrs.items, "lp");
+    for (graph.nodes.items) |node_item| {
+        try appendPositionAttrPoint(allocator, points, node_item.attrs.items, "xlp");
+    }
+    for (graph.edges.items) |edge_item| {
+        try appendPositionAttrPoint(allocator, points, edge_item.attrs.items, "lp");
+        try appendPositionAttrPoint(allocator, points, edge_item.attrs.items, "xlp");
+        try appendPositionAttrPoint(allocator, points, edge_item.attrs.items, "head_lp");
+        try appendPositionAttrPoint(allocator, points, edge_item.attrs.items, "tail_lp");
+    }
+    for (graph.subgraphs.items) |subgraph| {
+        try appendPositionAttrPoint(allocator, points, subgraph.attrs.items, "lp");
+        const raw_box = attrValue(subgraph.attrs.items, "bb") orelse continue;
+        const box = layout_mod.nop.parseBoundingBox(raw_box) catch continue;
+        try layout_mod.nop.appendBoundingBoxCorners(points, allocator, box);
+    }
+}
+
+fn appendPositionAttrPoint(
+    allocator: std.mem.Allocator,
+    points: *std.ArrayList(Point),
+    attrs: []const Attr,
+    name: []const u8,
+) !void {
+    const raw = attrValue(attrs, name) orelse return;
+    const point = layout_mod.nop.parsePoint(raw) catch return;
+    try points.append(allocator, point);
+}
+
+fn applyPositionedSubgraphBounds(graph: *const Graph, shift: Point, layouts: []SubgraphLayout) void {
+    for (graph.subgraphs.items, 0..) |subgraph, index| {
+        if (index >= layouts.len) break;
+        const raw = attrValue(subgraph.attrs.items, "bb") orelse continue;
+        const box = layout_mod.nop.parseBoundingBox(raw) catch continue;
+        layouts[index] = layout_mod.nop.transformBoundingBox(box, shift, subgraph.id);
+    }
 }
 
 fn positionedEdgeSplines(allocator: std.mem.Allocator, graph: *const Graph, shift: Point) ![]EdgeSpline {
@@ -9584,8 +9732,12 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             SvgFont{ .family = options.font_family };
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "fontcolor") orelse "black");
-        const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
-        try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor, noJustifyLineAnchor(graph.attrs.items, text_anchor));
+        if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |position| {
+            try renderSvgTextBlockWithAnchor(writer, graph_label, position.x, position.y, title_size, title_color, title_font, false, false, "middle", noJustifyLineAnchor(graph.attrs.items, "middle"));
+        } else {
+            const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
+            try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor, noJustifyLineAnchor(graph.attrs.items, text_anchor));
+        }
     }
     try writeSvgInteractiveClose(writer, graph_wrap);
     if (svgNeedsMarkerDefs(graph, concentrate)) {
@@ -11132,7 +11284,10 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     }
     if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
         const route = edgeSplineRoute(spline) orelse edgeRouteForRendering(graph, layout, edge_item);
-        const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
+        const aligned_label = edge_item.label != null and
+            positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
+            edgeLabelAlignedEnabled(edge_item.attrs.items) and
+            plainSingleLineLabel(edge_item.label.?);
         const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
         try renderSvgPositionedEdgeSpline(writer, graph.directed, edge_item, spline, visual, edge_path_id);
         var main_label_center: ?Point = null;
@@ -11155,14 +11310,18 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     }
     if (edge_item.from == edge_item.to) {
         const route = selfLoopRoute(layout.nodes[edge_item.from]);
-        const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
+        const aligned_label = edge_item.label != null and
+            positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
+            edgeLabelAlignedEnabled(edge_item.attrs.items) and
+            plainSingleLineLabel(edge_item.label.?);
         const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
         try renderSvgSelfLoopPaths(writer, graph, graph.directed, edge_item, route, visual, edge_path_id);
         if (edge_item.label) |label| {
             if (aligned_label) {
                 try renderSvgEdgeInteractiveTextPathLabel(writer, graph, edge_item, label, edge_path_id.?, visual.font_size, visual.font_color, visual.font);
             } else {
-                try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font);
+                const label_center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse route.label;
+                try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
             }
         }
         try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, route.label);
@@ -11177,7 +11336,10 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .tail_mdiamond = graph.nodes.items[edge_item.from].shape == .mdiamond,
         .head_msquare = graph.nodes.items[edge_item.to].shape == .msquare,
     };
-    const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
+    const aligned_label = edge_item.label != null and
+        positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
+        edgeLabelAlignedEnabled(edge_item.attrs.items) and
+        plainSingleLineLabel(edge_item.label.?);
     const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
     const effective_routing = svgEdgeRoutingForEdge(graph, edge_item, edge_routing);
     try renderSvgEdgePaths(writer, graph, graph.directed, layout, edge_item, layout.rankdir, offset, route, effective_routing, visual, hints, edge_path_id);
@@ -11200,10 +11362,12 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
 }
 
 fn edgeLabelCenterAvoidingNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, label: []const u8) Point {
+    if (positionedAttrPoint(layout, edge_item.attrs.items, "lp")) |point| return point;
     return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, visual.font_size, .{ .x = route.label.x, .y = route.label.y - 6.0 });
 }
 
 fn edgeXLabelCenterAvoidingNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, label: []const u8, font_size: f64) Point {
+    if (positionedAttrPoint(layout, edge_item.attrs.items, "xlp")) |point| return point;
     return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, font_size, .{ .x = route.label.x, .y = route.label.y + 18.0 });
 }
 
@@ -11396,7 +11560,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         try renderSvgNodeLabel(writer, node_item, l, visual);
     }
     try renderSvgNodeAuxLabels(writer, node_item, l, visual);
-    try renderSvgNodeXLabel(writer, node_item, l, visual);
+    try renderSvgNodeXLabel(writer, layout, node_item, l, visual);
     try writeSvgInteractiveClose(writer, node_wrap);
     try writer.writeAll("</g>\n");
 }
@@ -11477,9 +11641,18 @@ fn fitSvgContentAxis(content_min: f64, content_max: f64, padding: f64, canvas_si
 
 fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
     var bounds = BoundsBuilder{};
+    if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |point| {
+        if (attrValue(graph.attrs.items, "label")) |label| {
+            bounds.includeRect(edgeLabelRect(label, point, parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0)));
+        }
+    }
     for (layout.subgraphs, 0..) |cluster_box, index| {
         if (index >= graph.subgraphs.items.len or cluster_box.width <= 0 or cluster_box.height <= 0) continue;
         bounds.includeRect(clusterVisualRect(graph, layout, index));
+        const subgraph = graph.subgraphs.items[index];
+        if (positionedAttrPoint(layout, subgraph.attrs.items, "lp")) |point| {
+            bounds.includeRect(edgeLabelRect(subgraph.label, point, inheritedClusterFontSize(graph, subgraph)));
+        }
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= layout.nodes.len) continue;
@@ -11487,7 +11660,7 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
         const node_layout = graphvizRenderNodeLayout(graph, layout, node_item);
         const visual = resolveNodeVisual(graph, node_item);
         bounds.includeRect(nodeRect(node_layout));
-        if (nodeXLabelRect(node_item, node_layout, visual)) |rect| bounds.includeRect(rect);
+        if (nodeXLabelRect(layout, node_item, node_layout, visual)) |rect| bounds.includeRect(rect);
     }
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) continue;
@@ -11498,14 +11671,15 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
         }
         const route = edgeRouteForRendering(graph, layout, edge_item);
         if (edge_item.label) |label| {
-            const center = if (edge_item.from == edge_item.to)
-                route.label
-            else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
-                route.label
-            else if (edgeLabelFloatEnabled(edge_item.attrs.items))
-                Point{ .x = route.label.x, .y = route.label.y - 6.0 }
-            else
-                edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+            const center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse
+                if (edge_item.from == edge_item.to)
+                    route.label
+                else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
+                    route.label
+                else if (edgeLabelFloatEnabled(edge_item.attrs.items))
+                    Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+                else
+                    edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
             bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
         }
         if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
@@ -11588,6 +11762,13 @@ fn positionedEdgeSpline(layout: *const Layout, edge_id: EdgeId) ?*const EdgeSpli
     return &splines[edge_id];
 }
 
+fn positionedAttrPoint(layout: *const Layout, attrs: []const Attr, name: []const u8) ?Point {
+    const shift = layout.position_transform orelse return null;
+    const raw = attrValue(attrs, name) orelse return null;
+    const point = layout_mod.nop.parsePoint(raw) catch return null;
+    return layout_mod.nop.transformPoint(point, shift);
+}
+
 fn includeEdgeSplineBounds(bounds: *BoundsBuilder, spline: *const EdgeSpline) void {
     for (spline.segments) |segment| {
         for (segment.points) |point| bounds.includePoint(point);
@@ -11663,24 +11844,29 @@ fn includeBackEdgeObjectBounds(bounds: *BoundsBuilder, layout: *const Layout, ed
 
 fn includeEdgeLabelObjectBounds(bounds: *BoundsBuilder, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) void {
     if (edge_item.label) |label| {
-        const center = if (edge_item.from == edge_item.to)
-            route.label
-        else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
-            route.label
-        else if (edgeLabelFloatEnabled(edge_item.attrs.items))
-            Point{ .x = route.label.x, .y = route.label.y - 6.0 }
-        else
-            edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+        const center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse
+            if (edge_item.from == edge_item.to)
+                route.label
+            else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
+                route.label
+            else if (edgeLabelFloatEnabled(edge_item.attrs.items))
+                Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+            else
+                edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
         bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
     }
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
     const label_distance = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0);
     const label_angle = parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0);
     if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
-        bounds.includeRect(edgeLabelRect(label, endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false), label_font_size));
+        const center = positionedAttrPoint(layout, edge_item.attrs.items, "tail_lp") orelse
+            endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
+        bounds.includeRect(edgeLabelRect(label, center, label_font_size));
     }
     if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
-        bounds.includeRect(edgeLabelRect(label, endpointLabelPosition(route.end, route.label, label_distance, label_angle, true), label_font_size));
+        const center = positionedAttrPoint(layout, edge_item.attrs.items, "head_lp") orelse
+            endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
+        bounds.includeRect(edgeLabelRect(label, center, label_font_size));
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
         bounds.includeRect(edgeLabelRect(label, edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size), label_font_size));
@@ -12707,11 +12893,13 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
     const label_distance = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0);
     const label_angle = parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0);
     if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
-        const pos = endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
+        const pos = positionedAttrPoint(layout, edge_item.attrs.items, "tail_lp") orelse
+            endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .tail, label, pos, label_font_size, label_font_color, label_font);
     }
     if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
-        const pos = endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
+        const pos = positionedAttrPoint(layout, edge_item.attrs.items, "head_lp") orelse
+            endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .head, label, pos, label_font_size, label_font_color, label_font);
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
@@ -13409,22 +13597,25 @@ fn nodeAuxLabelsEligible(shape: Shape) bool {
     };
 }
 
-fn renderSvgNodeXLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+fn renderSvgNodeXLabel(writer: *Io.Writer, layout: *const Layout, node_item: Node, node_layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const label = attrValue(node_item.attrs.items, "xlabel") orelse return;
-    const center = nodeXLabelCenter(label, layout, visual.font_size);
+    const center = positionedAttrPoint(layout, node_item.attrs.items, "xlp") orelse
+        nodeXLabelCenter(label, node_layout, visual.font_size);
     try renderSvgTextBlock(writer, label, center.x, center.y, visual.font_size, visual.font_color, visual.font, true, true);
 }
 
-fn nodeXLabelCenter(label: []const u8, layout: NodeLayout, font_size: f64) Point {
+fn nodeXLabelCenter(label: []const u8, node_layout: NodeLayout, font_size: f64) Point {
     return .{
-        .x = layout.center.x + layout.width / 2.0 + 10.0 + @as(f64, @floatFromInt(displayLabelMaxLineLen(label))) * font_size * 0.18,
-        .y = layout.center.y - layout.height / 2.0 - font_size * 0.6,
+        .x = node_layout.center.x + node_layout.width / 2.0 + 10.0 + @as(f64, @floatFromInt(displayLabelMaxLineLen(label))) * font_size * 0.18,
+        .y = node_layout.center.y - node_layout.height / 2.0 - font_size * 0.6,
     };
 }
 
-fn nodeXLabelRect(node_item: Node, layout: NodeLayout, visual: NodeVisual) ?RectF {
+fn nodeXLabelRect(layout: *const Layout, node_item: Node, node_layout: NodeLayout, visual: NodeVisual) ?RectF {
     const label = attrValue(node_item.attrs.items, "xlabel") orelse return null;
-    return edgeLabelRect(label, nodeXLabelCenter(label, layout, visual.font_size), visual.font_size);
+    const center = positionedAttrPoint(layout, node_item.attrs.items, "xlp") orelse
+        nodeXLabelCenter(label, node_layout, visual.font_size);
+    return edgeLabelRect(label, center, visual.font_size);
 }
 
 const NodeLabelAnchor = struct {
@@ -14192,20 +14383,24 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         }
         try writer.writeAll("/>\n");
     }
-    const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
-    const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
-    const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
-    const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
-    const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
-    if (plainSingleLineLabel(cluster.label)) {
-        try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
-        try writeSvgTextFill(writer, visual.font_color);
-        try writer.writeAll(">");
-        try writeXmlEscaped(writer, cluster.label);
-        try writer.writeAll("</text>\n");
+    if (positionedAttrPoint(layout, cluster.attrs.items, "lp")) |position| {
+        try renderSvgTextBlockWithAnchor(writer, cluster.label, position.x, position.y, visual.font_size, visual.font_color, visual.font, false, false, "middle", noJustifyLineAnchorForCluster(graph, cluster, "middle"));
     } else {
-        const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
-        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
+        const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
+        const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
+        const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
+        const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
+        const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
+        if (plainSingleLineLabel(cluster.label)) {
+            try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
+            try writeSvgTextFill(writer, visual.font_color);
+            try writer.writeAll(">");
+            try writeXmlEscaped(writer, cluster.label);
+            try writer.writeAll("</text>\n");
+        } else {
+            const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
+            try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
+        }
     }
     if (collapse) try renderSvgCollapseButton(writer, cluster, rect);
     try writeSvgInteractiveClose(writer, cluster_wrap);
@@ -14217,6 +14412,14 @@ fn inheritedClusterLabelAttr(graph: *const Graph, cluster: Subgraph, name: []con
 }
 
 fn clusterVisualRect(graph: *const Graph, layout: *const Layout, index: usize) RectF {
+    if (layout.position_transform != null and
+        index < graph.subgraphs.items.len and
+        attrValue(graph.subgraphs.items[index].attrs.items, "bb") != null and
+        index < layout.subgraphs.len)
+    {
+        const box = layout.subgraphs[index];
+        return .{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
+    }
     return clusterVisualRectContainingNodes(graph, layout, index, rawClusterVisualRect(graph.subgraphs.items[index], layout, index));
 }
 
@@ -18653,6 +18856,95 @@ test "nop2 reroutes malformed edge position" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M20,0C45,-40 75,-40 100,0") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<path") != null);
+}
+
+test "nop2 honors input cluster boxes and label positions" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Aux {
+        \\  graph [layout=nop2, notranslate=true, label="Graph Label", lp="160,150"];
+        \\  a [pos="40,40", xlabel="Node X", xlp="20,100"];
+        \\  b [pos="280,40"];
+        \\  subgraph cluster_group {
+        \\    graph [label="Group", bb="10,10,150,120", lp="80,110"];
+        \\    a;
+        \\  }
+        \\  a -> b [label="Main", xlabel="Edge X", headlabel="Head", taillabel="Tail",
+        \\          lp="160,80", xlp="160,120", head_lp="250,60", tail_lp="70,60",
+        \\          pos="e,250,40 70,40 120,90 200,90 245,40"];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+
+    try std.testing.expect(layout.position_transform != null);
+    const cluster_box = layout.subgraphs[0];
+    try std.testing.expectApproxEqAbs(@as(f64, 10), cluster_box.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -120), cluster_box.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 140), cluster_box.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 110), cluster_box.height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 160), positionedAttrPoint(&layout, graph.attrs.items, "lp").?.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -150), positionedAttrPoint(&layout, graph.attrs.items, "lp").?.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 20), positionedAttrPoint(&layout, graph.nodes.items[0].attrs.items, "xlp").?.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -100), positionedAttrPoint(&layout, graph.nodes.items[0].attrs.items, "xlp").?.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 160), positionedAttrPoint(&layout, graph.edges.items[0].attrs.items, "lp").?.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -80), positionedAttrPoint(&layout, graph.edges.items[0].attrs.items, "lp").?.y, 0.001);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    const cluster_fragment = svgGroupFragmentByTitle(svg, "Group") orelse return error.MissingClusterRect;
+    try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "points=\"10,-10 10,-120 150,-120 150,-10") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "x=\"80\" y=\"-106.2\"") != null);
+    const edge_fragment = svg_mod.test_helpers.groupFragmentById(svg, "edge1") orelse return error.MissingEdge;
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"160\" y=\"-76.2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"70\" y=\"-56.2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"250\" y=\"-56.2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"160\" y=\"-116.2\"") != null);
+}
+
+test "typed positioned auxiliary geometry serializes cleanly" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "TypedAux" });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .layout = .positioned_with_edges });
+    try graph.setGraphAttr(.{ .notranslate = true });
+    try graph.setGraphAttr(.{ .label = "Graph" });
+    try graph.setGraphAttr(.{ .label_position = .{ .x = 100, .y = 140 } });
+    const a = try graph.addNode("a", .{
+        .position = .{ .x = 20, .y = 20 },
+        .xlabel = "Node X",
+        .external_label_position = .{ .x = 10, .y = 90 },
+    });
+    const b = try graph.addNode("b", .{ .position = .{ .x = 180, .y = 20 } });
+    _ = try graph.addSubgraph("Group", null, &.{a}, .{
+        .label_position = .{ .x = 60, .y = 100 },
+        .bounding_box = .{ .min_x = 0, .min_y = 0, .max_x = 100, .max_y = 110 },
+    });
+    _ = try graph.addEdge(a, b, .{
+        .label = "Main",
+        .label_position = .{ .x = 100, .y = 70 },
+        .xlabel = "Edge X",
+        .external_label_position = .{ .x = 100, .y = 110 },
+        .headlabel = "Head",
+        .head_label_position = .{ .x = 160, .y = 45 },
+        .taillabel = "Tail",
+        .tail_label_position = .{ .x = 40, .y = 45 },
+    });
+
+    try std.testing.expectEqualStrings("100,140", attrValue(graph.attrs.items, "lp").?);
+    try std.testing.expectEqualStrings("10,90", attrValue(graph.nodes.items[a].attrs.items, "xlp").?);
+    try std.testing.expectEqualStrings("0,0,100,110", attrValue(graph.subgraphs.items[0].attrs.items, "bb").?);
+    try std.testing.expectEqualStrings("60,100", attrValue(graph.subgraphs.items[0].attrs.items, "lp").?);
+    try std.testing.expectEqualStrings("100,70", attrValue(graph.edges.items[0].attrs.items, "lp").?);
+    try std.testing.expectEqualStrings("100,110", attrValue(graph.edges.items[0].attrs.items, "xlp").?);
+    try std.testing.expectEqualStrings("160,45", attrValue(graph.edges.items[0].attrs.items, "head_lp").?);
+    try std.testing.expectEqualStrings("40,45", attrValue(graph.edges.items[0].attrs.items, "tail_lp").?);
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    try std.testing.expectApproxEqAbs(@as(f64, 100), layout.subgraphs[0].width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 110), layout.subgraphs[0].height, 0.001);
 }
 
 fn rectContainsRect(outer: RectF, inner: RectF) bool {

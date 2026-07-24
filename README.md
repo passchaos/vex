@@ -85,8 +85,9 @@ node/subgraph `sortv` ordering.
 edges, while `--layout nop2` additionally preserves valid Graphviz `3n+1`
 cubic edge `pos` splines and reroutes missing or invalid ones. Both support
 `notranslate=true`; the Zig API exposes typed `NodePosition` and
-`EdgeSplineSegmentInput` values instead of leaking DOT strings into core API
-calls.
+`EdgeSplineSegmentInput` values, plus typed `BoundingBox` and graph/subgraph/
+node/edge label positions, instead of leaking DOT geometry strings into core
+API calls.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or

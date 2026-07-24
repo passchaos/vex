@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Point = @import("result.zig").Point;
+const Rect = @import("result.zig").SubgraphLayout;
 
 pub const PositionedPoint = struct {
     point: Point,
@@ -11,6 +12,13 @@ pub const PositionedPoint = struct {
 pub const Size = struct {
     width: f64,
     height: f64,
+};
+
+pub const BoundingBox = struct {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
 };
 
 pub const SplineSegment = struct {
@@ -53,6 +61,25 @@ pub fn parseNodePosition(value: []const u8) !PositionedPoint {
     return .{
         .point = try parsePointToken(text),
         .pinned = pinned,
+    };
+}
+
+pub fn parsePoint(value: []const u8) !Point {
+    return parsePointToken(std.mem.trim(u8, value, " \t\r\n"));
+}
+
+pub fn parseBoundingBox(value: []const u8) !BoundingBox {
+    var parts = std.mem.splitScalar(u8, value, ',');
+    const x0 = parseFiniteFloat(parts.next() orelse return error.InvalidBoundingBox) catch return error.InvalidBoundingBox;
+    const y0 = parseFiniteFloat(parts.next() orelse return error.InvalidBoundingBox) catch return error.InvalidBoundingBox;
+    const x1 = parseFiniteFloat(parts.next() orelse return error.InvalidBoundingBox) catch return error.InvalidBoundingBox;
+    const y1 = parseFiniteFloat(parts.next() orelse return error.InvalidBoundingBox) catch return error.InvalidBoundingBox;
+    if (parts.next() != null) return error.InvalidBoundingBox;
+    return .{
+        .min_x = @min(x0, x1),
+        .min_y = @min(y0, y1),
+        .max_x = @max(x0, x1),
+        .max_y = @max(y0, y1),
     };
 }
 
@@ -112,10 +139,15 @@ fn parsePointToken(value: []const u8) !Point {
     const x_text = parts.next() orelse return error.InvalidPosition;
     const y_text = parts.next() orelse return error.InvalidPosition;
     if (parts.next() != null) return error.InvalidPosition;
-    const x = std.fmt.parseFloat(f64, std.mem.trim(u8, x_text, " \t\r\n")) catch return error.InvalidPosition;
-    const y = std.fmt.parseFloat(f64, std.mem.trim(u8, y_text, " \t\r\n")) catch return error.InvalidPosition;
-    if (!std.math.isFinite(x) or !std.math.isFinite(y)) return error.InvalidPosition;
+    const x = parseFiniteFloat(x_text) catch return error.InvalidPosition;
+    const y = parseFiniteFloat(y_text) catch return error.InvalidPosition;
     return .{ .x = x, .y = y };
+}
+
+fn parseFiniteFloat(value: []const u8) !f64 {
+    const parsed = std.fmt.parseFloat(f64, std.mem.trim(u8, value, " \t\r\n")) catch return error.InvalidNumber;
+    if (!std.math.isFinite(parsed)) return error.InvalidNumber;
+    return parsed;
 }
 
 pub fn layout(
@@ -196,6 +228,26 @@ pub fn transformSpline(spline: *Spline, shift: Point) void {
     }
 }
 
+pub fn transformBoundingBox(box: BoundingBox, shift: Point, id: usize) Rect {
+    const top_left = transformPoint(.{ .x = box.min_x, .y = box.max_y }, shift);
+    return .{
+        .id = id,
+        .x = top_left.x,
+        .y = top_left.y,
+        .width = box.max_x - box.min_x,
+        .height = box.max_y - box.min_y,
+    };
+}
+
+pub fn appendBoundingBoxCorners(points: *std.ArrayList(Point), allocator: std.mem.Allocator, box: BoundingBox) !void {
+    try points.appendSlice(allocator, &.{
+        .{ .x = box.min_x, .y = box.min_y },
+        .{ .x = box.min_x, .y = box.max_y },
+        .{ .x = box.max_x, .y = box.min_y },
+        .{ .x = box.max_x, .y = box.max_y },
+    });
+}
+
 fn inputToScreen(point: Point) Point {
     return .{ .x = point.x, .y = -point.y };
 }
@@ -234,6 +286,21 @@ test "edge spline supports multiple cubic segments" {
     );
     defer spline.deinit();
     try std.testing.expectEqual(@as(usize, 2), spline.segments.len);
+}
+
+test "bounding boxes normalize and transform y-up coordinates" {
+    const parsed = try parseBoundingBox("100,80,20,-10");
+    try std.testing.expectApproxEqAbs(@as(f64, 20), parsed.min_x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -10), parsed.min_y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 100), parsed.max_x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 80), parsed.max_y, 0.001);
+
+    const rect = transformBoundingBox(parsed, .{ .x = 12, .y = 100 }, 4);
+    try std.testing.expectEqual(@as(usize, 4), rect.id);
+    try std.testing.expectApproxEqAbs(@as(f64, 32), rect.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 20), rect.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 80), rect.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 90), rect.height, 0.001);
 }
 
 test "pre-positioned layout flips y and translates node bounds" {

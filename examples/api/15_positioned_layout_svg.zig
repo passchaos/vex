@@ -12,10 +12,14 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.Graph.init(allocator, .{ .directed = true, .name = "PositionedLayout" });
     defer graph.deinit();
     try graph.setGraphAttr(.{ .layout = .positioned_with_edges });
+    try graph.setGraphAttr(.{ .label = "Imported Geometry" });
+    try graph.setGraphAttr(.{ .label_position = .{ .x = 170, .y = 150 } });
 
     const input = try graph.addNode("Input", .{
         .shape = .box,
         .position = .{ .x = 20, .y = 20, .pinned = true },
+        .xlabel = "source",
+        .external_label_position = .{ .x = 20, .y = 70 },
     });
     const process = try graph.addNode("Process", .{
         .shape = .box,
@@ -25,9 +29,19 @@ pub fn main(init: std.process.Init) !void {
         .shape = .box,
         .position = .{ .x = 320, .y = 20 },
     });
+    _ = try graph.addSubgraph("Pipeline", null, &.{ input, process }, .{
+        .bounding_box = .{ .min_x = 0, .min_y = 0, .max_x = 230, .max_y = 130 },
+        .label_position = .{ .x = 115, .y = 120 },
+        .style = .rounded,
+    });
 
     _ = try graph.addEdge(input, process, .{
         .label = "preserved",
+        .label_position = .{ .x = 105, .y = 88 },
+        .headlabel = "in",
+        .head_label_position = .{ .x = 145, .y = 96 },
+        .taillabel = "out",
+        .tail_label_position = .{ .x = 55, .y = 45 },
         .spline = &.{.{
             .points = &.{
                 .{ .x = 45, .y = 30 },
