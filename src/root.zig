@@ -4007,7 +4007,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         for (rank_heights) |rank_height| max_rank_height = @max(max_rank_height, rank_height);
         var equal_rank_gap = effective_options.rank_gap;
         for (0..if (rank_heights.len == 0) 0 else rank_heights.len - 1) |rank| {
-            equal_rank_gap = @max(equal_rank_gap, subgraphRankGapBetween(graph, ranks, rank, effective_options.rank_gap));
+            equal_rank_gap = @max(equal_rank_gap, layout_mod.subgraph.rankGapBetween(graph.subgraphs.items, ranks, rank, effective_options.rank_gap));
         }
         const rank_step = max_rank_height + equal_rank_gap;
         for (rank_heights, 0..) |rank_height, rank| {
@@ -4019,7 +4019,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         for (rank_heights, 0..) |rank_height, rank| {
             rank_depths[rank] = total_depth;
             total_depth += rank_height;
-            if (rank + 1 < rank_heights.len) total_depth += subgraphRankGapBetween(graph, ranks, rank, effective_options.rank_gap);
+            if (rank + 1 < rank_heights.len) total_depth += layout_mod.subgraph.rankGapBetween(graph.subgraphs.items, ranks, rank, effective_options.rank_gap);
         }
     }
 
@@ -4460,76 +4460,12 @@ fn clusterIndexContainingNode(graph: *const Graph, node_id: NodeId) ?usize {
     return null;
 }
 
-fn subgraphDepth(graph: *const Graph, index: usize) usize {
-    var depth: usize = 0;
-    var current: ?SubgraphId = if (index < graph.subgraphs.items.len) graph.subgraphs.items[index].parent else null;
-    while (current) |parent| {
-        if (parent >= graph.subgraphs.items.len) break;
-        depth += 1;
-        current = graph.subgraphs.items[parent].parent;
-    }
-    return depth;
-}
-
 fn subgraphNodePairGap(graph: *const Graph, left: NodeId, right: NodeId, fallback: f64) f64 {
-    var best_gap: ?f64 = null;
-    var best_depth: usize = 0;
-    for (graph.subgraphs.items, 0..) |cluster, index| {
-        if (!containsNode(cluster.nodes, left) or !containsNode(cluster.nodes, right)) continue;
-        const raw_nodesep = attrValue(cluster.attrs.items, "nodesep") orelse continue;
-        const gap = layout_mod.spacing.graphValue(raw_nodesep) orelse continue;
-        const depth = subgraphDepth(graph, index);
-        if (best_gap == null or depth >= best_depth) {
-            best_gap = gap;
-            best_depth = depth;
-        }
-    }
-    return best_gap orelse fallback;
-}
-
-fn subgraphRankGapBetween(graph: *const Graph, ranks: []const usize, upper_rank: usize, fallback: f64) f64 {
-    var best_gap = fallback;
-    for (graph.subgraphs.items) |cluster| {
-        if (!subgraphHasMemberOnRank(cluster, ranks, upper_rank) or !subgraphHasMemberOnRank(cluster, ranks, upper_rank + 1)) continue;
-        const raw_ranksep = attrValue(cluster.attrs.items, "ranksep") orelse continue;
-        const gap = layout_mod.spacing.graphValue(raw_ranksep) orelse continue;
-        best_gap = @max(best_gap, gap);
-    }
-    return best_gap;
-}
-
-fn subgraphHasMemberOnRank(cluster: Subgraph, ranks: []const usize, rank: usize) bool {
-    for (cluster.nodes) |node_id| {
-        if (node_id < ranks.len and ranks[node_id] == rank) return true;
-    }
-    return false;
+    return layout_mod.subgraph.nodePairGap(graph.subgraphs.items, left, right, fallback);
 }
 
 fn virtualNodePairGap(graph: *const Graph, left: VirtualNode, right: VirtualNode, fallback: f64) f64 {
-    var best_gap: ?f64 = null;
-    var best_depth: usize = 0;
-    for (graph.subgraphs.items, 0..) |cluster, index| {
-        if (!virtualNodeInSubgraph(graph, left, cluster) or !virtualNodeInSubgraph(graph, right, cluster)) continue;
-        const raw_nodesep = attrValue(cluster.attrs.items, "nodesep") orelse continue;
-        const gap = layout_mod.spacing.graphValue(raw_nodesep) orelse continue;
-        const depth = subgraphDepth(graph, index);
-        if (best_gap == null or depth >= best_depth) {
-            best_gap = gap;
-            best_depth = depth;
-        }
-    }
-    return best_gap orelse fallback;
-}
-
-fn virtualNodeInSubgraph(graph: *const Graph, node: VirtualNode, cluster: Subgraph) bool {
-    return switch (node) {
-        .real => |node_id| containsNode(cluster.nodes, node_id),
-        .dummy => |edge_id| blk: {
-            if (edge_id >= graph.edges.items.len) break :blk false;
-            const edge_item = graph.edges.items[edge_id];
-            break :blk containsNode(cluster.nodes, edge_item.from) and containsNode(cluster.nodes, edge_item.to);
-        },
-    };
+    return layout_mod.subgraph.virtualPairGap(graph.subgraphs.items, graph.edges.items, left, right, fallback);
 }
 
 fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usize {
