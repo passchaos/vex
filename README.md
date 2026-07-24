@@ -49,11 +49,14 @@ cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
 
 Layout selection defaults to `dot`/Sugiyama, which honors
-`rankdir=TB|BT|LR|RL` during layout. `--layout fr`, `--layout neato`, `--layout
-fdp`, and Graphviz-style `-Kneato` select the deterministic
-Fruchterman-Reingold force-directed layout. `--layout-iterations` caps the
-force-layout iteration budget for fast previews or large graph workflows; DOT
-can set the same budget with `graph [vex_layout_iterations=20]` or
+`rankdir=TB|BT|LR|RL` during layout. `--layout neato`, `graph
+[layout=neato]`, and Graphviz-style `-Kneato` select the deterministic
+stress-majorization engine. `--layout fr`, `--layout fdp`, and `--layout sfdp`
+currently select the deterministic Fruchterman-Reingold engine; `fdp` and
+`sfdp` remain compatibility aliases until their independent engines are
+implemented. `--layout-iterations` caps the selected iterative layout budget
+for fast previews or large graph workflows; DOT can set the same budget with
+`graph [vex_layout_iterations=20]` or
 `graph [layout_iterations=20]`, and the Zig API can pass
 `.{ .force = .{ .iterations = 20 } }`.
 For layered/Sugiyama layout, `--crossing-passes` and `--coordinate-passes`
@@ -216,7 +219,7 @@ They progress from small SVG output to broader feature coverage:
 - `04_svg_output.zig`: one API graph rendered through the SVG output dispatch path.
 - `05_records_ports_svg.zig`: record labels, record ports, and SVG output.
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, and SVG output.
-- `07_force_layout_svg.zig`: cyclic undirected graph rendered with layered Sugiyama layout to exercise edge-label avoidance.
+- `07_force_layout_svg.zig`: cyclic undirected graph rendered with the independent neato stress-majorization engine.
 - `08_incremental_layout_svg.zig`: add a node after the first layout, preserve shared-node positions with `layoutGraphIncremental`, and write the final SVG.
 
 ## Graphviz compatibility target

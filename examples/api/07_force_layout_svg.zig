@@ -1,6 +1,4 @@
-//! Build a cyclic graph with the API and render it with layered SVG layout.
-//!
-//! The build step name is historical; this example intentionally uses Sugiyama.
+//! Build a cyclic graph with the API and render it with neato SVG layout.
 //!
 //! Run with: zig build run-api-force-layout-svg
 
@@ -35,8 +33,7 @@ pub fn main(init: std.process.Init) !void {
     _ = try graph.addEdge(metrics, ui, .{ .label = "dash" });
 
     try common.writeSvg(init.gpa, init.io, &graph, "07.svg", .{
-        .algorithm = .sugiyama,
-        // .algorithm = .fruchterman_reingold,
-        // .force = .{ .width = 620, .height = 360, .iterations = 180 },
+        .algorithm = .stress_majorization,
+        .force = .{ .width = 620, .height = 360, .iterations = 180 },
     });
 }

@@ -3592,6 +3592,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .auto => unreachable,
         .sugiyama => layoutLayered(allocator, graph, config.layered),
         .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
+        .stress_majorization => layoutStressMajorization(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
     };
 }
 
@@ -3600,6 +3601,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .auto => unreachable,
         .sugiyama => layoutLayeredIncremental(allocator, graph, previous, config.layered, options),
         .fruchterman_reingold => layoutFruchtermanReingoldIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
+        .stress_majorization => layoutStressMajorizationIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
     };
 }
 
@@ -4009,6 +4011,257 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
         .width = options.width,
         .height = options.height,
     };
+}
+
+pub fn layoutStressMajorization(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    return layoutStressMajorizationWithPrevious(allocator, graph, null, options, .{});
+}
+
+pub fn layoutStressMajorizationIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    return layoutStressMajorizationWithPrevious(allocator, graph, previous, options, incremental);
+}
+
+fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const n = graph.nodes.items.len;
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    if (n == 0) {
+        return .{
+            .allocator = allocator,
+            .graph = graph_snapshot,
+            .rankdir = graph.rankdir,
+            .nodes = nodes,
+            .subgraphs = cluster_layouts,
+            .edge_waypoints = edge_waypoints,
+            .ranks = ranks,
+            .rank_depths = rank_depths,
+            .rank_heights = rank_heights,
+            .margin = options.margin,
+            .margin_x = options.margin,
+            .margin_y = options.margin,
+            .width = options.width,
+            .height = options.height,
+        };
+    }
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    const default_layout_options = LayoutOptions{};
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+
+    const positions = try allocator.alloc(Point, n);
+    defer allocator.free(positions);
+    initializeStressPositions(positions, previous, graph.rankdir, options, incremental);
+
+    const graph_distances = try stressGraphDistances(allocator, graph);
+    defer allocator.free(graph_distances.values);
+    const scratch = try allocator.alloc(Point, n);
+    defer allocator.free(scratch);
+    const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
+    defer if (previous != null) allocator.free(anchors);
+    const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
+    try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability);
+    fitStressPositionsToCanvas(positions, sizes, options);
+
+    for (nodes, 0..) |*node, id| {
+        node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
+    }
+    computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = nodes,
+        .subgraphs = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
+        .width = options.width,
+        .height = options.height,
+    };
+}
+
+const StressGraphDistances = struct {
+    values: []f64,
+    node_count: usize,
+    max_finite: f64,
+
+    fn at(self: StressGraphDistances, from: usize, to: usize) f64 {
+        return self.values[from * self.node_count + to];
+    }
+};
+
+fn stressGraphDistances(allocator: std.mem.Allocator, graph: *const Graph) !StressGraphDistances {
+    const n = graph.nodes.items.len;
+    if (n > 0 and n > std.math.maxInt(usize) / n) return error.OutOfMemory;
+    const values = try allocator.alloc(f64, n * n);
+    @memset(values, std.math.inf(f64));
+    for (0..n) |id| values[id * n + id] = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= n or edge_item.to >= n or edge_item.from == edge_item.to) continue;
+        const length = parsePositiveAttrFloat(edge_item.attrs.items, "len", 1.0);
+        const forward = edge_item.from * n + edge_item.to;
+        const reverse = edge_item.to * n + edge_item.from;
+        values[forward] = @min(values[forward], length);
+        values[reverse] = @min(values[reverse], length);
+    }
+
+    for (0..n) |via| {
+        for (0..n) |from| {
+            const left = values[from * n + via];
+            if (!std.math.isFinite(left)) continue;
+            for (0..n) |to| {
+                const right = values[via * n + to];
+                if (!std.math.isFinite(right)) continue;
+                const index = from * n + to;
+                values[index] = @min(values[index], left + right);
+            }
+        }
+    }
+
+    var max_finite: f64 = 1.0;
+    for (values) |distance| {
+        if (std.math.isFinite(distance)) max_finite = @max(max_finite, distance);
+    }
+    return .{ .values = values, .node_count = n, .max_finite = max_finite };
+}
+
+fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankdir: RankDir, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) void {
+    const n = positions.len;
+    const cx = options.width / 2.0;
+    const cy = options.height / 2.0;
+    const radius = @max(1.0, @min(options.width, options.height) * 0.32);
+    const stability = std.math.clamp(incremental.stability, 0.0, 1.0);
+    for (positions, 0..) |*position, id| {
+        const angle = 2.0 * std.math.pi * @as(f64, @floatFromInt(id)) / @as(f64, @floatFromInt(@max(n, 1)));
+        const fallback = Point{
+            .x = cx + std.math.cos(angle) * radius,
+            .y = cy + std.math.sin(angle) * radius,
+        };
+        if (previous) |prior| {
+            if (prior.rankdir == rankdir and id < prior.nodes.len) {
+                position.* = .{
+                    .x = prior.nodes[id].center.x * stability + fallback.x * (1.0 - stability),
+                    .y = prior.nodes[id].center.y * stability + fallback.y * (1.0 - stability),
+                };
+                continue;
+            }
+        }
+        position.* = fallback;
+    }
+}
+
+fn majorizeStressPositions(positions: []Point, scratch: []Point, distances: StressGraphDistances, iterations: usize, anchors: []const Point, stability: f64) !void {
+    if (positions.len != scratch.len or positions.len != distances.node_count) return error.InvalidStressLayoutState;
+    const ideal_length: f64 = 72.0;
+    for (0..iterations) |_| {
+        for (positions, 0..) |position, from| {
+            var sum_x: f64 = 0;
+            var sum_y: f64 = 0;
+            var sum_weight: f64 = 0;
+            for (positions, 0..) |other, to| {
+                if (from == to) continue;
+                const graph_distance = distances.at(from, to);
+                const disconnected = !std.math.isFinite(graph_distance);
+                const normalized_distance = if (disconnected) distances.max_finite + 1.0 else @max(graph_distance, 0.05);
+                const desired = normalized_distance * ideal_length;
+                const weight_scale: f64 = if (disconnected) 0.05 else 1.0;
+                const weight = weight_scale / (desired * desired);
+                var dx = position.x - other.x;
+                var dy = position.y - other.y;
+                var actual = std.math.hypot(dx, dy);
+                if (actual < 0.001) {
+                    const angle = @as(f64, @floatFromInt(from + to + 1)) * 2.399963229728653;
+                    dx = std.math.cos(angle) * 0.001;
+                    dy = std.math.sin(angle) * 0.001;
+                    actual = 0.001;
+                }
+                sum_x += weight * (other.x + desired * dx / actual);
+                sum_y += weight * (other.y + desired * dy / actual);
+                sum_weight += weight;
+            }
+            scratch[from] = if (sum_weight > 0)
+                .{ .x = sum_x / sum_weight, .y = sum_y / sum_weight }
+            else
+                position;
+            if (from < anchors.len and stability > 0) {
+                scratch[from].x = scratch[from].x * (1.0 - stability) + anchors[from].x * stability;
+                scratch[from].y = scratch[from].y * (1.0 - stability) + anchors[from].y * stability;
+            }
+        }
+        @memcpy(positions, scratch);
+    }
+}
+
+fn fitStressPositionsToCanvas(positions: []Point, sizes: []const NodeSize, options: ForceLayoutOptions) void {
+    if (positions.len == 0) return;
+    var min_x = std.math.floatMax(f64);
+    var min_y = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    var max_y: f64 = -std.math.floatMax(f64);
+    for (positions) |position| {
+        min_x = @min(min_x, position.x);
+        min_y = @min(min_y, position.y);
+        max_x = @max(max_x, position.x);
+        max_y = @max(max_y, position.y);
+    }
+    const source_width = @max(1.0, max_x - min_x);
+    const source_height = @max(1.0, max_y - min_y);
+    const target_width = @max(1.0, options.width - options.margin * 2.0);
+    const target_height = @max(1.0, options.height - options.margin * 2.0);
+    const scale = @min(1.0, @min(target_width / source_width, target_height / source_height));
+    const source_center_x = (min_x + max_x) / 2.0;
+    const source_center_y = (min_y + max_y) / 2.0;
+    const target_center_x = options.width / 2.0;
+    const target_center_y = options.height / 2.0;
+    for (positions, 0..) |*position, id| {
+        position.x = target_center_x + (position.x - source_center_x) * scale;
+        position.y = target_center_y + (position.y - source_center_y) * scale;
+        position.x = std.math.clamp(position.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
+        position.y = std.math.clamp(position.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
+    }
+}
+
+fn stressLayoutEnergy(positions: []const Point, distances: StressGraphDistances) f64 {
+    const ideal_length: f64 = 72.0;
+    var energy: f64 = 0;
+    for (positions, 0..) |position, from| {
+        for (positions[from + 1 ..], from + 1..) |other, to| {
+            const graph_distance = distances.at(from, to);
+            const disconnected = !std.math.isFinite(graph_distance);
+            const normalized_distance = if (disconnected) distances.max_finite + 1.0 else @max(graph_distance, 0.05);
+            const desired = normalized_distance * ideal_length;
+            const weight_scale: f64 = if (disconnected) 0.05 else 1.0;
+            const weight = weight_scale / (desired * desired);
+            const delta = std.math.hypot(position.x - other.x, position.y - other.y) - desired;
+            energy += weight * delta * delta;
+        }
+    }
+    return energy;
 }
 
 fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: *Layout, node_gap: f64, options: IncrementalLayoutOptions) !void {
@@ -15953,12 +16206,14 @@ test "Fruchterman-Reingold layout pulls adjacent nodes closer" {
 test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.sugiyama, LayoutAlgorithm.fromString("dot").?);
     try std.testing.expectEqual(LayoutAlgorithm.sugiyama, LayoutAlgorithm.fromString("sugiyama").?);
-    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("neato").?);
+    try std.testing.expectEqual(LayoutAlgorithm.stress_majorization, LayoutAlgorithm.fromString("neato").?);
+    try std.testing.expectEqual(LayoutAlgorithm.stress_majorization, LayoutAlgorithm.fromString("stress-majorization").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fdp").?);
+    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("sfdp").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
-test "layoutGraph selects Fruchterman-Reingold from graph layout attr" {
+test "layoutGraph selects stress majorization from neato graph attr" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\graph G {
@@ -15976,7 +16231,7 @@ test "layoutGraph selects Fruchterman-Reingold from graph layout attr" {
     try std.testing.expectEqual(defaults.height, layout.height);
 }
 
-test "force layout honors iteration budget from DOT and typed API" {
+test "neato layout honors iteration budget from DOT and typed API" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\graph G {
@@ -15995,6 +16250,76 @@ test "force layout honors iteration budget from DOT and typed API" {
 
     try std.testing.expectEqualStrings("40", attrValue(graph.attrs.items, "vex_layout_iterations").?);
     try std.testing.expect(distanceBetween(low_budget.nodes[0].center, higher_budget.nodes[0].center) > 0.1);
+}
+
+test "neato stress graph distances follow shortest paths" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "graph G { a -- b -- c -- d; }");
+    defer graph.deinit();
+
+    const distances = try stressGraphDistances(allocator, &graph);
+    defer allocator.free(distances.values);
+    try std.testing.expectEqual(@as(f64, 0), distances.at(0, 0));
+    try std.testing.expectEqual(@as(f64, 1), distances.at(0, 1));
+    try std.testing.expectEqual(@as(f64, 2), distances.at(0, 2));
+    try std.testing.expectEqual(@as(f64, 3), distances.at(0, 3));
+    try std.testing.expectEqual(distances.at(0, 3), distances.at(3, 0));
+}
+
+test "neato stress majorization lowers graph stress" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  a -- b;
+        \\  b -- c;
+        \\  c -- d;
+        \\  d -- a;
+        \\  a -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const distances = try stressGraphDistances(allocator, &graph);
+    defer allocator.free(distances.values);
+    var positions = [_]Point{
+        .{ .x = 20, .y = 20 },
+        .{ .x = 380, .y = 20 },
+        .{ .x = 30, .y = 260 },
+        .{ .x = 370, .y = 250 },
+    };
+    var scratch: [positions.len]Point = undefined;
+    const before = stressLayoutEnergy(&positions, distances);
+    try majorizeStressPositions(&positions, &scratch, distances, 60, &.{}, 0);
+    const after = stressLayoutEnergy(&positions, distances);
+    try std.testing.expect(after < before * 0.25);
+}
+
+test "neato is distinct from Fruchterman-Reingold" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  hub -- a;
+        \\  hub -- b;
+        \\  hub -- c;
+        \\  hub -- d;
+        \\  a -- b;
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = ForceLayoutOptions{ .width = 420, .height = 300, .margin = 30, .iterations = 60 };
+    var neato = try layoutGraph(allocator, &graph, .{ .algorithm = .stress_majorization, .force = options });
+    defer neato.deinit();
+    var fr = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = options });
+    defer fr.deinit();
+
+    try std.testing.expect(sharedNodeDisplacement(&neato, &fr, graph.nodes.items.len) > 10.0);
+    for (neato.nodes) |node| {
+        try std.testing.expect(node.center.x - node.width / 2.0 >= options.margin - 0.001);
+        try std.testing.expect(node.center.x + node.width / 2.0 <= options.width - options.margin + 0.001);
+        try std.testing.expect(node.center.y - node.height / 2.0 >= options.margin - 0.001);
+        try std.testing.expect(node.center.y + node.height / 2.0 <= options.height - options.margin + 0.001);
+    }
 }
 
 test "force layout config iterations override graph fallback" {

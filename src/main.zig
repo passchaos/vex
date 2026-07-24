@@ -10,7 +10,7 @@ const usage =
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--check|--validate]
-    \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
+    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
     \\        [--crossing-passes count] [--coordinate-passes count]
@@ -34,7 +34,7 @@ const usage =
     \\--check parses input and reports graph counts without layout or rendering.
     \\--max-input-bytes caps DOT/Mermaid input reads.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
-    \\--layout-iterations caps force/neato layout iterations.
+    \\--layout-iterations caps neato stress or force-layout iterations.
     \\--interactive-all enables all SVG-native controls and metadata.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.

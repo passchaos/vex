@@ -29,7 +29,7 @@
 | 核心图模型与 Zig API | 已验证 | `Graph`、`NodeId`、typed attrs、API 示例与测试 | 保持 `NodeId` 身份、`label` 显示语义和 parser 局部 textual-id 映射 |
 | strict graph 合并语义 | 已验证 | strict DOT/API duplicate-edge 测试 | 有向与无向路径持续通过 |
 | layered/Sugiyama 布局 | 部分完成 | rank、crossing、coordinate、long-edge、compound 与 cluster 测试 | 完整目标 cluster 语义 corpus；大图质量与性能门槛 |
-| force-directed 布局 | 部分完成 | deterministic Fruchterman-Reingold 与预算测试 | `neato`、`fdp`、`sfdp` 不应只作为同一引擎别名；建立各自语义/质量门槛 |
+| force-directed 布局 | 部分完成 | independent neato stress-majorization；deterministic Fruchterman-Reingold；最短路、stress 下降、引擎区分和预算测试 | `fdp`、`sfdp` 仍需独立引擎和各自语义/质量门槛 |
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |
 | records、ports、compound edges | 已验证 | record field、compass port、scoped ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
 | parent-scoped subgraph identity | 已验证 | Graphviz `agsubg` source oracle；same-parent reopen merge、different-parent isolation 和 file corpus 测试 | 保持成员/属性合并和最近作用域引用语义 |
@@ -63,6 +63,6 @@
 ## 当前优先级
 
 1. 目标 DOT grammar/corpus 与完整 cluster 语义。
-2. 独立的 `neato` / `fdp` / `sfdp` 能力，而不是兼容别名。
+2. 独立的 `fdp` / `sfdp` 能力，而不是 Fruchterman-Reingold 兼容别名。
 3. 大图性能、内存和取消门槛。
 4. 继续收敛 parser/model/layout/SVG 模块边界。
