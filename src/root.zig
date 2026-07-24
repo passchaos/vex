@@ -10525,15 +10525,11 @@ fn clusterVisualRectHasVerticalTrim(cluster: Subgraph, layout: *const Layout) bo
 }
 
 fn writeSvgFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!void {
-    if (std.mem.eql(u8, opacity, "1.0") or std.mem.eql(u8, opacity, "1") or std.mem.eql(u8, opacity, "1.00")) return;
-    try writer.print(" fill-opacity=\"{s}\"", .{opacity});
+    try svg_mod.style.writeFillOpacity(writer, opacity);
 }
 
 fn writeSvgStrokeWidth(writer: *Io.Writer, width: f64) Io.Writer.Error!void {
-    if (@abs(width - 1.0) <= 0.0001) return;
-    try writer.writeAll(" stroke-width=\"");
-    try writeSvgNumber(writer, width);
-    try writer.writeByte('"');
+    try svg_mod.style.writeStrokeWidth(writer, width);
 }
 
 fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual, options: SvgOptions) Io.Writer.Error!void {

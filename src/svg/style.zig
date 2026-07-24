@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Io = std.Io;
+const svg_writer = @import("writer.zig");
 
 pub const Dash = enum {
     none,
@@ -43,4 +44,16 @@ pub fn writeDash(writer: *Io.Writer, dash: Dash) Io.Writer.Error!void {
         .dashed => try writer.writeAll(" stroke-dasharray=\"8,5\""),
         .dotted => try writer.writeAll(" stroke-dasharray=\"2,5\""),
     }
+}
+
+pub fn writeFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!void {
+    if (std.mem.eql(u8, opacity, "1.0") or std.mem.eql(u8, opacity, "1") or std.mem.eql(u8, opacity, "1.00")) return;
+    try writer.print(" fill-opacity=\"{s}\"", .{opacity});
+}
+
+pub fn writeStrokeWidth(writer: *Io.Writer, width: f64) Io.Writer.Error!void {
+    if (@abs(width - 1.0) <= 0.0001) return;
+    try writer.writeAll(" stroke-width=\"");
+    try svg_writer.number(writer, width);
+    try writer.writeByte('"');
 }
