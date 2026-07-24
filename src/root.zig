@@ -9384,15 +9384,11 @@ fn edgeColorList(edge_item: Edge) ?ColorList {
 }
 
 fn edgeMarkerColor(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
-    const colors = edgeColorList(edge_item) orelse return visual.stroke;
-    if (head) return resolveSvgColor(graph, edge_item.attrs.items, colors.segments[0].color);
-    if (colors.len >= 2) return resolveSvgColor(graph, edge_item.attrs.items, colors.segments[1].color);
-    return resolveSvgColor(graph, edge_item.attrs.items, colors.segments[0].color);
+    return resolveSvgColor(graph, edge_item.attrs.items, svg_mod.edge.markerColorToken(edge_item, visual.stroke, head));
 }
 
 fn edgeMarkerFill(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
-    if (attrValue(edge_item.attrs.items, "fillcolor")) |fillcolor| return resolveSvgColor(graph, edge_item.attrs.items, fillcolor);
-    return edgeMarkerColor(graph, edge_item, visual, head);
+    return resolveSvgColor(graph, edge_item.attrs.items, svg_mod.edge.markerFillToken(edge_item, visual.stroke, head));
 }
 
 fn edgeVisualForSegment(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, color: []const u8, index: usize, color_count: usize) EdgeVisual {

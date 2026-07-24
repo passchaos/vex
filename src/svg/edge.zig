@@ -49,6 +49,18 @@ pub fn colorListOffset(count: usize, index: usize, spacing: f64) f64 {
     return (@as(f64, @floatFromInt(index)) - @as(f64, @floatFromInt(count - 1)) / 2.0) * spacing;
 }
 
+pub fn markerColorToken(edge: anytype, fallback: []const u8, head: bool) []const u8 {
+    const colors = colorList(edge) orelse return fallback;
+    if (head) return colors.segments[0].color;
+    if (colors.len >= 2) return colors.segments[1].color;
+    return colors.segments[0].color;
+}
+
+pub fn markerFillToken(edge: anytype, fallback: []const u8, head: bool) []const u8 {
+    if (attrValue(edge.attrs.items, "fillcolor")) |fillcolor| return fillcolor;
+    return markerColorToken(edge, fallback, head);
+}
+
 fn parseBool(value: []const u8) ?bool {
     if (std.ascii.eqlIgnoreCase(value, "true") or
         std.ascii.eqlIgnoreCase(value, "yes") or
