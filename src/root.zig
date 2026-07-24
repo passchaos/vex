@@ -6906,13 +6906,20 @@ fn firstClusterMemberIndex(cluster: Subgraph, nodes: []const NodeId) ?usize {
 fn applyOrderingHints(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize) void {
     const graph_mode = orderingMode(attrValue(graph.attrs.items, "ordering"));
     for (graph.nodes.items) |node_item| {
-        const mode = if (graph_mode != .none) graph_mode else orderingMode(attrValue(node_item.attrs.items, "ordering"));
+        const node_mode = orderingMode(attrValue(node_item.attrs.items, "ordering"));
+        const subgraph_mode = subgraphOrderingModeForNode(graph, node_item.id);
+        const mode = if (node_mode != .none) node_mode else if (subgraph_mode != .none) subgraph_mode else graph_mode;
         switch (mode) {
             .none => {},
             .out => applyNodeOrdering(graph, levels, ranks, node_item.id, true),
             .in => applyNodeOrdering(graph, levels, ranks, node_item.id, false),
         }
     }
+}
+
+fn subgraphOrderingModeForNode(graph: *const Graph, node_id: NodeId) OrderingMode {
+    const cluster_index = clusterIndexContainingNode(graph, node_id) orelse return .none;
+    return orderingMode(attrValue(graph.subgraphs.items[cluster_index].attrs.items, "ordering"));
 }
 
 fn orderingMode(value: ?[]const u8) OrderingMode {
@@ -21237,6 +21244,49 @@ test "layered layout honors DOT ordering hints for edge declaration order" {
     const ic = nodeIdByLabel(&incoming, "c");
     try std.testing.expect(incoming_layout.nodes[ic].center.x < incoming_layout.nodes[ia].center.x);
     try std.testing.expect(incoming_layout.nodes[ia].center.x < incoming_layout.nodes[ib].center.x);
+}
+
+test "layered layout honors subgraph ordering hints for members" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB];
+        \\  subgraph cluster_ordered {
+        \\    ordering=out;
+        \\    source -> c;
+        \\    source -> a;
+        \\    source -> b;
+        \\  }
+        \\  { rank=same; a; b; c; }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expect(layout.nodes[c].center.x < layout.nodes[a].center.x);
+    try std.testing.expect(layout.nodes[a].center.x < layout.nodes[b].center.x);
+
+    var typed = try Graph.init(allocator, .{ .directed = true, .rankdir = .TB });
+    defer typed.deinit();
+    const source = try typed.addNode("source", .{});
+    const ta = try typed.addNode("a", .{});
+    const tb = try typed.addNode("b", .{});
+    const tc = try typed.addNode("c", .{});
+    _ = try typed.addEdge(source, tc, .{});
+    _ = try typed.addEdge(source, ta, .{});
+    _ = try typed.addEdge(source, tb, .{});
+    try typed.addRankConstraint(.same, &.{ ta, tb, tc });
+    const ordered = try typed.addSubgraph("ordered", null, &.{ source, ta, tb, tc }, .{ .ordering = .out });
+    try std.testing.expectEqualStrings("out", attrValue(typed.subgraphs.items[ordered].attrs.items, "ordering").?);
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    try std.testing.expect(typed_layout.nodes[tc].center.x < typed_layout.nodes[ta].center.x);
+    try std.testing.expect(typed_layout.nodes[ta].center.x < typed_layout.nodes[tb].center.x);
 }
 
 test "DOT parser and SVG renderer support common Graphviz node shapes" {
