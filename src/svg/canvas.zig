@@ -17,6 +17,11 @@ pub const Canvas = struct {
     scale: f64,
 };
 
+pub const Padding = struct {
+    x: f64,
+    y: f64,
+};
+
 const RequestedSize = struct {
     width: f64,
     height: f64,
@@ -87,6 +92,25 @@ pub fn canvas(attrs: anytype, natural: Size) Canvas {
         .output = output,
         .scale = dpiScale(attrs),
     };
+}
+
+pub fn pad(attrs: anytype, fallback: f64) Padding {
+    const value = attrValue(attrs, "pad") orelse return .{ .x = fallback, .y = fallback };
+    var parts = std.mem.tokenizeAny(u8, value, ", \t");
+    const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
+    const x = parseInchMargin(first) orelse fallback;
+    const y = if (parts.next()) |second| parseInchMargin(second) orelse x else x;
+    return .{ .x = x, .y = y };
+}
+
+pub fn fitAxis(content_min: f64, content_max: f64, padding: f64, canvas_size: *f64, translate: *f64) void {
+    const screen_min = content_min + translate.*;
+    const screen_max = content_max + translate.*;
+    const left_deficit = padding - screen_min;
+    const left_adjust = @max(0.0, left_deficit);
+    translate.* += left_adjust;
+    const right_deficit = screen_max + left_adjust + padding - canvas_size.*;
+    if (right_deficit > 0) canvas_size.* += right_deficit;
 }
 
 fn viewBoxWithRatio(current: Size, desired: f64) Size {

@@ -8450,7 +8450,8 @@ fn svgGraphContentTranslate(layout: *const Layout) f64 {
 }
 
 fn graphSvgPad(graph: *const Graph) BoxMargin {
-    return attrPad(graph.attrs.items, svg_clip_padding);
+    const pad = svg_mod.canvas.pad(graph.attrs.items, svg_clip_padding);
+    return .{ .x = pad.x, .y = pad.y };
 }
 
 fn graphSvgLandscape(graph: *const Graph) bool {
@@ -8483,22 +8484,12 @@ fn graphSvgCanvas(graph: *const Graph, natural: Point) GraphSvgCanvas {
 }
 
 fn attrPad(attrs: []const Attr, fallback: f64) BoxMargin {
-    const value = attrValue(attrs, "pad") orelse return .{ .x = fallback, .y = fallback };
-    var parts = std.mem.tokenizeAny(u8, value, ", \t");
-    const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
-    const x = parseInchMargin(first) orelse fallback;
-    const y = if (parts.next()) |second| parseInchMargin(second) orelse x else x;
-    return .{ .x = x, .y = y };
+    const pad = svg_mod.canvas.pad(attrs, fallback);
+    return .{ .x = pad.x, .y = pad.y };
 }
 
 fn fitSvgContentAxis(content_min: f64, content_max: f64, padding: f64, canvas_size: *f64, translate: *f64) void {
-    const screen_min = content_min + translate.*;
-    const screen_max = content_max + translate.*;
-    const left_deficit = padding - screen_min;
-    const left_adjust = @max(0.0, left_deficit);
-    translate.* += left_adjust;
-    const right_deficit = screen_max + left_adjust + padding - canvas_size.*;
-    if (right_deficit > 0) canvas_size.* += right_deficit;
+    svg_mod.canvas.fitAxis(content_min, content_max, padding, canvas_size, translate);
 }
 
 fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
