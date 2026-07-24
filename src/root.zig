@@ -47,6 +47,8 @@ pub const Shape = enum {
     underline,
     cylinder,
     cds,
+    terminator,
+    utr,
     primersite,
     larrow,
     rarrow,
@@ -1620,6 +1622,8 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "underline")) return .underline;
     if (std.ascii.eqlIgnoreCase(value, "cylinder")) return .cylinder;
     if (std.ascii.eqlIgnoreCase(value, "cds")) return .cds;
+    if (std.ascii.eqlIgnoreCase(value, "terminator")) return .terminator;
+    if (std.ascii.eqlIgnoreCase(value, "utr")) return .utr;
     if (std.ascii.eqlIgnoreCase(value, "primersite")) return .primersite;
     if (std.ascii.eqlIgnoreCase(value, "larrow")) return .larrow;
     if (std.ascii.eqlIgnoreCase(value, "rarrow")) return .rarrow;
@@ -1666,6 +1670,8 @@ fn shapeName(shape: Shape) []const u8 {
         .underline => "underline",
         .cylinder => "cylinder",
         .cds => "cds",
+        .terminator => "terminator",
+        .utr => "utr",
         .primersite => "primersite",
         .larrow => "larrow",
         .rarrow => "rarrow",
@@ -4827,7 +4833,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
                 height = side;
             }
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .cds, .primersite, .larrow, .rarrow => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .cds, .terminator, .utr, .primersite, .larrow, .rarrow => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .egg => {
@@ -11214,6 +11220,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .underline => try renderSvgUnderlineShape(writer, shape_layout, visual),
         .cylinder => try renderSvgCylinderShape(writer, shape_layout, visual),
         .cds => try renderSvgPolygonRings(6, writer, shape_layout, visual, cdsPoints, diagonals),
+        .terminator => try renderSvgPolygonRings(8, writer, shape_layout, visual, terminatorPoints, diagonals),
+        .utr => try renderSvgPolygonRings(6, writer, shape_layout, visual, utrPoints, diagonals),
         .primersite => try renderSvgPolygonRings(6, writer, shape_layout, visual, primerSitePoints, diagonals),
         .larrow => try renderSvgPolygonRings(6, writer, shape_layout, visual, larrowPoints, diagonals),
         .rarrow => try renderSvgPolygonRings(6, writer, shape_layout, visual, rarrowPoints, diagonals),
@@ -11521,6 +11529,46 @@ fn cdsPoints(layout: NodeLayout) [6]Point {
         .{ .x = right - head, .y = bottom },
         .{ .x = left, .y = bottom },
         .{ .x = -1, .y = -1 },
+    };
+}
+
+fn terminatorPoints(layout: NodeLayout) [8]Point {
+    const cx = layout.center.x;
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const stem_half = @min(layout.width * 0.18, layout.height * 0.35);
+    const cap_top = top;
+    const cap_bottom = top + layout.height * 0.36;
+    const stem_bottom = bottom;
+    return .{
+        .{ .x = left, .y = cap_top },
+        .{ .x = right, .y = cap_top },
+        .{ .x = right, .y = cap_bottom },
+        .{ .x = cx + stem_half, .y = cap_bottom },
+        .{ .x = cx + stem_half, .y = stem_bottom },
+        .{ .x = cx - stem_half, .y = stem_bottom },
+        .{ .x = cx - stem_half, .y = cap_bottom },
+        .{ .x = left, .y = cap_bottom },
+    };
+}
+
+fn utrPoints(layout: NodeLayout) [6]Point {
+    const cx = layout.center.x;
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const shoulder_y = top + layout.height * 0.28;
+    const inset = @min(layout.width * 0.22, layout.height * 0.45);
+    return .{
+        .{ .x = left, .y = bottom },
+        .{ .x = left, .y = shoulder_y },
+        .{ .x = cx - inset, .y = top },
+        .{ .x = cx + inset, .y = top },
+        .{ .x = right, .y = shoulder_y },
+        .{ .x = right, .y = bottom },
     };
 }
 
@@ -14199,6 +14247,8 @@ test "code API sets typed node and edge options at creation" {
     const b = try graph.addNode("b", .{ .shape = .diamond });
     const plain = try graph.addNode("plain", .{ .shape = .plain });
     const cds = try graph.addNode("cds", .{ .shape = .cds });
+    const terminator = try graph.addNode("terminator", .{ .shape = .terminator });
+    const utr = try graph.addNode("utr", .{ .shape = .utr });
     const primersite = try graph.addNode("primersite", .{ .shape = .primersite });
     const larrow = try graph.addNode("larrow", .{ .shape = .larrow });
     const rarrow = try graph.addNode("rarrow", .{ .shape = .rarrow });
@@ -14273,6 +14323,10 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("plain", attrValue(graph.nodes.items[plain].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.cds, graph.nodes.items[cds].shape);
     try std.testing.expectEqualStrings("cds", attrValue(graph.nodes.items[cds].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.terminator, graph.nodes.items[terminator].shape);
+    try std.testing.expectEqualStrings("terminator", attrValue(graph.nodes.items[terminator].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.utr, graph.nodes.items[utr].shape);
+    try std.testing.expectEqualStrings("utr", attrValue(graph.nodes.items[utr].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.primersite, graph.nodes.items[primersite].shape);
     try std.testing.expectEqualStrings("primersite", attrValue(graph.nodes.items[primersite].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.larrow, graph.nodes.items[larrow].shape);
@@ -21679,10 +21733,12 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
         \\  underline [label="Underline", shape=underline];
         \\  cylinder [label="Cylinder", shape=cylinder];
         \\  coding [label="CDS", shape=cds];
+        \\  stop_codon [label="Terminator", shape=terminator];
+        \\  untranslated [label="UTR", shape=utr];
         \\  primer [label="Primer", shape=primersite];
         \\  left_arrow [label="LArrow", shape=larrow];
         \\  right_arrow [label="RArrow", shape=rarrow];
-        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> coding -> primer -> left_arrow -> right_arrow;
+        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> coding -> stop_codon -> untranslated -> primer -> left_arrow -> right_arrow;
         \\}
     );
     defer graph.deinit();
@@ -21695,6 +21751,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expectEqual(Shape.underline, graph.nodes.items[nodeIdByLabel(&graph, "underline")].shape);
     try std.testing.expectEqual(Shape.cylinder, graph.nodes.items[nodeIdByLabel(&graph, "cylinder")].shape);
     try std.testing.expectEqual(Shape.cds, graph.nodes.items[nodeIdByLabel(&graph, "coding")].shape);
+    try std.testing.expectEqual(Shape.terminator, graph.nodes.items[nodeIdByLabel(&graph, "stop_codon")].shape);
+    try std.testing.expectEqual(Shape.utr, graph.nodes.items[nodeIdByLabel(&graph, "untranslated")].shape);
     try std.testing.expectEqual(Shape.primersite, graph.nodes.items[nodeIdByLabel(&graph, "primer")].shape);
     try std.testing.expectEqual(Shape.larrow, graph.nodes.items[nodeIdByLabel(&graph, "left_arrow")].shape);
     try std.testing.expectEqual(Shape.rarrow, graph.nodes.items[nodeIdByLabel(&graph, "right_arrow")].shape);
@@ -21711,6 +21769,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "Component") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Underline") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "CDS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Terminator") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "UTR") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Primer") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "LArrow") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "RArrow") != null);
