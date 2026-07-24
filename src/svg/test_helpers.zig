@@ -12,6 +12,16 @@ pub const ViewBox = struct {
     height: f64,
 };
 
+pub const Point = struct {
+    x: f64,
+    y: f64,
+};
+
+pub const Endpoints = struct {
+    start: Point,
+    end: Point,
+};
+
 pub fn pathCommandCount(svg: []const u8, command: u8) usize {
     var count: usize = 0;
     var search_start: usize = 0;
@@ -262,6 +272,57 @@ pub fn nodeScreenCenterY(svg: []const u8, title: []const u8) ?f64 {
     return y + graphvizTranslate(svg).y;
 }
 
+pub fn pathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
+    const fragment = groupFragmentByTitle(svg, title) orelse return 0;
+    return numbersInAttribute(fragment, "d", out);
+}
+
+pub fn pathStartEnd(svg: []const u8, title: []const u8) ?Endpoints {
+    var numbers: [64]f64 = undefined;
+    const count = pathNumbers(svg, title, numbers[0..]);
+    if (count < 4 or count % 2 != 0) return null;
+    return .{
+        .start = .{ .x = numbers[0], .y = numbers[1] },
+        .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
+    };
+}
+
+pub fn edgeArrowTip(svg: []const u8, title: []const u8) ?Point {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    var numbers: [32]f64 = undefined;
+    const count = numbersInAttribute(fragment, "points", numbers[0..]);
+    if (count < 4) return null;
+    return .{ .x = numbers[2], .y = numbers[3] };
+}
+
+pub fn polylineEndpoints(svg: []const u8, title: []const u8, polyline_index: usize) ?Endpoints {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    var search_start: usize = 0;
+    var current_index: usize = 0;
+    while (std.mem.indexOf(u8, fragment[search_start..], "<polyline")) |rel| {
+        const polyline_start = search_start + rel;
+        const polyline_end_rel = std.mem.indexOf(u8, fragment[polyline_start..], "/>") orelse return null;
+        const polyline = fragment[polyline_start .. polyline_start + polyline_end_rel];
+        if (current_index == polyline_index) {
+            var numbers: [16]f64 = undefined;
+            const count = numbersInAttribute(polyline, "points", numbers[0..]);
+            if (count < 4) return null;
+            return .{
+                .start = .{ .x = numbers[0], .y = numbers[1] },
+                .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
+            };
+        }
+        current_index += 1;
+        search_start = polyline_start + polyline_end_rel + 2;
+    }
+    return null;
+}
+
+pub fn polylineCount(svg: []const u8, title: []const u8) usize {
+    const fragment = groupFragmentByTitle(svg, title) orelse return 0;
+    return countSubstrings(fragment, "<polyline");
+}
+
 pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
     var marker_buf: [64]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return 0;
@@ -282,6 +343,17 @@ pub fn pathDataCommandCount(path_data: []const u8, command: u8) usize {
     var count: usize = 0;
     for (path_data) |c| {
         if (c == command) count += 1;
+    }
+    return count;
+}
+
+fn countSubstrings(haystack: []const u8, needle: []const u8) usize {
+    if (needle.len == 0) return 0;
+    var count: usize = 0;
+    var offset: usize = 0;
+    while (std.mem.indexOf(u8, haystack[offset..], needle)) |found| {
+        count += 1;
+        offset += found + needle.len;
     }
     return count;
 }

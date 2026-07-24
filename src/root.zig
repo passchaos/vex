@@ -10154,8 +10154,7 @@ fn svgNumbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64
 }
 
 fn svgPathNumbers(svg: []const u8, title: []const u8, out: []f64) usize {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return 0;
-    return svgNumbersInAttribute(fragment, "d", out);
+    return svg_mod.test_helpers.pathNumbers(svg, title, out);
 }
 
 fn lastSvgPathNumbersInFragment(fragment: []const u8, out: []f64) usize {
@@ -10171,49 +10170,28 @@ fn lastSvgPathNumbersInFragment(fragment: []const u8, out: []f64) usize {
 }
 
 fn svgPathStartEnd(svg: []const u8, title: []const u8) ?struct { start: Point, end: Point } {
-    var numbers: [64]f64 = undefined;
-    const count = svgPathNumbers(svg, title, numbers[0..]);
-    if (count < 4 or count % 2 != 0) return null;
+    const endpoints = svg_mod.test_helpers.pathStartEnd(svg, title) orelse return null;
     return .{
-        .start = .{ .x = numbers[0], .y = numbers[1] },
-        .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
+        .start = .{ .x = endpoints.start.x, .y = endpoints.start.y },
+        .end = .{ .x = endpoints.end.x, .y = endpoints.end.y },
     };
 }
 
 fn svgEdgeArrowTip(svg: []const u8, title: []const u8) ?Point {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    var numbers: [32]f64 = undefined;
-    const count = svgNumbersInAttribute(fragment, "points", numbers[0..]);
-    if (count < 4) return null;
-    return .{ .x = numbers[2], .y = numbers[3] };
+    const point = svg_mod.test_helpers.edgeArrowTip(svg, title) orelse return null;
+    return .{ .x = point.x, .y = point.y };
 }
 
 fn svgPolylineEndpoints(svg: []const u8, title: []const u8, polyline_index: usize) ?struct { start: Point, end: Point } {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    var search_start: usize = 0;
-    var current_index: usize = 0;
-    while (std.mem.indexOf(u8, fragment[search_start..], "<polyline")) |rel| {
-        const polyline_start = search_start + rel;
-        const polyline_end_rel = std.mem.indexOf(u8, fragment[polyline_start..], "/>") orelse return null;
-        const polyline = fragment[polyline_start .. polyline_start + polyline_end_rel];
-        if (current_index == polyline_index) {
-            var numbers: [16]f64 = undefined;
-            const count = svgNumbersInAttribute(polyline, "points", numbers[0..]);
-            if (count < 4) return null;
-            return .{
-                .start = .{ .x = numbers[0], .y = numbers[1] },
-                .end = .{ .x = numbers[count - 2], .y = numbers[count - 1] },
-            };
-        }
-        current_index += 1;
-        search_start = polyline_start + polyline_end_rel + 2;
-    }
-    return null;
+    const endpoints = svg_mod.test_helpers.polylineEndpoints(svg, title, polyline_index) orelse return null;
+    return .{
+        .start = .{ .x = endpoints.start.x, .y = endpoints.start.y },
+        .end = .{ .x = endpoints.end.x, .y = endpoints.end.y },
+    };
 }
 
 fn svgPolylineCount(svg: []const u8, title: []const u8) usize {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return 0;
-    return countSubstrings(fragment, "<polyline");
+    return svg_mod.test_helpers.polylineCount(svg, title);
 }
 
 fn polylineEndpointDistance(svg: []const u8, polyline: anytype, oracle: []const u8, oracle_polyline: anytype) f64 {
