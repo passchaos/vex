@@ -87,7 +87,10 @@ cubic edge `pos` splines and reroutes missing or invalid ones. Both support
 `notranslate=true`; the Zig API exposes typed `NodePosition` and
 `EdgeSplineSegmentInput` values, plus typed `BoundingBox` and graph/subgraph/
 node/edge label positions, instead of leaking DOT geometry strings into core
-API calls.
+API calls. Nop honors Graphviz overlap families (`false`/Voronoi, `scale`,
+`scalexy`, `compress`, `ortho*`, `portho*`, `prism`, `vpsc`, and `ipsep`)
+with deterministic native adjustment and `sep`; nop2 treats input coordinates
+as final and never applies overlap adjustment.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or

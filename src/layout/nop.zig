@@ -14,6 +14,44 @@ pub const Size = struct {
     height: f64,
 };
 
+pub const OverlapMode = enum {
+    retain,
+    remove,
+    scale,
+    scalexy,
+    compress,
+    orthogonal,
+    orthogonal_yx,
+    prism,
+    vpsc,
+    ipsep,
+
+    pub fn name(self: OverlapMode) []const u8 {
+        return switch (self) {
+            .retain => "true",
+            .remove => "false",
+            .scale => "scale",
+            .scalexy => "scalexy",
+            .compress => "compress",
+            .orthogonal => "ortho",
+            .orthogonal_yx => "ortho_yx",
+            .prism => "prism",
+            .vpsc => "vpsc",
+            .ipsep => "ipsep",
+        };
+    }
+};
+
+pub const Separation = union(enum) {
+    scale: Point,
+    add: Point,
+};
+
+pub const AdjustmentStats = struct {
+    moved: bool = false,
+    passes: usize = 0,
+};
+
 pub const BoundingBox = struct {
     min_x: f64,
     min_y: f64,
@@ -81,6 +119,315 @@ pub fn parseBoundingBox(value: []const u8) !BoundingBox {
         .max_x = @max(x0, x1),
         .max_y = @max(y0, y1),
     };
+}
+
+pub fn parseOverlapMode(value: ?[]const u8) OverlapMode {
+    const raw = value orelse return .retain;
+    const text = std.mem.trim(u8, raw, " \t\r\n");
+    if (text.len == 0) return .retain;
+    if (std.ascii.eqlIgnoreCase(text, "true") or
+        std.ascii.eqlIgnoreCase(text, "yes") or
+        std.ascii.eqlIgnoreCase(text, "on") or
+        std.mem.eql(u8, text, "1"))
+    {
+        return .retain;
+    }
+    if (std.ascii.eqlIgnoreCase(text, "false") or
+        std.ascii.eqlIgnoreCase(text, "no") or
+        std.ascii.eqlIgnoreCase(text, "off") or
+        std.mem.eql(u8, text, "0") or
+        std.ascii.eqlIgnoreCase(text, "voronoi"))
+    {
+        return .remove;
+    }
+    if (std.ascii.eqlIgnoreCase(text, "scale") or std.ascii.eqlIgnoreCase(text, "oscale")) return .scale;
+    if (std.ascii.eqlIgnoreCase(text, "scalexy")) return .scalexy;
+    if (std.ascii.eqlIgnoreCase(text, "compress")) return .compress;
+    if (std.ascii.eqlIgnoreCase(text, "ortho") or
+        std.ascii.eqlIgnoreCase(text, "orthoxy") or
+        std.ascii.eqlIgnoreCase(text, "portho") or
+        std.ascii.eqlIgnoreCase(text, "porthoxy"))
+    {
+        return .orthogonal;
+    }
+    if (std.ascii.eqlIgnoreCase(text, "ortho_yx") or
+        std.ascii.eqlIgnoreCase(text, "orthoyx") or
+        std.ascii.eqlIgnoreCase(text, "portho_yx") or
+        std.ascii.eqlIgnoreCase(text, "porthoyx"))
+    {
+        return .orthogonal_yx;
+    }
+    if (startsWithIgnoreCase(text, "prism")) return .prism;
+    if (std.ascii.eqlIgnoreCase(text, "vpsc")) return .vpsc;
+    if (std.ascii.eqlIgnoreCase(text, "ipsep")) return .ipsep;
+    return .remove;
+}
+
+pub fn parseSeparation(value: ?[]const u8) Separation {
+    const raw = value orelse return .{ .scale = .{ .x = 0.1, .y = 0.1 } };
+    var text = std.mem.trim(u8, raw, " \t\r\n");
+    const additive = text.len > 0 and text[0] == '+';
+    if (additive) text = std.mem.trim(u8, text[1..], " \t\r\n");
+    var parts = std.mem.splitScalar(u8, text, ',');
+    const x = parseFiniteFloat(parts.next() orelse return .{ .scale = .{ .x = 0.1, .y = 0.1 } }) catch
+        return .{ .scale = .{ .x = 0.1, .y = 0.1 } };
+    const y = if (parts.next()) |part| parseFiniteFloat(part) catch x else x;
+    const point = Point{ .x = @max(0, x), .y = @max(0, y) };
+    return if (additive) .{ .add = point } else .{ .scale = point };
+}
+
+pub fn adjustOverlaps(
+    allocator: std.mem.Allocator,
+    positions: []Point,
+    sizes: []const Size,
+    mode: OverlapMode,
+    separation: Separation,
+) !AdjustmentStats {
+    if (positions.len != sizes.len) return error.PositionCountMismatch;
+    if (positions.len < 2 or mode == .retain) return .{};
+
+    const extents = try allocator.alloc(Size, sizes.len);
+    defer allocator.free(extents);
+    for (sizes, extents) |size, *extent| {
+        extent.* = effectiveExtent(size, separation);
+    }
+
+    return switch (mode) {
+        .retain => .{},
+        .scale => scalePositionsToAvoidOverlap(positions, extents, false),
+        .scalexy => scalePositionsToAvoidOverlap(positions, extents, true),
+        .compress => compressPositions(positions, extents),
+        .orthogonal => resolveOrthogonalOverlaps(allocator, positions, extents, .x),
+        .orthogonal_yx => resolveOrthogonalOverlaps(allocator, positions, extents, .y),
+        .remove, .prism => resolvePairwiseOverlaps(positions, extents, .minimum),
+        .vpsc, .ipsep => resolveOrthogonalOverlaps(allocator, positions, extents, .x),
+    };
+}
+
+const PreferredAxis = enum {
+    minimum,
+    x,
+    y,
+};
+
+fn effectiveExtent(size: Size, separation: Separation) Size {
+    return switch (separation) {
+        .scale => |factor| .{
+            .width = positiveDimension(size.width) * (1.0 + factor.x),
+            .height = positiveDimension(size.height) * (1.0 + factor.y),
+        },
+        .add => |margin| .{
+            .width = positiveDimension(size.width) + margin.x * 2.0,
+            .height = positiveDimension(size.height) + margin.y * 2.0,
+        },
+    };
+}
+
+fn resolvePairwiseOverlaps(positions: []Point, extents: []const Size, preferred: PreferredAxis) AdjustmentStats {
+    var stats = AdjustmentStats{};
+    const max_passes = @max(@as(usize, 8), positions.len * 8);
+    var pass: usize = 0;
+    while (pass < max_passes) : (pass += 1) {
+        var changed = false;
+        for (0..positions.len) |left_id| {
+            for (left_id + 1..positions.len) |right_id| {
+                const overlap = overlapAmount(positions[left_id], extents[left_id], positions[right_id], extents[right_id]) orelse continue;
+                const axis = switch (preferred) {
+                    .minimum => if (overlap.x <= overlap.y) PreferredAxis.x else PreferredAxis.y,
+                    else => preferred,
+                };
+                if (axis == .x) {
+                    separateAxis(&positions[left_id].x, &positions[right_id].x, overlap.x, left_id, right_id);
+                } else {
+                    separateAxis(&positions[left_id].y, &positions[right_id].y, overlap.y, left_id, right_id);
+                }
+                changed = true;
+                stats.moved = true;
+            }
+        }
+        stats.passes = pass + 1;
+        if (!changed) break;
+    }
+    return stats;
+}
+
+fn resolveOrthogonalOverlaps(
+    allocator: std.mem.Allocator,
+    positions: []Point,
+    extents: []const Size,
+    axis: PreferredAxis,
+) !AdjustmentStats {
+    const ids = try allocator.alloc(usize, positions.len);
+    defer allocator.free(ids);
+    for (ids, 0..) |*id, index| id.* = index;
+    std.mem.sort(usize, ids, AxisSortContext{ .positions = positions, .axis = axis }, AxisSortContext.lessThan);
+
+    var stats = AdjustmentStats{ .passes = 1 };
+    if (ids.len <= 1) return stats;
+    for (ids[1..], 1..) |id, sorted_index| {
+        const previous_id = ids[sorted_index - 1];
+        if (axis == .y) {
+            const minimum = positions[previous_id].y + (extents[previous_id].height + extents[id].height) / 2.0 + 0.01;
+            if (positions[id].y < minimum) {
+                positions[id].y = minimum;
+                stats.moved = true;
+            }
+        } else {
+            const minimum = positions[previous_id].x + (extents[previous_id].width + extents[id].width) / 2.0 + 0.01;
+            if (positions[id].x < minimum) {
+                positions[id].x = minimum;
+                stats.moved = true;
+            }
+        }
+    }
+    return stats;
+}
+
+const AxisSortContext = struct {
+    positions: []const Point,
+    axis: PreferredAxis,
+
+    fn lessThan(context: AxisSortContext, left: usize, right: usize) bool {
+        const left_value = if (context.axis == .y) context.positions[left].y else context.positions[left].x;
+        const right_value = if (context.axis == .y) context.positions[right].y else context.positions[right].x;
+        if (left_value == right_value) return left < right;
+        return left_value < right_value;
+    }
+};
+
+fn separateAxis(left: *f64, right: *f64, overlap: f64, left_id: usize, right_id: usize) void {
+    const epsilon: f64 = 0.01;
+    const shift = (overlap + epsilon) / 2.0;
+    if (left.* < right.*) {
+        left.* -= shift;
+        right.* += shift;
+    } else if (left.* > right.*) {
+        left.* += shift;
+        right.* -= shift;
+    } else if (left_id < right_id) {
+        left.* -= shift;
+        right.* += shift;
+    } else {
+        left.* += shift;
+        right.* -= shift;
+    }
+}
+
+fn scalePositionsToAvoidOverlap(positions: []Point, extents: []const Size, separate_axes: bool) AdjustmentStats {
+    const center = positionCenter(positions);
+    var scaled = false;
+    if (separate_axes) {
+        var x_factor: f64 = 1.0;
+        var y_factor: f64 = 1.0;
+        for (0..positions.len) |left_id| {
+            for (left_id + 1..positions.len) |right_id| {
+                if (overlapAmount(positions[left_id], extents[left_id], positions[right_id], extents[right_id]) == null) continue;
+                const required_x = requiredAxisScale(
+                    positions[left_id].x,
+                    positions[right_id].x,
+                    (extents[left_id].width + extents[right_id].width) / 2.0,
+                );
+                const required_y = requiredAxisScale(
+                    positions[left_id].y,
+                    positions[right_id].y,
+                    (extents[left_id].height + extents[right_id].height) / 2.0,
+                );
+                if (required_x <= required_y) {
+                    if (std.math.isFinite(required_x)) x_factor = @max(x_factor, required_x);
+                } else {
+                    if (std.math.isFinite(required_y)) y_factor = @max(y_factor, required_y);
+                }
+            }
+        }
+        if (x_factor > 1.0 or y_factor > 1.0) {
+            scaleAround(positions, center, x_factor * 1.001, y_factor * 1.001);
+            scaled = true;
+        }
+    } else {
+        var factor: f64 = 1.0;
+        for (0..positions.len) |left_id| {
+            for (left_id + 1..positions.len) |right_id| {
+                if (overlapAmount(positions[left_id], extents[left_id], positions[right_id], extents[right_id]) == null) continue;
+                const required_x = requiredAxisScale(
+                    positions[left_id].x,
+                    positions[right_id].x,
+                    (extents[left_id].width + extents[right_id].width) / 2.0,
+                );
+                const required_y = requiredAxisScale(
+                    positions[left_id].y,
+                    positions[right_id].y,
+                    (extents[left_id].height + extents[right_id].height) / 2.0,
+                );
+                const candidate = @min(required_x, required_y);
+                if (std.math.isFinite(candidate)) factor = @max(factor, candidate);
+            }
+        }
+        if (factor > 1.0) {
+            scaleAround(positions, center, factor * 1.001, factor * 1.001);
+            scaled = true;
+        }
+    }
+    const fallback = resolvePairwiseOverlaps(positions, extents, .minimum);
+    return .{ .moved = scaled or fallback.moved, .passes = fallback.passes + @intFromBool(scaled) };
+}
+
+fn compressPositions(positions: []Point, extents: []const Size) AdjustmentStats {
+    var factor: f64 = 0;
+    for (0..positions.len) |left_id| {
+        for (left_id + 1..positions.len) |right_id| {
+            if (overlapAmount(positions[left_id], extents[left_id], positions[right_id], extents[right_id]) != null) {
+                return .{};
+            }
+            const required_x = requiredAxisScale(
+                positions[left_id].x,
+                positions[right_id].x,
+                (extents[left_id].width + extents[right_id].width) / 2.0,
+            );
+            const required_y = requiredAxisScale(
+                positions[left_id].y,
+                positions[right_id].y,
+                (extents[left_id].height + extents[right_id].height) / 2.0,
+            );
+            factor = @max(factor, @min(required_x, required_y));
+        }
+    }
+    const safe_factor = std.math.clamp(factor * 1.001, 0.001, 1.0);
+    if (safe_factor >= 0.9999) return .{};
+    scaleAround(positions, positionCenter(positions), safe_factor, safe_factor);
+    return .{ .moved = true, .passes = 1 };
+}
+
+fn requiredAxisScale(left: f64, right: f64, required_distance: f64) f64 {
+    const distance = @abs(right - left);
+    if (distance <= 0.000001) return std.math.floatMax(f64);
+    return required_distance / distance;
+}
+
+fn scaleAround(positions: []Point, center: Point, x_factor: f64, y_factor: f64) void {
+    for (positions) |*position| {
+        position.x = center.x + (position.x - center.x) * x_factor;
+        position.y = center.y + (position.y - center.y) * y_factor;
+    }
+}
+
+fn positionCenter(positions: []const Point) Point {
+    var center = Point{ .x = 0, .y = 0 };
+    if (positions.len == 0) return center;
+    for (positions) |position| {
+        center.x += position.x;
+        center.y += position.y;
+    }
+    const count = @as(f64, @floatFromInt(positions.len));
+    center.x /= count;
+    center.y /= count;
+    return center;
+}
+
+fn overlapAmount(left: Point, left_size: Size, right: Point, right_size: Size) ?Point {
+    const overlap_x = (left_size.width + right_size.width) / 2.0 - @abs(right.x - left.x);
+    const overlap_y = (left_size.height + right_size.height) / 2.0 - @abs(right.y - left.y);
+    if (overlap_x <= 0 or overlap_y <= 0) return null;
+    return .{ .x = overlap_x, .y = overlap_y };
 }
 
 pub fn parseSpline(allocator: std.mem.Allocator, value: []const u8) !Spline {
@@ -256,6 +603,14 @@ fn positiveOrZero(value: f64) f64 {
     return if (std.math.isFinite(value) and value > 0) value else 0;
 }
 
+fn positiveDimension(value: f64) f64 {
+    return if (std.math.isFinite(value) and value > 0) value else 1.0;
+}
+
+fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
+    return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
+}
+
 test "node position accepts Graphviz pin suffix" {
     const parsed = try parseNodePosition(" 12.5,-7! ");
     try std.testing.expect(parsed.pinned);
@@ -301,6 +656,128 @@ test "bounding boxes normalize and transform y-up coordinates" {
     try std.testing.expectApproxEqAbs(@as(f64, 20), rect.y, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 80), rect.width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 90), rect.height, 0.001);
+}
+
+test "overlap mode parser covers Graphviz families" {
+    try std.testing.expectEqual(OverlapMode.retain, parseOverlapMode(null));
+    try std.testing.expectEqual(OverlapMode.retain, parseOverlapMode("true"));
+    try std.testing.expectEqual(OverlapMode.remove, parseOverlapMode("false"));
+    try std.testing.expectEqual(OverlapMode.remove, parseOverlapMode("voronoi"));
+    try std.testing.expectEqual(OverlapMode.scale, parseOverlapMode("scale"));
+    try std.testing.expectEqual(OverlapMode.scalexy, parseOverlapMode("scalexy"));
+    try std.testing.expectEqual(OverlapMode.compress, parseOverlapMode("compress"));
+    try std.testing.expectEqual(OverlapMode.orthogonal, parseOverlapMode("orthoxy"));
+    try std.testing.expectEqual(OverlapMode.orthogonal_yx, parseOverlapMode("porthoyx"));
+    try std.testing.expectEqual(OverlapMode.prism, parseOverlapMode("prism100"));
+    try std.testing.expectEqual(OverlapMode.vpsc, parseOverlapMode("vpsc"));
+    try std.testing.expectEqual(OverlapMode.ipsep, parseOverlapMode("ipsep"));
+}
+
+test "separation parser distinguishes scale and additive forms" {
+    const scaled = parseSeparation("0.2,0.3");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.2), scaled.scale.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.3), scaled.scale.y, 0.001);
+    const additive = parseSeparation("+6,8");
+    try std.testing.expectApproxEqAbs(@as(f64, 6), additive.add.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 8), additive.add.y, 0.001);
+}
+
+test "remove overlap separates coincident rectangles deterministically" {
+    const allocator = std.testing.allocator;
+    var positions = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 0, .y = 0 },
+        .{ .x = 0, .y = 0 },
+    };
+    const sizes = [_]Size{
+        .{ .width = 40, .height = 20 },
+        .{ .width = 40, .height = 20 },
+        .{ .width = 40, .height = 20 },
+    };
+    const stats = try adjustOverlaps(
+        allocator,
+        &positions,
+        &sizes,
+        .remove,
+        .{ .add = .{ .x = 4, .y = 4 } },
+    );
+    try std.testing.expect(stats.moved);
+    try expectNoOverlaps(&positions, &sizes, .{ .add = .{ .x = 4, .y = 4 } });
+    for (positions) |position| {
+        try std.testing.expect(std.math.isFinite(position.x));
+        try std.testing.expect(std.math.isFinite(position.y));
+    }
+}
+
+test "scale and orthogonal overlap modes preserve ordering" {
+    const allocator = std.testing.allocator;
+    const sizes = [_]Size{
+        .{ .width = 40, .height = 24 },
+        .{ .width = 40, .height = 24 },
+        .{ .width = 40, .height = 24 },
+    };
+    const original = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 10, .y = 2 },
+        .{ .x = 20, .y = 4 },
+    };
+    var scaled = original;
+    _ = try adjustOverlaps(
+        allocator,
+        &scaled,
+        &sizes,
+        .scale,
+        .{ .scale = .{ .x = 0.1, .y = 0.1 } },
+    );
+    try expectNoOverlaps(&scaled, &sizes, .{ .scale = .{ .x = 0.1, .y = 0.1 } });
+    try std.testing.expect(scaled[0].x < scaled[1].x and scaled[1].x < scaled[2].x);
+
+    var orthogonal = original;
+    _ = try adjustOverlaps(
+        allocator,
+        &orthogonal,
+        &sizes,
+        .orthogonal_yx,
+        .{ .scale = .{ .x = 0.1, .y = 0.1 } },
+    );
+    try expectNoOverlaps(&orthogonal, &sizes, .{ .scale = .{ .x = 0.1, .y = 0.1 } });
+    try std.testing.expect(orthogonal[0].y < orthogonal[1].y and orthogonal[1].y < orthogonal[2].y);
+}
+
+test "compress shrinks non-overlapping coordinates without introducing overlap" {
+    const allocator = std.testing.allocator;
+    var positions = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 200, .y = 0 },
+    };
+    const sizes = [_]Size{
+        .{ .width = 40, .height = 20 },
+        .{ .width = 40, .height = 20 },
+    };
+    const before = positions[1].x - positions[0].x;
+    const stats = try adjustOverlaps(
+        allocator,
+        &positions,
+        &sizes,
+        .compress,
+        .{ .add = .{ .x = 4, .y = 4 } },
+    );
+    try std.testing.expect(stats.moved);
+    try std.testing.expect(positions[1].x - positions[0].x < before);
+    try expectNoOverlaps(&positions, &sizes, .{ .add = .{ .x = 4, .y = 4 } });
+}
+
+fn expectNoOverlaps(positions: []const Point, sizes: []const Size, separation: Separation) !void {
+    for (0..positions.len) |left_id| {
+        for (left_id + 1..positions.len) |right_id| {
+            try std.testing.expect(overlapAmount(
+                positions[left_id],
+                effectiveExtent(sizes[left_id], separation),
+                positions[right_id],
+                effectiveExtent(sizes[right_id], separation),
+            ) == null);
+        }
+    }
 }
 
 test "pre-positioned layout flips y and translates node bounds" {

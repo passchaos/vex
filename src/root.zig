@@ -34,6 +34,9 @@ pub const EdgeSplineSegmentInput = struct {
     end_tip: ?Point = null,
 };
 
+pub const OverlapMode = layout_mod.nop.OverlapMode;
+pub const Separation = layout_mod.nop.Separation;
+
 pub const Shape = enum {
     ellipse,
     egg,
@@ -189,6 +192,8 @@ pub const GraphAttr = union(enum) {
     orientation: []const u8,
     center: bool,
     notranslate: bool,
+    overlap: OverlapMode,
+    separation: Separation,
     compound: bool,
     concentrate: bool,
     nodesep: f64,
@@ -946,6 +951,11 @@ pub const Graph = struct {
             .orientation => |value| try self.setGraphAttrRaw("orientation", value),
             .center => |value| try self.setGraphAttrRaw("center", boolAttrValue(value)),
             .notranslate => |value| try self.setGraphAttrRaw("notranslate", boolAttrValue(value)),
+            .overlap => |value| try self.setGraphAttrRaw("overlap", value.name()),
+            .separation => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setGraphAttrRaw("sep", try separationAttrText(&buffer, value));
+            },
             .compound => |value| try self.setGraphAttrRaw("compound", boolAttrValue(value)),
             .concentrate => |value| try self.setGraphAttrRaw("concentrate", boolAttrValue(value)),
             .nodesep => |value| try self.setGraphAttrFloat("nodesep", value),
@@ -2029,6 +2039,23 @@ fn boundingBoxAttrText(buffer: []u8, box: BoundingBox) ![]const u8 {
         box.max_x,
         box.max_y,
     });
+}
+
+fn separationAttrText(buffer: []u8, separation: Separation) ![]const u8 {
+    return switch (separation) {
+        .scale => |point| blk: {
+            if (!std.math.isFinite(point.x) or !std.math.isFinite(point.y) or point.x < 0 or point.y < 0) {
+                return error.InvalidSeparation;
+            }
+            break :blk std.fmt.bufPrint(buffer, "{d},{d}", .{ point.x, point.y });
+        },
+        .add => |point| blk: {
+            if (!std.math.isFinite(point.x) or !std.math.isFinite(point.y) or point.x < 0 or point.y < 0) {
+                return error.InvalidSeparation;
+            }
+            break :blk std.fmt.bufPrint(buffer, "+{d},{d}", .{ point.x, point.y });
+        },
+    };
 }
 
 fn parseBool(value: []const u8) ?bool {
@@ -5503,6 +5530,12 @@ fn layoutPositionedWithControl(
         const size = measureNode(node_item, effective_options);
         sizes[id] = .{ .width = size.width, .height = size.height };
     }
+    const overlap_mode = layout_mod.nop.parseOverlapMode(attrValue(graph.attrs.items, "overlap"));
+    const separation = layout_mod.nop.parseSeparation(attrValue(graph.attrs.items, "sep"));
+    const adjustment = if (!preserve_edge_splines and overlap_mode != .retain)
+        try layout_mod.nop.adjustOverlaps(allocator, input_positions, sizes, overlap_mode, separation)
+    else
+        layout_mod.nop.AdjustmentStats{};
     var preserved_spline_points = std.ArrayList(Point).empty;
     defer preserved_spline_points.deinit(allocator);
     if (preserve_edge_splines) {
@@ -5520,7 +5553,7 @@ fn layoutPositionedWithControl(
             }
         }
     }
-    try appendPositionedAuxiliaryPoints(allocator, graph, &preserved_spline_points);
+    if (!adjustment.moved) try appendPositionedAuxiliaryPoints(allocator, graph, &preserved_spline_points);
 
     const translate = if (attrValue(graph.attrs.items, "notranslate")) |value|
         !(parseBool(value) orelse false)
@@ -5549,7 +5582,7 @@ fn layoutPositionedWithControl(
     const subgraph_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
     errdefer allocator.free(subgraph_layouts);
     computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), node_layouts, subgraph_layouts);
-    applyPositionedSubgraphBounds(graph, positioned.shift, subgraph_layouts);
+    if (!adjustment.moved) applyPositionedSubgraphBounds(graph, positioned.shift, subgraph_layouts);
 
     const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
     errdefer allocator.free(edge_waypoints);
@@ -5582,7 +5615,7 @@ fn layoutPositionedWithControl(
         .subgraphs = subgraph_layouts,
         .edge_waypoints = edge_waypoints,
         .edge_splines = edge_splines,
-        .position_transform = positioned.shift,
+        .position_transform = if (adjustment.moved) null else positioned.shift,
         .ranks = ranks,
         .rank_depths = rank_depths,
         .rank_heights = rank_heights,
@@ -18945,6 +18978,75 @@ test "typed positioned auxiliary geometry serializes cleanly" {
     defer layout.deinit();
     try std.testing.expectApproxEqAbs(@as(f64, 100), layout.subgraphs[0].width, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 110), layout.subgraphs[0].height, 0.001);
+}
+
+test "nop overlap modes adjust nodes while nop2 preserves final positions" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [overlap=false, sep="+6"];
+        \\  a [pos="0,0", fixedsize=true, width=1, height=0.6];
+        \\  b [pos="0,0", fixedsize=true, width=1, height=0.6];
+        \\  c [pos="8,4", fixedsize=true, width=1, height=0.6];
+        \\}
+    );
+    defer graph.deinit();
+
+    var nop = try layoutGraph(allocator, &graph, .{ .algorithm = .positioned });
+    defer nop.deinit();
+    for (0..nop.nodes.len) |left_id| {
+        for (left_id + 1..nop.nodes.len) |right_id| {
+            try std.testing.expect(!rectsOverlap(nodeRect(nop.nodes[left_id]), nodeRect(nop.nodes[right_id])));
+        }
+    }
+    try std.testing.expect(nop.position_transform == null);
+
+    var nop2 = try layoutGraph(allocator, &graph, .{ .algorithm = .positioned_with_edges });
+    defer nop2.deinit();
+    try std.testing.expectApproxEqAbs(nop2.nodes[0].center.x, nop2.nodes[1].center.x, 0.001);
+    try std.testing.expectApproxEqAbs(nop2.nodes[0].center.y, nop2.nodes[1].center.y, 0.001);
+    try std.testing.expect(nop2.position_transform != null);
+}
+
+test "nop scale and orthogonal modes preserve input ordering" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\graph G {
+        \\  a [pos="0,0", fixedsize=true, width=1, height=0.6];
+        \\  b [pos="10,2", fixedsize=true, width=1, height=0.6];
+        \\  c [pos="20,4", fixedsize=true, width=1, height=0.6];
+        \\}
+    ;
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try graph.setGraphAttr(.{ .overlap = .scale });
+    try graph.setGraphAttr(.{ .separation = .{ .scale = .{ .x = 0.1, .y = 0.1 } } });
+    var scaled = try layoutGraph(allocator, &graph, .{ .algorithm = .positioned });
+    defer scaled.deinit();
+    try std.testing.expect(scaled.nodes[0].center.x < scaled.nodes[1].center.x);
+    try std.testing.expect(scaled.nodes[1].center.x < scaled.nodes[2].center.x);
+    for (0..scaled.nodes.len) |left_id| {
+        for (left_id + 1..scaled.nodes.len) |right_id| {
+            try std.testing.expect(!rectsOverlap(nodeRect(scaled.nodes[left_id]), nodeRect(scaled.nodes[right_id])));
+        }
+    }
+
+    try graph.setGraphAttr(.{ .overlap = .orthogonal_yx });
+    var orthogonal = try layoutGraph(allocator, &graph, .{ .algorithm = .positioned });
+    defer orthogonal.deinit();
+    try std.testing.expect(orthogonal.nodes[0].center.y > orthogonal.nodes[1].center.y);
+    try std.testing.expect(orthogonal.nodes[1].center.y > orthogonal.nodes[2].center.y);
+}
+
+test "typed overlap attributes serialize Graphviz values" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .overlap = .orthogonal });
+    try graph.setGraphAttr(.{ .separation = .{ .add = .{ .x = 6, .y = 8 } } });
+    try std.testing.expectEqualStrings("ortho", attrValue(graph.attrs.items, "overlap").?);
+    try std.testing.expectEqualStrings("+6,8", attrValue(graph.attrs.items, "sep").?);
 }
 
 fn rectContainsRect(outer: RectF, inner: RectF) bool {
