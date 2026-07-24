@@ -14826,6 +14826,42 @@ test "code API merges strict duplicate edge options" {
     try std.testing.expectEqualStrings("reverse merged", undirected.edges.items[forward].label.?);
 }
 
+test "DOT parser merges strict duplicate edge statements" {
+    const allocator = std.testing.allocator;
+    var directed = try parseDot(allocator,
+        \\strict digraph G {
+        \\  a -> b [label=first, color="#64748b", minlen=2, constraint=false];
+        \\  a -> b [label=second, color="#2563eb", minlen=4, constraint=true];
+        \\}
+    );
+    defer directed.deinit();
+
+    try std.testing.expect(directed.strict);
+    try std.testing.expectEqual(@as(usize, 1), directed.edges.items.len);
+    const edge_item = directed.edges.items[0];
+    try std.testing.expectEqualStrings("second", edge_item.label.?);
+    try std.testing.expectEqualStrings("#2563eb", edge_item.color);
+    try std.testing.expectEqual(@as(usize, 4), edge_item.min_len);
+    try std.testing.expect(edge_item.constraint);
+    try std.testing.expectEqualStrings("second", attrValue(edge_item.attrs.items, "label").?);
+    try std.testing.expectEqualStrings("#2563eb", attrValue(edge_item.attrs.items, "color").?);
+    try std.testing.expectEqualStrings("4", attrValue(edge_item.attrs.items, "minlen").?);
+    try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "constraint").?);
+
+    var undirected = try parseDot(allocator,
+        \\strict graph G {
+        \\  a -- b [label=left];
+        \\  b -- a [label=right, color="#16a34a"];
+        \\}
+    );
+    defer undirected.deinit();
+
+    try std.testing.expect(undirected.strict);
+    try std.testing.expectEqual(@as(usize, 1), undirected.edges.items.len);
+    try std.testing.expectEqualStrings("right", undirected.edges.items[0].label.?);
+    try std.testing.expectEqualStrings("#16a34a", undirected.edges.items[0].color);
+}
+
 test "code API allows duplicate node names and uses ids for identity" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "api" });
