@@ -26,6 +26,7 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
+zig build run -- --input examples/simple.dot --max-input-bytes 1048576 --output simple.svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 zig build run -- --input examples/simple.dot --layout neato --layout-iterations 20 --output force-fast.svg
 zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-passes 1 --output layered-fast.svg
@@ -56,6 +57,9 @@ same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
 
 DOT parse failures report a line, column, source excerpt, caret, and repair hint
 so input mistakes can be fixed without rerunning through another tool.
+
+`--max-input-bytes` caps input reads for DOT and Mermaid sources, including stdin,
+so preview workflows can fail early on unexpectedly large graph inputs.
 
 `--svg-metadata` embeds a machine-readable object index with node, edge
 waypoint, and subgraph layout geometry in the SVG `<metadata>` element. DOT can enable the same index with

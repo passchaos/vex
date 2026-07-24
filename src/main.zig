@@ -2,12 +2,15 @@ const std = @import("std");
 const Io = std.Io;
 const vex = @import("vex");
 
+const default_max_input_bytes: usize = 64 * 1024 * 1024;
+
 const usage =
     \\vex - DOT-compatible graph visualization prototype
     \\
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
+    \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
     \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
@@ -23,6 +26,7 @@ const usage =
     \\output is written to stdout.
     \\Default input format is auto. Default layout is DOT/Sugiyama and honors
     \\rankdir=TB|BT|LR|RL.
+    \\--max-input-bytes caps DOT/Mermaid input reads.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps force/neato layout iterations.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
@@ -49,6 +53,7 @@ pub fn main(init: std.process.Init) !void {
     var output_path: ?[]const u8 = null;
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
+    var max_input_bytes: usize = default_max_input_bytes;
     var layout_iterations: ?usize = null;
     var crossing_passes: ?usize = null;
     var coordinate_passes: ?usize = null;
@@ -87,6 +92,11 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingInputFormat;
             input_format = vex.InputFormat.fromString(args[i]) orelse return error.UnknownInputFormat;
+        } else if (std.mem.eql(u8, arg, "--max-input-bytes")) {
+            i += 1;
+            if (i >= args.len) return error.MissingMaxInputBytes;
+            max_input_bytes = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidMaxInputBytes;
+            if (max_input_bytes == 0) return error.InvalidMaxInputBytes;
         } else if (std.mem.eql(u8, arg, "--mermaid")) {
             input_format = .mermaid;
         } else if (std.mem.eql(u8, arg, "--interactive-layers")) {
@@ -142,11 +152,11 @@ pub fn main(init: std.process.Init) !void {
 
     const dot = if (input_path) |path|
         if (std.mem.eql(u8, path, "-"))
-            try readStdin(allocator, io)
+            readStdin(allocator, io, max_input_bytes) catch |err| try handleInputReadError(io, err, max_input_bytes)
         else
-            try Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024 * 1024))
+            Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_input_bytes)) catch |err| try handleInputReadError(io, err, max_input_bytes)
     else blk: {
-        break :blk try readStdin(allocator, io);
+        break :blk readStdin(allocator, io, max_input_bytes) catch |err| try handleInputReadError(io, err, max_input_bytes);
     };
     defer allocator.free(dot);
 
@@ -188,10 +198,21 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn readStdin(allocator: std.mem.Allocator, io: Io) ![]u8 {
+fn readStdin(allocator: std.mem.Allocator, io: Io, max_input_bytes: usize) ![]u8 {
     var stdin_buffer: [4096]u8 = undefined;
     var stdin_reader = Io.File.stdin().readerStreaming(io, &stdin_buffer);
-    return stdin_reader.interface.allocRemaining(allocator, .limited(64 * 1024 * 1024));
+    return stdin_reader.interface.allocRemaining(allocator, .limited(max_input_bytes));
+}
+
+fn handleInputReadError(io: Io, err: anyerror, max_input_bytes: usize) !noreturn {
+    if (err == error.StreamTooLong) {
+        var stderr_buffer: [512]u8 = undefined;
+        var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+        try stderr_file_writer.interface.print("input exceeds --max-input-bytes limit ({d} bytes)\n", .{max_input_bytes});
+        try stderr_file_writer.interface.flush();
+        std.process.exit(1);
+    }
+    return err;
 }
 
 fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {

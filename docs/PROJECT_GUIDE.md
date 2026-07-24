@@ -64,4 +64,4 @@ try vex.render(writer, &layout, .svg, .{});
 - 更好的增量布局：大图局部更新时保持心理地图稳定。
 - 更强的可编程接口：Zig 原生 API，后续可提供 C ABI、WASM、Python/JS 绑定。
 - 更好的错误诊断：DOT 解析错误已经带基础位置、上下文和 caret；后续继续扩展修复建议和更多语义诊断。
-- 对大图友好：流式解析、可配置布局预算、并行布局阶段。force/neato 布局已经提供 `--layout-iterations` / `vex_layout_iterations` / `LayoutConfig.force.iterations` 作为迭代预算入口；layered/Sugiyama 布局已经提供 `--crossing-passes` / `--coordinate-passes`、`vex_crossing_passes` / `vex_coordinate_passes` 和 `LayoutConfig.layered` 作为 pass 预算入口。
+- 对大图友好：流式解析、可配置布局预算、并行布局阶段。CLI 已经提供 `--max-input-bytes` 作为 DOT/Mermaid 输入读取预算；force/neato 布局已经提供 `--layout-iterations` / `vex_layout_iterations` / `LayoutConfig.force.iterations` 作为迭代预算入口；layered/Sugiyama 布局已经提供 `--crossing-passes` / `--coordinate-passes`、`vex_crossing_passes` / `vex_coordinate_passes` 和 `LayoutConfig.layered` 作为 pass 预算入口。
