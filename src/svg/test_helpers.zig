@@ -37,6 +37,12 @@ pub const ElementName = struct {
     name: []const u8,
 };
 
+pub const DrawablePoints = struct {
+    tag: []const u8,
+    numbers: [128]f64,
+    count: usize,
+};
+
 pub fn pathCommandCount(svg: []const u8, command: u8) usize {
     var count: usize = 0;
     var search_start: usize = 0;
@@ -584,6 +590,118 @@ pub fn expectLinesNumericNormalizedEqual(svg: []const u8, oracle: []const u8) !v
     }
 }
 
+pub fn nextDrawablePoints(svg: []const u8, index: *usize) ?DrawablePoints {
+    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
+        const tag_start = index.* + rel;
+        index.* = tag_start + 1;
+        if (index.* >= svg.len) return null;
+        if (svg[index.*] == '!' or svg[index.*] == '?' or svg[index.*] == '/') continue;
+        const name_start = index.*;
+        while (index.* < svg.len and isNameChar(svg[index.*])) : (index.* += 1) {}
+        const name = svg[name_start..index.*];
+        const tag_end_rel = std.mem.indexOfScalar(u8, svg[index.*..], '>') orelse return null;
+        const tag = svg[tag_start .. index.* + tag_end_rel + 1];
+        index.* += tag_end_rel + 1;
+
+        const attr_name: []const u8 = if (std.mem.eql(u8, name, "polygon") or std.mem.eql(u8, name, "polyline"))
+            "points"
+        else if (std.mem.eql(u8, name, "path"))
+            "d"
+        else
+            continue;
+        var result = DrawablePoints{ .tag = name, .numbers = undefined, .count = 0 };
+        result.count = numbersInAttribute(tag, attr_name, result.numbers[0..]);
+        if (result.count >= 2 and result.count % 2 == 0) return result;
+    }
+    return null;
+}
+
+pub fn screenPoint(svg: []const u8, point: Point) Point {
+    const translate = graphvizTranslate(svg);
+    return .{ .x = point.x + translate.x, .y = point.y + translate.y };
+}
+
+pub fn renderedEdgePathCount(svg: []const u8) usize {
+    return countSubstrings(svg, "class=\"edge\"") - countSubstrings(svg, "class=\"edges\"");
+}
+
+pub fn expectDrawablePointsNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    _ = nextDrawablePoints(svg, &svg_index) orelse return error.MissingSvgDrawable;
+    _ = nextDrawablePoints(oracle, &oracle_index) orelse return error.MissingSvgDrawable;
+    while (true) {
+        const svg_drawable = nextDrawablePoints(svg, &svg_index);
+        const oracle_drawable = nextDrawablePoints(oracle, &oracle_index);
+        if (svg_drawable == null or oracle_drawable == null) {
+            try std.testing.expect(svg_drawable == null and oracle_drawable == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_drawable.?.tag, svg_drawable.?.tag);
+        try std.testing.expectEqual(oracle_drawable.?.count, svg_drawable.?.count);
+        var point_index: usize = 0;
+        while (point_index + 1 < svg_drawable.?.count) : (point_index += 2) {
+            const point = screenPoint(svg, .{ .x = svg_drawable.?.numbers[point_index], .y = svg_drawable.?.numbers[point_index + 1] });
+            const oracle_point = screenPoint(oracle, .{ .x = oracle_drawable.?.numbers[point_index], .y = oracle_drawable.?.numbers[point_index + 1] });
+            try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+        }
+    }
+}
+
+pub fn expectDrawableOneDecimalGapNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    _ = nextDrawablePoints(svg, &svg_index) orelse return error.MissingSvgDrawable;
+    _ = nextDrawablePoints(oracle, &oracle_index) orelse return error.MissingSvgDrawable;
+    while (true) {
+        const svg_drawable = nextDrawablePoints(svg, &svg_index);
+        const oracle_drawable = nextDrawablePoints(oracle, &oracle_index);
+        if (svg_drawable == null or oracle_drawable == null) {
+            try std.testing.expect(svg_drawable == null and oracle_drawable == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_drawable.?.tag, svg_drawable.?.tag);
+        try std.testing.expectEqual(oracle_drawable.?.count, svg_drawable.?.count);
+        var point_index: usize = 0;
+        while (point_index + 1 < svg_drawable.?.count) : (point_index += 2) {
+            const point = screenPoint(svg, .{ .x = svg_drawable.?.numbers[point_index], .y = svg_drawable.?.numbers[point_index + 1] });
+            const oracle_point = screenPoint(oracle, .{ .x = oracle_drawable.?.numbers[point_index], .y = oracle_drawable.?.numbers[point_index + 1] });
+            const residual = distanceBetween(point, oracle_point);
+            const lower_bound = oneDecimalPointLowerBound(oracle_point);
+            try std.testing.expect(residual - lower_bound <= tolerance);
+        }
+    }
+}
+
+pub fn expectEdgeCurveSamplesNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
+    var numbers: [64]f64 = undefined;
+    const count = pathNumbers(svg, title, numbers[0..]);
+    if (count < 8 or count % 6 != 2) return error.MissingEdge;
+    var oracle_numbers: [64]f64 = undefined;
+    const oracle_count = pathNumbers(oracle, title, oracle_numbers[0..]);
+    if (oracle_count != count) return error.MissingEdge;
+
+    var segment_start: usize = 0;
+    while (segment_start + 7 < count) : (segment_start += 6) {
+        const p0 = screenPoint(svg, .{ .x = numbers[segment_start], .y = numbers[segment_start + 1] });
+        const p1 = screenPoint(svg, .{ .x = numbers[segment_start + 2], .y = numbers[segment_start + 3] });
+        const p2 = screenPoint(svg, .{ .x = numbers[segment_start + 4], .y = numbers[segment_start + 5] });
+        const p3 = screenPoint(svg, .{ .x = numbers[segment_start + 6], .y = numbers[segment_start + 7] });
+        const oracle_p0 = screenPoint(oracle, .{ .x = oracle_numbers[segment_start], .y = oracle_numbers[segment_start + 1] });
+        const oracle_p1 = screenPoint(oracle, .{ .x = oracle_numbers[segment_start + 2], .y = oracle_numbers[segment_start + 3] });
+        const oracle_p2 = screenPoint(oracle, .{ .x = oracle_numbers[segment_start + 4], .y = oracle_numbers[segment_start + 5] });
+        const oracle_p3 = screenPoint(oracle, .{ .x = oracle_numbers[segment_start + 6], .y = oracle_numbers[segment_start + 7] });
+
+        var sample: usize = 1;
+        while (sample <= 3) : (sample += 1) {
+            const t = @as(f64, @floatFromInt(sample)) / 4.0;
+            const point = cubicPoint(p0, p1, p2, p3, t);
+            const oracle_point = cubicPoint(oracle_p0, oracle_p1, oracle_p2, oracle_p3, t);
+            try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
+        }
+    }
+}
+
 pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
     var marker_buf: [64]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return 0;
@@ -632,6 +750,39 @@ fn skipNumber(text: []const u8, index: usize) usize {
         while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
     }
     return i;
+}
+
+fn oneDecimalPointLowerBound(point: Point) f64 {
+    const min_x: i64 = @intFromFloat(@floor(point.x * 10.0) - 2.0);
+    const max_x: i64 = @intFromFloat(@ceil(point.x * 10.0) + 2.0);
+    const min_y: i64 = @intFromFloat(@floor(point.y * 10.0) - 2.0);
+    const max_y: i64 = @intFromFloat(@ceil(point.y * 10.0) + 2.0);
+    var best = std.math.floatMax(f64);
+    var xi = min_x;
+    while (xi <= max_x) : (xi += 1) {
+        var yi = min_y;
+        while (yi <= max_y) : (yi += 1) {
+            const candidate = Point{ .x = @as(f64, @floatFromInt(xi)) / 10.0, .y = @as(f64, @floatFromInt(yi)) / 10.0 };
+            best = @min(best, distanceBetween(candidate, point));
+        }
+    }
+    return best;
+}
+
+fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
+    const u = 1.0 - t;
+    const tt = t * t;
+    const uu = u * u;
+    const uuu = uu * u;
+    const ttt = tt * t;
+    return .{
+        .x = uuu * p0.x + 3.0 * uu * t * p1.x + 3.0 * u * tt * p2.x + ttt * p3.x,
+        .y = uuu * p0.y + 3.0 * uu * t * p1.y + 3.0 * u * tt * p2.y + ttt * p3.y,
+    };
+}
+
+fn distanceBetween(a: Point, b: Point) f64 {
+    return std.math.hypot(a.x - b.x, a.y - b.y);
 }
 
 fn isNameChar(c: u8) bool {

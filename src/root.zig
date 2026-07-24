@@ -10326,140 +10326,24 @@ fn expectSvgEdgePathPointsNear(svg: []const u8, oracle: []const u8, title: []con
 }
 
 fn expectSvgDrawablePointsNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    // The root background polygon is visually identical but uses a different
-    // coordinate direction from Graphviz; the content geometry below is ordered.
-    _ = nextSvgDrawablePoints(svg, &svg_index) orelse return error.MissingSvgDrawable;
-    _ = nextSvgDrawablePoints(oracle, &oracle_index) orelse return error.MissingSvgDrawable;
-    while (true) {
-        const svg_drawable = nextSvgDrawablePoints(svg, &svg_index);
-        const oracle_drawable = nextSvgDrawablePoints(oracle, &oracle_index);
-        if (svg_drawable == null or oracle_drawable == null) {
-            try std.testing.expect(svg_drawable == null and oracle_drawable == null);
-            return;
-        }
-        try std.testing.expectEqualStrings(oracle_drawable.?.tag, svg_drawable.?.tag);
-        try std.testing.expectEqual(oracle_drawable.?.count, svg_drawable.?.count);
-        var index: usize = 0;
-        while (index + 1 < svg_drawable.?.count) : (index += 2) {
-            const point = svgScreenPoint(svg, .{ .x = svg_drawable.?.numbers[index], .y = svg_drawable.?.numbers[index + 1] });
-            const oracle_point = svgScreenPoint(oracle, .{ .x = oracle_drawable.?.numbers[index], .y = oracle_drawable.?.numbers[index + 1] });
-            try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
-        }
-    }
+    try svg_mod.test_helpers.expectDrawablePointsNear(svg, oracle, tolerance);
 }
 
 fn expectSvgDrawableOneDecimalGapNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    _ = nextSvgDrawablePoints(svg, &svg_index) orelse return error.MissingSvgDrawable;
-    _ = nextSvgDrawablePoints(oracle, &oracle_index) orelse return error.MissingSvgDrawable;
-    while (true) {
-        const svg_drawable = nextSvgDrawablePoints(svg, &svg_index);
-        const oracle_drawable = nextSvgDrawablePoints(oracle, &oracle_index);
-        if (svg_drawable == null or oracle_drawable == null) {
-            try std.testing.expect(svg_drawable == null and oracle_drawable == null);
-            return;
-        }
-        try std.testing.expectEqualStrings(oracle_drawable.?.tag, svg_drawable.?.tag);
-        try std.testing.expectEqual(oracle_drawable.?.count, svg_drawable.?.count);
-        var index: usize = 0;
-        while (index + 1 < svg_drawable.?.count) : (index += 2) {
-            const point = svgScreenPoint(svg, .{ .x = svg_drawable.?.numbers[index], .y = svg_drawable.?.numbers[index + 1] });
-            const oracle_point = svgScreenPoint(oracle, .{ .x = oracle_drawable.?.numbers[index], .y = oracle_drawable.?.numbers[index + 1] });
-            const residual = distanceBetween(point, oracle_point);
-            const lower_bound = oneDecimalPointLowerBound(oracle_point);
-            try std.testing.expect(residual - lower_bound <= tolerance);
-        }
-    }
-}
-
-fn oneDecimalPointLowerBound(point: Point) f64 {
-    const min_x: i64 = @intFromFloat(@floor(point.x * 10.0) - 2.0);
-    const max_x: i64 = @intFromFloat(@ceil(point.x * 10.0) + 2.0);
-    const min_y: i64 = @intFromFloat(@floor(point.y * 10.0) - 2.0);
-    const max_y: i64 = @intFromFloat(@ceil(point.y * 10.0) + 2.0);
-    var best = std.math.floatMax(f64);
-    var xi = min_x;
-    while (xi <= max_x) : (xi += 1) {
-        var yi = min_y;
-        while (yi <= max_y) : (yi += 1) {
-            const candidate = Point{ .x = @as(f64, @floatFromInt(xi)) / 10.0, .y = @as(f64, @floatFromInt(yi)) / 10.0 };
-            best = @min(best, distanceBetween(candidate, point));
-        }
-    }
-    return best;
-}
-
-const SvgDrawablePoints = struct {
-    tag: []const u8,
-    numbers: [128]f64,
-    count: usize,
-};
-
-fn nextSvgDrawablePoints(svg: []const u8, index: *usize) ?SvgDrawablePoints {
-    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
-        const tag_start = index.* + rel;
-        index.* = tag_start + 1;
-        if (index.* >= svg.len) return null;
-        if (svg[index.*] == '!' or svg[index.*] == '?' or svg[index.*] == '/') continue;
-        const name_start = index.*;
-        while (index.* < svg.len and isSvgNameChar(svg[index.*])) : (index.* += 1) {}
-        const name = svg[name_start..index.*];
-        const tag_end_rel = std.mem.indexOfScalar(u8, svg[index.*..], '>') orelse return null;
-        const tag = svg[tag_start .. index.* + tag_end_rel + 1];
-        index.* += tag_end_rel + 1;
-
-        const attr_name: []const u8 = if (std.mem.eql(u8, name, "polygon") or std.mem.eql(u8, name, "polyline"))
-            "points"
-        else if (std.mem.eql(u8, name, "path"))
-            "d"
-        else
-            continue;
-        var result = SvgDrawablePoints{ .tag = name, .numbers = undefined, .count = 0 };
-        result.count = svgNumbersInAttribute(tag, attr_name, result.numbers[0..]);
-        if (result.count >= 2 and result.count % 2 == 0) return result;
-    }
-    return null;
+    try svg_mod.test_helpers.expectDrawableOneDecimalGapNear(svg, oracle, tolerance);
 }
 
 fn expectSvgEdgeCurveSamplesNear(svg: []const u8, oracle: []const u8, title: []const u8, tolerance: f64) !void {
-    var numbers: [64]f64 = undefined;
-    const count = svgPathNumbers(svg, title, numbers[0..]);
-    if (count < 8 or count % 6 != 2) return error.MissingEdge;
-    var oracle_numbers: [64]f64 = undefined;
-    const oracle_count = svgPathNumbers(oracle, title, oracle_numbers[0..]);
-    if (oracle_count != count) return error.MissingEdge;
-
-    var segment_start: usize = 0;
-    while (segment_start + 7 < count) : (segment_start += 6) {
-        const p0 = svgScreenPoint(svg, .{ .x = numbers[segment_start], .y = numbers[segment_start + 1] });
-        const p1 = svgScreenPoint(svg, .{ .x = numbers[segment_start + 2], .y = numbers[segment_start + 3] });
-        const p2 = svgScreenPoint(svg, .{ .x = numbers[segment_start + 4], .y = numbers[segment_start + 5] });
-        const p3 = svgScreenPoint(svg, .{ .x = numbers[segment_start + 6], .y = numbers[segment_start + 7] });
-        const oracle_p0 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start], .y = oracle_numbers[segment_start + 1] });
-        const oracle_p1 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start + 2], .y = oracle_numbers[segment_start + 3] });
-        const oracle_p2 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start + 4], .y = oracle_numbers[segment_start + 5] });
-        const oracle_p3 = svgScreenPoint(oracle, .{ .x = oracle_numbers[segment_start + 6], .y = oracle_numbers[segment_start + 7] });
-
-        var sample: usize = 1;
-        while (sample <= 3) : (sample += 1) {
-            const t = @as(f64, @floatFromInt(sample)) / 4.0;
-            const point = cubicPoint(p0, p1, p2, p3, t);
-            const oracle_point = cubicPoint(oracle_p0, oracle_p1, oracle_p2, oracle_p3, t);
-            try std.testing.expect(distanceBetween(point, oracle_point) <= tolerance);
-        }
-    }
+    try svg_mod.test_helpers.expectEdgeCurveSamplesNear(svg, oracle, title, tolerance);
 }
 
 fn svgScreenPoint(svg: []const u8, point: Point) Point {
-    const translate = svgGraphvizTranslate(svg);
-    return .{ .x = point.x + translate.x, .y = point.y + translate.y };
+    const screen = svg_mod.test_helpers.screenPoint(svg, .{ .x = point.x, .y = point.y });
+    return .{ .x = screen.x, .y = screen.y };
 }
 
 fn renderedEdgePathCount(svg: []const u8) usize {
-    return countSubstrings(svg, "class=\"edge\"") - countSubstrings(svg, "class=\"edges\"");
+    return svg_mod.test_helpers.renderedEdgePathCount(svg);
 }
 
 fn expectSvgTitleSequenceEqual(svg: []const u8, oracle: []const u8) !void {
@@ -10566,10 +10450,6 @@ const SvgElementName = svg_mod.test_helpers.ElementName;
 
 fn nextSvgElementName(svg: []const u8, index: *usize) ?SvgElementName {
     return svg_mod.test_helpers.nextElementName(svg, index);
-}
-
-fn isSvgNameChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == ':';
 }
 
 fn graphConcentrateEnabled(graph: *const Graph) bool {
