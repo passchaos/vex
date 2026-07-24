@@ -39,6 +39,7 @@ zig build run -- --input examples/subgraph.dot --output inspect.svg --interactiv
 zig build run -- --input examples/simple.dot --output searchable.svg --interactive-search
 zig build run -- --input examples/simple.dot --output viewport.svg --interactive-viewport
 zig build run -- --input examples/simple.dot --output minimap.svg --interactive-minimap
+zig build run -- --input examples/simple.dot --output stats.svg --interactive-stats
 zig build run -- --input examples/simple.dot --output indexed.svg --svg-metadata
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
@@ -115,6 +116,11 @@ rendered graph. Clicking nodes or subgraph boxes in the minimap recenters the
 main SVG viewport. It can also be enabled from DOT with
 `graph [vex_interactive_minimap=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_minimap = true } }`.
+
+`--interactive-stats` adds a self-contained graph statistics panel with object
+counts, layout size, canvas size, direction, and rank direction. It can also be
+enabled from DOT with `graph [vex_interactive_stats=true]` or from the Zig API
+with `.{ .svg = .{ .interactive_stats = true } }`.
 
 ## Zig API sketch
 
@@ -221,6 +227,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `vex_interactive_search=true`, or `SvgOptions.interactive_search`.
 - Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
 - Vex SVG output can optionally embed a native minimap overview via `--interactive-minimap`, `vex_interactive_minimap=true`, or `SvgOptions.interactive_minimap`.
+- Vex SVG output can optionally embed a native graph statistics panel via `--interactive-stats`, `vex_interactive_stats=true`, or `SvgOptions.interactive_stats`.
 - Vex SVG output can optionally embed a machine-readable SVG metadata object index via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.

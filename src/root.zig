@@ -182,6 +182,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_search: bool,
     vex_interactive_viewport: bool,
     vex_interactive_minimap: bool,
+    vex_interactive_stats: bool,
     vex_svg_metadata: bool,
     pad: []const u8,
     margin: []const u8,
@@ -895,6 +896,7 @@ pub const Graph = struct {
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
             .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
             .vex_interactive_minimap => |value| try self.setGraphAttrRaw("vex_interactive_minimap", boolAttrValue(value)),
+            .vex_interactive_stats => |value| try self.setGraphAttrRaw("vex_interactive_stats", boolAttrValue(value)),
             .vex_svg_metadata => |value| try self.setGraphAttrRaw("vex_svg_metadata", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
@@ -7646,6 +7648,7 @@ pub const SvgOptions = struct {
     interactive_search: bool = false,
     interactive_viewport: bool = false,
     interactive_minimap: bool = false,
+    interactive_stats: bool = false,
     metadata: bool = false,
 };
 
@@ -7811,6 +7814,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const write_interactive_focus = svgInteractiveFocusEnabled(graph, options);
     const write_interactive_inspector = svgInteractiveInspectorEnabled(graph, options);
     const write_interactive_search = svgInteractiveSearchEnabled(graph, options);
+    const write_interactive_stats = svgInteractiveStatsEnabled(graph, options);
 
     if (maybe_layers) |layers| {
         if (layers.selected) |indices| {
@@ -7857,6 +7861,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (write_interactive_search) {
         try writeSvgSearchControls(writer, controls_x, controls_y);
         controls_y += svgSearchControlsHeight() + 8.0;
+    }
+    if (write_interactive_stats) {
+        try writeSvgStatsControls(writer, graph, layout, controls_x, controls_y, svg_canvas);
+        controls_y += svgStatsControlsHeight() + 8.0;
     }
     if (write_interactive_viewport) try writeSvgViewportResources(writer);
     if (write_interactive_viewport_controls) {
@@ -7992,6 +8000,12 @@ fn svgInteractiveViewportEnabled(graph: *const Graph, options: SvgOptions) bool 
 fn svgInteractiveMinimapEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_minimap) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_minimap") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn svgInteractiveStatsEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_stats) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_stats") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -8436,6 +8450,43 @@ fn writeSvgSearchControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!vo
 
 fn svgSearchControlsHeight() f64 {
     return 54.0;
+}
+
+fn svgStatsControlsHeight() f64 {
+    return 98.0;
+}
+
+fn writeSvgStatsControls(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, x: f64, y: f64, canvas: GraphSvgCanvas) Io.Writer.Error!void {
+    try writer.writeAll(
+        \\<style>
+        \\.vex-stats-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-stats-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-stats-title { fill: #0f172a; font-weight: bold; }
+        \\.vex-stats-label { fill: #64748b; }
+        \\.vex-stats-value { fill: #0f172a; font-weight: bold; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-stats-controls\" class=\"vex-stats-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
+    try writer.writeAll("<rect class=\"vex-stats-panel-bg\" x=\"0\" y=\"0\" width=\"252\" height=\"98\" rx=\"4\"/>\n");
+    try writer.writeAll("<text class=\"vex-stats-title\" x=\"8\" y=\"16\">Graph stats</text>\n");
+    try writer.writeAll("<text class=\"vex-stats-label\" x=\"8\" y=\"34\">Graph</text>\n<text class=\"vex-stats-value\" x=\"64\" y=\"34\">");
+    try writeXmlEscaped(writer, graph.name);
+    try writer.writeAll("</text>\n");
+    try writer.print(
+        "<text class=\"vex-stats-label\" x=\"8\" y=\"50\">Objects</text>\n<text class=\"vex-stats-value\" x=\"64\" y=\"50\">nodes={d} edges={d} subgraphs={d}</text>\n",
+        .{ graph.nodes.items.len, graph.edges.items.len, graph.subgraphs.items.len },
+    );
+    try writer.print(
+        "<text class=\"vex-stats-label\" x=\"8\" y=\"66\">Layout</text>\n<text class=\"vex-stats-value\" x=\"64\" y=\"66\">{d:.0} x {d:.0} pt, {s}</text>\n",
+        .{ layout.width, layout.height, layout.rankdir.name() },
+    );
+    try writer.print(
+        "<text class=\"vex-stats-label\" x=\"8\" y=\"82\">Canvas</text>\n<text class=\"vex-stats-value\" x=\"64\" y=\"82\">{d:.0} x {d:.0} pt, directed={s}</text>\n",
+        .{ canvas.view_box.x * canvas.scale, canvas.view_box.y * canvas.scale, if (graph.directed) "true" else "false" },
+    );
+    try writer.writeAll("</g>\n");
 }
 
 fn svgViewportControlsHeight() f64 {
@@ -18816,6 +18867,66 @@ test "SVG interactive search metadata escapes object text" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-search-text=\"a&amp;b-&gt;c a&amp;b A &amp; B c C &lt; D x&lt;y x&lt;y\"") != null);
 }
 
+test "SVG renderer emits opt-in Vex stats panel" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph "A&B" {
+        \\  subgraph service { api; worker; }
+        \\  api -> worker -> db;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-stats-controls") == null);
+
+    const stats_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_stats = true });
+    defer allocator.free(stats_svg);
+    try std.testing.expect(std.mem.indexOf(u8, stats_svg, "id=\"vex-stats-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stats_svg, "Graph stats") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stats_svg, "A&amp;B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stats_svg, "nodes=3 edges=2 subgraphs=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stats_svg, "directed=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stats_svg, "TB</text>") != null);
+}
+
+test "DOT and typed API can enable Vex stats panel" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_stats=true];
+        \\  parse -> render;
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_stats").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-stats-controls\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = false, .name = "typed" });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_stats = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{});
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_stats").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-stats-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "directed=false") != null);
+}
+
 test "SVG renderer emits opt-in Vex interactive viewport controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -18953,6 +19064,7 @@ test "SVG interactive controls stack outside viewport content" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{
         .interactive_layers = true,
         .interactive_search = true,
+        .interactive_stats = true,
         .interactive_viewport = true,
         .interactive_minimap = true,
     });
@@ -18961,16 +19073,21 @@ test "SVG interactive controls stack outside viewport content" {
     const content_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-content\"") orelse return error.MissingViewportContent;
     const layer_pos = std.mem.indexOf(u8, svg, "id=\"vex-layer-controls\"") orelse return error.MissingLayerControls;
     const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
+    const stats_pos = std.mem.indexOf(u8, svg, "id=\"vex-stats-controls\"") orelse return error.MissingStatsControls;
     const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
     const minimap_pos = std.mem.indexOf(u8, svg, "id=\"vex-minimap-controls\"") orelse return error.MissingMinimapControls;
     try std.testing.expect(content_pos < layer_pos);
     try std.testing.expect(layer_pos < search_pos);
+    try std.testing.expect(search_pos < stats_pos);
+    try std.testing.expect(stats_pos < viewport_pos);
     try std.testing.expect(search_pos < viewport_pos);
     try std.testing.expect(viewport_pos < minimap_pos);
     const search_fragment = svgGroupFragmentById(svg, "vex-search-controls") orelse return error.MissingSearchControlsFragment;
+    const stats_fragment = svgGroupFragmentById(svg, "vex-stats-controls") orelse return error.MissingStatsControlsFragment;
     const viewport_fragment = svgGroupFragmentById(svg, "vex-viewport-controls") orelse return error.MissingViewportControlsFragment;
     const minimap_fragment = svgGroupFragmentById(svg, "vex-minimap-controls") orelse return error.MissingMinimapControlsFragment;
     try std.testing.expect(std.mem.indexOf(u8, search_fragment, "class=\"vex-search-panel\" transform=\"translate(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stats_fragment, "class=\"vex-stats-panel\" transform=\"translate(") != null);
     try std.testing.expect(std.mem.indexOf(u8, viewport_fragment, "class=\"vex-viewport-panel\" transform=\"translate(") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_fragment, "class=\"vex-minimap-panel\" transform=\"translate(") != null);
 }
@@ -18995,6 +19112,7 @@ test "SVG interactive controls include filter in panel stack" {
         .interactive_focus = true,
         .interactive_inspector = true,
         .interactive_search = true,
+        .interactive_stats = true,
         .interactive_viewport = true,
         .interactive_minimap = true,
     });
@@ -19005,12 +19123,15 @@ test "SVG interactive controls include filter in panel stack" {
     const focus_pos = std.mem.indexOf(u8, svg, "id=\"vex-focus-controls\"") orelse return error.MissingFocusControls;
     const inspector_pos = std.mem.indexOf(u8, svg, "id=\"vex-inspector-controls\"") orelse return error.MissingInspectorControls;
     const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
+    const stats_pos = std.mem.indexOf(u8, svg, "id=\"vex-stats-controls\"") orelse return error.MissingStatsControls;
     const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
     const minimap_pos = std.mem.indexOf(u8, svg, "id=\"vex-minimap-controls\"") orelse return error.MissingMinimapControls;
     try std.testing.expect(layer_pos < filter_pos);
     try std.testing.expect(filter_pos < focus_pos);
     try std.testing.expect(focus_pos < inspector_pos);
     try std.testing.expect(inspector_pos < search_pos);
+    try std.testing.expect(search_pos < stats_pos);
+    try std.testing.expect(stats_pos < viewport_pos);
     try std.testing.expect(search_pos < viewport_pos);
     try std.testing.expect(viewport_pos < minimap_pos);
 }
