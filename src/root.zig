@@ -4929,14 +4929,10 @@ fn parseInchMargin(value: []const u8) ?f64 {
     return inches * 72.0;
 }
 
-const BoxMargin = struct {
-    x: f64,
-    y: f64,
-};
+const BoxMargin = layout_mod.options.BoxMargin;
 
 fn attrMargin(attrs: []const Attr, fallback: f64) BoxMargin {
-    const margin = layout_mod.options.attrMargin(attrs, fallback);
-    return .{ .x = margin.x, .y = margin.y };
+    return layout_mod.options.attrMargin(attrs, fallback);
 }
 
 fn nodeMargin(attrs: []const Attr, fallback: f64) BoxMargin {
