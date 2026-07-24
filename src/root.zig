@@ -961,8 +961,8 @@ pub const Graph = struct {
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
             .image => |value| try self.setDefaultNodeAttrRaw("image", value),
             .shapefile => |value| try self.setDefaultNodeAttrRaw("shapefile", value),
-            .imagescale => |value| try self.setDefaultNodeAttrRaw("imagescale", imageScaleName(value)),
-            .imagepos => |value| try self.setDefaultNodeAttrRaw("imagepos", imagePositionName(value)),
+            .imagescale => |value| try self.setDefaultNodeAttrRaw("imagescale", value.name()),
+            .imagepos => |value| try self.setDefaultNodeAttrRaw("imagepos", value.name()),
             .toplabel => |value| try self.setDefaultNodeAttrRaw("toplabel", value),
             .bottomlabel => |value| try self.setDefaultNodeAttrRaw("bottomlabel", value),
             .xlabel => |value| try self.setDefaultNodeAttrRaw("xlabel", value),
@@ -1169,8 +1169,8 @@ pub const Graph = struct {
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
             .image => |value| try self.setNodeAttrRaw(id, "image", value),
             .shapefile => |value| try self.setNodeAttrRaw(id, "shapefile", value),
-            .imagescale => |value| try self.setNodeAttrRaw(id, "imagescale", imageScaleName(value)),
-            .imagepos => |value| try self.setNodeAttrRaw(id, "imagepos", imagePositionName(value)),
+            .imagescale => |value| try self.setNodeAttrRaw(id, "imagescale", value.name()),
+            .imagepos => |value| try self.setNodeAttrRaw(id, "imagepos", value.name()),
             .toplabel => |value| try self.setNodeAttrRaw(id, "toplabel", value),
             .bottomlabel => |value| try self.setNodeAttrRaw(id, "bottomlabel", value),
             .xlabel => |value| try self.setNodeAttrRaw(id, "xlabel", value),
@@ -1800,14 +1800,6 @@ fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
         .fit_label => "true",
         .shape => "shape",
     };
-}
-
-fn imageScaleName(scale: ImageScale) []const u8 {
-    return svg_mod.image.scaleName(scale);
-}
-
-fn imagePositionName(position: ImagePosition) []const u8 {
-    return svg_mod.image.positionName(position);
 }
 
 fn arrowShapeName(shape: ArrowShape) []const u8 {

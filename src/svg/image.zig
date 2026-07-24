@@ -8,6 +8,16 @@ pub const Scale = enum {
     width,
     height,
     both,
+
+    pub fn name(self: Scale) []const u8 {
+        return switch (self) {
+            .none => "false",
+            .fit => "true",
+            .width => "width",
+            .height => "height",
+            .both => "both",
+        };
+    }
 };
 
 pub const Position = enum {
@@ -20,6 +30,20 @@ pub const Position = enum {
     bottom_left,
     bottom_center,
     bottom_right,
+
+    pub fn name(self: Position) []const u8 {
+        return switch (self) {
+            .top_left => "tl",
+            .top_center => "tc",
+            .top_right => "tr",
+            .middle_left => "ml",
+            .middle_center => "mc",
+            .middle_right => "mr",
+            .bottom_left => "bl",
+            .bottom_center => "bc",
+            .bottom_right => "br",
+        };
+    }
 };
 
 pub fn source(attrs: anytype) ?[]const u8 {
@@ -33,27 +57,11 @@ pub fn source(attrs: anytype) ?[]const u8 {
 }
 
 pub fn scaleName(scale: Scale) []const u8 {
-    return switch (scale) {
-        .none => "false",
-        .fit => "true",
-        .width => "width",
-        .height => "height",
-        .both => "both",
-    };
+    return scale.name();
 }
 
 pub fn positionName(position: Position) []const u8 {
-    return switch (position) {
-        .top_left => "tl",
-        .top_center => "tc",
-        .top_right => "tr",
-        .middle_left => "ml",
-        .middle_center => "mc",
-        .middle_right => "mr",
-        .bottom_left => "bl",
-        .bottom_center => "bc",
-        .bottom_right => "br",
-    };
+    return position.name();
 }
 
 pub fn parseScale(attrs: anytype) Scale {
