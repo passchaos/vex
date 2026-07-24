@@ -21036,6 +21036,12 @@ test "cluster layout inherits margin from parent subgraphs" {
     const explicit_box = layout.subgraphs[explicit_index];
     const explicit_left = layout.nodes[b].center.x - layout.nodes[b].width / 2.0 - explicit_box.x;
     try std.testing.expect(explicit_left < inherited_left);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const inner_width = svgClusterRectWidth(svg, "Inner") orelse return error.MissingInnerCluster;
+    const explicit_width = svgClusterRectWidth(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(inner_width > explicit_width);
 }
 
 test "cluster fill follows Graphviz style filled color semantics" {
