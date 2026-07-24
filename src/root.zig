@@ -7953,6 +7953,16 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     }
     for (graph.edges.items) |edge_item| {
         try writer.print("<vex:edge id=\"{d}\" from=\"{d}\" to=\"{d}\"", .{ edge_item.id, edge_item.from, edge_item.to });
+        if (edge_item.from < graph.nodes.items.len) {
+            try writer.writeAll(" from-label=\"");
+            try writeXmlEscaped(writer, nodeFallbackTitle(graph.nodes.items[edge_item.from]));
+            try writer.writeByte('"');
+        }
+        if (edge_item.to < graph.nodes.items.len) {
+            try writer.writeAll(" to-label=\"");
+            try writeXmlEscaped(writer, nodeFallbackTitle(graph.nodes.items[edge_item.to]));
+            try writer.writeByte('"');
+        }
         if (attrValue(edge_item.attrs.items, "layer")) |layer| {
             try writer.writeAll(" layer=\"");
             try writeXmlEscaped(writer, layer);
@@ -15840,7 +15850,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" label=\"job\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"api\"") != null);
@@ -15881,7 +15891,7 @@ test "SVG metadata index records layers" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "layerselect=\"base:detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A &amp; B\" layer=\"base\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"b\" layer=\"detail\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" layer=\"base:detail\" label=\"a&amp;b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"A &amp; B\" to-label=\"b\" layer=\"base:detail\" label=\"a&amp;b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"outer\" layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"Inner\" layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"A &amp; B\" data-vex-object-layer=\"base\"") != null);
