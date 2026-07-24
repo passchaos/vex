@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
+const layout_mod = @import("layout/mod.zig");
 const svg_mod = @import("svg/mod.zig");
 
 pub const NodeId = usize;
@@ -3813,11 +3814,11 @@ fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) Layo
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
     var result = options;
     if (attrValue(graph.attrs.items, "ranksep")) |value| {
-        result.rank_gap = parseGraphSpacing(value, result.rank_gap);
-        result.ranksep_equally = spacingHasWord(value, "equally");
+        result.rank_gap = layout_mod.spacing.graph(value, result.rank_gap);
+        result.ranksep_equally = layout_mod.spacing.hasWord(value, "equally");
     }
     if (attrValue(graph.attrs.items, "nodesep")) |value| {
-        result.node_gap = parseGraphSpacing(value, result.node_gap);
+        result.node_gap = layout_mod.spacing.graph(value, result.node_gap);
     }
     if (attrValue(graph.attrs.items, "margin") != null) {
         const margin = attrMargin(graph.attrs.items, result.margin);
@@ -3829,28 +3830,6 @@ fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) Layo
         result.margin_y = @max(result.margin_y, font_size + 12.0);
     }
     return result;
-}
-
-fn spacingHasWord(value: []const u8, word: []const u8) bool {
-    var parts = std.mem.tokenizeAny(u8, value, " \t,");
-    while (parts.next()) |part| {
-        if (std.ascii.eqlIgnoreCase(part, word)) return true;
-    }
-    return false;
-}
-
-fn parseGraphSpacing(value: []const u8, fallback: f64) f64 {
-    return parseGraphSpacingValue(value) orelse fallback;
-}
-
-fn parseGraphSpacingValue(value: []const u8) ?f64 {
-    var parts = std.mem.tokenizeAny(u8, value, " \t,");
-    const first = parts.next() orelse return null;
-    const inches = std.fmt.parseFloat(f64, first) catch return null;
-    if (inches <= 0) return null;
-    // Graphviz ranksep/nodesep are in inches. Use a conservative 72 px/in
-    // scale and keep the existing defaults as a lower bound for unset attrs.
-    return @max(12.0, inches * 72.0);
 }
 
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
@@ -4498,7 +4477,7 @@ fn subgraphNodePairGap(graph: *const Graph, left: NodeId, right: NodeId, fallbac
     for (graph.subgraphs.items, 0..) |cluster, index| {
         if (!containsNode(cluster.nodes, left) or !containsNode(cluster.nodes, right)) continue;
         const raw_nodesep = attrValue(cluster.attrs.items, "nodesep") orelse continue;
-        const gap = parseGraphSpacingValue(raw_nodesep) orelse continue;
+        const gap = layout_mod.spacing.graphValue(raw_nodesep) orelse continue;
         const depth = subgraphDepth(graph, index);
         if (best_gap == null or depth >= best_depth) {
             best_gap = gap;
@@ -4513,7 +4492,7 @@ fn subgraphRankGapBetween(graph: *const Graph, ranks: []const usize, upper_rank:
     for (graph.subgraphs.items) |cluster| {
         if (!subgraphHasMemberOnRank(cluster, ranks, upper_rank) or !subgraphHasMemberOnRank(cluster, ranks, upper_rank + 1)) continue;
         const raw_ranksep = attrValue(cluster.attrs.items, "ranksep") orelse continue;
-        const gap = parseGraphSpacingValue(raw_ranksep) orelse continue;
+        const gap = layout_mod.spacing.graphValue(raw_ranksep) orelse continue;
         best_gap = @max(best_gap, gap);
     }
     return best_gap;
@@ -4532,7 +4511,7 @@ fn virtualNodePairGap(graph: *const Graph, left: VirtualNode, right: VirtualNode
     for (graph.subgraphs.items, 0..) |cluster, index| {
         if (!virtualNodeInSubgraph(graph, left, cluster) or !virtualNodeInSubgraph(graph, right, cluster)) continue;
         const raw_nodesep = attrValue(cluster.attrs.items, "nodesep") orelse continue;
-        const gap = parseGraphSpacingValue(raw_nodesep) orelse continue;
+        const gap = layout_mod.spacing.graphValue(raw_nodesep) orelse continue;
         const depth = subgraphDepth(graph, index);
         if (best_gap == null or depth >= best_depth) {
             best_gap = gap;
