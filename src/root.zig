@@ -8998,6 +8998,46 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
     const href = interactiveHref(attrs, kind);
     const tooltip = interactiveTooltip(attrs, kind) orelse if (href != null) fallback_title else null;
     const link_target = interactiveTarget(attrs, kind);
+    return writeSvgInteractiveOpenResolved(writer, allocator, href, tooltip, link_target, context, anchor_id);
+}
+
+fn writeSvgClusterInteractiveOpen(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, context: LabelEscapeContext, fallback_title: ?[]const u8, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
+    const href = inheritedClusterHref(graph, cluster);
+    const tooltip = inheritedClusterTooltip(graph, cluster) orelse if (href != null) fallback_title else null;
+    const link_target = inheritedClusterTarget(graph, cluster);
+    return writeSvgInteractiveOpenResolved(writer, graph.allocator, href, tooltip, link_target, context, anchor_id);
+}
+
+fn inheritedClusterHref(graph: *const Graph, cluster: Subgraph) ?[]const u8 {
+    var current: ?SubgraphId = cluster.id;
+    while (current) |id| {
+        if (id >= graph.subgraphs.items.len) return null;
+        const attrs = graph.subgraphs.items[id].attrs.items;
+        if (attrValue(attrs, "href")) |value| return value;
+        if (attrValue(attrs, "URL")) |value| return value;
+        if (attrValue(attrs, "url")) |value| return value;
+        current = graph.subgraphs.items[id].parent;
+    }
+    return null;
+}
+
+fn inheritedClusterTooltip(graph: *const Graph, cluster: Subgraph) ?[]const u8 {
+    var current: ?SubgraphId = cluster.id;
+    while (current) |id| {
+        if (id >= graph.subgraphs.items.len) return null;
+        const attrs = graph.subgraphs.items[id].attrs.items;
+        if (attrValue(attrs, "tooltip")) |value| return value;
+        if (attrValue(attrs, "title")) |value| return value;
+        current = graph.subgraphs.items[id].parent;
+    }
+    return null;
+}
+
+fn inheritedClusterTarget(graph: *const Graph, cluster: Subgraph) ?[]const u8 {
+    return layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "target");
+}
+
+fn writeSvgInteractiveOpenResolved(writer: *Io.Writer, allocator: std.mem.Allocator, href: ?[]const u8, tooltip: ?[]const u8, link_target: ?[]const u8, context: LabelEscapeContext, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
     if (href == null and tooltip == null) return .none;
 
     const expanded_tooltip = if (tooltip) |tip| expandLabelEscapes(allocator, tip, context) catch tip else null;
@@ -10475,7 +10515,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .default_class = "cluster",
         .context = cluster_context,
     } };
-    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, cluster_context, cluster.label, cluster_anchor_id);
+    const cluster_wrap = try writeSvgClusterInteractiveOpen(writer, graph, cluster, cluster_context, cluster.label, cluster_anchor_id);
     const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgClusterStripedRectFill(writer, graph, cluster, index + 1, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
@@ -17496,6 +17536,49 @@ test "SVG renderer emits URL href and tooltip metadata" {
     const node_anchor_prefix_start = if (node_anchor_href > 32) node_anchor_href - 32 else 0;
     try std.testing.expect(std.mem.indexOf(u8, svg[node_anchor_prefix_start..node_anchor_href], "<g id=\"a_node") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_edge1\"><a href=\"https://example.com/e\"") != null);
+}
+
+test "SVG renderer inherits cluster interactive metadata from parents" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    label="Outer";
+        \\    URL="https://example.com/outer/\N";
+        \\    tooltip="Outer \N";
+        \\    target="outer-\N";
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      URL="https://example.com/explicit/\N";
+        \\      tooltip="Explicit \N";
+        \\      target="explicit-\N";
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner].attrs.items, "URL") == null);
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "<a href=\"https://example.com/outer/Inner\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "xlink:title=\"Outer Inner\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "target=\"outer-Inner\"") != null);
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "<a href=\"https://example.com/explicit/Explicit\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "xlink:title=\"Explicit Explicit\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "target=\"explicit-Explicit\"") != null);
 }
 
 test "SVG renderer emits anchors for tooltip-only metadata" {
