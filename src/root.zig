@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const svg_canvas_mod = @import("svg_canvas.zig");
 const svg_layers_mod = @import("svg_layers.zig");
+const svg_writer = @import("svg_writer.zig");
 
 pub const NodeId = usize;
 pub const EdgeId = usize;
@@ -8617,15 +8618,7 @@ pub fn renderSvgAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout:
 }
 
 fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
-    for (text) |c| switch (c) {
-        '&' => try writer.writeAll("&amp;"),
-        '<' => try writer.writeAll("&lt;"),
-        '>' => try writer.writeAll("&gt;"),
-        '"' => try writer.writeAll("&quot;"),
-        0x27 => try writer.writeAll("&apos;"),
-        label_left_break, label_right_break => try writer.writeByte('\n'),
-        else => try writer.writeByte(c),
-    };
+    try svg_writer.xmlEscapedWithLineBreaks(writer, text, label_left_break, label_right_break);
 }
 
 const SvgGroupOpenOptions = struct {
@@ -12699,63 +12692,31 @@ fn writeSvgPolylineLineYPrecise(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y
 }
 
 fn writeSvgPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writeSvgNumber(writer, point.x);
-    try writer.writeByte(',');
-    try writeSvgNumber(writer, point.y);
+    try svg_writer.point(writer, .{ .x = point.x, .y = point.y });
 }
 
 fn writeSvgPointWithPrecision(writer: *Io.Writer, point: Point, precise: bool) Io.Writer.Error!void {
     if (precise) {
-        try writeSvgNumberPrecise(writer, point.x);
-        try writer.writeByte(',');
-        try writeSvgNumberPrecise(writer, point.y);
+        try svg_writer.pointPrecise(writer, .{ .x = point.x, .y = point.y });
     } else {
         try writeSvgPoint(writer, point);
     }
 }
 
 fn writeSvgNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
-    const normalized = if (@abs(value) < 0.05) 0.0 else value;
-    const rounded = @round(normalized);
-    if (@abs(normalized - rounded) < 0.05) {
-        try writer.print("{d:.0}", .{rounded});
-    } else {
-        try writer.print("{d:.1}", .{normalized});
-    }
+    try svg_writer.number(writer, value);
 }
 
 fn writeSvgNumberPrecise(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
-    const normalized = if (@abs(value) < 0.005) 0.0 else value;
-    const rounded = @round(normalized);
-    if (@abs(normalized - rounded) < 0.005) {
-        try writer.print("{d:.0}", .{rounded});
-    } else {
-        try writer.print("{d:.2}", .{normalized});
-    }
+    try svg_writer.numberPrecise(writer, value);
 }
 
 fn writeSvgRectOpen(writer: *Io.Writer, rect: RectF, radius: f64) Io.Writer.Error!void {
-    try writer.writeAll("<rect x=\"");
-    try writeSvgNumber(writer, rect.x);
-    try writer.writeAll("\" y=\"");
-    try writeSvgNumber(writer, rect.y);
-    try writer.writeAll("\" width=\"");
-    try writeSvgNumber(writer, rect.width);
-    try writer.writeAll("\" height=\"");
-    try writeSvgNumber(writer, rect.height);
-    try writer.writeAll("\" rx=\"");
-    try writeSvgNumber(writer, radius);
-    try writer.writeByte('"');
+    try svg_writer.rectOpen(writer, .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, radius);
 }
 
 fn writeSvgCircleOpen(writer: *Io.Writer, center: Point, radius: f64) Io.Writer.Error!void {
-    try writer.writeAll("<circle cx=\"");
-    try writeSvgNumber(writer, center.x);
-    try writer.writeAll("\" cy=\"");
-    try writeSvgNumber(writer, center.y);
-    try writer.writeAll("\" r=\"");
-    try writeSvgNumber(writer, radius);
-    try writer.writeByte('"');
+    try svg_writer.circleOpen(writer, .{ .x = center.x, .y = center.y }, radius);
 }
 
 fn nodeRect(layout: NodeLayout) RectF {
