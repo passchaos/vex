@@ -10497,11 +10497,7 @@ const EdgePathHints = struct {
     head_msquare: bool = false,
 };
 
-const DashStyle = enum {
-    none,
-    dashed,
-    dotted,
-};
+const DashStyle = svg_mod.style.Dash;
 
 const MarkerShape = enum {
     none,
@@ -12280,36 +12276,15 @@ fn resolveSvgColor(graph: *const Graph, attrs: []const Attr, color: []const u8) 
 }
 
 fn styleHas(style: ?[]const u8, needle: []const u8) bool {
-    const value = style orelse return false;
-    var parts = std.mem.tokenizeAny(u8, value, ",; \t\r\n");
-    while (parts.next()) |part| {
-        if (std.ascii.eqlIgnoreCase(part, needle)) return true;
-    }
-    return false;
+    return svg_mod.style.has(style, needle);
 }
 
 fn dashStyleFromAttr(style: ?[]const u8) DashStyle {
-    const value = style orelse return .none;
-    var result = DashStyle.none;
-    var parts = std.mem.tokenizeAny(u8, value, ",; \t\r\n");
-    while (parts.next()) |part| {
-        if (std.ascii.eqlIgnoreCase(part, "dotted")) {
-            result = .dotted;
-        } else if (std.ascii.eqlIgnoreCase(part, "dashed")) {
-            result = .dashed;
-        } else if (std.ascii.eqlIgnoreCase(part, "solid")) {
-            result = .none;
-        }
-    }
-    return result;
+    return svg_mod.style.dashFromAttr(style);
 }
 
 fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
-    switch (dash) {
-        .none => {},
-        .dashed => try writer.writeAll(" stroke-dasharray=\"8,5\""),
-        .dotted => try writer.writeAll(" stroke-dasharray=\"2,5\""),
-    }
+    try svg_mod.style.writeDash(writer, dash);
 }
 
 fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, stroke: []const u8, fill: []const u8, scale: f64) Io.Writer.Error!void {
