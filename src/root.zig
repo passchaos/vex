@@ -11911,7 +11911,7 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
         .font_color = resolveSvgColor(graph, cluster.attrs.items, inheritedClusterFontAttr(graph, cluster, "fontcolor") orelse "black"),
         .font = svgFont(graph, inheritedClusterFontAttr(graph, cluster, "fontname") orelse default_graphviz_fontname),
         .font_size = inheritedClusterFontSize(graph, cluster),
-        .width = parseAttrFloat(cluster.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
+        .width = inheritedClusterPenWidth(graph, cluster, if (bold) 3.0 else 1.0),
         .radius = if (rounded) 10 else 0,
         .dash = dashStyleFromAttr(style),
         .fill_opacity = "1.0",
@@ -11922,6 +11922,11 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
 
 fn inheritedClusterVisualAttr(graph: *const Graph, cluster: Subgraph, name: []const u8) ?[]const u8 {
     return layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, name);
+}
+
+fn inheritedClusterPenWidth(graph: *const Graph, cluster: Subgraph, fallback: f64) f64 {
+    const value = inheritedClusterVisualAttr(graph, cluster, "penwidth") orelse return fallback;
+    return std.fmt.parseFloat(f64, value) catch fallback;
 }
 
 fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
@@ -21034,6 +21039,46 @@ test "cluster bold style thickens stroke unless penwidth is explicit" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"none\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"2\"") != null);
+}
+
+test "cluster penwidth inherits from parent subgraphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    penwidth=4;
+        \\    color="#2563eb";
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      penwidth=2;
+        \\      color="#16a34a";
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    const inner = graph.subgraphs.items[inner_index];
+    try std.testing.expect(attrValue(inner.attrs.items, "penwidth") == null);
+    try std.testing.expectEqual(@as(f64, 4), inheritedClusterPenWidth(&graph, inner, 1.0));
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "stroke-width=\"4\"") != null);
+
+    const explicit = graph.subgraphs.items[subgraphIndexByLabel(&graph, "Explicit").?];
+    try std.testing.expectEqual(@as(f64, 2), inheritedClusterPenWidth(&graph, explicit, 1.0));
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "stroke-width=\"2\"") != null);
 }
 
 test "cluster peripheries zero hides border while preserving fill" {
