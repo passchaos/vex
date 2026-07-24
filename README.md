@@ -268,6 +268,8 @@ The parser currently supports a practical, mainstream DOT subset:
 - Named subgraphs use parent-relative identity: reopening the same name under
   one parent merges members and attributes, while identical names under
   different parents remain distinct.
+- Anonymous subgraph blocks keep graph attributes local without becoming
+  rendered cluster objects.
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.

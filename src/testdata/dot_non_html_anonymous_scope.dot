@@ -1,0 +1,9 @@
+digraph AnonymousScope {
+  graph [color=root]
+  {
+    graph [color=local, label=anonymous]
+    local_only=true
+    a
+  }
+  b
+}

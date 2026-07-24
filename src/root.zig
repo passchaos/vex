@@ -2157,7 +2157,10 @@ const Parser = struct {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
-            for (attrs.items) |attr| try graph.setDefaultEdgeAttrRaw(attr.name, attr.value);
+            for (attrs.items) |attr| {
+                if (std.ascii.eqlIgnoreCase(attr.name, "key")) continue;
+                try graph.setDefaultEdgeAttrRaw(attr.name, attr.value);
+            }
             return;
         }
         if (self.isSubgraphStart()) {
@@ -2402,7 +2405,7 @@ const Parser = struct {
         errdefer self.collectors.items.len -= 1;
         try self.rank_scopes.append(self.allocator, &rank_kind);
         errdefer self.rank_scopes.items.len -= 1;
-        try self.subgraph_scopes.append(self.allocator, if (is_subgraph) &subgraph_attrs else null);
+        try self.subgraph_scopes.append(self.allocator, &subgraph_attrs);
         errdefer self.subgraph_scopes.items.len -= 1;
         var stack_pushed = false;
         if (is_subgraph) {
@@ -16275,6 +16278,59 @@ test "non HTML DOT edge key corpus parses with expected semantics" {
     try std.testing.expectEqualStrings("updated", graph.edges.items[0].label.?);
     try std.testing.expectEqualStrings("3", attrValue(graph.edges.items[0].attrs.items, "penwidth").?);
     try std.testing.expectEqualStrings("second", graph.edges.items[1].label.?);
+}
+
+test "anonymous DOT subgraph graph attrs stay local" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [color=root];
+        \\  {
+        \\    graph [color=local, label=anonymous];
+        \\    local_only=true;
+        \\    a;
+        \\  }
+        \\  b;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), graph.subgraphs.items.len);
+    try std.testing.expectEqualStrings("root", attrValue(graph.attrs.items, "color").?);
+    try std.testing.expect(attrValue(graph.attrs.items, "label") == null);
+    try std.testing.expect(attrValue(graph.attrs.items, "local_only") == null);
+    try std.testing.expectEqual(@as(usize, 2), graph.nodes.items.len);
+}
+
+test "DOT default edge key is ignored as a pseudo attribute" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  edge [key=shared, color=red];
+        \\  a -> b [label=one];
+        \\  a -> b [label=two];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
+    try std.testing.expect(attrValue(graph.edge_default_attrs.items, "key") == null);
+    for (graph.edges.items) |edge_item| {
+        try std.testing.expect(attrValue(edge_item.attrs.items, "key") == null);
+        try std.testing.expectEqualStrings("red", edge_item.color);
+    }
+}
+
+test "non HTML DOT anonymous scope corpus keeps root attrs isolated" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_anonymous_scope.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("root", attrValue(graph.attrs.items, "color").?);
+    try std.testing.expect(attrValue(graph.attrs.items, "label") == null);
+    try std.testing.expect(attrValue(graph.attrs.items, "local_only") == null);
+    try std.testing.expectEqual(@as(usize, 0), graph.subgraphs.items.len);
 }
 
 test "code API allows duplicate node names and uses ids for identity" {
