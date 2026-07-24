@@ -181,6 +181,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_inspector: bool,
     vex_interactive_search: bool,
     vex_interactive_viewport: bool,
+    vex_interactive_minimap: bool,
     vex_svg_metadata: bool,
     pad: []const u8,
     margin: []const u8,
@@ -893,6 +894,7 @@ pub const Graph = struct {
             .vex_interactive_inspector => |value| try self.setGraphAttrRaw("vex_interactive_inspector", boolAttrValue(value)),
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
             .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
+            .vex_interactive_minimap => |value| try self.setGraphAttrRaw("vex_interactive_minimap", boolAttrValue(value)),
             .vex_svg_metadata => |value| try self.setGraphAttrRaw("vex_svg_metadata", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
@@ -7643,6 +7645,7 @@ pub const SvgOptions = struct {
     interactive_inspector: bool = false,
     interactive_search: bool = false,
     interactive_viewport: bool = false,
+    interactive_minimap: bool = false,
     metadata: bool = false,
 };
 
@@ -7695,7 +7698,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     );
     try writer.writeAll(">\n");
     if (svgMetadataEnabled(graph, options)) try writeSvgMetadata(writer, graph, layout);
-    const write_interactive_viewport = svgInteractiveViewportEnabled(graph, options);
+    const write_interactive_minimap = svgInteractiveMinimapEnabled(graph, options);
+    const write_interactive_viewport_controls = svgInteractiveViewportEnabled(graph, options);
+    const write_interactive_viewport = write_interactive_viewport_controls or write_interactive_minimap;
     if (write_interactive_viewport) try writer.writeAll("<g id=\"vex-viewport-content\" class=\"vex-viewport-content\">\n");
     try writeSvgGroupOpenStart(writer, .{
         .graph = graph,
@@ -7853,7 +7858,12 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgSearchControls(writer, controls_x, controls_y);
         controls_y += svgSearchControlsHeight() + 8.0;
     }
-    if (write_interactive_viewport) try writeSvgViewportControls(writer, controls_x, controls_y);
+    if (write_interactive_viewport) try writeSvgViewportResources(writer);
+    if (write_interactive_viewport_controls) {
+        try writeSvgViewportControls(writer, controls_x, controls_y);
+        controls_y += svgViewportControlsHeight() + 8.0;
+    }
+    if (write_interactive_minimap) try writeSvgMinimapControls(writer, graph, layout, controls_x, controls_y, content_translate, svg_canvas, landscape, render_canvas_height);
     if (write_interactive_collapse) try writeSvgCollapseScript(writer);
     try writer.writeAll("</svg>");
 }
@@ -7976,6 +7986,12 @@ fn svgInteractiveSearchEnabled(graph: *const Graph, options: SvgOptions) bool {
 fn svgInteractiveViewportEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_viewport) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_viewport") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn svgInteractiveMinimapEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_minimap) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_minimap") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -8422,30 +8438,16 @@ fn svgSearchControlsHeight() f64 {
     return 54.0;
 }
 
-fn writeSvgViewportControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
+fn svgViewportControlsHeight() f64 {
+    return 78.0;
+}
+
+fn writeSvgViewportResources(writer: *Io.Writer) Io.Writer.Error!void {
     try writer.writeAll(
         \\<style>
-        \\.vex-viewport-panel { font-family: Arial,sans-serif; font-size: 11px; }
-        \\.vex-viewport-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
-        \\.vex-viewport-control { cursor: pointer; }
-        \\.vex-viewport-control rect { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
-        \\.vex-viewport-control text { fill: #0f172a; pointer-events: none; }
         \\.vex-viewport-content { transform-box: fill-box; transform-origin: 0 0; }
         \\
         \\</style>
-        \\
-    );
-    try writer.print("<g id=\"vex-viewport-controls\" class=\"vex-viewport-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
-    try writer.writeAll("<rect class=\"vex-viewport-panel-bg\" x=\"0\" y=\"0\" width=\"122\" height=\"78\" rx=\"4\"/>\n");
-    try writeSvgViewportButton(writer, "+", "zoom-in", 4, 4, "Zoom in");
-    try writeSvgViewportButton(writer, "-", "zoom-out", 34, 4, "Zoom out");
-    try writeSvgViewportButton(writer, "0", "reset", 64, 4, "Reset viewport");
-    try writeSvgViewportButton(writer, "^", "pan-up", 34, 28, "Pan up");
-    try writeSvgViewportButton(writer, "<", "pan-left", 4, 52, "Pan left");
-    try writeSvgViewportButton(writer, "v", "pan-down", 34, 52, "Pan down");
-    try writeSvgViewportButton(writer, ">", "pan-right", 64, 52, "Pan right");
-    try writer.writeAll("</g>\n");
-    try writer.writeAll(
         \\<script type="application/ecmascript"><![CDATA[
         \\(function () {
         \\  var script = document.currentScript;
@@ -8466,6 +8468,16 @@ fn writeSvgViewportControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!
         \\    else if (action === 'reset') state = { scale: 1, x: 0, y: 0 };
         \\    applyViewport();
         \\  }
+        \\  function centerOn(targetX, targetY) {
+        \\    var svg = root.viewBox && root.viewBox.baseVal ? root.viewBox.baseVal : null;
+        \\    var width = svg && svg.width ? svg.width : 0;
+        \\    var height = svg && svg.height ? svg.height : 0;
+        \\    if (width > 0 && height > 0) {
+        \\      state.x = width / 2 - targetX * state.scale;
+        \\      state.y = height / 2 - targetY * state.scale;
+        \\      applyViewport();
+        \\    }
+        \\  }
         \\  var controls = root.querySelectorAll('[data-vex-viewport-action]');
         \\  for (var i = 0; i < controls.length; i += 1) {
         \\    controls[i].addEventListener('click', function (event) {
@@ -8479,10 +8491,41 @@ fn writeSvgViewportControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!
         \\      }
         \\    });
         \\  }
+        \\  var minimapTargets = root.querySelectorAll('[data-vex-minimap-target-x]');
+        \\  for (var j = 0; j < minimapTargets.length; j += 1) {
+        \\    minimapTargets[j].addEventListener('click', function (event) {
+        \\      event.preventDefault();
+        \\      centerOn(parseFloat(this.getAttribute('data-vex-minimap-target-x')), parseFloat(this.getAttribute('data-vex-minimap-target-y')));
+        \\    });
+        \\  }
         \\}());
         \\]]></script>
         \\
     );
+}
+
+fn writeSvgViewportControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
+    try writer.writeAll(
+        \\<style>
+        \\.vex-viewport-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-viewport-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-viewport-control { cursor: pointer; }
+        \\.vex-viewport-control rect { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
+        \\.vex-viewport-control text { fill: #0f172a; pointer-events: none; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-viewport-controls\" class=\"vex-viewport-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
+    try writer.writeAll("<rect class=\"vex-viewport-panel-bg\" x=\"0\" y=\"0\" width=\"122\" height=\"78\" rx=\"4\"/>\n");
+    try writeSvgViewportButton(writer, "+", "zoom-in", 4, 4, "Zoom in");
+    try writeSvgViewportButton(writer, "-", "zoom-out", 34, 4, "Zoom out");
+    try writeSvgViewportButton(writer, "0", "reset", 64, 4, "Reset viewport");
+    try writeSvgViewportButton(writer, "^", "pan-up", 34, 28, "Pan up");
+    try writeSvgViewportButton(writer, "<", "pan-left", 4, 52, "Pan left");
+    try writeSvgViewportButton(writer, "v", "pan-down", 34, 52, "Pan down");
+    try writeSvgViewportButton(writer, ">", "pan-right", 64, 52, "Pan right");
+    try writer.writeAll("</g>\n");
 }
 
 fn writeSvgViewportButton(writer: *Io.Writer, label: []const u8, action: []const u8, x: f64, y: f64, title: []const u8) Io.Writer.Error!void {
@@ -8491,6 +8534,113 @@ fn writeSvgViewportButton(writer: *Io.Writer, label: []const u8, action: []const
     try writer.writeAll("</title>\n<rect x=\"0\" y=\"0\" width=\"24\" height=\"20\" rx=\"3\"/>\n<text x=\"12\" y=\"14\" text-anchor=\"middle\">");
     try writeXmlEscaped(writer, label);
     try writer.writeAll("</text>\n</g>\n");
+}
+
+const SvgMinimapFrame = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale: f64,
+};
+
+fn svgMinimapFrame(bounds: RectF) SvgMinimapFrame {
+    const width: f64 = 132.0;
+    const height: f64 = 86.0;
+    const padding: f64 = 8.0;
+    const inner_width = width - padding * 2.0;
+    const inner_height = height - padding * 2.0;
+    const scale = @min(inner_width / bounds.width, inner_height / bounds.height);
+    return .{
+        .x = padding + (inner_width - bounds.width * scale) / 2.0,
+        .y = padding + (inner_height - bounds.height * scale) / 2.0,
+        .width = bounds.width * scale,
+        .height = bounds.height * scale,
+        .scale = scale,
+    };
+}
+
+fn svgMinimapPoint(point: Point, bounds: RectF, frame: SvgMinimapFrame) Point {
+    return .{
+        .x = frame.x + (point.x - bounds.x) * frame.scale,
+        .y = frame.y + (point.y - bounds.y) * frame.scale,
+    };
+}
+
+fn svgMinimapRect(rect: RectF, bounds: RectF, frame: SvgMinimapFrame) RectF {
+    const top_left = svgMinimapPoint(.{ .x = rect.x, .y = rect.y }, bounds, frame);
+    return .{
+        .x = top_left.x,
+        .y = top_left.y,
+        .width = @max(rect.width * frame.scale, 1.0),
+        .height = @max(rect.height * frame.scale, 1.0),
+    };
+}
+
+fn svgMinimapScreenPoint(point: Point, content_translate: Point, canvas: GraphSvgCanvas, landscape: bool, render_canvas_height: f64) Point {
+    if (landscape) {
+        return .{
+            .x = (render_canvas_height - (point.y + content_translate.y)) * canvas.scale,
+            .y = (point.x + content_translate.x) * canvas.scale,
+        };
+    }
+    return .{
+        .x = (point.x + content_translate.x) * canvas.scale,
+        .y = (point.y + content_translate.y) * canvas.scale,
+    };
+}
+
+fn writeSvgMinimapControls(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, x: f64, y: f64, content_translate: Point, canvas: GraphSvgCanvas, landscape: bool, render_canvas_height: f64) Io.Writer.Error!void {
+    const content_bounds = svgGraphContentBounds(graph, layout) orelse return;
+    const frame = svgMinimapFrame(content_bounds);
+    const panel_width: f64 = 148.0;
+    const panel_height: f64 = 106.0;
+    try writer.writeAll(
+        \\<style>
+        \\.vex-minimap-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-minimap-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-minimap-content { fill: #eff6ff; stroke: #2563eb; stroke-width: 1; }
+        \\.vex-minimap-node { fill: #1d4ed8; fill-opacity: 0.78; stroke: none; cursor: pointer; }
+        \\.vex-minimap-subgraph { fill: none; stroke: #64748b; stroke-width: 1; stroke-dasharray: 3 2; cursor: pointer; }
+        \\.vex-minimap-viewport { fill: none; stroke: #dc2626; stroke-width: 1.5; pointer-events: none; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-minimap-controls\" class=\"vex-minimap-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
+    try writer.print("<rect class=\"vex-minimap-panel-bg\" x=\"0\" y=\"0\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"4\"/>\n<title>Graph minimap</title>\n", .{ panel_width, panel_height });
+    try writer.print("<rect class=\"vex-minimap-content\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"2\"/>\n", .{ frame.x, frame.y, frame.width, frame.height });
+
+    for (layout.subgraphs, 0..) |cluster_box, index| {
+        if (index >= graph.subgraphs.items.len or cluster_box.width <= 0 or cluster_box.height <= 0) continue;
+        const cluster_rect = svgMinimapRect(clusterVisualRect(graph, layout, index), content_bounds, frame);
+        const center = svgMinimapScreenPoint(.{ .x = cluster_box.x + cluster_box.width / 2.0, .y = cluster_box.y + cluster_box.height / 2.0 }, content_translate, canvas, landscape, render_canvas_height);
+        try writer.print(
+            "<rect class=\"vex-minimap-subgraph\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\"/>\n",
+            .{ cluster_rect.x, cluster_rect.y, cluster_rect.width, cluster_rect.height, center.x, center.y },
+        );
+    }
+
+    for (graph.nodes.items) |node_item| {
+        if (node_item.id >= layout.nodes.len) continue;
+        if (resolveNodeVisual(graph, node_item).hidden) continue;
+        const node_layout = graphvizRenderNodeLayout(graph, layout, node_item);
+        const node_rect = svgMinimapRect(nodeRect(node_layout), content_bounds, frame);
+        const center = svgMinimapScreenPoint(node_layout.center, content_translate, canvas, landscape, render_canvas_height);
+        try writer.print(
+            "<rect class=\"vex-minimap-node\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\"/>\n",
+            .{ node_rect.x, node_rect.y, node_rect.width, node_rect.height, center.x, center.y },
+        );
+    }
+
+    const viewport_rect = svgMinimapRect(.{
+        .x = -content_translate.x,
+        .y = -content_translate.y,
+        .width = @max(canvas.view_box.x / canvas.scale, 1.0),
+        .height = @max(canvas.view_box.y / canvas.scale, 1.0),
+    }, content_bounds, frame);
+    try writer.print("<rect class=\"vex-minimap-viewport\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\"/>\n", .{ viewport_rect.x, viewport_rect.y, viewport_rect.width, viewport_rect.height });
+    try writer.writeAll("</g>\n");
 }
 
 fn writeSvgCollapseScript(writer: *Io.Writer) Io.Writer.Error!void {
@@ -18724,6 +18874,68 @@ test "DOT and typed API can enable Vex interactive viewport controls" {
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-viewport-controls\"") != null);
 }
 
+test "SVG renderer emits opt-in Vex minimap controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service { api; worker; }
+        \\  api -> worker -> db;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-minimap-controls") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-minimap-target-x=") == null);
+
+    const minimap_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_minimap = true });
+    defer allocator.free(minimap_svg);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "<g id=\"vex-viewport-content\" class=\"vex-viewport-content\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "id=\"vex-minimap-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-node\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-subgraph\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-viewport\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "data-vex-minimap-target-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "centerOn(parseFloat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "id=\"vex-viewport-controls\"") == null);
+}
+
+test "DOT and typed API can enable Vex minimap controls" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_minimap=true];
+        \\  parse -> render;
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_minimap").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-minimap-controls\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_minimap = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{});
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_minimap").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-minimap-controls\"") != null);
+}
+
 test "SVG interactive controls stack outside viewport content" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -18742,6 +18954,7 @@ test "SVG interactive controls stack outside viewport content" {
         .interactive_layers = true,
         .interactive_search = true,
         .interactive_viewport = true,
+        .interactive_minimap = true,
     });
     defer allocator.free(svg);
 
@@ -18749,13 +18962,17 @@ test "SVG interactive controls stack outside viewport content" {
     const layer_pos = std.mem.indexOf(u8, svg, "id=\"vex-layer-controls\"") orelse return error.MissingLayerControls;
     const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
     const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
+    const minimap_pos = std.mem.indexOf(u8, svg, "id=\"vex-minimap-controls\"") orelse return error.MissingMinimapControls;
     try std.testing.expect(content_pos < layer_pos);
     try std.testing.expect(layer_pos < search_pos);
     try std.testing.expect(search_pos < viewport_pos);
+    try std.testing.expect(viewport_pos < minimap_pos);
     const search_fragment = svgGroupFragmentById(svg, "vex-search-controls") orelse return error.MissingSearchControlsFragment;
     const viewport_fragment = svgGroupFragmentById(svg, "vex-viewport-controls") orelse return error.MissingViewportControlsFragment;
+    const minimap_fragment = svgGroupFragmentById(svg, "vex-minimap-controls") orelse return error.MissingMinimapControlsFragment;
     try std.testing.expect(std.mem.indexOf(u8, search_fragment, "class=\"vex-search-panel\" transform=\"translate(") != null);
     try std.testing.expect(std.mem.indexOf(u8, viewport_fragment, "class=\"vex-viewport-panel\" transform=\"translate(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_fragment, "class=\"vex-minimap-panel\" transform=\"translate(") != null);
 }
 
 test "SVG interactive controls include filter in panel stack" {
@@ -18779,6 +18996,7 @@ test "SVG interactive controls include filter in panel stack" {
         .interactive_inspector = true,
         .interactive_search = true,
         .interactive_viewport = true,
+        .interactive_minimap = true,
     });
     defer allocator.free(svg);
 
@@ -18788,11 +19006,13 @@ test "SVG interactive controls include filter in panel stack" {
     const inspector_pos = std.mem.indexOf(u8, svg, "id=\"vex-inspector-controls\"") orelse return error.MissingInspectorControls;
     const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
     const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
+    const minimap_pos = std.mem.indexOf(u8, svg, "id=\"vex-minimap-controls\"") orelse return error.MissingMinimapControls;
     try std.testing.expect(layer_pos < filter_pos);
     try std.testing.expect(filter_pos < focus_pos);
     try std.testing.expect(focus_pos < inspector_pos);
     try std.testing.expect(inspector_pos < search_pos);
     try std.testing.expect(search_pos < viewport_pos);
+    try std.testing.expect(viewport_pos < minimap_pos);
 }
 
 test "SVG renderer honors Graphviz graph layerlistsep" {
