@@ -111,6 +111,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
 - Order-sensitive SVG line styles for `solid`, `dashed`, and `dotted`.
 - SVG rendering for Graphviz-style node `diagonals` on polygonal and ellipse-like shapes.
+- SVG rendering for node `image`, `imagescale`, and `imagepos` attributes inside the node box.
 - SVG rendering for Graphviz-style multicolor fills including box/node/subgraph `striped` fills and ellipse/circle `wedged` fills.
 - SVG edge labels honor `decorate=true` with a label underline connected to the edge path.
 - Edge `labelfloat=true` keeps the main edge label at its unconstrained route position.

@@ -226,6 +226,26 @@ pub const NodeFixedSize = enum {
     shape,
 };
 
+pub const ImageScale = enum {
+    none,
+    fit,
+    width,
+    height,
+    both,
+};
+
+pub const ImagePosition = enum {
+    top_left,
+    top_center,
+    top_right,
+    middle_left,
+    middle_center,
+    middle_right,
+    bottom_left,
+    bottom_center,
+    bottom_right,
+};
+
 pub const NodeAttr = union(enum) {
     label: []const u8,
     color: []const u8,
@@ -249,6 +269,9 @@ pub const NodeAttr = union(enum) {
     height: f64,
     fixedsize: NodeFixedSize,
     margin: []const u8,
+    image: []const u8,
+    imagescale: ImageScale,
+    imagepos: ImagePosition,
     toplabel: []const u8,
     bottomlabel: []const u8,
     xlabel: []const u8,
@@ -330,6 +353,9 @@ pub const NodeOptions = struct {
     height: ?f64 = null,
     fixedsize: ?NodeFixedSize = null,
     margin: ?[]const u8 = null,
+    image: ?[]const u8 = null,
+    imagescale: ?ImageScale = null,
+    imagepos: ?ImagePosition = null,
     toplabel: ?[]const u8 = null,
     bottomlabel: ?[]const u8 = null,
     xlabel: ?[]const u8 = null,
@@ -948,6 +974,9 @@ pub const Graph = struct {
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
+            .image => |value| try self.setDefaultNodeAttrRaw("image", value),
+            .imagescale => |value| try self.setDefaultNodeAttrRaw("imagescale", imageScaleName(value)),
+            .imagepos => |value| try self.setDefaultNodeAttrRaw("imagepos", imagePositionName(value)),
             .toplabel => |value| try self.setDefaultNodeAttrRaw("toplabel", value),
             .bottomlabel => |value| try self.setDefaultNodeAttrRaw("bottomlabel", value),
             .xlabel => |value| try self.setDefaultNodeAttrRaw("xlabel", value),
@@ -1095,6 +1124,9 @@ pub const Graph = struct {
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
         if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
+        if (options.image) |value| try self.setNodeAttr(id, .{ .image = value });
+        if (options.imagescale) |value| try self.setNodeAttr(id, .{ .imagescale = value });
+        if (options.imagepos) |value| try self.setNodeAttr(id, .{ .imagepos = value });
         if (options.toplabel) |value| try self.setNodeAttr(id, .{ .toplabel = value });
         if (options.bottomlabel) |value| try self.setNodeAttr(id, .{ .bottomlabel = value });
         if (options.xlabel) |value| try self.setNodeAttr(id, .{ .xlabel = value });
@@ -1145,6 +1177,9 @@ pub const Graph = struct {
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
+            .image => |value| try self.setNodeAttrRaw(id, "image", value),
+            .imagescale => |value| try self.setNodeAttrRaw(id, "imagescale", imageScaleName(value)),
+            .imagepos => |value| try self.setNodeAttrRaw(id, "imagepos", imagePositionName(value)),
             .toplabel => |value| try self.setNodeAttrRaw(id, "toplabel", value),
             .bottomlabel => |value| try self.setNodeAttrRaw(id, "bottomlabel", value),
             .xlabel => |value| try self.setNodeAttrRaw(id, "xlabel", value),
@@ -1781,6 +1816,30 @@ fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
         .none => "false",
         .fit_label => "true",
         .shape => "shape",
+    };
+}
+
+fn imageScaleName(scale: ImageScale) []const u8 {
+    return switch (scale) {
+        .none => "false",
+        .fit => "true",
+        .width => "width",
+        .height => "height",
+        .both => "both",
+    };
+}
+
+fn imagePositionName(position: ImagePosition) []const u8 {
+    return switch (position) {
+        .top_left => "tl",
+        .top_center => "tc",
+        .top_right => "tr",
+        .middle_left => "ml",
+        .middle_center => "mc",
+        .middle_right => "mr",
+        .bottom_left => "bl",
+        .bottom_center => "bc",
+        .bottom_right => "br",
     };
 }
 
@@ -8142,6 +8201,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         try resolveSvgGradientFill(writer, graph, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
     }
     try renderSvgNodeShape(writer, node_item, l, visual, options);
+    try renderSvgNodeImage(writer, node_item, l);
     if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
         try renderSvgNodeLabel(writer, node_item, l, visual);
     }
@@ -9430,6 +9490,98 @@ fn renderSvgNodeAuxLabels(writer: *Io.Writer, node_item: Node, layout: NodeLayou
         const y = shape_layout.center.y + shape_layout.height / 2.0 + visual.font_size * 0.55;
         try renderSvgPlainTextBlock(writer, label, shape_layout.center.x, y, visual.font_size, visual.font_color, visual.font, "middle");
     }
+}
+
+fn renderSvgNodeImage(writer: *Io.Writer, node_item: Node, layout: NodeLayout) Io.Writer.Error!void {
+    const image = attrValue(node_item.attrs.items, "image") orelse return;
+    if (image.len == 0 or node_item.shape == .point) return;
+    const image_rect = nodeImageRect(node_item, layout);
+    if (image_rect.width <= 0 or image_rect.height <= 0) return;
+
+    try writer.writeAll("<image x=\"");
+    try writeSvgNumber(writer, image_rect.x);
+    try writer.writeAll("\" y=\"");
+    try writeSvgNumber(writer, image_rect.y);
+    try writer.writeAll("\" width=\"");
+    try writeSvgNumber(writer, image_rect.width);
+    try writer.writeAll("\" height=\"");
+    try writeSvgNumber(writer, image_rect.height);
+    try writer.writeAll("\" preserveAspectRatio=\"");
+    try writer.writeAll(nodeImagePreserveAspectRatio(node_item.attrs.items));
+    try writer.writeAll("\" href=\"");
+    try writeXmlEscaped(writer, image);
+    try writer.writeAll("\" xlink:href=\"");
+    try writeXmlEscaped(writer, image);
+    try writer.writeAll("\"/>\n");
+}
+
+fn nodeImageRect(node_item: Node, layout: NodeLayout) RectF {
+    const shape_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, layout));
+    const margin = nodeMargin(node_item.attrs.items, 0);
+    var box = nodeRect(shape_layout);
+    box = .{
+        .x = box.x + margin.x,
+        .y = box.y + margin.y,
+        .width = @max(0, box.width - margin.x * 2.0),
+        .height = @max(0, box.height - margin.y * 2.0),
+    };
+    var width = box.width;
+    var height = box.height;
+    if (nodeImageScale(node_item.attrs.items) == .none) {
+        width = @min(box.width, @max(1, box.width * 0.72));
+        height = @min(box.height, @max(1, box.height * 0.72));
+    }
+
+    const position = nodeImagePosition(node_item.attrs.items);
+    const x = switch (position) {
+        .top_left, .middle_left, .bottom_left => box.x,
+        .top_center, .middle_center, .bottom_center => box.x + (box.width - width) / 2.0,
+        .top_right, .middle_right, .bottom_right => box.x + box.width - width,
+    };
+    const y = switch (position) {
+        .top_left, .top_center, .top_right => box.y,
+        .middle_left, .middle_center, .middle_right => box.y + (box.height - height) / 2.0,
+        .bottom_left, .bottom_center, .bottom_right => box.y + box.height - height,
+    };
+    return .{ .x = x, .y = y, .width = width, .height = height };
+}
+
+fn nodeImageScale(attrs: []const Attr) ImageScale {
+    const value = attrValue(attrs, "imagescale") orelse return .none;
+    if (parseBool(value)) |enabled| return if (enabled) .fit else .none;
+    if (std.ascii.eqlIgnoreCase(value, "width")) return .width;
+    if (std.ascii.eqlIgnoreCase(value, "height")) return .height;
+    if (std.ascii.eqlIgnoreCase(value, "both")) return .both;
+    return .none;
+}
+
+fn nodeImagePosition(attrs: []const Attr) ImagePosition {
+    const value = attrValue(attrs, "imagepos") orelse return .middle_center;
+    if (std.ascii.eqlIgnoreCase(value, "tl")) return .top_left;
+    if (std.ascii.eqlIgnoreCase(value, "tc")) return .top_center;
+    if (std.ascii.eqlIgnoreCase(value, "tr")) return .top_right;
+    if (std.ascii.eqlIgnoreCase(value, "ml")) return .middle_left;
+    if (std.ascii.eqlIgnoreCase(value, "mc")) return .middle_center;
+    if (std.ascii.eqlIgnoreCase(value, "mr")) return .middle_right;
+    if (std.ascii.eqlIgnoreCase(value, "bl")) return .bottom_left;
+    if (std.ascii.eqlIgnoreCase(value, "bc")) return .bottom_center;
+    if (std.ascii.eqlIgnoreCase(value, "br")) return .bottom_right;
+    return .middle_center;
+}
+
+fn nodeImagePreserveAspectRatio(attrs: []const Attr) []const u8 {
+    if (nodeImageScale(attrs) == .both) return "none";
+    return switch (nodeImagePosition(attrs)) {
+        .top_left => "xMinYMin meet",
+        .top_center => "xMidYMin meet",
+        .top_right => "xMaxYMin meet",
+        .middle_left => "xMinYMid meet",
+        .middle_center => "xMidYMid meet",
+        .middle_right => "xMaxYMid meet",
+        .bottom_left => "xMinYMax meet",
+        .bottom_center => "xMidYMax meet",
+        .bottom_right => "xMaxYMax meet",
+    };
 }
 
 fn nodeAuxLabelsEligible(shape: Shape) bool {
@@ -13921,6 +14073,9 @@ test "code API sets typed node and edge options at creation" {
         .height = 0.75,
         .fixedsize = .fit_label,
         .margin = "0.12,0.08",
+        .image = "icons/api&node.svg",
+        .imagescale = .both,
+        .imagepos = .bottom_right,
         .xlabel = "extra",
         .labelloc = .bottom,
         .labeljust = .left,
@@ -13987,6 +14142,9 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("0.75", attrValue(node_item.attrs.items, "height").?);
     try std.testing.expectEqualStrings("true", attrValue(node_item.attrs.items, "fixedsize").?);
     try std.testing.expectEqualStrings("0.12,0.08", attrValue(node_item.attrs.items, "margin").?);
+    try std.testing.expectEqualStrings("icons/api&node.svg", attrValue(node_item.attrs.items, "image").?);
+    try std.testing.expectEqualStrings("both", attrValue(node_item.attrs.items, "imagescale").?);
+    try std.testing.expectEqualStrings("br", attrValue(node_item.attrs.items, "imagepos").?);
     try std.testing.expectEqualStrings("extra", attrValue(node_item.attrs.items, "xlabel").?);
     try std.testing.expectEqualStrings("b", attrValue(node_item.attrs.items, "labelloc").?);
     try std.testing.expectEqualStrings("l", attrValue(node_item.attrs.items, "labeljust").?);
@@ -17749,6 +17907,56 @@ test "SVG renderer keeps ordinary edge labels when labelaligned is false" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "textPath") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">ordinary</tspan>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "_p\"") == null);
+}
+
+test "SVG renderer emits node images" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    _ = try graph.addNode("A", .{
+        .shape = .box,
+        .width = 1.0,
+        .height = 0.75,
+        .fixedsize = .fit_label,
+        .margin = "0",
+        .image = "assets/icon&node.svg",
+        .imagescale = .both,
+        .imagepos = .bottom_right,
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<image x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " width=\"72\" height=\"54\" preserveAspectRatio=\"none\" href=\"assets/icon&amp;node.svg\" xlink:href=\"assets/icon&amp;node.svg\"/>") != null);
+    const group_pos = std.mem.indexOf(u8, svg, "<g id=\"node1\" class=\"node\">") orelse return error.MissingNodeGroup;
+    const image_pos = std.mem.indexOf(u8, svg, "<image ") orelse return error.MissingNodeImage;
+    const label_pos = std.mem.indexOf(u8, svg, ">A</text>") orelse return error.MissingNodeLabel;
+    try std.testing.expect(group_pos < image_pos);
+    try std.testing.expect(image_pos < label_pos);
+
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  node [shape=box, width=1.0, height=0.75, fixedsize=true, margin=0, image="default.svg", imagescale=width, imagepos=tl];
+        \\  a;
+        \\  b [image="explicit.svg", imagescale=height, imagepos=br];
+        \\}
+    );
+    defer parsed.deinit();
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+
+    try std.testing.expectEqualStrings("default.svg", attrValue(parsed.nodes.items[0].attrs.items, "image").?);
+    try std.testing.expectEqualStrings("width", attrValue(parsed.nodes.items[0].attrs.items, "imagescale").?);
+    try std.testing.expectEqualStrings("tl", attrValue(parsed.nodes.items[0].attrs.items, "imagepos").?);
+    try std.testing.expectEqualStrings("explicit.svg", attrValue(parsed.nodes.items[1].attrs.items, "image").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "href=\"default.svg\" xlink:href=\"default.svg\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "preserveAspectRatio=\"xMinYMin meet\" href=\"default.svg\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "preserveAspectRatio=\"xMaxYMax meet\" href=\"explicit.svg\"") != null);
 }
 
 test "SVG renderer uses Graphviz default text color" {
