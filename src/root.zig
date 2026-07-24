@@ -7703,7 +7703,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         },
     );
     try writer.writeAll(">\n");
-    if (svgMetadataEnabled(graph, options)) try writeSvgMetadata(writer, graph, layout);
+    if (svgMetadataEnabled(graph, options)) try writeSvgMetadata(writer, graph, layout, svg_canvas);
     const write_interactive_minimap = svgInteractiveMinimapEnabled(graph, options);
     const write_interactive_viewport_controls = svgInteractiveViewportEnabled(graph, options);
     const write_interactive_viewport = write_interactive_viewport_controls or write_interactive_minimap;
@@ -7902,20 +7902,43 @@ fn svgMetadataEnabled(graph: *const Graph, options: SvgOptions) bool {
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
-fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) Io.Writer.Error!void {
+fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, canvas: GraphSvgCanvas) Io.Writer.Error!void {
     try writer.writeAll("<metadata id=\"vex-metadata\">\n");
     try writer.print("<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"", .{});
     try writeXmlEscaped(writer, graph.name);
-    try writer.print("\" directed=\"{s}\" nodes=\"{d}\" edges=\"{d}\" subgraphs=\"{d}\">\n", .{
+    try writer.print("\" directed=\"{s}\" rankdir=\"{s}\" nodes=\"{d}\" edges=\"{d}\" subgraphs=\"{d}\"", .{
         if (graph.directed) "true" else "false",
+        layout.rankdir.name(),
         graph.nodes.items.len,
         graph.edges.items.len,
         graph.subgraphs.items.len,
+    });
+    if (attrValue(graph.attrs.items, "layers")) |layers| {
+        try writer.writeAll(" layers=\"");
+        try writeXmlEscaped(writer, layers);
+        try writer.writeByte('"');
+    }
+    if (attrValue(graph.attrs.items, "layerselect")) |layerselect| {
+        try writer.writeAll(" layerselect=\"");
+        try writeXmlEscaped(writer, layerselect);
+        try writer.writeByte('"');
+    }
+    try writer.print(" layout-width=\"{d:.2}\" layout-height=\"{d:.2}\" canvas-width=\"{d:.2}\" canvas-height=\"{d:.2}\" viewbox-width=\"{d:.2}\" viewbox-height=\"{d:.2}\">\n", .{
+        layout.width,
+        layout.height,
+        canvas.output.x * canvas.scale,
+        canvas.output.y * canvas.scale,
+        canvas.view_box.x * canvas.scale,
+        canvas.view_box.y * canvas.scale,
     });
     for (graph.nodes.items) |node_item| {
         const node_layout = if (node_item.id < layout.nodes.len) layout.nodes[node_item.id] else NodeLayout{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
         try writer.print("<vex:node id=\"{d}\" label=\"", .{node_item.id});
         try writeXmlEscaped(writer, nodeFallbackTitle(node_item));
+        if (attrValue(node_item.attrs.items, "layer")) |layer| {
+            try writer.writeAll("\" layer=\"");
+            try writeXmlEscaped(writer, layer);
+        }
         try writer.print("\" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"/>\n", .{
             node_layout.center.x,
             node_layout.center.y,
@@ -7925,6 +7948,11 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     }
     for (graph.edges.items) |edge_item| {
         try writer.print("<vex:edge id=\"{d}\" from=\"{d}\" to=\"{d}\"", .{ edge_item.id, edge_item.from, edge_item.to });
+        if (attrValue(edge_item.attrs.items, "layer")) |layer| {
+            try writer.writeAll(" layer=\"");
+            try writeXmlEscaped(writer, layer);
+            try writer.writeByte('"');
+        }
         if (edge_item.label) |label| {
             try writer.writeAll(" label=\"");
             try writeXmlEscaped(writer, label);
@@ -7948,6 +7976,10 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         const subgraph_layout = if (subgraph.id < layout.subgraphs.len) layout.subgraphs[subgraph.id] else SubgraphLayout{ .id = subgraph.id, .x = 0, .y = 0, .width = 0, .height = 0 };
         try writer.print("<vex:subgraph id=\"{d}\" label=\"", .{subgraph.id});
         try writeXmlEscaped(writer, subgraph.label);
+        if (layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, subgraph.id, "layer")) |layer| {
+            try writer.writeAll("\" layer=\"");
+            try writeXmlEscaped(writer, layer);
+        }
         try writer.writeAll("\" nodes=\"");
         for (subgraph.nodes, 0..) |node_id, index| {
             if (index > 0) try writer.writeByte(' ');
@@ -15593,12 +15625,50 @@ test "SVG renderer emits opt-in metadata index" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"Meta\" directed=\"true\" nodes=\"3\" edges=\"2\" subgraphs=\"1\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"Meta\" directed=\"true\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "layout-width=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "layout-height=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-width=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-height=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-width=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" label=\"job\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\" x=\"") != null);
+}
+
+test "SVG metadata index records layers" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Meta {
+        \\  graph [layers="base:detail", layerselect="base:detail"];
+        \\  subgraph outer {
+        \\    layer="detail";
+        \\    subgraph inner {
+        \\      label="Inner";
+        \\      a [label="A", layer="base"];
+        \\    }
+        \\  }
+        \\  b [layer="detail"];
+        \\  a -> b [label="a&b", layer="base:detail"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "layers=\"base:detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "layerselect=\"base:detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A\" layer=\"base\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"b\" layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" layer=\"base:detail\" label=\"a&amp;b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"outer\" layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"Inner\" layer=\"detail\"") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
