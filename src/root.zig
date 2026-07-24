@@ -7750,7 +7750,15 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
     const graph_fallback_title = graphFallbackTitle(graph);
-    const graph_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, graph.attrs.items, .{ .graph_name = graph.name, .label_name = graph_fallback_title }, graph_fallback_title);
+    const graph_anchor_id = SvgAnchorIdOptions{ .group = .{
+        .graph = graph,
+        .attrs = graph.attrs.items,
+        .default_id = "graph0",
+        .default_class = "graph",
+        .context = .{ .graph_name = graph.name, .label_name = graph_fallback_title },
+        .is_root_graph = true,
+    } };
+    const graph_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, graph.attrs.items, .{ .graph_name = graph.name, .label_name = graph_fallback_title }, graph_fallback_title, graph_anchor_id);
     try writer.print("<polygon fill=\"{s}\" stroke=\"none\" points=\"", .{background});
     try writeSvgPoint(writer, .{ .x = background_left, .y = background_top });
     try writer.writeByte(' ');
@@ -7914,7 +7922,14 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .default_class = "edge",
         .context = edge_context,
     });
-    const edge_wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, .edge, edge_context, edgeFallbackTitle(edge_item, edge_context.edge_name));
+    const edge_anchor_id = SvgAnchorIdOptions{ .group = .{
+        .graph = graph,
+        .attrs = edge_item.attrs.items,
+        .default_id = default_id,
+        .default_class = "edge",
+        .context = edge_context,
+    } };
+    const edge_wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, .edge, edge_context, edgeFallbackTitle(edge_item, edge_context.edge_name), edge_anchor_id);
     if (edge_wrap == .none) {
         try writeSvgEdgeTitle(writer, graph, edge_item);
         try writer.writeByte('\n');
@@ -8080,7 +8095,14 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .default_class = "node",
         .context = node_context,
     });
-    const node_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, node_item.attrs.items, node_context, node_fallback_title);
+    const node_anchor_id = SvgAnchorIdOptions{ .group = .{
+        .graph = graph,
+        .attrs = node_item.attrs.items,
+        .default_id = default_id,
+        .default_class = "node",
+        .context = node_context,
+    } };
+    const node_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, node_item.attrs.items, node_context, node_fallback_title, node_anchor_id);
     if (node_wrap == .none) {
         try writeSvgNodeNameTitle(writer, node_item);
         try writer.writeByte('\n');
@@ -8257,6 +8279,11 @@ const SvgGroupOpenOptions = struct {
     default_class: []const u8,
     context: LabelEscapeContext,
     is_root_graph: bool = false,
+};
+
+const SvgAnchorIdOptions = struct {
+    group: SvgGroupOpenOptions,
+    suffix: ?[]const u8 = null,
 };
 
 fn writeSvgGroupOpen(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.Writer.Error!void {
@@ -8676,11 +8703,11 @@ fn gradientStopEndOffset(start: ColorSegment, stop: ColorSegment) f64 {
     return 1.0;
 }
 
-fn writeSvgInteractiveOpen(writer: *Io.Writer, allocator: std.mem.Allocator, attrs: []const Attr, context: LabelEscapeContext, fallback_title: ?[]const u8) Io.Writer.Error!SvgInteractiveWrap {
-    return writeSvgInteractiveOpenKind(writer, allocator, attrs, .default, context, fallback_title);
+fn writeSvgInteractiveOpen(writer: *Io.Writer, allocator: std.mem.Allocator, attrs: []const Attr, context: LabelEscapeContext, fallback_title: ?[]const u8, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
+    return writeSvgInteractiveOpenKind(writer, allocator, attrs, .default, context, fallback_title, anchor_id);
 }
 
-fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator, attrs: []const Attr, kind: SvgInteractiveKind, context: LabelEscapeContext, fallback_title: ?[]const u8) Io.Writer.Error!SvgInteractiveWrap {
+fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator, attrs: []const Attr, kind: SvgInteractiveKind, context: LabelEscapeContext, fallback_title: ?[]const u8, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
     const href = interactiveHref(attrs, kind);
     const tooltip = interactiveTooltip(attrs, kind) orelse if (href != null) fallback_title else null;
     const link_target = interactiveTarget(attrs, kind);
@@ -8698,6 +8725,7 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
     if (href) |target_href| {
         const expanded_href = expandLabelEscapes(allocator, target_href, context) catch target_href;
         defer if (expanded_href.ptr != target_href.ptr) allocator.free(expanded_href);
+        try writeSvgAnchorGroupOpen(writer, anchor_id);
         try writer.writeAll("<a href=\"");
         try writeXmlEscaped(writer, expanded_href);
         try writer.writeAll("\" xlink:href=\"");
@@ -8718,6 +8746,7 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
         return .anchor;
     }
 
+    try writeSvgAnchorGroupOpen(writer, anchor_id);
     try writer.writeAll("<a");
     if (expanded_tooltip) |tip| {
         try writer.writeAll(" xlink:title=\"");
@@ -8732,6 +8761,20 @@ fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator,
     try writer.writeByte('>');
     if (expanded_tooltip) |tip| try writeSvgTitle(writer, tip);
     return .anchor;
+}
+
+fn writeSvgAnchorGroupOpen(writer: *Io.Writer, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!void {
+    try writer.writeAll("<g");
+    if (anchor_id) |id_options| {
+        try writer.writeAll(" id=\"a_");
+        try writeSvgGroupId(writer, id_options.group);
+        if (id_options.suffix) |suffix| {
+            try writer.writeByte('-');
+            try writeXmlEscaped(writer, suffix);
+        }
+        try writer.writeByte('"');
+    }
+    try writer.writeByte('>');
 }
 
 fn interactiveHref(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
@@ -8788,7 +8831,7 @@ fn writeSvgEdgeTitle(writer: *Io.Writer, graph: *const Graph, edge_item: Edge) I
 fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Writer.Error!void {
     switch (wrap) {
         .none => {},
-        .anchor => try writer.writeAll("</a>\n"),
+        .anchor => try writer.writeAll("</a>\n</g>\n"),
         .group => try writer.writeAll("</g>\n"),
     }
 }
@@ -8839,9 +8882,30 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
     var context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
     context.node_name = label;
     context.label_name = label;
-    const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label);
+    var default_id_buf: [32]u8 = undefined;
+    const default_id = std.fmt.bufPrint(&default_id_buf, "edge{d}", .{edge_item.id + 1}) catch unreachable;
+    const label_anchor_id = SvgAnchorIdOptions{
+        .group = .{
+            .graph = graph,
+            .attrs = edge_item.attrs.items,
+            .default_id = default_id,
+            .default_class = "edge",
+            .context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf),
+        },
+        .suffix = svgEdgeLabelAnchorSuffix(kind),
+    };
+    const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label, label_anchor_id);
     try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
     try writeSvgInteractiveClose(writer, wrap);
+}
+
+fn svgEdgeLabelAnchorSuffix(kind: SvgInteractiveKind) ?[]const u8 {
+    return switch (kind) {
+        .label => "label",
+        .head => "headlabel",
+        .tail => "taillabel",
+        .default, .edge => null,
+    };
 }
 
 fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
@@ -10618,7 +10682,14 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     });
     try writeSvgTitle(writer, cluster.label);
     try writer.writeByte('\n');
-    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, cluster_context, cluster.label);
+    const cluster_anchor_id = SvgAnchorIdOptions{ .group = .{
+        .graph = graph,
+        .attrs = cluster.attrs.items,
+        .default_id = default_id,
+        .default_class = "cluster",
+        .context = cluster_context,
+    } };
+    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, cluster_context, cluster.label, cluster_anchor_id);
     const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgStripedRectFill(writer, graph, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
@@ -16828,6 +16899,7 @@ test "SVG renderer honors graph label and bgcolor attributes" {
     try std.testing.expectEqualStrings("0.25", attrValue(graph.attrs.items, "pad").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"lightgrey\" stroke=\"none\" points=\"0,0 0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Visible Title") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_graph0\"><a href=\"https://example.com/graph-href\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/graph-href\" xlink:href=\"https://example.com/graph-href\" xlink:title=\"Graph tip\" target=\"_top\"><title>Graph tip</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">InternalName</text>") == null);
     try std.testing.expect(layout.margin_y >= 26.0);
@@ -17090,7 +17162,11 @@ test "SVG renderer emits URL href and tooltip metadata" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/e\" xlink:href=\"https://example.com/e\" xlink:title=\"Edge A to B\" target=\"_self\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<title>Edge A to B</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\"><title>Cluster API</title>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<title>API</title>\n<g id=\"a_clust1\"><a href=\"https://example.com/cluster\" xlink:href=\"https://example.com/cluster\" xlink:title=\"Cluster API\" target=\"_parent\">") != null);
+    const node_anchor_href = std.mem.indexOf(u8, svg, "<a href=\"https://example.com/a\"") orelse return error.MissingNodeAnchor;
+    const node_anchor_prefix_start = if (node_anchor_href > 32) node_anchor_href - 32 else 0;
+    try std.testing.expect(std.mem.indexOf(u8, svg[node_anchor_prefix_start..node_anchor_href], "<g id=\"a_node") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_edge1\"><a href=\"https://example.com/e\"") != null);
 }
 
 test "SVG renderer emits anchors for tooltip-only metadata" {
@@ -17199,6 +17275,9 @@ test "SVG renderer expands URL escape sequences with object context" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label/go/go/a-&gt;b\" xlink:href=\"https://example.com/label/go/go/a-&gt;b\" xlink:title=\"go\" target=\"edge-a-&gt;b\"><title>go</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head/head/head/a-&gt;b\" xlink:href=\"https://example.com/head/head/head/a-&gt;b\" xlink:title=\"head\" target=\"edge-a-&gt;b\"><title>head</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail/tail/tail/a-&gt;b\" xlink:href=\"https://example.com/tail/tail/tail/a-&gt;b\" xlink:title=\"tail\" target=\"edge-a-&gt;b\"><title>tail</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_edge1-label\"><a href=\"https://example.com/label/go/go/a-&gt;b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_edge1-headlabel\"><a href=\"https://example.com/head/head/head/a-&gt;b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_edge1-taillabel\"><a href=\"https://example.com/tail/tail/tail/a-&gt;b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "href=\"https://example.com/ported/a:e-&gt;b:w\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "xlink:title=\"ported a:e-&gt;b:w\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "target=\"ported-a:e-&gt;b:w\"") != null);

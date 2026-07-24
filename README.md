@@ -118,6 +118,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Root graph labels default to bottom-center while cluster labels default to top-center; clusters inherit root `labelloc` / `labeljust` and label font attributes unless overridden.
 - Clusters inherit root graph `fillcolor` / `pencolor` unless they set their own values.
 - SVG group `id` attributes honor Graphviz object escapes and use the root graph `id` as a default prefix for child objects.
+- SVG interactive anchors are wrapped in Graphviz-style `a_*` groups, including edge label, head label, and tail label anchors.
 - SVG font output honors Graphviz `fontnames=svg|ps|gd` for standard PostScript font aliases, including family, weight, style, and stretch.
 - SVG color and color-list attributes resolve Graphviz `colorscheme=bugn9` numeric ColorBrewer colors.
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
