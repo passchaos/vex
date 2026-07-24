@@ -74,37 +74,8 @@ pub const Shape = enum {
     mrecord,
 };
 
-pub const RankDir = enum {
-    TB,
-    BT,
-    LR,
-    RL,
-
-    pub fn fromString(value: []const u8) ?RankDir {
-        if (std.ascii.eqlIgnoreCase(value, "TB")) return .TB;
-        if (std.ascii.eqlIgnoreCase(value, "BT")) return .BT;
-        if (std.ascii.eqlIgnoreCase(value, "LR")) return .LR;
-        if (std.ascii.eqlIgnoreCase(value, "RL")) return .RL;
-        return null;
-    }
-};
-
-pub const RankKind = enum {
-    same,
-    min,
-    max,
-    source,
-    sink,
-
-    pub fn fromString(value: []const u8) ?RankKind {
-        if (std.ascii.eqlIgnoreCase(value, "same")) return .same;
-        if (std.ascii.eqlIgnoreCase(value, "min")) return .min;
-        if (std.ascii.eqlIgnoreCase(value, "max")) return .max;
-        if (std.ascii.eqlIgnoreCase(value, "source")) return .source;
-        if (std.ascii.eqlIgnoreCase(value, "sink")) return .sink;
-        return null;
-    }
-};
+pub const RankDir = layout_mod.rank.RankDir;
+pub const RankKind = layout_mod.rank.RankKind;
 
 pub const Attr = struct {
     name: []const u8,
@@ -177,10 +148,7 @@ pub const FontNames = svg_mod.font.Names;
 
 pub const OutputOrder = svg_mod.order.Order;
 
-pub const RankSep = union(enum) {
-    value: f64,
-    equally: f64,
-};
+pub const RankSep = layout_mod.rank.RankSep;
 
 pub const GraphRatio = union(enum) {
     value: f64,
@@ -909,7 +877,7 @@ pub const Graph = struct {
             .label => |value| try self.setGraphAttrRaw("label", value),
             .rankdir => |value| {
                 self.rankdir = value;
-                try self.setGraphAttrRaw("rankdir", rankDirName(value));
+                try self.setGraphAttrRaw("rankdir", value.name());
             },
             .layout => |value| try self.setGraphAttrRaw("layout", layoutAlgorithmName(value)),
             .rotate => |value| try self.setGraphAttrFloat("rotate", value),
@@ -1521,7 +1489,7 @@ pub const Graph = struct {
     pub fn setSubgraphAttr(self: *Graph, id: SubgraphId, attr: SubgraphAttr) !void {
         switch (attr) {
             .label => |value| try self.setSubgraphAttrRaw(id, "label", value),
-            .rankdir => |value| try self.setSubgraphAttrRaw(id, "rankdir", rankDirName(value)),
+            .rankdir => |value| try self.setSubgraphAttrRaw(id, "rankdir", value.name()),
             .layout => |value| try self.setSubgraphAttrRaw(id, "layout", layoutAlgorithmName(value)),
             .compound => |value| try self.setSubgraphAttrRaw(id, "compound", boolAttrValue(value)),
             .concentrate => |value| try self.setSubgraphAttrRaw(id, "concentrate", boolAttrValue(value)),
@@ -1751,15 +1719,6 @@ fn shapeName(shape: Shape) []const u8 {
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
-    };
-}
-
-fn rankDirName(rankdir: RankDir) []const u8 {
-    return switch (rankdir) {
-        .TB => "TB",
-        .BT => "BT",
-        .LR => "LR",
-        .RL => "RL",
     };
 }
 
