@@ -73,8 +73,9 @@ so preview workflows can fail early on unexpectedly large graph inputs.
 `--svg-metadata` embeds a machine-readable object index in the SVG `<metadata>`
 element. It includes graph layout/canvas facts, node geometry, edge waypoints,
 subgraph geometry, and layer metadata when present. It also annotates rendered
-object groups with `data-vex-object-*` attributes, including object layer when
-known, for direct tooling hooks. DOT can enable the same index with
+object groups with `data-vex-object-*` attributes, including object layer and
+effective `href` / `tooltip` / `target` metadata when known, for direct tooling
+hooks. DOT can enable the same index with
 `graph [vex_svg_metadata=true]`, and the Zig API can pass
 `.{ .svg = .{ .metadata = true } }`.
 
@@ -246,7 +247,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
 - Vex SVG output can optionally embed a native minimap overview via `--interactive-minimap`, `vex_interactive_minimap=true`, or `SvgOptions.interactive_minimap`.
 - Vex SVG output can optionally embed a native graph statistics panel via `--interactive-stats`, `vex_interactive_stats=true`, or `SvgOptions.interactive_stats`.
-- Vex SVG output can optionally embed a machine-readable SVG metadata object index with layout/canvas facts, rendered object attributes including object layers, object geometry, waypoints, and layer metadata via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
+- Vex SVG output can optionally embed a machine-readable SVG metadata object index with layout/canvas facts, rendered object attributes including object layers, effective `href` / `tooltip` / `target` metadata, object geometry, waypoints, and layer metadata via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes including `true` / `false`, `yes` / `no`, `on` / `off`, and `1` / `0`. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; Graphviz object escapes include `\G`, `\N`, `\E`, `\T`, `\H`, and `\L`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.

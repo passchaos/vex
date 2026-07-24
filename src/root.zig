@@ -7909,6 +7909,8 @@ fn svgMetadataEnabled(graph: *const Graph, options: SvgOptions) bool {
 
 fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, canvas: GraphSvgCanvas) Io.Writer.Error!void {
     try writer.writeAll("<metadata id=\"vex-metadata\">\n");
+    const graph_title = graphFallbackTitle(graph);
+    const graph_context = LabelEscapeContext{ .graph_name = graph.name, .label_name = graph_title };
     try writer.print("<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"", .{});
     try writeXmlEscaped(writer, graph.name);
     try writer.print("\" directed=\"{s}\" rankdir=\"{s}\" nodes=\"{d}\" edges=\"{d}\" subgraphs=\"{d}\"", .{
@@ -7928,6 +7930,16 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         try writeXmlEscaped(writer, layerselect);
         try writer.writeByte('"');
     }
+    const graph_href = interactiveHref(graph.attrs.items, .default);
+    try writeSvgInteractiveMetadataAttrs(
+        writer,
+        graph.allocator,
+        "",
+        graph_href,
+        svgInteractiveTooltipWithFallback(graph.attrs.items, .default, graph_href, graph_title),
+        interactiveTarget(graph.attrs.items, .default),
+        graph_context,
+    );
     try writer.print(" layout-width=\"{d:.2}\" layout-height=\"{d:.2}\" canvas-width=\"{d:.2}\" canvas-height=\"{d:.2}\" viewbox-width=\"{d:.2}\" viewbox-height=\"{d:.2}\">\n", .{
         layout.width,
         layout.height,
@@ -7938,15 +7950,29 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     });
     for (graph.nodes.items) |node_item| {
         const node_layout = if (node_item.id < layout.nodes.len) layout.nodes[node_item.id] else NodeLayout{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
+        const node_title = nodeFallbackTitle(node_item);
+        const node_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = svgNodeName(node_item), .label_name = node_title };
+        const node_href = interactiveHref(node_item.attrs.items, .default);
         try writer.print("<vex:node id=\"{d}\" label=\"", .{node_item.id});
-        try writeXmlEscaped(writer, nodeFallbackTitle(node_item));
+        try writeXmlEscaped(writer, node_title);
         try writer.writeAll("\" shape=\"");
         try writeXmlEscaped(writer, shapeName(node_item.shape));
+        try writer.writeByte('"');
         if (attrValue(node_item.attrs.items, "layer")) |layer| {
-            try writer.writeAll("\" layer=\"");
+            try writer.writeAll(" layer=\"");
             try writeXmlEscaped(writer, layer);
+            try writer.writeByte('"');
         }
-        try writer.print("\" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"/>\n", .{
+        try writeSvgInteractiveMetadataAttrs(
+            writer,
+            graph.allocator,
+            "",
+            node_href,
+            svgInteractiveTooltipWithFallback(node_item.attrs.items, .default, node_href, node_title),
+            interactiveTarget(node_item.attrs.items, .default),
+            node_context,
+        );
+        try writer.print(" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"/>\n", .{
             node_layout.center.x,
             node_layout.center.y,
             node_layout.width,
@@ -7975,6 +8001,19 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             try writeXmlEscaped(writer, label);
             try writer.writeByte('"');
         }
+        var edge_name_buf: [256]u8 = undefined;
+        const edge_context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
+        const edge_title = edgeFallbackTitle(edge_item, edge_context.edge_name);
+        const edge_href = interactiveHref(edge_item.attrs.items, .edge);
+        try writeSvgInteractiveMetadataAttrs(
+            writer,
+            graph.allocator,
+            "",
+            edge_href,
+            svgInteractiveTooltipWithFallback(edge_item.attrs.items, .edge, edge_href, edge_title),
+            interactiveTarget(edge_item.attrs.items, .edge),
+            edge_context,
+        );
         if (edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) {
             try writer.writeAll(">\n");
             for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
@@ -7991,13 +8030,26 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     }
     for (graph.subgraphs.items) |subgraph| {
         const subgraph_layout = if (subgraph.id < layout.subgraphs.len) layout.subgraphs[subgraph.id] else SubgraphLayout{ .id = subgraph.id, .x = 0, .y = 0, .width = 0, .height = 0 };
+        const subgraph_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = subgraph.label, .label_name = subgraph.label };
+        const subgraph_href = inheritedClusterHref(graph, subgraph);
         try writer.print("<vex:subgraph id=\"{d}\" label=\"", .{subgraph.id});
         try writeXmlEscaped(writer, subgraph.label);
+        try writer.writeByte('"');
         if (layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, subgraph.id, "layer")) |layer| {
-            try writer.writeAll("\" layer=\"");
+            try writer.writeAll(" layer=\"");
             try writeXmlEscaped(writer, layer);
+            try writer.writeByte('"');
         }
-        try writer.writeAll("\" nodes=\"");
+        try writeSvgInteractiveMetadataAttrs(
+            writer,
+            graph.allocator,
+            "",
+            subgraph_href,
+            svgClusterTooltipWithFallback(graph, subgraph, subgraph_href),
+            inheritedClusterTarget(graph, subgraph),
+            subgraph_context,
+        );
+        try writer.writeAll(" nodes=\"");
         for (subgraph.nodes, 0..) |node_id, index| {
             if (index > 0) try writer.writeByte(' ');
             try writer.print("{d}", .{node_id});
@@ -9139,6 +9191,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const object_from_label = if (metadata and edge_item.from < graph.nodes.items.len) nodeFallbackTitle(graph.nodes.items[edge_item.from]) else null;
     const object_to_label = if (metadata and edge_item.to < graph.nodes.items.len) nodeFallbackTitle(graph.nodes.items[edge_item.to]) else null;
     const object_label = edgeFallbackTitle(edge_item, edge_context.edge_name);
+    const edge_href = if (metadata) interactiveHref(edge_item.attrs.items, .edge) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = edge_item.attrs.items,
@@ -9154,6 +9207,9 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_id = object_id,
         .object_label = object_label,
         .object_layer = if (metadata) attrValue(edge_item.attrs.items, "layer") else null,
+        .object_href = edge_href,
+        .object_tooltip = if (metadata) svgInteractiveTooltipWithFallback(edge_item.attrs.items, .edge, edge_href, object_label) else null,
+        .object_target = if (metadata) interactiveTarget(edge_item.attrs.items, .edge) else null,
         .object_from = object_from,
         .object_to = object_to,
         .object_from_label = object_from_label,
@@ -9354,6 +9410,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const focus_related = if (focus) svgNodeFocusRelated(&focus_related_buf, graph, node_item.id) else null;
     var object_id_buf: [32]u8 = undefined;
     const object_id = if (metadata) std.fmt.bufPrint(&object_id_buf, "{d}", .{node_item.id}) catch null else null;
+    const node_href = if (metadata) interactiveHref(node_item.attrs.items, .default) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = node_item.attrs.items,
@@ -9370,6 +9427,9 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_label = node_fallback_title,
         .object_shape = if (metadata) shapeName(node_item.shape) else null,
         .object_layer = if (metadata) attrValue(node_item.attrs.items, "layer") else null,
+        .object_href = node_href,
+        .object_tooltip = if (metadata) svgInteractiveTooltipWithFallback(node_item.attrs.items, .default, node_href, node_fallback_title) else null,
+        .object_target = if (metadata) interactiveTarget(node_item.attrs.items, .default) else null,
         .object_rect = if (metadata) nodeRect(l) else null,
         .collapse_member = collapse_member,
     });
@@ -9761,6 +9821,9 @@ const SvgGroupOpenOptions = struct {
     object_label: ?[]const u8 = null,
     object_shape: ?[]const u8 = null,
     object_layer: ?[]const u8 = null,
+    object_href: ?[]const u8 = null,
+    object_tooltip: ?[]const u8 = null,
+    object_target: ?[]const u8 = null,
     object_rect: ?RectF = null,
     object_from: ?[]const u8 = null,
     object_to: ?[]const u8 = null,
@@ -9838,6 +9901,15 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
             try writeXmlEscaped(writer, object_layer);
             try writer.writeByte('"');
         }
+        try writeSvgInteractiveMetadataAttrs(
+            writer,
+            options.graph.allocator,
+            "data-vex-object-",
+            options.object_href,
+            options.object_tooltip,
+            options.object_target,
+            options.context,
+        );
         if (options.object_rect) |rect| {
             try writer.print(" data-vex-object-x=\"{d:.2}\" data-vex-object-y=\"{d:.2}\" data-vex-object-width=\"{d:.2}\" data-vex-object-height=\"{d:.2}\"", .{
                 rect.x,
@@ -10246,9 +10318,31 @@ fn writeSvgInteractiveOpen(writer: *Io.Writer, allocator: std.mem.Allocator, att
 
 fn writeSvgInteractiveOpenKind(writer: *Io.Writer, allocator: std.mem.Allocator, attrs: []const Attr, kind: SvgInteractiveKind, context: LabelEscapeContext, fallback_title: ?[]const u8, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
     const href = interactiveHref(attrs, kind);
-    const tooltip = interactiveTooltip(attrs, kind) orelse if (href != null) fallback_title else null;
+    const tooltip = svgInteractiveTooltipWithFallback(attrs, kind, href, fallback_title);
     const link_target = interactiveTarget(attrs, kind);
     return writeSvgInteractiveOpenResolved(writer, allocator, href, tooltip, link_target, context, anchor_id);
+}
+
+fn svgInteractiveTooltipWithFallback(attrs: []const Attr, kind: SvgInteractiveKind, href: ?[]const u8, fallback_title: ?[]const u8) ?[]const u8 {
+    return interactiveTooltip(attrs, kind) orelse if (href != null) fallback_title else null;
+}
+
+fn writeSvgInteractiveMetadataAttrs(writer: *Io.Writer, allocator: std.mem.Allocator, name_prefix: []const u8, href: ?[]const u8, tooltip: ?[]const u8, target: ?[]const u8, context: LabelEscapeContext) Io.Writer.Error!void {
+    try writeSvgExpandedMetadataAttr(writer, allocator, name_prefix, "href", href, context);
+    try writeSvgExpandedMetadataAttr(writer, allocator, name_prefix, "tooltip", tooltip, context);
+    try writeSvgExpandedMetadataAttr(writer, allocator, name_prefix, "target", target, context);
+}
+
+fn writeSvgExpandedMetadataAttr(writer: *Io.Writer, allocator: std.mem.Allocator, name_prefix: []const u8, name: []const u8, value: ?[]const u8, context: LabelEscapeContext) Io.Writer.Error!void {
+    const raw = value orelse return;
+    const expanded = expandLabelEscapes(allocator, raw, context) catch raw;
+    defer if (expanded.ptr != raw.ptr) allocator.free(expanded);
+    try writer.writeByte(' ');
+    try writer.writeAll(name_prefix);
+    try writer.writeAll(name);
+    try writer.writeAll("=\"");
+    try writeXmlEscaped(writer, expanded);
+    try writer.writeByte('"');
 }
 
 fn writeSvgClusterInteractiveOpen(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, context: LabelEscapeContext, fallback_title: ?[]const u8, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
@@ -10256,6 +10350,12 @@ fn writeSvgClusterInteractiveOpen(writer: *Io.Writer, graph: *const Graph, clust
     const tooltip = inheritedClusterTooltip(graph, cluster) orelse if (href != null) fallback_title else null;
     const link_target = inheritedClusterTarget(graph, cluster);
     return writeSvgInteractiveOpenResolved(writer, graph.allocator, href, tooltip, link_target, context, anchor_id);
+}
+
+fn svgClusterTooltipWithFallback(graph: *const Graph, cluster: Subgraph, href: ?[]const u8) ?[]const u8 {
+    if (inheritedClusterTooltip(graph, cluster)) |tooltip| return tooltip;
+    if (href != null) return cluster.label;
+    return null;
 }
 
 fn inheritedClusterHref(graph: *const Graph, cluster: Subgraph) ?[]const u8 {
@@ -11757,6 +11857,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     const inspector_text = if (inspector) svgClusterInspectorText(&inspector_text_buf, cluster) else null;
     var object_id_buf: [32]u8 = undefined;
     const object_id = if (metadata) std.fmt.bufPrint(&object_id_buf, "{d}", .{cluster.id}) catch null else null;
+    const cluster_href = if (metadata) inheritedClusterHref(graph, cluster) else null;
     const rect = clusterVisualRect(graph, layout, index);
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
@@ -11771,6 +11872,9 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .object_id = object_id,
         .object_label = cluster.label,
         .object_layer = if (metadata) layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "layer") else null,
+        .object_href = cluster_href,
+        .object_tooltip = if (metadata) svgClusterTooltipWithFallback(graph, cluster, cluster_href) else null,
+        .object_target = if (metadata) inheritedClusterTarget(graph, cluster) else null,
         .object_rect = if (metadata) rect else null,
         .collapse_target = collapse_target,
     });
@@ -15871,6 +15975,56 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-y=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-height=\"") != null);
+}
+
+test "SVG metadata index records effective link attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph LinkMeta {
+        \\  graph [
+        \\    label="Graph Label",
+        \\    URL="https://example.com/graph/\G/\L",
+        \\    tooltip="Graph \G \L",
+        \\    target="frame-\G"
+        \\  ];
+        \\  subgraph group {
+        \\    label="API";
+        \\    URL="https://example.com/cluster/\N/\L/\G";
+        \\    tooltip="Cluster \N \L \G";
+        \\    target="cluster-\N";
+        \\    "A & B";
+        \\  }
+        \\  "A & B" [
+        \\    URL="https://example.com/node/\N/\L/\G",
+        \\    tooltip="Node \N \L \G",
+        \\    target="node-\N"
+        \\  ];
+        \\  "A & B" -> sink [
+        \\    label="go",
+        \\    edgeURL="https://example.com/edge/\E/\T/\H/\G/\L",
+        \\    edgetooltip="Edge \E \T \H \G \L",
+        \\    edgetarget="edge-\E"
+        \\  ];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-href=") == null);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"LinkMeta\" directed=\"true\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A &amp; B\" shape=\"ellipse\" href=\"https://example.com/node/A &amp; B/A &amp; B/LinkMeta\" tooltip=\"Node A &amp; B A &amp; B LinkMeta\" target=\"node-A &amp; B\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"A &amp; B\" to-label=\"sink\" label=\"go\" href=\"https://example.com/edge/A &amp; B-&gt;sink/A &amp; B/sink/LinkMeta/go\" tooltip=\"Edge A &amp; B-&gt;sink A &amp; B sink LinkMeta go\" target=\"edge-A &amp; B-&gt;sink\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"API\" href=\"https://example.com/cluster/API/API/LinkMeta\" tooltip=\"Cluster API API LinkMeta\" target=\"cluster-API\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"A &amp; B\" data-vex-object-shape=\"ellipse\" data-vex-object-href=\"https://example.com/node/A &amp; B/A &amp; B/LinkMeta\" data-vex-object-tooltip=\"Node A &amp; B A &amp; B LinkMeta\" data-vex-object-target=\"node-A &amp; B\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"edge\" data-vex-object-id=\"0\" data-vex-object-label=\"go\" data-vex-object-href=\"https://example.com/edge/A &amp; B-&gt;sink/A &amp; B/sink/LinkMeta/go\" data-vex-object-tooltip=\"Edge A &amp; B-&gt;sink A &amp; B sink LinkMeta go\" data-vex-object-target=\"edge-A &amp; B-&gt;sink\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"API\" data-vex-object-href=\"https://example.com/cluster/API/API/LinkMeta\" data-vex-object-tooltip=\"Cluster API API LinkMeta\" data-vex-object-target=\"cluster-API\"") != null);
 }
 
 test "SVG metadata index records layers" {
