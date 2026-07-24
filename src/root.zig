@@ -10381,21 +10381,9 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     }
     const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
     const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
-    const text_anchor: []const u8 = if (label_just) |value|
-        if (std.ascii.eqlIgnoreCase(value, "l")) "start" else if (std.ascii.eqlIgnoreCase(value, "r")) "end" else "middle"
-    else
-        "middle";
-    const label_x = if (std.mem.eql(u8, text_anchor, "start"))
-        rect.x + 12.0
-    else if (std.mem.eql(u8, text_anchor, "end"))
-        rect.x + rect.width - 12.0
-    else
-        rect.x + rect.width / 2.0;
-    const top_label_offset: f64 = if (clusterVisualRectHasVerticalTrim(cluster, layout)) 16.6 else 15.3;
-    const label_y = if (label_loc) |value|
-        if (std.ascii.eqlIgnoreCase(value, "b")) rect.y + rect.height - 10.0 else rect.y + top_label_offset
-    else
-        rect.y + top_label_offset;
+    const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
+    const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
+    const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
     if (plainSingleLineLabel(cluster.label)) {
         try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
         try writeSvgTextFill(writer, visual.font_color);
@@ -10419,32 +10407,8 @@ fn clusterVisualRect(graph: *const Graph, layout: *const Layout, index: usize) R
 }
 
 fn rawClusterVisualRect(cluster: Subgraph, layout: *const Layout, index: usize) RectF {
-    const box = layout.subgraphs[index];
-    var rect = RectF{ .x = box.x, .y = box.y, .width = box.width, .height = box.height };
-    if (cluster.parent != null or layout.subgraphs.len <= 1) return rect;
-
-    var min_x = std.math.floatMax(f64);
-    var max_x: f64 = -std.math.floatMax(f64);
-    for (layout.subgraphs) |cluster_box| {
-        if (cluster_box.width <= 0 or cluster_box.height <= 0) continue;
-        min_x = @min(min_x, cluster_box.x);
-        max_x = @max(max_x, cluster_box.x + cluster_box.width);
-    }
-    if (min_x == std.math.floatMax(f64)) return rect;
-
-    const trim: f64 = 4.0;
-    if (@abs(rect.x - min_x) <= 0.01 and rect.width > trim) {
-        rect.x += trim;
-        rect.width -= trim;
-    }
-    if (@abs(rect.x + rect.width - max_x) <= 0.01 and rect.width > trim) {
-        rect.width -= trim;
-    }
-    if (clusterVisualRectHasVerticalTrim(cluster, layout) and rect.height > 1.2) {
-        rect.y -= 1.3;
-        rect.height -= 1.2;
-    }
-    return rect;
+    const rect = svg_mod.subgraph.rawVisualRect(cluster, layout.subgraphs, index);
+    return .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
 }
 
 fn clusterVisualRectContainingNodes(graph: *const Graph, layout: *const Layout, index: usize, rect: RectF) RectF {
@@ -10472,7 +10436,7 @@ fn expandRect(rect: RectF, padding: f64) RectF {
 }
 
 fn clusterVisualRectHasVerticalTrim(cluster: Subgraph, layout: *const Layout) bool {
-    return cluster.parent == null and layout.subgraphs.len == 2;
+    return svg_mod.subgraph.hasVerticalTrim(cluster.parent, layout.subgraphs.len);
 }
 
 fn writeSvgFillOpacity(writer: *Io.Writer, opacity: []const u8) Io.Writer.Error!void {
