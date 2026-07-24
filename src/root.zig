@@ -7970,6 +7970,7 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         canvas.view_box.x * canvas.scale,
         canvas.view_box.y * canvas.scale,
     });
+    try writeSvgAttributeIndex(writer, graph);
     for (graph.nodes.items) |node_item| {
         const node_layout = if (node_item.id < layout.nodes.len) layout.nodes[node_item.id] else NodeLayout{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
         const node_rank = if (node_item.id < layout.ranks.len) layout.ranks[node_item.id] else 0;
@@ -8092,6 +8093,36 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         });
     }
     try writer.writeAll("</vex:graph>\n</metadata>\n");
+}
+
+fn writeSvgAttributeIndex(writer: *Io.Writer, graph: *const Graph) Io.Writer.Error!void {
+    try writer.writeAll("<vex:attributes>\n");
+    for (graph.attrs.items) |attr| try writeSvgIndexedAttr(writer, "graph", null, attr);
+    for (graph.nodes.items) |node_item| {
+        for (node_item.attrs.items) |attr| {
+            if (std.ascii.eqlIgnoreCase(attr.name, "vex_text_id")) continue;
+            try writeSvgIndexedAttr(writer, "node", node_item.id, attr);
+        }
+    }
+    for (graph.edges.items) |edge_item| {
+        for (edge_item.attrs.items) |attr| try writeSvgIndexedAttr(writer, "edge", edge_item.id, attr);
+    }
+    for (graph.subgraphs.items) |subgraph| {
+        for (subgraph.attrs.items) |attr| try writeSvgIndexedAttr(writer, "subgraph", subgraph.id, attr);
+    }
+    try writer.writeAll("</vex:attributes>\n");
+}
+
+fn writeSvgIndexedAttr(writer: *Io.Writer, kind: []const u8, id: ?usize, attr: Attr) Io.Writer.Error!void {
+    try writer.writeAll("<vex:attr kind=\"");
+    try writeXmlEscaped(writer, kind);
+    try writer.writeByte('"');
+    if (id) |object_id| try writer.print(" id=\"{d}\"", .{object_id});
+    try writer.writeAll(" name=\"");
+    try writeXmlEscaped(writer, attr.name);
+    try writer.writeAll("\" value=\"");
+    try writeXmlEscaped(writer, attr.value);
+    try writer.writeAll("\"/>\n");
 }
 
 fn svgInteractiveAllEnabled(graph: *const Graph, options: SvgOptions) bool {
@@ -16232,6 +16263,34 @@ test "SVG metadata records edge ports and compound endpoints" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "tail-port=\"orders&amp;new:e\" head-port=\"id:w\" ltail=\"0\" lhead=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-tail-port=\"orders&amp;new:e\" data-vex-object-head-port=\"id:w\" data-vex-object-ltail=\"0\" data-vex-object-lhead=\"1\"") != null);
+}
+
+test "SVG metadata indexes arbitrary object attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Attrs {
+        \\  graph [x_graph="g&<"];
+        \\  subgraph team {
+        \\    x_subgraph="s&<";
+        \\    A [x_node="n&<"];
+        \\  }
+        \\  A -> B [x_edge="e&<"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attributes>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"graph\" name=\"x_graph\" value=\"g&amp;&lt;\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"node\" id=\"0\" name=\"x_node\" value=\"n&amp;&lt;\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"edge\" id=\"0\" name=\"x_edge\" value=\"e&amp;&lt;\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"subgraph\" id=\"0\" name=\"x_subgraph\" value=\"s&amp;&lt;\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "name=\"vex_text_id\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "</vex:attributes>") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
