@@ -59,6 +59,9 @@ pub const Shape = enum {
     signature,
     insulator,
     ribosite,
+    rnastab,
+    proteasesite,
+    proteinstab,
     rpromoter,
     lpromoter,
     larrow,
@@ -1645,6 +1648,9 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "signature")) return .signature;
     if (std.ascii.eqlIgnoreCase(value, "insulator")) return .insulator;
     if (std.ascii.eqlIgnoreCase(value, "ribosite")) return .ribosite;
+    if (std.ascii.eqlIgnoreCase(value, "rnastab")) return .rnastab;
+    if (std.ascii.eqlIgnoreCase(value, "proteasesite")) return .proteasesite;
+    if (std.ascii.eqlIgnoreCase(value, "proteinstab")) return .proteinstab;
     if (std.ascii.eqlIgnoreCase(value, "rpromoter")) return .rpromoter;
     if (std.ascii.eqlIgnoreCase(value, "lpromoter")) return .lpromoter;
     if (std.ascii.eqlIgnoreCase(value, "larrow")) return .larrow;
@@ -1704,6 +1710,9 @@ fn shapeName(shape: Shape) []const u8 {
         .signature => "signature",
         .insulator => "insulator",
         .ribosite => "ribosite",
+        .rnastab => "rnastab",
+        .proteasesite => "proteasesite",
+        .proteinstab => "proteinstab",
         .rpromoter => "rpromoter",
         .lpromoter => "lpromoter",
         .larrow => "larrow",
@@ -4866,7 +4875,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
                 height = side;
             }
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .fivepoverhang, .threepoverhang, .noverhang, .assembly, .signature, .insulator, .ribosite, .rpromoter, .lpromoter, .larrow, .rarrow => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .fivepoverhang, .threepoverhang, .noverhang, .assembly, .signature, .insulator, .ribosite, .rnastab, .proteasesite, .proteinstab, .rpromoter, .lpromoter, .larrow, .rarrow => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .egg => {
@@ -11265,6 +11274,9 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .signature => try renderSvgPolygonRings(8, writer, shape_layout, visual, signaturePoints, diagonals),
         .insulator => try renderSvgPolygonRings(8, writer, shape_layout, visual, insulatorPoints, diagonals),
         .ribosite => try renderSvgPolygonRings(8, writer, shape_layout, visual, ribositePoints, diagonals),
+        .rnastab => try renderSvgPolygonRings(8, writer, shape_layout, visual, rnaStabilityPoints, diagonals),
+        .proteasesite => try renderSvgPolygonRings(8, writer, shape_layout, visual, proteaseSitePoints, diagonals),
+        .proteinstab => try renderSvgPolygonRings(8, writer, shape_layout, visual, proteinStabilityPoints, diagonals),
         .rpromoter => try renderSvgPolygonRings(10, writer, shape_layout, visual, rpromoterPoints, diagonals),
         .lpromoter => try renderSvgPolygonRings(10, writer, shape_layout, visual, lpromoterPoints, diagonals),
         .larrow => try renderSvgPolygonRings(6, writer, shape_layout, visual, larrowPoints, diagonals),
@@ -11824,6 +11836,60 @@ fn ribositePoints(layout: NodeLayout) [8]Point {
         .{ .x = cx + arm * 0.35, .y = bottom },
         .{ .x = cx, .y = cy + arm * 0.35 },
         .{ .x = left, .y = cy },
+    };
+}
+
+fn rnaStabilityPoints(layout: NodeLayout) [8]Point {
+    const cx = layout.center.x;
+    const cy = layout.center.y;
+    const radius_x = @min(layout.width * 0.22, layout.height * 0.45);
+    const radius_y = @min(layout.height * 0.30, layout.width * 0.22);
+    return .{
+        .{ .x = cx + radius_x * 0.45, .y = cy - radius_y },
+        .{ .x = cx + radius_x, .y = cy - radius_y * 0.45 },
+        .{ .x = cx + radius_x, .y = cy + radius_y * 0.45 },
+        .{ .x = cx + radius_x * 0.45, .y = cy + radius_y },
+        .{ .x = cx - radius_x * 0.45, .y = cy + radius_y },
+        .{ .x = cx - radius_x, .y = cy + radius_y * 0.45 },
+        .{ .x = cx - radius_x, .y = cy - radius_y * 0.45 },
+        .{ .x = cx - radius_x * 0.45, .y = cy - radius_y },
+    };
+}
+
+fn proteaseSitePoints(layout: NodeLayout) [8]Point {
+    const cx = layout.center.x;
+    const cy = layout.center.y;
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const arm = @min(layout.width * 0.28, layout.height * 0.48);
+    return .{
+        .{ .x = cx - arm, .y = top },
+        .{ .x = cx, .y = cy - arm * 0.25 },
+        .{ .x = cx + arm, .y = top },
+        .{ .x = cx + arm * 0.25, .y = cy },
+        .{ .x = right, .y = bottom },
+        .{ .x = cx + arm * 0.1, .y = cy + arm * 0.25 },
+        .{ .x = cx - arm, .y = bottom },
+        .{ .x = left, .y = cy },
+    };
+}
+
+fn proteinStabilityPoints(layout: NodeLayout) [8]Point {
+    const cx = layout.center.x;
+    const cy = layout.center.y;
+    const radius_x = @min(layout.width * 0.24, layout.height * 0.48);
+    const radius_y = @min(layout.height * 0.32, layout.width * 0.24);
+    return .{
+        .{ .x = cx + radius_x * 0.45, .y = cy - radius_y },
+        .{ .x = cx + radius_x, .y = cy - radius_y * 0.45 },
+        .{ .x = cx + radius_x, .y = cy + radius_y * 0.45 },
+        .{ .x = cx + radius_x * 0.45, .y = cy + radius_y },
+        .{ .x = cx - radius_x * 0.45, .y = cy + radius_y },
+        .{ .x = cx - radius_x, .y = cy + radius_y * 0.45 },
+        .{ .x = cx - radius_x, .y = cy - radius_y * 0.45 },
+        .{ .x = cx - radius_x * 0.45, .y = cy - radius_y },
     };
 }
 
@@ -14545,6 +14611,9 @@ test "code API sets typed node and edge options at creation" {
     const signature = try graph.addNode("signature", .{ .shape = .signature });
     const insulator = try graph.addNode("insulator", .{ .shape = .insulator });
     const ribosite = try graph.addNode("ribosite", .{ .shape = .ribosite });
+    const rnastab = try graph.addNode("rnastab", .{ .shape = .rnastab });
+    const proteasesite = try graph.addNode("proteasesite", .{ .shape = .proteasesite });
+    const proteinstab = try graph.addNode("proteinstab", .{ .shape = .proteinstab });
     const rpromoter = try graph.addNode("rpromoter", .{ .shape = .rpromoter });
     const lpromoter = try graph.addNode("lpromoter", .{ .shape = .lpromoter });
     const larrow = try graph.addNode("larrow", .{ .shape = .larrow });
@@ -14644,6 +14713,12 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("insulator", attrValue(graph.nodes.items[insulator].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.ribosite, graph.nodes.items[ribosite].shape);
     try std.testing.expectEqualStrings("ribosite", attrValue(graph.nodes.items[ribosite].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.rnastab, graph.nodes.items[rnastab].shape);
+    try std.testing.expectEqualStrings("rnastab", attrValue(graph.nodes.items[rnastab].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.proteasesite, graph.nodes.items[proteasesite].shape);
+    try std.testing.expectEqualStrings("proteasesite", attrValue(graph.nodes.items[proteasesite].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.proteinstab, graph.nodes.items[proteinstab].shape);
+    try std.testing.expectEqualStrings("proteinstab", attrValue(graph.nodes.items[proteinstab].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.rpromoter, graph.nodes.items[rpromoter].shape);
     try std.testing.expectEqualStrings("rpromoter", attrValue(graph.nodes.items[rpromoter].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.lpromoter, graph.nodes.items[lpromoter].shape);
@@ -22064,11 +22139,14 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
         \\  signature [label="Signature", shape=signature];
         \\  insulator [label="Insulator", shape=insulator];
         \\  ribosite [label="Ribosite", shape=ribosite];
+        \\  rna_stability [label="RNAStab", shape=rnastab];
+        \\  protease [label="Protease", shape=proteasesite];
+        \\  protein_stability [label="ProteinStab", shape=proteinstab];
         \\  reverse_promoter [label="RPromoter", shape=rpromoter];
         \\  left_promoter [label="LPromoter", shape=lpromoter];
         \\  left_arrow [label="LArrow", shape=larrow];
         \\  right_arrow [label="RArrow", shape=rarrow];
-        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> promoter -> coding -> stop_codon -> untranslated -> primer -> restriction -> five_overhang -> three_overhang -> no_overhang -> assembly -> signature -> insulator -> ribosite -> reverse_promoter -> left_promoter -> left_arrow -> right_arrow;
+        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> promoter -> coding -> stop_codon -> untranslated -> primer -> restriction -> five_overhang -> three_overhang -> no_overhang -> assembly -> signature -> insulator -> ribosite -> rna_stability -> protease -> protein_stability -> reverse_promoter -> left_promoter -> left_arrow -> right_arrow;
         \\}
     );
     defer graph.deinit();
@@ -22093,6 +22171,9 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expectEqual(Shape.signature, graph.nodes.items[nodeIdByLabel(&graph, "signature")].shape);
     try std.testing.expectEqual(Shape.insulator, graph.nodes.items[nodeIdByLabel(&graph, "insulator")].shape);
     try std.testing.expectEqual(Shape.ribosite, graph.nodes.items[nodeIdByLabel(&graph, "ribosite")].shape);
+    try std.testing.expectEqual(Shape.rnastab, graph.nodes.items[nodeIdByLabel(&graph, "rna_stability")].shape);
+    try std.testing.expectEqual(Shape.proteasesite, graph.nodes.items[nodeIdByLabel(&graph, "protease")].shape);
+    try std.testing.expectEqual(Shape.proteinstab, graph.nodes.items[nodeIdByLabel(&graph, "protein_stability")].shape);
     try std.testing.expectEqual(Shape.rpromoter, graph.nodes.items[nodeIdByLabel(&graph, "reverse_promoter")].shape);
     try std.testing.expectEqual(Shape.lpromoter, graph.nodes.items[nodeIdByLabel(&graph, "left_promoter")].shape);
     try std.testing.expectEqual(Shape.larrow, graph.nodes.items[nodeIdByLabel(&graph, "left_arrow")].shape);
@@ -22122,6 +22203,9 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "Signature") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Insulator") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Ribosite") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "RNAStab") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Protease") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "ProteinStab") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "RPromoter") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "LPromoter") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "LArrow") != null);
