@@ -6,14 +6,18 @@ pub const Order = enum {
     breadthfirst,
     nodesfirst,
     edgesfirst,
+
+    pub fn name(self: Order) []const u8 {
+        return switch (self) {
+            .breadthfirst => "breadthfirst",
+            .nodesfirst => "nodesfirst",
+            .edgesfirst => "edgesfirst",
+        };
+    }
 };
 
 pub fn name(order: Order) []const u8 {
-    return switch (order) {
-        .breadthfirst => "breadthfirst",
-        .nodesfirst => "nodesfirst",
-        .edgesfirst => "edgesfirst",
-    };
+    return order.name();
 }
 
 pub fn parse(attrs: anytype) Order {

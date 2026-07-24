@@ -894,13 +894,13 @@ pub const Graph = struct {
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
-            .fontnames => |value| try self.setGraphAttrRaw("fontnames", fontNamesName(value)),
+            .fontnames => |value| try self.setGraphAttrRaw("fontnames", value.name()),
             .fontsize => |value| try self.setGraphAttrFloat("fontsize", value),
             .fontcolor => |value| try self.setGraphAttrRaw("fontcolor", value),
             .labeljust => |value| try self.setGraphAttrRaw("labeljust", labelJustName(value)),
             .labelloc => |value| try self.setGraphAttrRaw("labelloc", labelLocName(value)),
             .nojustify => |value| try self.setGraphAttrRaw("nojustify", boolAttrValue(value)),
-            .outputorder => |value| try self.setGraphAttrRaw("outputorder", outputOrderName(value)),
+            .outputorder => |value| try self.setGraphAttrRaw("outputorder", value.name()),
             .ordering => |value| try self.setGraphAttrRaw("ordering", orderingModeName(value)),
             .url => |value| try self.setGraphAttrRaw("URL", value),
             .href => |value| try self.setGraphAttrRaw("href", value),
@@ -1702,14 +1702,6 @@ fn splineModeName(mode: SplineMode) []const u8 {
         .ortho => "ortho",
         .none => "none",
     };
-}
-
-fn outputOrderName(order: OutputOrder) []const u8 {
-    return svg_mod.order.name(order);
-}
-
-fn fontNamesName(fontnames: FontNames) []const u8 {
-    return svg_mod.font.namesName(fontnames);
 }
 
 fn labelJustName(just: LabelJust) []const u8 {

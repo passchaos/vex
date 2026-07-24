@@ -13,17 +13,21 @@ pub const Names = enum {
     gd,
     ps,
     svg,
+
+    pub fn name(self: Names) []const u8 {
+        return switch (self) {
+            .gd => "gd",
+            .ps => "ps",
+            .svg => "svg",
+        };
+    }
 };
 
 pub const default_graphviz_name = "Times-Roman";
 pub const default_svg_family = "Times,serif";
 
 pub fn namesName(fontnames: Names) []const u8 {
-    return switch (fontnames) {
-        .gd => "gd",
-        .ps => "ps",
-        .svg => "svg",
-    };
+    return fontnames.name();
 }
 
 pub fn parseNames(value: []const u8) ?Names {
