@@ -3812,24 +3812,7 @@ fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) Layo
 }
 
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
-    var result = options;
-    if (attrValue(graph.attrs.items, "ranksep")) |value| {
-        result.rank_gap = layout_mod.spacing.graph(value, result.rank_gap);
-        result.ranksep_equally = layout_mod.spacing.hasWord(value, "equally");
-    }
-    if (attrValue(graph.attrs.items, "nodesep")) |value| {
-        result.node_gap = layout_mod.spacing.graph(value, result.node_gap);
-    }
-    if (attrValue(graph.attrs.items, "margin") != null) {
-        const margin = attrMargin(graph.attrs.items, result.margin);
-        result.margin = margin.x;
-        result.margin_y = margin.y;
-    }
-    if (attrValue(graph.attrs.items, "label") != null) {
-        const font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
-        result.margin_y = @max(result.margin_y, font_size + 12.0);
-    }
-    return result;
+    return layout_mod.options.withGraphAttrs(options, graph.attrs.items);
 }
 
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
@@ -4953,12 +4936,8 @@ const BoxMargin = struct {
 };
 
 fn attrMargin(attrs: []const Attr, fallback: f64) BoxMargin {
-    const value = attrValue(attrs, "margin") orelse return .{ .x = fallback, .y = fallback };
-    var parts = std.mem.tokenizeAny(u8, value, ", \t");
-    const first = parts.next() orelse return .{ .x = fallback, .y = fallback };
-    const x = parseInchMargin(first) orelse fallback;
-    const y = if (parts.next()) |second| parseInchMargin(second) orelse x else x;
-    return .{ .x = x, .y = y };
+    const margin = layout_mod.options.attrMargin(attrs, fallback);
+    return .{ .x = margin.x, .y = margin.y };
 }
 
 fn nodeMargin(attrs: []const Attr, fallback: f64) BoxMargin {
