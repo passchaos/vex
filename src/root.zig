@@ -8056,7 +8056,9 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         const subgraph_layout = if (subgraph.id < layout.subgraphs.len) layout.subgraphs[subgraph.id] else SubgraphLayout{ .id = subgraph.id, .x = 0, .y = 0, .width = 0, .height = 0 };
         const subgraph_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = subgraph.label, .label_name = subgraph.label };
         const subgraph_href = inheritedClusterHref(graph, subgraph);
-        try writer.print("<vex:subgraph id=\"{d}\" label=\"", .{subgraph.id});
+        try writer.print("<vex:subgraph id=\"{d}\"", .{subgraph.id});
+        if (subgraph.parent) |parent| try writer.print(" parent=\"{d}\"", .{parent});
+        try writer.writeAll(" label=\"");
         try writeXmlEscaped(writer, subgraph.label);
         try writer.writeByte('"');
         if (layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, subgraph.id, "layer")) |layer| {
@@ -9860,6 +9862,8 @@ const SvgGroupOpenOptions = struct {
     object_node_count: ?[]const u8 = null,
     object_edge_count: ?[]const u8 = null,
     object_subgraph_count: ?[]const u8 = null,
+    object_parent: ?[]const u8 = null,
+    object_nodes: ?[]const NodeId = null,
     object_rank: ?[]const u8 = null,
     object_from: ?[]const u8 = null,
     object_to: ?[]const u8 = null,
@@ -9961,6 +9965,15 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         try writeSvgObjectStringAttr(writer, "nodes", options.object_node_count);
         try writeSvgObjectStringAttr(writer, "edges", options.object_edge_count);
         try writeSvgObjectStringAttr(writer, "subgraphs", options.object_subgraph_count);
+        try writeSvgObjectStringAttr(writer, "parent", options.object_parent);
+        if (options.object_nodes) |node_ids| {
+            try writer.writeAll(" data-vex-object-nodes=\"");
+            for (node_ids, 0..) |node_id, index| {
+                if (index > 0) try writer.writeByte(' ');
+                try writer.print("{d}", .{node_id});
+            }
+            try writer.writeByte('"');
+        }
         if (options.object_rank) |rank| {
             try writer.writeAll(" data-vex-object-rank=\"");
             try writeXmlEscaped(writer, rank);
@@ -11922,6 +11935,8 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     const inspector_text = if (inspector) svgClusterInspectorText(&inspector_text_buf, cluster) else null;
     var object_id_buf: [32]u8 = undefined;
     const object_id = if (metadata) std.fmt.bufPrint(&object_id_buf, "{d}", .{cluster.id}) catch null else null;
+    var object_parent_buf: [32]u8 = undefined;
+    const object_parent = if (metadata and cluster.parent != null) std.fmt.bufPrint(&object_parent_buf, "{d}", .{cluster.parent.?}) catch null else null;
     const cluster_href = if (metadata) inheritedClusterHref(graph, cluster) else null;
     const rect = clusterVisualRect(graph, layout, index);
     try writeSvgGroupOpen(writer, .{
@@ -11941,6 +11956,8 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .object_tooltip = if (metadata) svgClusterTooltipWithFallback(graph, cluster, cluster_href) else null,
         .object_target = if (metadata) inheritedClusterTarget(graph, cluster) else null,
         .object_rect = if (metadata) rect else null,
+        .object_parent = object_parent,
+        .object_nodes = if (metadata) cluster.nodes else null,
         .collapse_target = collapse_target,
     });
     try writeSvgTitle(writer, cluster.label);
@@ -16049,6 +16066,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, long_edge_fragment, "data-vex-object-waypoints=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, long_edge_fragment, "1:") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"service\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-nodes=\"0 1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-y=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-width=\"") != null);
@@ -16140,7 +16158,7 @@ test "SVG metadata index records layers" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"b\" shape=\"ellipse\" layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"A &amp; B\" to-label=\"b\" layer=\"base:detail\" label=\"a&amp;b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"outer\" layer=\"detail\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"Inner\" layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"1\" parent=\"0\" label=\"Inner\" layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"A &amp; B\" data-vex-object-shape=\"box\" data-vex-object-layer=\"base\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"1\" data-vex-object-label=\"b\" data-vex-object-shape=\"ellipse\" data-vex-object-layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"edge\" data-vex-object-id=\"0\" data-vex-object-label=\"a&amp;b\" data-vex-object-layer=\"base:detail\"") != null);
@@ -16148,6 +16166,7 @@ test "SVG metadata index records layers" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from-label=\"A &amp; B\" data-vex-object-to-label=\"b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"outer\" data-vex-object-layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"1\" data-vex-object-label=\"Inner\" data-vex-object-layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-parent=\"0\" data-vex-object-nodes=\"0\"") != null);
     const node_fragment = svgGroupFragmentById(svg, "node1") orelse return error.MissingNodeGroup;
     const cluster_fragment = svgGroupFragmentById(svg, "clust1") orelse return error.MissingClusterGroup;
     try std.testing.expect(std.mem.indexOf(u8, node_fragment, "data-vex-object-x=\"") != null);
