@@ -222,6 +222,7 @@ pub const GraphAttr = union(enum) {
     resolution: f64,
     layers: []const u8,
     layersep: []const u8,
+    layerlistsep: []const u8,
     layerselect: []const u8,
     pad: []const u8,
     margin: []const u8,
@@ -968,6 +969,7 @@ pub const Graph = struct {
             .resolution => |value| try self.setGraphAttrFloat("resolution", value),
             .layers => |value| try self.setGraphAttrRaw("layers", value),
             .layersep => |value| try self.setGraphAttrRaw("layersep", value),
+            .layerlistsep => |value| try self.setGraphAttrRaw("layerlistsep", value),
             .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
@@ -8063,6 +8065,7 @@ fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, la
 const SvgLayers = struct {
     names: []const []const u8,
     delims: []const u8,
+    list_delims: []const u8,
     selected: ?[]const usize,
 };
 
@@ -8074,6 +8077,8 @@ const SvgLayerContext = struct {
 fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
     const raw = attrValue(graph.attrs.items, "layers") orelse return null;
     const delims = attrValue(graph.attrs.items, "layersep") orelse ":\t ";
+    const raw_list_delims = attrValue(graph.attrs.items, "layerlistsep") orelse ",";
+    const list_delims = if (std.mem.indexOfAny(u8, delims, raw_list_delims) == null) raw_list_delims else "";
     var count: usize = 0;
     var iter = std.mem.tokenizeAny(u8, raw, delims);
     while (iter.next()) |_| count += 1;
@@ -8082,8 +8087,8 @@ fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
     var fill_iter = std.mem.tokenizeAny(u8, raw, delims);
     var index: usize = 0;
     while (fill_iter.next()) |name| : (index += 1) names[index] = name;
-    const base = SvgLayers{ .names = names, .delims = delims, .selected = null };
-    return .{ .names = names, .delims = delims, .selected = svgLayerSelection(graph, base) };
+    const base = SvgLayers{ .names = names, .delims = delims, .list_delims = list_delims, .selected = null };
+    return .{ .names = names, .delims = delims, .list_delims = list_delims, .selected = svgLayerSelection(graph, base) };
 }
 
 fn svgLayerSelection(graph: *const Graph, layers: SvgLayers) ?[]const usize {
@@ -8166,23 +8171,27 @@ fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerCont
 
 fn svgLayerSpecMatches(layer: SvgLayerContext, spec: []const u8) bool {
     const current = layer.index + 1;
-    var parts = std.mem.tokenizeScalar(u8, spec, ',');
+    if (layer.layers.list_delims.len == 0) return svgLayerSpecPartMatches(layer, spec, current);
+    var parts = std.mem.tokenizeAny(u8, spec, layer.layers.list_delims);
     while (parts.next()) |part| {
-        const trimmed = std.mem.trim(u8, part, " \t\r\n");
-        if (trimmed.len == 0) continue;
-        var range = std.mem.tokenizeAny(u8, trimmed, layer.layers.delims);
-        const first = range.next() orelse continue;
-        if (range.next()) |second| {
-            const start = svgLayerIndex(layer.layers, first, 0) orelse continue;
-            const end = svgLayerIndex(layer.layers, second, layer.layers.names.len) orelse continue;
-            const lo = @min(start, end);
-            const hi = @max(start, end);
-            if (current >= lo and current <= hi) return true;
-        } else if (svgLayerIndex(layer.layers, first, current)) |index| {
-            if (index == current) return true;
-        }
+        if (svgLayerSpecPartMatches(layer, part, current)) return true;
     }
     return false;
+}
+
+fn svgLayerSpecPartMatches(layer: SvgLayerContext, part: []const u8, current: usize) bool {
+    const trimmed = std.mem.trim(u8, part, " \t\r\n");
+    if (trimmed.len == 0) return false;
+    var range = std.mem.tokenizeAny(u8, trimmed, layer.layers.delims);
+    const first = range.next() orelse return false;
+    if (range.next()) |second| {
+        const start = svgLayerIndex(layer.layers, first, 0) orelse return false;
+        const end = svgLayerIndex(layer.layers, second, layer.layers.names.len) orelse return false;
+        const lo = @min(start, end);
+        const hi = @max(start, end);
+        return current >= lo and current <= hi;
+    }
+    return if (svgLayerIndex(layer.layers, first, current)) |index| index == current else false;
 }
 
 fn svgLayerIndex(layers: SvgLayers, raw: []const u8, all_value: usize) ?usize {
@@ -18361,6 +18370,47 @@ test "SVG renderer honors Graphviz graph layerselect" {
     try typed.setGraphAttr(.{ .layers = "L1:L2" });
     try typed.setGraphAttr(.{ .layerselect = "L2" });
     try std.testing.expectEqualStrings("L2", attrValue(typed.attrs.items, "layerselect").?);
+}
+
+test "SVG renderer honors Graphviz graph layerlistsep" {
+    const allocator = std.testing.allocator;
+    var selected = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail:print", layerselect="base;print", layerlistsep=";"];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\  c [layer=print];
+        \\}
+    );
+    defer selected.deinit();
+
+    var selected_layout = try layoutLayered(allocator, &selected, .{});
+    defer selected_layout.deinit();
+    const selected_svg = try renderSvgAlloc(allocator, &selected, &selected_layout, .{});
+    defer allocator.free(selected_svg);
+    try std.testing.expect(svgGroupFragmentById(selected_svg, "base") != null);
+    try std.testing.expect(svgGroupFragmentById(selected_svg, "detail") == null);
+    try std.testing.expect(svgGroupFragmentById(selected_svg, "print") != null);
+
+    var conflict = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail", layerselect="base:detail", layerlistsep=":"];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\}
+    );
+    defer conflict.deinit();
+    var conflict_layout = try layoutLayered(allocator, &conflict, .{});
+    defer conflict_layout.deinit();
+    const conflict_svg = try renderSvgAlloc(allocator, &conflict, &conflict_layout, .{});
+    defer allocator.free(conflict_svg);
+    try std.testing.expect(svgGroupFragmentById(conflict_svg, "base") != null);
+    try std.testing.expect(svgGroupFragmentById(conflict_svg, "detail") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .layerlistsep = ";" });
+    try std.testing.expectEqualStrings(";", attrValue(typed.attrs.items, "layerlistsep").?);
 }
 
 test "SVG renderer honors Graphviz landscape orientation attributes" {
