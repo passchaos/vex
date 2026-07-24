@@ -146,6 +146,8 @@ pub const GraphAttr = union(enum) {
     dpi: f64,
     resolution: f64,
     vex_layout_iterations: usize,
+    vex_crossing_passes: usize,
+    vex_coordinate_passes: usize,
     layers: []const u8,
     layersep: []const u8,
     layerlistsep: []const u8,
@@ -844,6 +846,16 @@ pub const Graph = struct {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setGraphAttrRaw("vex_layout_iterations", text);
+            },
+            .vex_crossing_passes => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("vex_crossing_passes", text);
+            },
+            .vex_coordinate_passes => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("vex_coordinate_passes", text);
             },
             .layers => |value| try self.setGraphAttrRaw("layers", value),
             .layersep => |value| try self.setGraphAttrRaw("layersep", value),
@@ -14302,6 +14314,45 @@ test "force layout config iterations override graph fallback" {
     var forty = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = .{ .iterations = 40 } });
     defer forty.deinit();
     try std.testing.expect(distanceBetween(one.nodes[0].center, forty.nodes[0].center) > 0.1);
+}
+
+test "layered layout honors pass budgets from DOT and typed API" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_crossing_passes=1, vex_coordinate_passes=0];
+        \\  a -> c;
+        \\  b -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    const from_dot = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 1), from_dot.crossing_passes);
+    try std.testing.expectEqual(@as(usize, 0), from_dot.coordinate_passes);
+
+    try graph.setGraphAttr(.{ .vex_crossing_passes = 3 });
+    try graph.setGraphAttr(.{ .vex_coordinate_passes = 2 });
+    const typed = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqualStrings("3", attrValue(graph.attrs.items, "vex_crossing_passes").?);
+    try std.testing.expectEqualStrings("2", attrValue(graph.attrs.items, "vex_coordinate_passes").?);
+    try std.testing.expectEqual(@as(usize, 3), typed.crossing_passes);
+    try std.testing.expectEqual(@as(usize, 2), typed.coordinate_passes);
+}
+
+test "layered layout accepts compatibility pass budget aliases" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [crossing_passes=2, coordinate_passes=1];
+        \\  a -> b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 2), options.crossing_passes);
+    try std.testing.expectEqual(@as(usize, 1), options.coordinate_passes);
 }
 
 test "layoutGraph default keeps Sugiyama rankdir as layout input" {

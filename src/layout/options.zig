@@ -82,6 +82,12 @@ pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {
     if (attrValue(graph_attrs, "nodesep")) |value| {
         result.node_gap = spacing.graph(value, result.node_gap);
     }
+    if (attrValue(graph_attrs, "vex_crossing_passes") orelse attrValue(graph_attrs, "crossing_passes")) |value| {
+        result.crossing_passes = attrUsize(value, result.crossing_passes);
+    }
+    if (attrValue(graph_attrs, "vex_coordinate_passes") orelse attrValue(graph_attrs, "coordinate_passes")) |value| {
+        result.coordinate_passes = attrUsize(value, result.coordinate_passes);
+    }
     if (attrValue(graph_attrs, "margin") != null) {
         const margin = attrMargin(graph_attrs, result.margin);
         result.margin = margin.x;
@@ -127,8 +133,12 @@ fn positiveAttrFloat(attrs: anytype, name: []const u8, fallback: f64) f64 {
 }
 
 fn positiveAttrUsize(value: []const u8, fallback: usize) usize {
-    const parsed = std.fmt.parseInt(usize, value, 10) catch return fallback;
+    const parsed = attrUsize(value, fallback);
     return if (parsed > 0) parsed else fallback;
+}
+
+fn attrUsize(value: []const u8, fallback: usize) usize {
+    return std.fmt.parseInt(usize, value, 10) catch fallback;
 }
 
 fn parseInchMargin(value: []const u8) ?f64 {

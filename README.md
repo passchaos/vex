@@ -28,6 +28,7 @@ zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 zig build run -- --input examples/simple.dot --layout neato --layout-iterations 20 --output force-fast.svg
+zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-passes 1 --output layered-fast.svg
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
 zig build run -- --input examples/subgraph.dot --output collapse.svg --interactive-collapse
 zig build run -- --input examples/simple.dot --output filtered.svg --interactive-filter
@@ -44,6 +45,11 @@ force-layout iteration budget for fast previews or large graph workflows; DOT
 can set the same budget with `graph [vex_layout_iterations=20]` or
 `graph [layout_iterations=20]`, and the Zig API can pass
 `.{ .force = .{ .iterations = 20 } }`.
+For layered/Sugiyama layout, `--crossing-passes` and `--coordinate-passes`
+control crossing-reduction and coordinate-refinement budgets. DOT can set the
+same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
+`crossing_passes` / `coordinate_passes` aliases, and the Zig API can pass
+`LayoutConfig.layered`.
 
 `--interactive-layers` is a Vex SVG extension. When a graph declares
 Graphviz-style `layers`, it embeds a small self-contained SVG control panel for

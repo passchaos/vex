@@ -9,6 +9,7 @@ const usage =
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
     \\        [--layout-iterations count]
+    \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-layers] [--interactive-collapse]
     \\        [--interactive-filter] [--interactive-search]
@@ -19,6 +20,7 @@ const usage =
     \\output is written to stdout.
     \\Default input format is auto. Default layout is DOT/Sugiyama and honors
     \\rankdir=TB|BT|LR|RL.
+    \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps force/neato layout iterations.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
@@ -42,6 +44,8 @@ pub fn main(init: std.process.Init) !void {
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var layout_iterations: ?usize = null;
+    var crossing_passes: ?usize = null;
+    var coordinate_passes: ?usize = null;
     var input_format: vex.InputFormat = .auto;
     var interactive_layers = false;
     var interactive_collapse = false;
@@ -95,6 +99,14 @@ pub fn main(init: std.process.Init) !void {
             if (i >= args.len) return error.MissingLayoutIterations;
             layout_iterations = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidLayoutIterations;
             if (layout_iterations.? == 0) return error.InvalidLayoutIterations;
+        } else if (std.mem.eql(u8, arg, "--crossing-passes")) {
+            i += 1;
+            if (i >= args.len) return error.MissingCrossingPasses;
+            crossing_passes = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidCrossingPasses;
+        } else if (std.mem.eql(u8, arg, "--coordinate-passes")) {
+            i += 1;
+            if (i >= args.len) return error.MissingCoordinatePasses;
+            coordinate_passes = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidCoordinatePasses;
         } else if (std.mem.startsWith(u8, arg, "-K") and arg.len > 2) {
             layout_arg = vex.LayoutAlgorithm.fromString(arg[2..]) orelse return error.UnknownLayout;
         } else if (std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "-")) {
@@ -126,8 +138,12 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.parseInput(allocator, dot, input_format);
     defer graph.deinit();
 
+    var layered_options = vex.LayoutOptions{};
+    if (crossing_passes) |value| layered_options.crossing_passes = value;
+    if (coordinate_passes) |value| layered_options.coordinate_passes = value;
     const layout_config = vex.LayoutConfig{
         .algorithm = layout_arg,
+        .layered = layered_options,
         .force = if (layout_iterations) |iterations| .{ .iterations = iterations } else .{},
     };
     var layout = try vex.layoutGraph(allocator, &graph, layout_config);
