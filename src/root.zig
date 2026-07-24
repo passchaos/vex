@@ -265,25 +265,8 @@ pub const NodeFixedSize = enum {
     shape,
 };
 
-pub const ImageScale = enum {
-    none,
-    fit,
-    width,
-    height,
-    both,
-};
-
-pub const ImagePosition = enum {
-    top_left,
-    top_center,
-    top_right,
-    middle_left,
-    middle_center,
-    middle_right,
-    bottom_left,
-    bottom_center,
-    bottom_right,
-};
+pub const ImageScale = svg_mod.image.Scale;
+pub const ImagePosition = svg_mod.image.Position;
 
 pub const NodeAttr = union(enum) {
     label: []const u8,
@@ -1934,27 +1917,11 @@ fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
 }
 
 fn imageScaleName(scale: ImageScale) []const u8 {
-    return switch (scale) {
-        .none => "false",
-        .fit => "true",
-        .width => "width",
-        .height => "height",
-        .both => "both",
-    };
+    return svg_mod.image.scaleName(scale);
 }
 
 fn imagePositionName(position: ImagePosition) []const u8 {
-    return switch (position) {
-        .top_left => "tl",
-        .top_center => "tc",
-        .top_right => "tr",
-        .middle_left => "ml",
-        .middle_center => "mc",
-        .middle_right => "mr",
-        .bottom_left => "bl",
-        .bottom_center => "bc",
-        .bottom_right => "br",
-    };
+    return svg_mod.image.positionName(position);
 }
 
 fn edgeStyleName(style: EdgeStyle) []const u8 {
@@ -9695,26 +9662,11 @@ fn nodeImageRect(node_item: Node, layout: NodeLayout) RectF {
 }
 
 fn nodeImageScale(attrs: []const Attr) ImageScale {
-    const value = attrValue(attrs, "imagescale") orelse return .none;
-    if (parseBool(value)) |enabled| return if (enabled) .fit else .none;
-    if (std.ascii.eqlIgnoreCase(value, "width")) return .width;
-    if (std.ascii.eqlIgnoreCase(value, "height")) return .height;
-    if (std.ascii.eqlIgnoreCase(value, "both")) return .both;
-    return .none;
+    return svg_mod.image.parseScale(attrs);
 }
 
 fn nodeImagePosition(attrs: []const Attr) ImagePosition {
-    const value = attrValue(attrs, "imagepos") orelse return .middle_center;
-    if (std.ascii.eqlIgnoreCase(value, "tl")) return .top_left;
-    if (std.ascii.eqlIgnoreCase(value, "tc")) return .top_center;
-    if (std.ascii.eqlIgnoreCase(value, "tr")) return .top_right;
-    if (std.ascii.eqlIgnoreCase(value, "ml")) return .middle_left;
-    if (std.ascii.eqlIgnoreCase(value, "mc")) return .middle_center;
-    if (std.ascii.eqlIgnoreCase(value, "mr")) return .middle_right;
-    if (std.ascii.eqlIgnoreCase(value, "bl")) return .bottom_left;
-    if (std.ascii.eqlIgnoreCase(value, "bc")) return .bottom_center;
-    if (std.ascii.eqlIgnoreCase(value, "br")) return .bottom_right;
-    return .middle_center;
+    return svg_mod.image.parsePosition(attrs);
 }
 
 fn nodeImagePreserveAspectRatio(attrs: []const Attr) []const u8 {
