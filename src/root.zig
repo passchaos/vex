@@ -9102,7 +9102,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const focus_related = if (focus) svgEdgeFocusRelated(&focus_related_buf, edge_item) else null;
     var object_id_buf: [32]u8 = undefined;
     const object_id = if (metadata) std.fmt.bufPrint(&object_id_buf, "{d}", .{edge_item.id}) catch null else null;
-    const object_label = if (metadata) edgeFallbackTitle(edge_item, edge_context.edge_name) else null;
+    const object_label = edgeFallbackTitle(edge_item, edge_context.edge_name);
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = edge_item.attrs.items,
@@ -9113,7 +9113,8 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .inspector_text = inspector_text,
         .focus_id = focus_id,
         .focus_related = focus_related,
-        .object_kind = if (metadata) "edge" else null,
+        .write_object_attrs = metadata,
+        .object_kind = "edge",
         .object_id = object_id,
         .object_label = object_label,
         .collapse_member = collapse_member,
@@ -9322,9 +9323,10 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .inspector_text = inspector_text,
         .focus_id = focus_id,
         .focus_related = focus_related,
-        .object_kind = if (metadata) "node" else null,
+        .write_object_attrs = metadata,
+        .object_kind = "node",
         .object_id = object_id,
-        .object_label = if (metadata) node_fallback_title else null,
+        .object_label = node_fallback_title,
         .collapse_member = collapse_member,
     });
     const node_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9709,6 +9711,7 @@ const SvgGroupOpenOptions = struct {
     inspector_text: ?[]const u8 = null,
     focus_id: ?[]const u8 = null,
     focus_related: ?[]const u8 = null,
+    write_object_attrs: bool = false,
     object_kind: ?[]const u8 = null,
     object_id: ?[]const u8 = null,
     object_label: ?[]const u8 = null,
@@ -9758,23 +9761,36 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         try writeXmlEscaped(writer, focus_related);
         try writer.writeByte('"');
     }
-    if (options.object_kind) |object_kind| {
-        try writer.writeAll(" data-vex-object-kind=\"");
-        try writeXmlEscaped(writer, object_kind);
-        try writer.writeByte('"');
-    }
-    if (options.object_id) |object_id| {
-        try writer.writeAll(" data-vex-object-id=\"");
-        try writeXmlEscaped(writer, object_id);
-        try writer.writeByte('"');
-    }
-    if (options.object_label) |object_label| {
-        try writer.writeAll(" data-vex-object-label=\"");
-        try writeXmlEscaped(writer, object_label);
-        try writer.writeByte('"');
+    if (options.write_object_attrs) {
+        if (options.object_kind) |object_kind| {
+            try writer.writeAll(" data-vex-object-kind=\"");
+            try writeXmlEscaped(writer, object_kind);
+            try writer.writeByte('"');
+        }
+        if (options.object_id) |object_id| {
+            try writer.writeAll(" data-vex-object-id=\"");
+            try writeXmlEscaped(writer, object_id);
+            try writer.writeByte('"');
+        }
+        if (options.object_label) |object_label| {
+            try writer.writeAll(" data-vex-object-label=\"");
+            try writeXmlEscaped(writer, object_label);
+            try writer.writeByte('"');
+        }
     }
     if (options.inspector_text != null or options.focus_id != null) {
         try writer.writeAll(" role=\"button\" tabindex=\"0\"");
+        if (options.object_kind) |object_kind| {
+            try writer.writeAll(" aria-label=\"");
+            try writeXmlEscaped(writer, object_kind);
+            if (options.object_label) |object_label| {
+                if (object_label.len > 0) {
+                    try writer.writeAll(": ");
+                    try writeXmlEscaped(writer, object_label);
+                }
+            }
+            try writer.writeByte('"');
+        }
     }
     if (options.collapse_member) |collapse_member| {
         try writer.writeAll(" data-vex-collapse-member=\"");
@@ -11660,9 +11676,10 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .context = cluster_context,
         .search_text = search_text,
         .inspector_text = inspector_text,
-        .object_kind = if (metadata) "subgraph" else null,
+        .write_object_attrs = metadata,
+        .object_kind = "subgraph",
         .object_id = object_id,
-        .object_label = if (metadata) cluster.label else null,
+        .object_label = cluster.label,
         .collapse_target = collapse_target,
     });
     try writeSvgTitle(writer, cluster.label);
@@ -19002,6 +19019,8 @@ test "SVG renderer emits opt-in Vex focus controls" {
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-related=\"node-1 edge-1 node-1 node-2 edge-2 node-1 node-3 edge-3 node-4 node-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"node-1\" data-vex-focus-related=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "role=\"button\" tabindex=\"0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "aria-label=\"node: api\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "aria-label=\"edge: api-&gt;worker\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "vex-focus-match") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "applyFocus(this)") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "event.key === 'Enter' || event.key === ' '") != null);
@@ -19068,6 +19087,9 @@ test "SVG renderer emits opt-in Vex inspector controls" {
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=edge id=api-&gt;worker label=job") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=subgraph label=Service") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=node id=api label=API box\" role=\"button\" tabindex=\"0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "aria-label=\"node: API\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "aria-label=\"edge: job\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "aria-label=\"subgraph: Service\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "vex-inspect-selected") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "inspect(this)") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "event.key === 'Enter' || event.key === ' '") != null);
