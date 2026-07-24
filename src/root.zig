@@ -12276,42 +12276,7 @@ fn parseAttrUsize(attrs: []const Attr, name: []const u8, fallback: usize) usize 
 }
 
 fn resolveSvgColor(graph: *const Graph, attrs: []const Attr, color: []const u8) []const u8 {
-    if (std.ascii.eqlIgnoreCase(color, "transparent")) return "none";
-    if (std.mem.eql(u8, color, "black") or std.mem.eql(u8, color, "white") or std.mem.eql(u8, color, "lightgrey")) return color;
-    if (color.len >= 2 and color[0] == '/' and color[1] == '/') {
-        const scheme = attrValue(attrs, "colorscheme") orelse attrValue(graph.attrs.items, "colorscheme") orelse return color[2..];
-        return colorFromScheme(scheme, color[2..]) orelse color[2..];
-    }
-    if (color.len >= 1 and color[0] == '/') {
-        const rest = color[1..];
-        if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
-            const scheme = rest[0..slash];
-            const name = rest[slash + 1 ..];
-            if (std.ascii.eqlIgnoreCase(scheme, "X11") or std.ascii.eqlIgnoreCase(scheme, "Xlib")) return name;
-            return colorFromScheme(scheme, name) orelse color;
-        }
-        return rest;
-    }
-    const scheme = attrValue(attrs, "colorscheme") orelse attrValue(graph.attrs.items, "colorscheme") orelse return color;
-    if (std.ascii.eqlIgnoreCase(scheme, "X11") or std.ascii.eqlIgnoreCase(scheme, "Xlib")) return color;
-    return colorFromScheme(scheme, color) orelse color;
-}
-
-fn colorFromScheme(scheme: []const u8, name: []const u8) ?[]const u8 {
-    if (!std.ascii.eqlIgnoreCase(scheme, "bugn9")) return null;
-    const index = std.fmt.parseInt(usize, name, 10) catch return null;
-    return switch (index) {
-        1 => "#f7fcfd",
-        2 => "#e5f5f9",
-        3 => "#ccece6",
-        4 => "#99d8c9",
-        5 => "#66c2a4",
-        6 => "#41ae76",
-        7 => "#238b45",
-        8 => "#006d2c",
-        9 => "#00441b",
-        else => null,
-    };
+    return svg_mod.color.resolve(attrs, graph.attrs.items, color);
 }
 
 fn styleHas(style: ?[]const u8, needle: []const u8) bool {
