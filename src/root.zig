@@ -8015,6 +8015,10 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             try writeXmlEscaped(writer, nodeFallbackTitle(graph.nodes.items[edge_item.to]));
             try writer.writeByte('"');
         }
+        try writeSvgPortMetadataAttr(writer, "", "tail-port", edge_item.tail_record_port, edge_item.tail_port);
+        try writeSvgPortMetadataAttr(writer, "", "head-port", edge_item.head_record_port, edge_item.head_port);
+        if (edge_item.ltail) |ltail| try writer.print(" ltail=\"{d}\"", .{ltail});
+        if (edge_item.lhead) |lhead| try writer.print(" lhead=\"{d}\"", .{lhead});
         if (attrValue(edge_item.attrs.items, "layer")) |layer| {
             try writer.writeAll(" layer=\"");
             try writeXmlEscaped(writer, layer);
@@ -9241,6 +9245,12 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_to = object_to,
         .object_from_label = object_from_label,
         .object_to_label = object_to_label,
+        .object_tail_record_port = if (metadata) edge_item.tail_record_port else null,
+        .object_tail_port = if (metadata) edge_item.tail_port else .auto,
+        .object_head_record_port = if (metadata) edge_item.head_record_port else null,
+        .object_head_port = if (metadata) edge_item.head_port else .auto,
+        .object_ltail = if (metadata) edge_item.ltail else null,
+        .object_lhead = if (metadata) edge_item.lhead else null,
         .object_waypoints = object_waypoints,
         .collapse_member = collapse_member,
     });
@@ -9869,6 +9879,12 @@ const SvgGroupOpenOptions = struct {
     object_to: ?[]const u8 = null,
     object_from_label: ?[]const u8 = null,
     object_to_label: ?[]const u8 = null,
+    object_tail_record_port: ?[]const u8 = null,
+    object_tail_port: CompassPort = .auto,
+    object_head_record_port: ?[]const u8 = null,
+    object_head_port: CompassPort = .auto,
+    object_ltail: ?SubgraphId = null,
+    object_lhead: ?SubgraphId = null,
     object_waypoints: ?[]const EdgeWaypoint = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
@@ -9999,6 +10015,10 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
             try writeXmlEscaped(writer, to_label);
             try writer.writeByte('"');
         }
+        try writeSvgPortMetadataAttr(writer, "data-vex-object-", "tail-port", options.object_tail_record_port, options.object_tail_port);
+        try writeSvgPortMetadataAttr(writer, "data-vex-object-", "head-port", options.object_head_record_port, options.object_head_port);
+        if (options.object_ltail) |ltail| try writer.print(" data-vex-object-ltail=\"{d}\"", .{ltail});
+        if (options.object_lhead) |lhead| try writer.print(" data-vex-object-lhead=\"{d}\"", .{lhead});
         if (options.object_waypoints) |waypoints| {
             try writer.writeAll(" data-vex-object-waypoints=\"");
             for (waypoints, 0..) |waypoint, index| {
@@ -10420,6 +10440,20 @@ fn writeSvgObjectStringAttr(writer: *Io.Writer, name: []const u8, value: ?[]cons
     try writer.writeAll(name);
     try writer.writeAll("=\"");
     try writeXmlEscaped(writer, text);
+    try writer.writeByte('"');
+}
+
+fn writeSvgPortMetadataAttr(writer: *Io.Writer, prefix: []const u8, name: []const u8, record_port: ?[]const u8, compass: CompassPort) Io.Writer.Error!void {
+    if (record_port == null and compass == .auto) return;
+    try writer.writeByte(' ');
+    try writer.writeAll(prefix);
+    try writer.writeAll(name);
+    try writer.writeAll("=\"");
+    if (record_port) |record| {
+        try writeXmlEscaped(writer, record);
+        if (compass != .auto) try writer.writeByte(':');
+    }
+    if (compass != .auto) try writer.writeAll(compass.name());
     try writer.writeByte('"');
 }
 
@@ -16173,6 +16207,31 @@ test "SVG metadata index records layers" {
     try std.testing.expect(std.mem.indexOf(u8, node_fragment, "data-vex-object-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "data-vex-object-x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "data-vex-object-height=\"") != null);
+}
+
+test "SVG metadata records edge ports and compound endpoints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Meta {
+        \\  compound=true;
+        \\  subgraph left {
+        \\    customer [shape=record, label="<orders&new> orders"];
+        \\  }
+        \\  subgraph right {
+        \\    order [shape=record, label="<id> id"];
+        \\  }
+        \\  customer:"orders&new":e -> order:id:w [ltail=left, lhead=right];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "tail-port=\"orders&amp;new:e\" head-port=\"id:w\" ltail=\"0\" lhead=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-tail-port=\"orders&amp;new:e\" data-vex-object-head-port=\"id:w\" data-vex-object-ltail=\"0\" data-vex-object-lhead=\"1\"") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
