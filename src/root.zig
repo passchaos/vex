@@ -51,6 +51,8 @@ pub const Shape = enum {
     terminator,
     utr,
     primersite,
+    restrictionsite,
+    noverhang,
     rpromoter,
     lpromoter,
     larrow,
@@ -1629,6 +1631,8 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "terminator")) return .terminator;
     if (std.ascii.eqlIgnoreCase(value, "utr")) return .utr;
     if (std.ascii.eqlIgnoreCase(value, "primersite")) return .primersite;
+    if (std.ascii.eqlIgnoreCase(value, "restrictionsite")) return .restrictionsite;
+    if (std.ascii.eqlIgnoreCase(value, "noverhang")) return .noverhang;
     if (std.ascii.eqlIgnoreCase(value, "rpromoter")) return .rpromoter;
     if (std.ascii.eqlIgnoreCase(value, "lpromoter")) return .lpromoter;
     if (std.ascii.eqlIgnoreCase(value, "larrow")) return .larrow;
@@ -1680,6 +1684,8 @@ fn shapeName(shape: Shape) []const u8 {
         .terminator => "terminator",
         .utr => "utr",
         .primersite => "primersite",
+        .restrictionsite => "restrictionsite",
+        .noverhang => "noverhang",
         .rpromoter => "rpromoter",
         .lpromoter => "lpromoter",
         .larrow => "larrow",
@@ -4842,7 +4848,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
                 height = side;
             }
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .rpromoter, .lpromoter, .larrow, .rarrow => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .noverhang, .rpromoter, .lpromoter, .larrow, .rarrow => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .egg => {
@@ -11233,6 +11239,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .terminator => try renderSvgPolygonRings(8, writer, shape_layout, visual, terminatorPoints, diagonals),
         .utr => try renderSvgPolygonRings(6, writer, shape_layout, visual, utrPoints, diagonals),
         .primersite => try renderSvgPolygonRings(6, writer, shape_layout, visual, primerSitePoints, diagonals),
+        .restrictionsite => try renderSvgPolygonRings(8, writer, shape_layout, visual, restrictionSitePoints, diagonals),
+        .noverhang => try renderSvgPolygonRings(8, writer, shape_layout, visual, noverhangPoints, diagonals),
         .rpromoter => try renderSvgPolygonRings(10, writer, shape_layout, visual, rpromoterPoints, diagonals),
         .lpromoter => try renderSvgPolygonRings(10, writer, shape_layout, visual, lpromoterPoints, diagonals),
         .larrow => try renderSvgPolygonRings(6, writer, shape_layout, visual, larrowPoints, diagonals),
@@ -11625,6 +11633,45 @@ fn primerSitePoints(layout: NodeLayout) [6]Point {
         .{ .x = right, .y = mid },
         .{ .x = right - head, .y = bottom },
         .{ .x = left, .y = shaft_bottom },
+    };
+}
+
+fn restrictionSitePoints(layout: NodeLayout) [8]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const notch = @min(layout.width * 0.22, layout.height * 0.55);
+    const mid = layout.center.x;
+    return .{
+        .{ .x = left, .y = top + layout.height * 0.25 },
+        .{ .x = mid - notch * 0.35, .y = top + layout.height * 0.25 },
+        .{ .x = mid - notch * 0.35, .y = top },
+        .{ .x = right, .y = top },
+        .{ .x = right, .y = bottom - layout.height * 0.25 },
+        .{ .x = mid + notch * 0.35, .y = bottom - layout.height * 0.25 },
+        .{ .x = mid + notch * 0.35, .y = bottom },
+        .{ .x = left, .y = bottom },
+    };
+}
+
+fn noverhangPoints(layout: NodeLayout) [8]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const gap = @min(layout.width * 0.18, layout.height * 0.35);
+    const mid_x = layout.center.x;
+    const mid_y = layout.center.y;
+    return .{
+        .{ .x = left, .y = top },
+        .{ .x = mid_x - gap, .y = top },
+        .{ .x = mid_x - gap, .y = mid_y - gap * 0.35 },
+        .{ .x = right, .y = mid_y - gap * 0.35 },
+        .{ .x = right, .y = bottom },
+        .{ .x = mid_x + gap, .y = bottom },
+        .{ .x = mid_x + gap, .y = mid_y + gap * 0.35 },
+        .{ .x = left, .y = mid_y + gap * 0.35 },
     };
 }
 
@@ -14338,6 +14385,8 @@ test "code API sets typed node and edge options at creation" {
     const terminator = try graph.addNode("terminator", .{ .shape = .terminator });
     const utr = try graph.addNode("utr", .{ .shape = .utr });
     const primersite = try graph.addNode("primersite", .{ .shape = .primersite });
+    const restrictionsite = try graph.addNode("restrictionsite", .{ .shape = .restrictionsite });
+    const noverhang = try graph.addNode("noverhang", .{ .shape = .noverhang });
     const rpromoter = try graph.addNode("rpromoter", .{ .shape = .rpromoter });
     const lpromoter = try graph.addNode("lpromoter", .{ .shape = .lpromoter });
     const larrow = try graph.addNode("larrow", .{ .shape = .larrow });
@@ -14421,6 +14470,10 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("utr", attrValue(graph.nodes.items[utr].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.primersite, graph.nodes.items[primersite].shape);
     try std.testing.expectEqualStrings("primersite", attrValue(graph.nodes.items[primersite].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.restrictionsite, graph.nodes.items[restrictionsite].shape);
+    try std.testing.expectEqualStrings("restrictionsite", attrValue(graph.nodes.items[restrictionsite].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.noverhang, graph.nodes.items[noverhang].shape);
+    try std.testing.expectEqualStrings("noverhang", attrValue(graph.nodes.items[noverhang].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.rpromoter, graph.nodes.items[rpromoter].shape);
     try std.testing.expectEqualStrings("rpromoter", attrValue(graph.nodes.items[rpromoter].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.lpromoter, graph.nodes.items[lpromoter].shape);
@@ -21833,11 +21886,13 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
         \\  stop_codon [label="Terminator", shape=terminator];
         \\  untranslated [label="UTR", shape=utr];
         \\  primer [label="Primer", shape=primersite];
+        \\  restriction [label="Restriction", shape=restrictionsite];
+        \\  no_overhang [label="NOverhang", shape=noverhang];
         \\  reverse_promoter [label="RPromoter", shape=rpromoter];
         \\  left_promoter [label="LPromoter", shape=lpromoter];
         \\  left_arrow [label="LArrow", shape=larrow];
         \\  right_arrow [label="RArrow", shape=rarrow];
-        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> promoter -> coding -> stop_codon -> untranslated -> primer -> reverse_promoter -> left_promoter -> left_arrow -> right_arrow;
+        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> promoter -> coding -> stop_codon -> untranslated -> primer -> restriction -> no_overhang -> reverse_promoter -> left_promoter -> left_arrow -> right_arrow;
         \\}
     );
     defer graph.deinit();
@@ -21854,6 +21909,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expectEqual(Shape.terminator, graph.nodes.items[nodeIdByLabel(&graph, "stop_codon")].shape);
     try std.testing.expectEqual(Shape.utr, graph.nodes.items[nodeIdByLabel(&graph, "untranslated")].shape);
     try std.testing.expectEqual(Shape.primersite, graph.nodes.items[nodeIdByLabel(&graph, "primer")].shape);
+    try std.testing.expectEqual(Shape.restrictionsite, graph.nodes.items[nodeIdByLabel(&graph, "restriction")].shape);
+    try std.testing.expectEqual(Shape.noverhang, graph.nodes.items[nodeIdByLabel(&graph, "no_overhang")].shape);
     try std.testing.expectEqual(Shape.rpromoter, graph.nodes.items[nodeIdByLabel(&graph, "reverse_promoter")].shape);
     try std.testing.expectEqual(Shape.lpromoter, graph.nodes.items[nodeIdByLabel(&graph, "left_promoter")].shape);
     try std.testing.expectEqual(Shape.larrow, graph.nodes.items[nodeIdByLabel(&graph, "left_arrow")].shape);
@@ -21875,6 +21932,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "Terminator") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "UTR") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Primer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Restriction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "NOverhang") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "RPromoter") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "LPromoter") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "LArrow") != null);
