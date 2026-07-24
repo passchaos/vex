@@ -8700,10 +8700,16 @@ fn writeSvgViewportResources(writer: *Io.Writer) Io.Writer.Error!void {
         \\    });
         \\  }
         \\  var minimapTargets = root.querySelectorAll('[data-vex-minimap-target-x]');
+        \\  function activateTarget(target, event) {
+        \\    if (event) event.preventDefault();
+        \\    centerOn(parseFloat(target.getAttribute('data-vex-minimap-target-x')), parseFloat(target.getAttribute('data-vex-minimap-target-y')));
+        \\  }
         \\  for (var j = 0; j < minimapTargets.length; j += 1) {
         \\    minimapTargets[j].addEventListener('click', function (event) {
-        \\      event.preventDefault();
-        \\      centerOn(parseFloat(this.getAttribute('data-vex-minimap-target-x')), parseFloat(this.getAttribute('data-vex-minimap-target-y')));
+        \\      activateTarget(this, event);
+        \\    });
+        \\    minimapTargets[j].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') activateTarget(this, event);
         \\    });
         \\  }
         \\}());
@@ -8824,9 +8830,11 @@ fn writeSvgMinimapControls(writer: *Io.Writer, graph: *const Graph, layout: *con
         const cluster_rect = svgMinimapRect(clusterVisualRect(graph, layout, index), content_bounds, frame);
         const center = svgMinimapScreenPoint(.{ .x = cluster_box.x + cluster_box.width / 2.0, .y = cluster_box.y + cluster_box.height / 2.0 }, content_translate, canvas, landscape, render_canvas_height);
         try writer.print(
-            "<rect class=\"vex-minimap-subgraph\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\"/>\n",
+            "<rect class=\"vex-minimap-subgraph\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" role=\"button\" tabindex=\"0\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\">\n<title>Center subgraph ",
             .{ cluster_rect.x, cluster_rect.y, cluster_rect.width, cluster_rect.height, center.x, center.y },
         );
+        try writeXmlEscaped(writer, graph.subgraphs.items[index].label);
+        try writer.writeAll("</title>\n</rect>\n");
     }
 
     for (graph.nodes.items) |node_item| {
@@ -8836,9 +8844,11 @@ fn writeSvgMinimapControls(writer: *Io.Writer, graph: *const Graph, layout: *con
         const node_rect = svgMinimapRect(nodeRect(node_layout), content_bounds, frame);
         const center = svgMinimapScreenPoint(node_layout.center, content_translate, canvas, landscape, render_canvas_height);
         try writer.print(
-            "<rect class=\"vex-minimap-node\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\"/>\n",
+            "<rect class=\"vex-minimap-node\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" role=\"button\" tabindex=\"0\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\">\n<title>Center node ",
             .{ node_rect.x, node_rect.y, node_rect.width, node_rect.height, center.x, center.y },
         );
+        try writeXmlEscaped(writer, nodeFallbackTitle(node_item));
+        try writer.writeAll("</title>\n</rect>\n");
     }
 
     const viewport_rect = svgMinimapRect(.{
@@ -19340,8 +19350,12 @@ test "SVG renderer emits opt-in Vex minimap controls" {
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-node\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-subgraph\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-viewport\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "role=\"button\" tabindex=\"0\" data-vex-minimap-target-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "<title>Center node api</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "<title>Center subgraph service</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "data-vex-minimap-target-x=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "centerOn(parseFloat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "activateTarget(this, event)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "event.key === 'Enter' || event.key === ' '") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "id=\"vex-viewport-controls\"") == null);
 }
 
