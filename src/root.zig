@@ -9347,6 +9347,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_id = object_id,
         .object_label = node_fallback_title,
         .object_layer = if (metadata) attrValue(node_item.attrs.items, "layer") else null,
+        .object_rect = if (metadata) nodeRect(l) else null,
         .collapse_member = collapse_member,
     });
     const node_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9736,6 +9737,7 @@ const SvgGroupOpenOptions = struct {
     object_id: ?[]const u8 = null,
     object_label: ?[]const u8 = null,
     object_layer: ?[]const u8 = null,
+    object_rect: ?RectF = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
 };
@@ -9802,6 +9804,14 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
             try writer.writeAll(" data-vex-object-layer=\"");
             try writeXmlEscaped(writer, object_layer);
             try writer.writeByte('"');
+        }
+        if (options.object_rect) |rect| {
+            try writer.print(" data-vex-object-x=\"{d:.2}\" data-vex-object-y=\"{d:.2}\" data-vex-object-width=\"{d:.2}\" data-vex-object-height=\"{d:.2}\"", .{
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            });
         }
     }
     if (options.inspector_text != null or options.focus_id != null) {
@@ -11694,6 +11704,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     const inspector_text = if (inspector) svgClusterInspectorText(&inspector_text_buf, cluster) else null;
     var object_id_buf: [32]u8 = undefined;
     const object_id = if (metadata) std.fmt.bufPrint(&object_id_buf, "{d}", .{cluster.id}) catch null else null;
+    const rect = clusterVisualRect(graph, layout, index);
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = cluster.attrs.items,
@@ -11707,6 +11718,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .object_id = object_id,
         .object_label = cluster.label,
         .object_layer = if (metadata) layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "layer") else null,
+        .object_rect = if (metadata) rect else null,
         .collapse_target = collapse_target,
     });
     try writeSvgTitle(writer, cluster.label);
@@ -11719,7 +11731,6 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .context = cluster_context,
     } };
     const cluster_wrap = try writeSvgClusterInteractiveOpen(writer, graph, cluster, cluster_context, cluster.label, cluster_anchor_id);
-    const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgClusterStripedRectFill(writer, graph, cluster, index + 1, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
     } else {
@@ -15801,6 +15812,10 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"api\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"edge\" data-vex-object-id=\"0\" data-vex-object-label=\"job\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"service\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-y=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-width=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-height=\"") != null);
 }
 
 test "SVG metadata index records layers" {
@@ -15838,6 +15853,12 @@ test "SVG metadata index records layers" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"edge\" data-vex-object-id=\"0\" data-vex-object-label=\"a&amp;b\" data-vex-object-layer=\"base:detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"outer\" data-vex-object-layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"1\" data-vex-object-label=\"Inner\" data-vex-object-layer=\"detail\"") != null);
+    const node_fragment = svgGroupFragmentById(svg, "node1") orelse return error.MissingNodeGroup;
+    const cluster_fragment = svgGroupFragmentById(svg, "clust1") orelse return error.MissingClusterGroup;
+    try std.testing.expect(std.mem.indexOf(u8, node_fragment, "data-vex-object-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, node_fragment, "data-vex-object-height=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "data-vex-object-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "data-vex-object-height=\"") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
