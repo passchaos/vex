@@ -199,6 +199,7 @@ pub const GraphRatio = union(enum) {
 
 const label_left_break: u8 = 0x1e;
 const label_right_break: u8 = 0x1f;
+const svg_label_breaks = svg_mod.text.LabelBreaks{ .left = label_left_break, .right = label_right_break };
 
 pub const GraphAttr = union(enum) {
     label: []const u8,
@@ -10612,12 +10613,7 @@ const MarkerShape = enum {
 const default_graphviz_fontname = "Times-Roman";
 const default_svg_font_family = "Times,serif";
 
-const SvgFont = struct {
-    family: []const u8,
-    weight: ?[]const u8 = null,
-    stretch: ?[]const u8 = null,
-    style: ?[]const u8 = null,
-};
+const SvgFont = svg_mod.text.Font;
 
 const NodeVisual = struct {
     fill: []const u8,
@@ -13925,44 +13921,19 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
 }
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
-    try renderSvgTextBlockWithAnchor(writer, text, x, center_y, font_size, fill, font, label_background, dominant_middle, "middle", null);
+    try svg_mod.text.renderBlock(writer, text, x, center_y, font_size, fill, font, label_background, dominant_middle, svg_label_breaks);
 }
 
 fn writeSvgTextFill(writer: *Io.Writer, fill: []const u8) Io.Writer.Error!void {
-    if (std.ascii.eqlIgnoreCase(fill, "black")) return;
-    try writer.print(" fill=\"{s}\"", .{fill});
+    try svg_mod.text.fill(writer, fill);
 }
 
 fn writeSvgTextOpen(writer: *Io.Writer, text_anchor: []const u8, x: f64, y: f64, font: SvgFont, font_size: f64) Io.Writer.Error!void {
-    try writer.print("<text xml:space=\"preserve\" text-anchor=\"{s}\" x=\"", .{text_anchor});
-    try writeSvgNumber(writer, x);
-    try writer.writeAll("\" y=\"");
-    try writeSvgNumber(writer, y);
-    try writer.writeByte('"');
-    try writeSvgFontAttrs(writer, font, font_size);
+    try svg_mod.text.open(writer, text_anchor, x, y, font, font_size);
 }
 
 fn writeSvgFontAttrs(writer: *Io.Writer, font: SvgFont, font_size: f64) Io.Writer.Error!void {
-    try writer.print(" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ font.family, font_size });
-    if (font.weight) |weight| try writer.print(" font-weight=\"{s}\"", .{weight});
-    if (font.stretch) |stretch| try writer.print(" font-stretch=\"{s}\"", .{stretch});
-    if (font.style) |style| try writer.print(" font-style=\"{s}\"", .{style});
-}
-
-fn writeSvgTspanOpen(writer: *Io.Writer, x: f64, anchor: ?[]const u8) Io.Writer.Error!void {
-    try writer.writeAll("<tspan x=\"");
-    try writeSvgNumber(writer, x);
-    try writer.writeByte('"');
-    if (anchor) |value| try writer.print(" text-anchor=\"{s}\"", .{value});
-    try writer.writeByte('>');
-}
-
-fn writeSvgTspanOpenDy(writer: *Io.Writer, x: f64, dy: f64, anchor: ?[]const u8) Io.Writer.Error!void {
-    try writer.writeAll("<tspan x=\"");
-    try writeSvgNumber(writer, x);
-    try writer.print("\" dy=\"{d:.1}\"", .{dy});
-    if (anchor) |value| try writer.print(" text-anchor=\"{s}\"", .{value});
-    try writer.writeByte('>');
+    try svg_mod.text.fontAttrs(writer, font, font_size);
 }
 
 fn plainSingleLineLabel(text: []const u8) bool {
@@ -13973,61 +13944,11 @@ fn plainSingleLineLabel(text: []const u8) bool {
 }
 
 fn renderSvgPlainTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, text_anchor: []const u8) Io.Writer.Error!void {
-    const line_height = font_size * 1.25;
-    const y = center_y - line_height / 2.0 + line_height * 0.72;
-    try writeSvgTextOpen(writer, text_anchor, x, y, font, font_size);
-    try writeSvgTextFill(writer, fill);
-    try writer.writeAll(">");
-    try writeXmlEscaped(writer, text);
-    try writer.writeAll("</text>\n");
+    try svg_mod.text.renderPlainBlock(writer, text, x, center_y, font_size, fill, font, text_anchor, svg_label_breaks);
 }
 
 fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, label_background: bool, dominant_middle: bool, text_anchor: []const u8, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
-    const line_count = displayLabelLineCount(text);
-    const line_height = font_size * 1.25;
-    const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
-    const first_y = center_y - block_height / 2.0 + line_height * 0.72;
-
-    if (label_background) {
-        const max_len = displayLabelMaxLineLen(text);
-        const width = @as(f64, @floatFromInt(max_len)) * font_size * 0.62 + 12.0;
-        const height = block_height + 8.0;
-        try writeSvgRectOpen(writer, .{ .x = x - width / 2.0, .y = center_y - height / 2.0, .width = width, .height = height }, 4);
-        try writer.writeAll(" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n");
-    }
-
-    try writeSvgTextOpen(writer, text_anchor, x, first_y, font, font_size);
-    try writeSvgTextFill(writer, fill);
-    if (dominant_middle and line_count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
-    try writer.writeAll(">");
-    try writeDisplayLabelTspans(writer, text, x, line_height, forced_line_anchor);
-    try writer.writeAll("</text>\n");
-}
-
-fn writeDisplayLabelTspans(writer: *Io.Writer, text: []const u8, x: f64, line_height: f64, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
-    var start: usize = 0;
-    var index: usize = 0;
-    var line_index: usize = 0;
-    while (index <= text.len) : (index += 1) {
-        if (index < text.len and !isLabelLineBreak(text[index])) continue;
-        const line_anchor = forced_line_anchor orelse labelLineAnchor(if (index < text.len) text[index] else '\n');
-        if (line_index == 0) {
-            try writeSvgTspanOpen(writer, x, line_anchor);
-        } else {
-            try writer.writeAll("</tspan>");
-            try writeSvgTspanOpenDy(writer, x, line_height, line_anchor);
-        }
-        const line = text[start..index];
-        try writeXmlEscaped(writer, line);
-        if (index >= text.len) break;
-        start = index + 1;
-        line_index += 1;
-    }
-    try writer.writeAll("</tspan>");
-}
-
-fn labelLineAnchor(c: u8) ?[]const u8 {
-    return if (c == label_left_break) "start" else if (c == label_right_break) "end" else null;
+    try svg_mod.text.renderBlockWithAnchor(writer, text, x, center_y, font_size, fill, font, label_background, dominant_middle, text_anchor, forced_line_anchor, svg_label_breaks);
 }
 
 fn maybeNodeIdByLabel(graph: *const Graph, label: []const u8) ?NodeId {
