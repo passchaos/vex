@@ -195,6 +195,9 @@ pub const GraphAttr = union(enum) {
     label: []const u8,
     rankdir: RankDir,
     layout: LayoutAlgorithm,
+    rotate: f64,
+    landscape: bool,
+    orientation: []const u8,
     compound: bool,
     concentrate: bool,
     nodesep: f64,
@@ -908,6 +911,9 @@ pub const Graph = struct {
                 try self.setGraphAttrRaw("rankdir", rankDirName(value));
             },
             .layout => |value| try self.setGraphAttrRaw("layout", layoutAlgorithmName(value)),
+            .rotate => |value| try self.setGraphAttrFloat("rotate", value),
+            .landscape => |value| try self.setGraphAttrRaw("landscape", boolAttrValue(value)),
+            .orientation => |value| try self.setGraphAttrRaw("orientation", value),
             .compound => |value| try self.setGraphAttrRaw("compound", boolAttrValue(value)),
             .concentrate => |value| try self.setGraphAttrRaw("concentrate", boolAttrValue(value)),
             .nodesep => |value| try self.setGraphAttrFloat("nodesep", value),
@@ -7851,6 +7857,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     }
     canvas_width = @ceil(canvas_width);
     canvas_height = @ceil(canvas_height);
+    const landscape = graphSvgLandscape(graph);
+    const svg_width = if (landscape) canvas_height else canvas_width;
+    const svg_height = if (landscape) canvas_width else canvas_height;
     const background_left = -content_translate.x;
     const background_top = -content_translate.y;
     const background_right = canvas_width - content_translate.x;
@@ -7864,7 +7873,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     }
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
-        .{ canvas_width, canvas_height, canvas_width, canvas_height },
+        .{ svg_width, svg_height, svg_width, svg_height },
     );
     try writeSvgGroupOpenStart(writer, .{
         .graph = graph,
@@ -7874,10 +7883,20 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         .context = .{ .graph_name = graph.name, .label_name = graphFallbackTitle(graph) },
         .is_root_graph = true,
     });
-    try writer.writeAll(" transform=\"scale(1 1) rotate(0) translate(");
-    try writeSvgNumber(writer, content_translate.x);
-    try writer.writeByte(' ');
-    try writeSvgNumber(writer, content_translate.y);
+    try writer.writeAll(" transform=\"scale(1 1) ");
+    if (landscape) {
+        try writer.writeAll("matrix(0 1 -1 0 ");
+        try writeSvgNumber(writer, canvas_height);
+        try writer.writeAll(" 0) translate(");
+        try writeSvgNumber(writer, content_translate.x);
+        try writer.writeByte(' ');
+        try writeSvgNumber(writer, content_translate.y);
+    } else {
+        try writer.writeAll("rotate(0) translate(");
+        try writeSvgNumber(writer, content_translate.x);
+        try writer.writeByte(' ');
+        try writeSvgNumber(writer, content_translate.y);
+    }
     try writer.writeAll(")\">\n");
     if (attrValue(graph.attrs.items, "comment")) |comment| {
         if (comment.len > 0) try writeSvgComment(writer, comment);
@@ -8316,6 +8335,20 @@ fn svgGraphContentTranslate(layout: *const Layout) f64 {
 
 fn graphSvgPad(graph: *const Graph) BoxMargin {
     return attrPad(graph.attrs.items, svg_clip_padding);
+}
+
+fn graphSvgLandscape(graph: *const Graph) bool {
+    if (attrValue(graph.attrs.items, "rotate")) |value| {
+        const angle = std.fmt.parseFloat(f64, value) catch return false;
+        return @abs(@mod(@abs(angle), 180.0) - 90.0) <= 0.001;
+    }
+    if (attrValue(graph.attrs.items, "landscape")) |value| {
+        if (parseBool(value)) |enabled| return enabled;
+    }
+    if (attrValue(graph.attrs.items, "orientation")) |value| {
+        return std.ascii.startsWithIgnoreCase(value, "l");
+    }
+    return false;
 }
 
 fn attrPad(attrs: []const Attr, fallback: f64) BoxMargin {
@@ -17786,6 +17819,53 @@ test "SVG renderer honors graph pad attribute in canvas bounds" {
     const tiny = attrPad(attrs[0..], svg_clip_padding);
     try std.testing.expectApproxEqAbs(@as(f64, 3.6), tiny.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 7.2), tiny.y, 0.001);
+}
+
+test "SVG renderer honors Graphviz landscape orientation attributes" {
+    const allocator = std.testing.allocator;
+    var rotated = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rotate=90];
+        \\  a -> b -> c;
+        \\}
+    );
+    defer rotated.deinit();
+
+    var rotated_layout = try layoutLayered(allocator, &rotated, .{});
+    defer rotated_layout.deinit();
+    const rotated_svg = try renderSvgAlloc(allocator, &rotated, &rotated_layout, .{});
+    defer allocator.free(rotated_svg);
+    const rotated_view_box = svgViewBox(rotated_svg) orelse return error.MissingViewBox;
+    try std.testing.expectEqual(@ceil(rotated_layout.height), rotated_view_box.width);
+    try std.testing.expectEqual(@ceil(rotated_layout.width), rotated_view_box.height);
+    try std.testing.expect(std.mem.indexOf(u8, rotated_svg, "matrix(0 1 -1 0 ") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .landscape = true });
+    const ta = try typed.addNode("A", .{});
+    const tb = try typed.addNode("B", .{});
+    _ = try typed.addEdge(ta, tb, .{});
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "landscape").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "matrix(0 1 -1 0 ") != null);
+
+    var orientation = try Graph.init(allocator, .{ .directed = true });
+    defer orientation.deinit();
+    try orientation.setGraphAttr(.{ .orientation = "landscape" });
+    try orientation.setGraphAttr(.{ .rotate = 0 });
+    const oa = try orientation.addNode("A", .{});
+    const ob = try orientation.addNode("B", .{});
+    _ = try orientation.addEdge(oa, ob, .{});
+    var orientation_layout = try layoutLayered(allocator, &orientation, .{});
+    defer orientation_layout.deinit();
+    const orientation_svg = try renderSvgAlloc(allocator, &orientation, &orientation_layout, .{});
+    defer allocator.free(orientation_svg);
+    try std.testing.expect(std.mem.indexOf(u8, orientation_svg, "matrix(0 1 -1 0 ") == null);
+    try std.testing.expect(std.mem.indexOf(u8, orientation_svg, "rotate(0)") != null);
 }
 
 test "SVG renderer honors Graphviz outputorder" {
