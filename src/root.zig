@@ -8044,6 +8044,11 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             interactiveTarget(edge_item.attrs.items, .edge),
             edge_context,
         );
+        try writer.print(" weight=\"{d}\" constraint=\"{s}\" minlen=\"{d}\"", .{
+            edge_item.weight,
+            if (edge_item.constraint) "true" else "false",
+            edge_item.min_len,
+        });
         if (edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) {
             try writer.writeAll(">\n");
             for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
@@ -9298,6 +9303,9 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_head_port = if (metadata) edge_item.head_port else .auto,
         .object_ltail = if (metadata) edge_item.ltail else null,
         .object_lhead = if (metadata) edge_item.lhead else null,
+        .object_weight = if (metadata) edge_item.weight else null,
+        .object_constraint = if (metadata) edge_item.constraint else null,
+        .object_min_len = if (metadata) edge_item.min_len else null,
         .object_waypoints = object_waypoints,
         .collapse_member = collapse_member,
     });
@@ -9932,6 +9940,9 @@ const SvgGroupOpenOptions = struct {
     object_head_port: CompassPort = .auto,
     object_ltail: ?SubgraphId = null,
     object_lhead: ?SubgraphId = null,
+    object_weight: ?f64 = null,
+    object_constraint: ?bool = null,
+    object_min_len: ?usize = null,
     object_waypoints: ?[]const EdgeWaypoint = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
@@ -10066,6 +10077,9 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         try writeSvgPortMetadataAttr(writer, "data-vex-object-", "head-port", options.object_head_record_port, options.object_head_port);
         if (options.object_ltail) |ltail| try writer.print(" data-vex-object-ltail=\"{d}\"", .{ltail});
         if (options.object_lhead) |lhead| try writer.print(" data-vex-object-lhead=\"{d}\"", .{lhead});
+        if (options.object_weight) |weight| try writer.print(" data-vex-object-weight=\"{d}\"", .{weight});
+        if (options.object_constraint) |constraint| try writer.print(" data-vex-object-constraint=\"{s}\"", .{if (constraint) "true" else "false"});
+        if (options.object_min_len) |min_len| try writer.print(" data-vex-object-minlen=\"{d}\"", .{min_len});
         if (options.object_waypoints) |waypoints| {
             try writer.writeAll(" data-vex-object-waypoints=\"");
             for (waypoints, 0..) |waypoint, index| {
@@ -16134,7 +16148,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\" weight=\"1\" constraint=\"true\" minlen=\"1\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"api\" data-vex-object-shape=\"ellipse\"") != null);
@@ -16332,6 +16346,27 @@ test "SVG metadata indexes rank constraints" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank kind=\"source\" nodes=\"2\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank kind=\"sink\" nodes=\"3\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "</vex:rank-constraints>") != null);
+}
+
+test "SVG metadata records effective edge layout attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph EdgeLayout {
+        \\  a -> b;
+        \\  b -> c [weight=2.5, constraint=false, minlen=3];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"a\" to-label=\"b\" weight=\"1\" constraint=\"true\" minlen=\"1\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"1\" from=\"1\" to=\"2\" from-label=\"b\" to-label=\"c\" weight=\"2.5\" constraint=\"false\" minlen=\"3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from-label=\"a\" data-vex-object-to-label=\"b\" data-vex-object-weight=\"1\" data-vex-object-constraint=\"true\" data-vex-object-minlen=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from-label=\"b\" data-vex-object-to-label=\"c\" data-vex-object-weight=\"2.5\" data-vex-object-constraint=\"false\" data-vex-object-minlen=\"3\"") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
