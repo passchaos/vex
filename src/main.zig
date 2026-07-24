@@ -9,6 +9,7 @@ const usage =
     \\
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
+    \\        [--check|--validate]
     \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
@@ -26,6 +27,7 @@ const usage =
     \\output is written to stdout.
     \\Default input format is auto. Default layout is DOT/Sugiyama and honors
     \\rankdir=TB|BT|LR|RL.
+    \\--check parses input and reports graph counts without layout or rendering.
     \\--max-input-bytes caps DOT/Mermaid input reads.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps force/neato layout iterations.
@@ -51,6 +53,7 @@ pub fn main(init: std.process.Init) !void {
 
     var input_path: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
+    var check_only = false;
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var max_input_bytes: usize = default_max_input_bytes;
@@ -84,6 +87,8 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingOutputPath;
             output_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "--validate")) {
+            check_only = true;
         } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
             i += 1;
             if (i >= args.len) return error.MissingFormat;
@@ -172,6 +177,11 @@ pub fn main(init: std.process.Init) !void {
     };
     defer graph.deinit();
 
+    if (check_only) {
+        try writeCheckSummary(io, &graph);
+        return;
+    }
+
     var layered_options = vex.LayoutOptions{};
     if (crossing_passes) |value| layered_options.crossing_passes = value;
     if (coordinate_passes) |value| layered_options.coordinate_passes = value;
@@ -231,4 +241,47 @@ fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {
     if (diagnostic.token.len > 0) try writer.print("  token: {s}\n", .{diagnostic.token});
     if (diagnostic.hint.len > 0) try writer.print("  hint: {s}\n", .{diagnostic.hint});
     try writer.flush();
+}
+
+fn writeCheckSummary(io: Io, graph: *const vex.Graph) !void {
+    var stderr_buffer: [512]u8 = undefined;
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    try writeCheckSummaryWriter(&stderr_file_writer.interface, graph);
+    try stderr_file_writer.interface.flush();
+}
+
+fn writeCheckSummaryWriter(writer: *Io.Writer, graph: *const vex.Graph) Io.Writer.Error!void {
+    try writer.print(
+        "input ok: graph={s} directed={s} nodes={d} edges={d} subgraphs={d}\n",
+        .{
+            graph.name,
+            if (graph.directed) "true" else "false",
+            graph.nodes.items.len,
+            graph.edges.items.len,
+            graph.subgraphs.items.len,
+        },
+    );
+}
+
+test "check summary reports graph counts" {
+    const allocator = std.testing.allocator;
+    var graph = try vex.parseInput(allocator,
+        \\digraph Vex {
+        \\  A -> B;
+        \\  B -> C;
+        \\  C -> A;
+        \\}
+    , .dot);
+    defer graph.deinit();
+
+    var aw = Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try writeCheckSummaryWriter(&aw.writer, &graph);
+    const summary = try aw.toOwnedSlice();
+    defer allocator.free(summary);
+
+    try std.testing.expectEqualStrings(
+        "input ok: graph=Vex directed=true nodes=3 edges=3 subgraphs=0\n",
+        summary,
+    );
 }

@@ -23,6 +23,7 @@ See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide
 ## CLI
 
 ```sh
+zig build run -- --input examples/simple.dot --check
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
@@ -57,6 +58,10 @@ same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
 
 DOT parse failures report a line, column, source excerpt, caret, and repair hint
 so input mistakes can be fixed without rerunning through another tool.
+
+`--check` / `--validate` parses DOT or Mermaid input and reports graph counts
+without running layout or rendering, which is useful for CI and fast input
+validation.
 
 `--max-input-bytes` caps input reads for DOT and Mermaid sources, including stdin,
 so preview workflows can fail early on unexpectedly large graph inputs.
