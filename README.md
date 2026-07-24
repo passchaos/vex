@@ -214,9 +214,15 @@ Default node and edge label attributes set through the API apply to subsequently
 ## C API
 
 `zig build` installs `zig-out/include/vex.h` and
-`zig-out/lib/libvex_c.a`. The C ABI supports graph construction, DOT-to-SVG,
-all five layout engines, layout work budgets, and SVG metadata v1. Run
-`zig build test-c-api` for a real C compiler/linker smoke.
+`zig-out/lib/libvex_c.a` plus the platform shared library. The C ABI supports
+graph construction, DOT-to-SVG, all five layout engines, layout work budgets,
+and SVG metadata v1. Run `zig build test-c-api` for a real C compiler/linker
+smoke.
+
+`bindings/python/vex.py` provides a dependency-free Python `ctypes` wrapper
+over C API v1. It supports `Graph`, `render_dot`, layout selection, metadata,
+and cancellation. Run `zig build test-python-api` for builder/DOT/error/cancel
+coverage; see [`bindings/python/README.md`](bindings/python/README.md).
 
 ## API Examples
 

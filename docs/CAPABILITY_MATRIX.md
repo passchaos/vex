@@ -45,7 +45,7 @@
 | 精确解析诊断 | 部分完成 | line/column/source/caret/hint 测试 | 扩展到目标 grammar 的语义错误和批量诊断 |
 | 可配置布局/输入预算 | 部分完成 | parse-only、max input、force iterations、layered pass budgets；五引擎 `LayoutControl` / `LayoutWorkBudget` 取消和 CLI exit-2 smoke；sfdp Barnes-Hut 精度/交互次数门槛和 512-node SVG smoke | 增加稳定时间/峰值内存观测和更大规模基准门槛 |
 | 增量布局与心理地图稳定性 | 已验证 | `layoutGraphIncremental`；layered/force 共享节点位移门槛、无重叠/边界和 `stability=0` 等价测试 | 保持 NodeId 驱动；共享节点位移显著低于完整重排 |
-| 多语言/运行时绑定 | 部分完成 | stable C ABI v1、installed header/static library、Zig ABI tests 和真实 C compiler/linker smoke | 按产品需求继续提供 WASM、JS 或 Python 原生绑定 |
+| 多语言/运行时绑定 | 部分完成 | stable C ABI v1；installed header/static/shared library；Zig ABI 和真实 C smoke；dependency-free Python ctypes builder/DOT/error/cancel smoke | 按产品需求继续提供 WASM 或 JS 原生绑定 |
 | 流式/并行大图管线 | 未实现 | 当前 parser/layout 为内存内串行流程 | 建立代表性规模、吞吐、峰值内存和取消门槛 |
 | 清晰模块边界 | 部分完成 | 已拆出 `src/layout/*`、`src/svg/*` | `src/root.zig` 仍承载 parser/model/layout/render 大量实现；继续按稳定边界拆分 |
 

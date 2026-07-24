@@ -1,0 +1,38 @@
+# Vex Python Binding
+
+This dependency-free binding uses Python `ctypes` and the stable Vex C API v1.
+
+Build the shared library:
+
+```sh
+zig build
+```
+
+Use it from the repository:
+
+```python
+from bindings.python.vex import Graph, RenderConfig, render_dot
+
+with Graph("Python", directed=True) as graph:
+    start = graph.add_node("Start")
+    finish = graph.add_node("Finish")
+    graph.add_edge(start, finish, "flow")
+    svg = graph.render_svg(RenderConfig(layout="dot", metadata=True))
+
+svg = render_dot(
+    "graph G { a -- b }",
+    RenderConfig(layout="neato", iterations=40),
+)
+```
+
+Library lookup order:
+
+1. `VEX_LIBRARY`
+2. repository `zig-out/lib`
+3. platform dynamic-loader search path
+
+Run the real binding smoke:
+
+```sh
+zig build test-python-api
+```

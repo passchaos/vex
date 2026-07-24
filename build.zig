@@ -103,6 +103,14 @@ pub fn build(b: *std.Build) void {
     c_api.installHeader(b.path("include/vex.h"), "vex.h");
     b.installArtifact(c_api);
 
+    const c_api_shared = b.addLibrary(.{
+        .name = "vex_c",
+        .linkage = .dynamic,
+        .root_module = c_api_mod,
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+    });
+    b.installArtifact(c_api_shared);
+
     const c_api_smoke = b.addExecutable(.{
         .name = "vex-c-api-smoke",
         .root_module = b.createModule(.{
@@ -120,6 +128,11 @@ pub fn build(b: *std.Build) void {
     const run_c_api_smoke = b.addRunArtifact(c_api_smoke);
     const c_api_smoke_step = b.step("test-c-api", "Build and run the C ABI smoke test");
     c_api_smoke_step.dependOn(&run_c_api_smoke.step);
+
+    const python_api_smoke = b.addSystemCommand(&.{ "python3", b.pathFromRoot("tools/python_api_smoke.py") });
+    python_api_smoke.addFileArg(c_api_shared.getEmittedBin());
+    const python_api_smoke_step = b.step("test-python-api", "Build and run the Python ctypes smoke test");
+    python_api_smoke_step.dependOn(&python_api_smoke.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -265,6 +278,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_c_api_tests.step);
     test_step.dependOn(&run_c_api_smoke.step);
+    test_step.dependOn(&python_api_smoke.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
