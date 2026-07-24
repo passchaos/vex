@@ -7982,7 +7982,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (svgNeedsMarkerDefs(graph, concentrate)) {
         try writer.writeAll("<defs>\n");
         for (graph.edges.items) |edge_item| {
-            if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
+            const edge_concentrate = svgConcentrateForEdge(graph, edge_item, concentrate);
+            if (edge_concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(graph, edge_item);
             if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(graph, edge_item, visual, true), edgeMarkerFill(graph, edge_item, visual, true), visual.marker_scale);
             if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(graph, edge_item, visual, false), edgeMarkerFill(graph, edge_item, visual, false), visual.marker_scale);
@@ -8153,7 +8154,8 @@ fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
 }
 
 fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext) Io.Writer.Error!void {
-    if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
+    const edge_concentrate = svgConcentrateForEdge(graph, edge_item, concentrate);
+    if (edge_concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
     if (layer) |context| {
         if (!svgEdgeInLayer(graph, edge_item, context)) return;
     }
@@ -10231,6 +10233,14 @@ fn graphConcentrateEnabled(graph: *const Graph) bool {
 
 fn isConcentratedDuplicateEdge(graph: *const Graph, edge_id: EdgeId) bool {
     return svg_mod.edge.isConcentratedDuplicate(graph.directed, graph.edges.items, edge_id);
+}
+
+fn svgConcentrateForEdge(graph: *const Graph, edge_item: Edge, fallback: bool) bool {
+    const from_cluster = clusterIndexContainingNode(graph, edge_item.from) orelse return fallback;
+    const to_cluster = clusterIndexContainingNode(graph, edge_item.to) orelse return fallback;
+    if (from_cluster != to_cluster) return fallback;
+    if (attrValue(graph.subgraphs.items[from_cluster].attrs.items, "concentrate") == null) return fallback;
+    return svg_mod.edge.concentrateEnabled(graph.subgraphs.items[from_cluster].attrs.items);
 }
 
 fn graphFontNamesMode(graph: *const Graph) FontNames {
@@ -18377,6 +18387,53 @@ test "SVG renderer honors DOT concentrate graph attribute for duplicate edges" {
     defer allocator.free(normal_svg);
     try std.testing.expect(renderedEdgePathCount(normal_svg) >= 2);
     try std.testing.expect(std.mem.indexOf(u8, normal_svg, "second") != null);
+}
+
+test "SVG renderer honors subgraph concentrate for internal duplicate edges" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_internal {
+        \\    concentrate=true;
+        \\    a -> b [label="first"];
+        \\    a -> b [label="second"];
+        \\  }
+        \\  b -> c [label="outside1"];
+        \\  b -> c [label="outside2"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "second") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "outside1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "outside2") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    const a = try typed.addNode("a", .{});
+    const b = try typed.addNode("b", .{});
+    const c = try typed.addNode("c", .{});
+    _ = try typed.addEdge(a, b, .{ .label = "first" });
+    _ = try typed.addEdge(a, b, .{ .label = "second" });
+    _ = try typed.addEdge(b, c, .{ .label = "outside1" });
+    _ = try typed.addEdge(b, c, .{ .label = "outside2" });
+    const subgraph = try typed.addSubgraph("internal", null, &.{ a, b }, .{ .concentrate = true });
+    try std.testing.expectEqualStrings("true", attrValue(typed.subgraphs.items[subgraph].attrs.items, "concentrate").?);
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "second") == null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "outside1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "outside2") != null);
 }
 
 test "DOT subgraphs scope default node and edge attributes" {
