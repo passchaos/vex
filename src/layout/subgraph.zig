@@ -4,6 +4,26 @@ const std = @import("std");
 
 const spacing = @import("spacing.zig");
 
+pub const OrderingMode = enum {
+    none,
+    in,
+    out,
+
+    pub fn name(self: OrderingMode) []const u8 {
+        return switch (self) {
+            .none => "",
+            .in => "in",
+            .out => "out",
+        };
+    }
+
+    pub fn fromString(value: []const u8) OrderingMode {
+        if (std.ascii.eqlIgnoreCase(value, "in")) return .in;
+        if (std.ascii.eqlIgnoreCase(value, "out")) return .out;
+        return .none;
+    }
+};
+
 pub fn compoundEnabled(attrs: anytype) bool {
     const value = attrValue(attrs, "compound") orelse return false;
     return parseBool(value) orelse false;

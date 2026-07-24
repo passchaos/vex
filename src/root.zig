@@ -101,11 +101,7 @@ pub const GraphOptions = struct {
 pub const LabelJust = svg_mod.text.LabelJust;
 pub const LabelLoc = svg_mod.text.LabelLoc;
 
-pub const OrderingMode = enum {
-    none,
-    in,
-    out,
-};
+pub const OrderingMode = layout_mod.subgraph.OrderingMode;
 
 pub const SplineMode = svg_mod.edge.SplineMode;
 
@@ -852,7 +848,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setGraphAttrRaw("labelloc", value.name()),
             .nojustify => |value| try self.setGraphAttrRaw("nojustify", boolAttrValue(value)),
             .outputorder => |value| try self.setGraphAttrRaw("outputorder", value.name()),
-            .ordering => |value| try self.setGraphAttrRaw("ordering", orderingModeName(value)),
+            .ordering => |value| try self.setGraphAttrRaw("ordering", value.name()),
             .url => |value| try self.setGraphAttrRaw("URL", value),
             .href => |value| try self.setGraphAttrRaw("href", value),
             .tooltip => |value| try self.setGraphAttrRaw("tooltip", value),
@@ -928,7 +924,7 @@ pub const Graph = struct {
             .id => |value| try self.setDefaultNodeAttrRaw("id", value),
             .class => |value| try self.setDefaultNodeAttrRaw("class", value),
             .comment => |value| try self.setDefaultNodeAttrRaw("comment", value),
-            .ordering => |value| try self.setDefaultNodeAttrRaw("ordering", orderingModeName(value)),
+            .ordering => |value| try self.setDefaultNodeAttrRaw("ordering", value.name()),
             .group => |value| try self.setDefaultNodeAttrRaw("group", value),
             .layer => |value| try self.setDefaultNodeAttrRaw("layer", value),
         }
@@ -1136,7 +1132,7 @@ pub const Graph = struct {
             .id => |value| try self.setNodeAttrRaw(id, "id", value),
             .class => |value| try self.setNodeAttrRaw(id, "class", value),
             .comment => |value| try self.setNodeAttrRaw(id, "comment", value),
-            .ordering => |value| try self.setNodeAttrRaw(id, "ordering", orderingModeName(value)),
+            .ordering => |value| try self.setNodeAttrRaw(id, "ordering", value.name()),
             .group => |value| try self.setNodeAttrRaw(id, "group", value),
             .layer => |value| try self.setNodeAttrRaw(id, "layer", value),
         }
@@ -1427,7 +1423,7 @@ pub const Graph = struct {
             },
             .splines => |value| try self.setSubgraphAttrRaw(id, "splines", value.name()),
             .bgcolor => |value| try self.setSubgraphAttrRaw(id, "bgcolor", value),
-            .ordering => |value| try self.setSubgraphAttrRaw(id, "ordering", orderingModeName(value)),
+            .ordering => |value| try self.setSubgraphAttrRaw(id, "ordering", value.name()),
             .color => |value| try self.setSubgraphAttrRaw(id, "color", value),
             .pencolor => |value| try self.setSubgraphAttrRaw(id, "pencolor", value),
             .colorscheme => |value| try self.setSubgraphAttrRaw(id, "colorscheme", value),
@@ -1642,14 +1638,6 @@ fn shapeName(shape: Shape) []const u8 {
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
-    };
-}
-
-fn orderingModeName(mode: OrderingMode) []const u8 {
-    return switch (mode) {
-        .none => "",
-        .in => "in",
-        .out => "out",
     };
 }
 
@@ -6477,10 +6465,7 @@ fn subgraphOrderingModeForNode(graph: *const Graph, node_id: NodeId) OrderingMod
 }
 
 fn orderingMode(value: ?[]const u8) OrderingMode {
-    const text = value orelse return .none;
-    if (std.ascii.eqlIgnoreCase(text, "out")) return .out;
-    if (std.ascii.eqlIgnoreCase(text, "in")) return .in;
-    return .none;
+    return OrderingMode.fromString(value orelse return .none);
 }
 
 fn applyNodeOrdering(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, node_id: NodeId, out_order: bool) void {
