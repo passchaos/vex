@@ -27,7 +27,7 @@
 | --- | --- | --- | --- |
 | DOT 实用语法 | 部分完成 | strict、subgraph、ports、edge chains、rank groups、字符串与注释测试；`src/testdata/dot_non_html_*.dot` corpus | 扩展非 HTML-like label 的目标 DOT grammar corpus；所有支持/拒绝项有诊断测试 |
 | 核心图模型与 Zig API | 已验证 | `Graph`、`NodeId`、typed attrs、API 示例与测试 | 保持 `NodeId` 身份、`label` 显示语义和 parser 局部 textual-id 映射 |
-| strict graph 合并语义 | 已验证 | strict DOT/API duplicate-edge 测试 | 有向与无向路径持续通过 |
+| strict / keyed edge identity | 已验证 | Graphviz `agedge` source oracle；strict DOT/API duplicate-edge、non-strict same-key reopen、different-key parallel edge、undirected canonicalization 和 file corpus 测试 | strict 保持端点唯一；`key` 仅留在 parser 边界 |
 | layered/Sugiyama 布局 | 部分完成 | rank、crossing、coordinate、long-edge、compound 与 cluster 测试 | 完整目标 cluster 语义 corpus；大图质量与性能门槛 |
 | force-directed 布局 | 已验证 | independent neato stress-majorization；independent fdp spring-electrical with K/T0/len/weight and cluster boxes；independent sfdp deterministic coarsen/prolongate/refine with levels/K/repulsiveforce；deterministic Fruchterman-Reingold；规模、能量、属性、引擎区分和预算测试 | 保持四条引擎路径独立，持续扩展规模基准 |
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |

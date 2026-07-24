@@ -1,0 +1,5 @@
+digraph KeyedEdges {
+  a -> b [key=primary, label=first, color=red]
+  a -> b [key=secondary, label=second, color=blue]
+  a -> b [key=primary, label=updated, penwidth=3]
+}

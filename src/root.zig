@@ -2075,7 +2075,9 @@ const Parser = struct {
     subgraph_scopes: std.ArrayList(?*AttrList) = .empty,
     subgraph_stack: std.ArrayList(SubgraphId) = .empty,
     node_index: std.StringHashMap(NodeId),
+    edge_key_index: std.StringHashMap(EdgeId),
     node_index_keys: std.ArrayList([]const u8) = .empty,
+    edge_key_index_keys: std.ArrayList([]const u8) = .empty,
     subgraph_text_ids: std.ArrayList([]const u8) = .empty,
     lex_error: ?anyerror = null,
 
@@ -2087,13 +2089,16 @@ const Parser = struct {
             .lexer = lexer,
             .current = first,
             .node_index = std.StringHashMap(NodeId).init(allocator),
+            .edge_key_index = std.StringHashMap(EdgeId).init(allocator),
         };
     }
 
     fn parse(self: *Parser) !Graph {
         defer freeStringList(self.allocator, &self.subgraph_text_ids);
+        defer freeStringList(self.allocator, &self.edge_key_index_keys);
         defer freeStringList(self.allocator, &self.node_index_keys);
         defer self.node_index.deinit();
+        defer self.edge_key_index.deinit();
         defer self.collectors.deinit(self.allocator);
         defer self.rank_scopes.deinit(self.allocator);
         defer self.subgraph_scopes.deinit(self.allocator);
@@ -2247,22 +2252,54 @@ const Parser = struct {
         var attrs = AttrList.empty;
         defer freeTempAttrs(self.allocator, &attrs);
         try self.parseAttrLists(&attrs);
+        const edge_key = attrValue(attrs.items, "key");
 
         var i: usize = 0;
         while (i + 1 < operands.items.len) : (i += 1) {
             for (operands.items[i].items) |from| {
                 for (operands.items[i + 1].items) |to| {
-                    const edge_id = try graph.addEdge(from.id, to.id, .{
-                        .tail_port = from.port,
-                        .head_port = to.port,
-                        .tail_record_port = from.record_port,
-                        .head_record_port = to.record_port,
-                    });
-                    try self.expandParsedEdgeDefaultLabelAttrs(graph, edge_id);
-                    for (attrs.items) |attr| try self.setParsedEdgeAttr(graph, edge_id, attr.name, attr.value);
+                    const parsed_edge = try self.addParsedEdge(graph, from, to, edge_key);
+                    if (parsed_edge.created) try self.expandParsedEdgeDefaultLabelAttrs(graph, parsed_edge.id);
+                    for (attrs.items) |attr| {
+                        if (std.ascii.eqlIgnoreCase(attr.name, "key")) continue;
+                        try self.setParsedEdgeAttr(graph, parsed_edge.id, attr.name, attr.value);
+                    }
                 }
             }
         }
+    }
+
+    const ParsedEdge = struct {
+        id: EdgeId,
+        created: bool,
+    };
+
+    fn addParsedEdge(self: *Parser, graph: *Graph, from: NodeRef, to: NodeRef, edge_key: ?[]const u8) !ParsedEdge {
+        const options = EdgeOptions{
+            .tail_port = from.port,
+            .head_port = to.port,
+            .tail_record_port = from.record_port,
+            .head_record_port = to.record_port,
+        };
+        if (!graph.strict) {
+            if (edge_key) |key| {
+                const lookup_key = try parsedEdgeKeyText(self.allocator, graph.directed, from.id, to.id, key);
+                if (self.edge_key_index.get(lookup_key)) |edge_id| {
+                    self.allocator.free(lookup_key);
+                    try graph.applyEdgeOptions(edge_id, options);
+                    return .{ .id = edge_id, .created = false };
+                }
+                const edge_id = try graph.addEdge(from.id, to.id, options);
+                try self.edge_key_index.put(lookup_key, edge_id);
+                errdefer _ = self.edge_key_index.remove(lookup_key);
+                try self.edge_key_index_keys.append(self.allocator, lookup_key);
+                return .{ .id = edge_id, .created = true };
+            }
+        }
+
+        const previous_count = graph.edges.items.len;
+        const edge_id = try graph.addEdge(from.id, to.id, options);
+        return .{ .id = edge_id, .created = graph.edges.items.len > previous_count };
     }
 
     fn parseOperandRefs(self: *Parser, graph: *Graph) anyerror!NodeRefSet {
@@ -2746,6 +2783,12 @@ fn edgePortText(buffer: []u8, record_port: ?[]const u8, port: CompassPort) ![]co
         return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, port.name() });
     }
     return port.name();
+}
+
+fn parsedEdgeKeyText(allocator: std.mem.Allocator, directed: bool, from: NodeId, to: NodeId, key: []const u8) ![]u8 {
+    const tail = if (!directed and from > to) to else from;
+    const head = if (!directed and from > to) from else to;
+    return std.fmt.allocPrint(allocator, "{d}:{d}:{d}:{s}", .{ tail, head, key.len, key });
 }
 
 const LabelEscapeContext = struct {
@@ -16168,6 +16211,70 @@ test "DOT parser merges strict duplicate edge statements" {
     try std.testing.expectEqual(@as(usize, 1), undirected.edges.items.len);
     try std.testing.expectEqualStrings("right", undirected.edges.items[0].label.?);
     try std.testing.expectEqualStrings("#16a34a", undirected.edges.items[0].color);
+}
+
+test "DOT edge key reopens named parallel edges in non strict graphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [key=primary, label=first, color=red];
+        \\  a -> b [key=secondary, label=second, color=blue];
+        \\  a -> b [key=primary, label=updated, penwidth=3];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
+    const primary = graph.edges.items[0];
+    const secondary = graph.edges.items[1];
+    try std.testing.expectEqualStrings("updated", primary.label.?);
+    try std.testing.expectEqualStrings("red", primary.color);
+    try std.testing.expectEqualStrings("3", attrValue(primary.attrs.items, "penwidth").?);
+    try std.testing.expect(attrValue(primary.attrs.items, "key") == null);
+    try std.testing.expectEqualStrings("second", secondary.label.?);
+    try std.testing.expectEqualStrings("blue", secondary.color);
+    try std.testing.expect(attrValue(secondary.attrs.items, "key") == null);
+}
+
+test "strict DOT ignores edge key for endpoint uniqueness" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\strict digraph G {
+        \\  a -> b [key=primary, label=first];
+        \\  a -> b [key=secondary, label=second];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.items.len);
+    try std.testing.expectEqualStrings("second", graph.edges.items[0].label.?);
+    try std.testing.expect(attrValue(graph.edges.items[0].attrs.items, "key") == null);
+}
+
+test "undirected DOT edge keys canonicalize endpoint order" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  a -- b [key=shared, label=first];
+        \\  b -- a [key=shared, label=second];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.items.len);
+    try std.testing.expectEqualStrings("second", graph.edges.items[0].label.?);
+}
+
+test "non HTML DOT edge key corpus parses with expected semantics" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_edge_keys.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
+    try std.testing.expectEqualStrings("updated", graph.edges.items[0].label.?);
+    try std.testing.expectEqualStrings("3", attrValue(graph.edges.items[0].attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("second", graph.edges.items[1].label.?);
 }
 
 test "code API allows duplicate node names and uses ids for identity" {

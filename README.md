@@ -260,6 +260,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - `graph` / `digraph` and optional `strict`.
 - Node statements: `A [label="Start", shape=box]`.
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
+- Graphviz edge `key` is handled as parser-local edge identity: the same
+  endpoints and key reopen an edge in non-strict graphs, while different keys
+  create parallel edges; strict graphs remain unique by endpoints.
 - Comma node lists in node statements and edge operands: `a, b -- c, d`.
 - Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph group { c d }`.
 - Named subgraphs use parent-relative identity: reopening the same name under
