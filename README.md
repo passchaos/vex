@@ -32,6 +32,7 @@ zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-pa
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
 zig build run -- --input examples/subgraph.dot --output collapse.svg --interactive-collapse
 zig build run -- --input examples/simple.dot --output filtered.svg --interactive-filter
+zig build run -- --input examples/subgraph.dot --output inspect.svg --interactive-inspector
 zig build run -- --input examples/simple.dot --output searchable.svg --interactive-search
 zig build run -- --input examples/simple.dot --output viewport.svg --interactive-viewport
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
@@ -70,6 +71,11 @@ subgraph's contents without re-rendering. It can also be enabled from DOT with
 subgraphs. It can also be enabled from DOT with
 `graph [vex_interactive_filter=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_filter = true } }`.
+
+`--interactive-inspector` embeds an object inspector panel. Clicking a node,
+edge, or subgraph shows its type, id/label, and selected metadata. It can also
+be enabled from DOT with `graph [vex_interactive_inspector=true]` or from the
+Zig API with `.{ .svg = .{ .interactive_inspector = true } }`.
 
 `--interactive-search` is another Vex SVG extension. It embeds a self-contained
 search and highlight panel and annotates rendered nodes, edges, and subgraphs
@@ -182,6 +188,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `vex_interactive_layers=true`, or `SvgOptions.interactive_layers`.
 - Vex SVG output can optionally embed native subgraph collapse controls via `--interactive-collapse`, `vex_interactive_collapse=true`, or `SvgOptions.interactive_collapse`.
 - Vex SVG output can optionally embed native object-type filter controls via `--interactive-filter`, `vex_interactive_filter=true`, or `SvgOptions.interactive_filter`.
+- Vex SVG output can optionally embed native object inspector controls via `--interactive-inspector`, `vex_interactive_inspector=true`, or `SvgOptions.interactive_inspector`.
 - Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `vex_interactive_search=true`, or `SvgOptions.interactive_search`.
 - Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.

@@ -12,7 +12,8 @@ const usage =
     \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-layers] [--interactive-collapse]
-    \\        [--interactive-filter] [--interactive-search]
+    \\        [--interactive-filter] [--interactive-inspector]
+    \\        [--interactive-search]
     \\        [--interactive-viewport]
     \\  vex --help
     \\
@@ -25,6 +26,7 @@ const usage =
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
     \\--interactive-filter adds SVG-native type filter controls.
+    \\--interactive-inspector adds SVG-native object metadata inspection.
     \\--interactive-search adds an SVG-native search and highlight panel.
     \\--interactive-viewport adds SVG-native pan and zoom controls.
     \\
@@ -50,6 +52,7 @@ pub fn main(init: std.process.Init) !void {
     var interactive_layers = false;
     var interactive_collapse = false;
     var interactive_filter = false;
+    var interactive_inspector = false;
     var interactive_search = false;
     var interactive_viewport = false;
 
@@ -86,6 +89,8 @@ pub fn main(init: std.process.Init) !void {
             interactive_collapse = true;
         } else if (std.mem.eql(u8, arg, "--interactive-filter")) {
             interactive_filter = true;
+        } else if (std.mem.eql(u8, arg, "--interactive-inspector")) {
+            interactive_inspector = true;
         } else if (std.mem.eql(u8, arg, "--interactive-search")) {
             interactive_search = true;
         } else if (std.mem.eql(u8, arg, "--interactive-viewport")) {
@@ -157,7 +162,7 @@ pub fn main(init: std.process.Init) !void {
     };
     var layout = try vex.layoutGraph(allocator, &graph, layout_config);
     defer layout.deinit();
-    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport } };
+    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);
