@@ -109,16 +109,8 @@ pub const GraphOptions = struct {
     rankdir: RankDir = .TB,
 };
 
-pub const LabelJust = enum {
-    left,
-    center,
-    right,
-};
-
-pub const LabelLoc = enum {
-    top,
-    bottom,
-};
+pub const LabelJust = svg_mod.text.LabelJust;
+pub const LabelLoc = svg_mod.text.LabelLoc;
 
 pub const OrderingMode = enum {
     none,
@@ -867,8 +859,8 @@ pub const Graph = struct {
             .fontnames => |value| try self.setGraphAttrRaw("fontnames", value.name()),
             .fontsize => |value| try self.setGraphAttrFloat("fontsize", value),
             .fontcolor => |value| try self.setGraphAttrRaw("fontcolor", value),
-            .labeljust => |value| try self.setGraphAttrRaw("labeljust", labelJustName(value)),
-            .labelloc => |value| try self.setGraphAttrRaw("labelloc", labelLocName(value)),
+            .labeljust => |value| try self.setGraphAttrRaw("labeljust", value.name()),
+            .labelloc => |value| try self.setGraphAttrRaw("labelloc", value.name()),
             .nojustify => |value| try self.setGraphAttrRaw("nojustify", boolAttrValue(value)),
             .outputorder => |value| try self.setGraphAttrRaw("outputorder", value.name()),
             .ordering => |value| try self.setGraphAttrRaw("ordering", orderingModeName(value)),
@@ -936,8 +928,8 @@ pub const Graph = struct {
             .toplabel => |value| try self.setDefaultNodeAttrRaw("toplabel", value),
             .bottomlabel => |value| try self.setDefaultNodeAttrRaw("bottomlabel", value),
             .xlabel => |value| try self.setDefaultNodeAttrRaw("xlabel", value),
-            .labelloc => |value| try self.setDefaultNodeAttrRaw("labelloc", labelLocName(value)),
-            .labeljust => |value| try self.setDefaultNodeAttrRaw("labeljust", labelJustName(value)),
+            .labelloc => |value| try self.setDefaultNodeAttrRaw("labelloc", value.name()),
+            .labeljust => |value| try self.setDefaultNodeAttrRaw("labeljust", value.name()),
             .nojustify => |value| try self.setDefaultNodeAttrRaw("nojustify", boolAttrValue(value)),
             .url => |value| try self.setDefaultNodeAttrRaw("URL", value),
             .href => |value| try self.setDefaultNodeAttrRaw("href", value),
@@ -1144,8 +1136,8 @@ pub const Graph = struct {
             .toplabel => |value| try self.setNodeAttrRaw(id, "toplabel", value),
             .bottomlabel => |value| try self.setNodeAttrRaw(id, "bottomlabel", value),
             .xlabel => |value| try self.setNodeAttrRaw(id, "xlabel", value),
-            .labelloc => |value| try self.setNodeAttrRaw(id, "labelloc", labelLocName(value)),
-            .labeljust => |value| try self.setNodeAttrRaw(id, "labeljust", labelJustName(value)),
+            .labelloc => |value| try self.setNodeAttrRaw(id, "labelloc", value.name()),
+            .labeljust => |value| try self.setNodeAttrRaw(id, "labeljust", value.name()),
             .nojustify => |value| try self.setNodeAttrRaw(id, "nojustify", boolAttrValue(value)),
             .url => |value| try self.setNodeAttrRaw(id, "URL", value),
             .href => |value| try self.setNodeAttrRaw(id, "href", value),
@@ -1473,8 +1465,8 @@ pub const Graph = struct {
                 try self.setSubgraphAttrRaw(id, "peripheries", text);
             },
             .margin => |value| try self.setSubgraphAttrRaw(id, "margin", value),
-            .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", labelLocName(value)),
-            .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", labelJustName(value)),
+            .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", value.name()),
+            .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", value.name()),
             .nojustify => |value| try self.setSubgraphAttrRaw(id, "nojustify", boolAttrValue(value)),
             .url => |value| try self.setSubgraphAttrRaw(id, "URL", value),
             .href => |value| try self.setSubgraphAttrRaw(id, "href", value),
@@ -1661,21 +1653,6 @@ fn shapeName(shape: Shape) []const u8 {
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
-    };
-}
-
-fn labelJustName(just: LabelJust) []const u8 {
-    return switch (just) {
-        .left => "l",
-        .center => "c",
-        .right => "r",
-    };
-}
-
-fn labelLocName(loc: LabelLoc) []const u8 {
-    return switch (loc) {
-        .top => "t",
-        .bottom => "b",
     };
 }
 

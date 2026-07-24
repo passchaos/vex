@@ -20,6 +20,32 @@ pub const LabelBreaks = struct {
     right: u8,
 };
 
+pub const LabelJust = enum {
+    left,
+    center,
+    right,
+
+    pub fn name(self: LabelJust) []const u8 {
+        return switch (self) {
+            .left => "l",
+            .center => "c",
+            .right => "r",
+        };
+    }
+};
+
+pub const LabelLoc = enum {
+    top,
+    bottom,
+
+    pub fn name(self: LabelLoc) []const u8 {
+        return switch (self) {
+            .top => "t",
+            .bottom => "b",
+        };
+    }
+};
+
 pub fn renderBlock(
     writer: *Io.Writer,
     text: []const u8,
