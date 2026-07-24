@@ -8018,14 +8018,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 }
 
 fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, label_loc: ?[]const u8) f64 {
-    const line_height = font_size * 1.25;
-    const line_count = displayLabelLineCount(label);
-    const block_height = @as(f64, @floatFromInt(line_count)) * line_height;
-    const first_baseline_y = if (label_loc) |value|
-        if (std.ascii.eqlIgnoreCase(value, "b")) baseline_y - @as(f64, @floatFromInt(line_count - 1)) * line_height else baseline_y
-    else
-        baseline_y;
-    return first_baseline_y + block_height / 2.0 - line_height * 0.72;
+    const bottom_aligned = if (label_loc) |value| std.ascii.eqlIgnoreCase(value, "b") else false;
+    return svg_mod.text.blockCenterY(label, baseline_y, font_size, bottom_aligned, svg_label_breaks);
 }
 
 const SvgLayers = svg_mod.layers.Layers;

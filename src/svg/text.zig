@@ -116,6 +116,17 @@ pub fn fontAttrs(writer: *Io.Writer, font: Font, font_size: f64) Io.Writer.Error
     if (font.style) |style| try writer.print(" font-style=\"{s}\"", .{style});
 }
 
+pub fn blockCenterY(text: []const u8, baseline_y: f64, font_size: f64, bottom_aligned: bool, breaks: LabelBreaks) f64 {
+    const height = font_size * 1.25;
+    const count = lineCount(text, breaks);
+    const block_height = @as(f64, @floatFromInt(count)) * height;
+    const first_baseline_y = if (bottom_aligned)
+        baseline_y - @as(f64, @floatFromInt(count - 1)) * height
+    else
+        baseline_y;
+    return first_baseline_y + block_height / 2.0 - height * 0.72;
+}
+
 pub fn lineCount(text: []const u8, breaks: LabelBreaks) usize {
     var count: usize = 1;
     for (text) |c| {
