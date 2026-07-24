@@ -110,6 +110,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Graph `pad` plus graph, node, and subgraph margin attributes with zero and sub-inch values.
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
 - Order-sensitive SVG line styles for `solid`, `dashed`, and `dotted`.
+- Graphviz `shape=plain` keeps a compact unboxed text node distinct from `shape=plaintext` / `shape=none`.
 - SVG rendering for Graphviz-style node `diagonals` on polygonal and ellipse-like shapes.
 - SVG rendering for node `image`, `imagescale`, and `imagepos` attributes inside the node box.
 - SVG rendering for Graphviz-style multicolor fills including box/node/subgraph `striped` fills and ellipse/circle `wedged` fills.

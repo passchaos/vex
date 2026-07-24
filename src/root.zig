@@ -46,6 +46,7 @@ pub const Shape = enum {
     component,
     underline,
     cylinder,
+    plain,
     plaintext,
     record,
     mrecord,
@@ -1609,7 +1610,8 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "component")) return .component;
     if (std.ascii.eqlIgnoreCase(value, "underline")) return .underline;
     if (std.ascii.eqlIgnoreCase(value, "cylinder")) return .cylinder;
-    if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "plain") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
+    if (std.ascii.eqlIgnoreCase(value, "plain")) return .plain;
+    if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
     if (std.ascii.eqlIgnoreCase(value, "record")) return .record;
     if (std.ascii.eqlIgnoreCase(value, "mrecord")) return .mrecord;
     return .ellipse;
@@ -1650,6 +1652,7 @@ fn shapeName(shape: Shape) []const u8 {
         .component => "component",
         .underline => "underline",
         .cylinder => "cylinder",
+        .plain => "plain",
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
@@ -4821,6 +4824,10 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
         .plaintext => {
             width = @max(24, text_width + 8);
             height = @max(18, text_height + 6);
+        },
+        .plain => {
+            width = @max(1, text_width);
+            height = @max(1, text_height);
         },
         .record, .mrecord => {
             const metrics = recordMetrics(node_item.label);
@@ -11179,7 +11186,7 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .component => try renderSvgComponentShape(writer, shape_layout, visual),
         .underline => try renderSvgUnderlineShape(writer, shape_layout, visual),
         .cylinder => try renderSvgCylinderShape(writer, shape_layout, visual),
-        .plaintext => {},
+        .plain, .plaintext => {},
         .record => try renderSvgRecordNode(writer, node_item.label, shape_layout, visual, options, false),
         .mrecord => try renderSvgRecordNode(writer, node_item.label, shape_layout, visual, options, true),
     }
@@ -14088,6 +14095,7 @@ test "code API sets typed node and edge options at creation" {
         .group = "main",
     });
     const b = try graph.addNode("b", .{ .shape = .diamond });
+    const plain = try graph.addNode("plain", .{ .shape = .plain });
     const edge = try graph.addEdge(a, b, .{
         .label = "edge",
         .color = "#16a34a",
@@ -14154,6 +14162,8 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("_blank", attrValue(node_item.attrs.items, "target").?);
     try std.testing.expectEqualStrings("out", attrValue(node_item.attrs.items, "ordering").?);
     try std.testing.expectEqualStrings("main", attrValue(node_item.attrs.items, "group").?);
+    try std.testing.expectEqual(Shape.plain, graph.nodes.items[plain].shape);
+    try std.testing.expectEqualStrings("plain", attrValue(graph.nodes.items[plain].attrs.items, "shape").?);
 
     const edge_item = graph.edges.items[edge];
     try std.testing.expectEqualStrings("edge", edge_item.label.?);
@@ -21454,6 +21464,8 @@ test "DOT parser and SVG renderer support common Graphviz node shapes" {
         \\  stop [label="Stop", shape=octagon];
         \\  fail [label="Fail", shape=invtriangle];
         \\  note [label="No box", shape=plaintext];
+        \\  plain [label="No box", shape=plain];
+        \\  none [label="No box", shape=none];
         \\  start -> decision -> io -> trap -> invtrap -> done -> stop;
         \\  decision -> fail;
         \\  note -> decision [constraint=false];
@@ -21470,11 +21482,18 @@ test "DOT parser and SVG renderer support common Graphviz node shapes" {
     try std.testing.expectEqual(Shape.octagon, graph.nodes.items[nodeIdByLabel(&graph, "stop")].shape);
     try std.testing.expectEqual(Shape.invtriangle, graph.nodes.items[nodeIdByLabel(&graph, "fail")].shape);
     try std.testing.expectEqual(Shape.plaintext, graph.nodes.items[nodeIdByLabel(&graph, "note")].shape);
+    try std.testing.expectEqual(Shape.plain, graph.nodes.items[nodeIdByLabel(&graph, "plain")].shape);
+    try std.testing.expectEqual(Shape.plaintext, graph.nodes.items[nodeIdByLabel(&graph, "none")].shape);
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     const note = nodeIdByLabel(&graph, "note");
+    const plain = nodeIdByLabel(&graph, "plain");
+    const none = nodeIdByLabel(&graph, "none");
     try std.testing.expect(layout.nodes[note].width < 120);
+    try std.testing.expect(layout.nodes[plain].width < layout.nodes[note].width);
+    try std.testing.expect(layout.nodes[plain].height < layout.nodes[note].height);
+    try std.testing.expectApproxEqAbs(layout.nodes[note].width, layout.nodes[none].width, 0.01);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
