@@ -17,7 +17,7 @@ Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Gr
 - 支持有向边 `->` 和无向边 `--`。
 - 支持节点语句、边语句和图/节点/边属性。
 - 支持常见属性：`label`、`color`、`shape`、`rankdir`、`weight` 等。
-- 当前应覆盖实用 DOT 子集：`strict`、具名 subgraph 分组、subgraph 作为边操作数、ports、angle-bracket labels/IDs 文本化、Graphviz 常见字符串转义（`\n`/`\l`/`\r`、引号、反斜杠、续行）、quoted string `+` 拼接、逗号节点列表、UTF-8 ID、简单布尔属性；具名 subgraph 身份按父级作用域解析，同父重开会合并成员和属性，不同父级可使用同名 subgraph；后续再扩展完整 subgraph 布局和完整 DOT 语义。Graphviz HTML-like label 渲染明确不在项目范围内，angle-string 始终按纯文本处理。
+- 当前应覆盖实用 DOT 子集：`strict`、具名 subgraph 分组、subgraph 作为边操作数、ports、保留每项 port 的逗号 node-list fanout、无空格 `a->b` / `a--b`、Graphviz NAME/NUMBER 词法边界与 BOM、angle-bracket labels/IDs 文本化、Graphviz 常见字符串转义（`\n`/`\l`/`\r`、引号、反斜杠、续行）、quoted string `+` 拼接、UTF-8 ID、简单布尔属性；含连字符的 ID 必须引用；具名 subgraph 身份按父级作用域解析，同父重开会合并成员和属性，不同父级可使用同名 subgraph；后续再扩展完整 subgraph 布局和完整 DOT 语义。Graphviz HTML-like label 渲染明确不在项目范围内，angle-string 始终按纯文本处理。
 
 ## 编码接口要求
 

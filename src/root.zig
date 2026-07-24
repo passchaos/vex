@@ -2149,7 +2149,8 @@ const Lexer = struct {
                     break :blk .{ .tag = .dashdash, .lexeme = self.source[start..self.index], .line = line, .column = column };
                 }
                 if (self.index < self.source.len and (std.ascii.isDigit(self.peek()) or self.peek() == '.')) {
-                    while (self.index < self.source.len and isIdChar(self.peek())) _ = self.advance();
+                    while (self.index < self.source.len and isNumberChar(self.peek())) _ = self.advance();
+                    try self.validateNumber(start, line, column);
                     break :blk .{ .tag = .id, .lexeme = self.source[start..self.index], .line = line, .column = column };
                 }
                 return error.UnexpectedCharacter;
@@ -2166,8 +2167,14 @@ const Lexer = struct {
                 break :blk .{ .tag = .string, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
             },
             else => blk: {
-                if (!isIdChar(c)) return error.UnexpectedCharacter;
-                while (self.index < self.source.len and isIdChar(self.peek())) _ = self.advance();
+                if (isNameStart(c)) {
+                    while (self.index < self.source.len and isNameContinue(self.peek())) _ = self.advance();
+                } else if (std.ascii.isDigit(c) or c == '.') {
+                    while (self.index < self.source.len and isNumberChar(self.peek())) _ = self.advance();
+                    try self.validateNumber(start, line, column);
+                } else {
+                    return error.UnexpectedCharacter;
+                }
                 break :blk .{ .tag = .id, .lexeme = self.source[start..self.index], .line = line, .column = column };
             },
         };
@@ -2177,8 +2184,28 @@ const Lexer = struct {
         return .{ .tag = tag, .lexeme = self.source[start..end], .line = self.line, .column = self.column };
     }
 
+    fn validateNumber(self: *Lexer, start: usize, line: usize, column: usize) !void {
+        const number_text = self.source[start..self.index];
+        var dot_count: usize = 0;
+        var digit_count: usize = 0;
+        for (number_text) |c| {
+            if (c == '.') dot_count += 1;
+            if (std.ascii.isDigit(c)) digit_count += 1;
+        }
+        if (dot_count > 1 or digit_count == 0) return self.lexError(error.BadNumber, line, column);
+        if (self.index < self.source.len and isNameStart(self.peek())) {
+            return self.lexError(error.BadNumber, line, column);
+        }
+    }
+
     fn skipIgnored(self: *Lexer) !void {
         while (self.index < self.source.len) {
+            if (self.index + 3 <= self.source.len and std.mem.eql(u8, self.source[self.index .. self.index + 3], "\xEF\xBB\xBF")) {
+                _ = self.advance();
+                _ = self.advance();
+                _ = self.advance();
+                continue;
+            }
             const c = self.peek();
             switch (c) {
                 ' ', '\t', '\r' => _ = self.advance(),
@@ -2233,8 +2260,16 @@ const Lexer = struct {
     }
 };
 
-fn isIdChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-' or c >= 0x80;
+fn isNameStart(c: u8) bool {
+    return std.ascii.isAlphabetic(c) or c == '_' or c >= 0x80;
+}
+
+fn isNameContinue(c: u8) bool {
+    return isNameStart(c) or std.ascii.isDigit(c);
+}
+
+fn isNumberChar(c: u8) bool {
+    return std.ascii.isDigit(c) or c == '.';
 }
 
 fn isAngleStringTerminator(c: u8) bool {
@@ -2492,35 +2527,37 @@ const Parser = struct {
             return;
         }
 
-        var first = NodeSet.empty;
-        defer first.deinit(self.allocator);
         const first_id = try self.nodeByTextId(graph, first_name);
         try self.recordNode(first_id);
-        try first.append(self.allocator, first_id);
+        var first_refs = NodeRefSet.empty;
+        defer freeNodeRefSet(self.allocator, &first_refs);
+        try first_refs.append(self.allocator, .{
+            .id = first_id,
+            .port = first_port.compass,
+            .record_port = if (first_port.record_port) |port| try self.allocator.dupe(u8, port) else null,
+        });
         while (self.match(.comma)) {
-            const name = try self.parseNodeIdText();
-            defer self.allocator.free(name);
-            const id = try self.nodeByTextId(graph, name);
-            try self.recordNode(id);
-            if (!containsNode(first.items, id)) try first.append(self.allocator, id);
+            const parsed = try self.parseNodeRef(graph);
+            try self.recordNode(parsed.id);
+            try first_refs.append(self.allocator, parsed);
         }
 
         if (self.current.tag == .arrow or self.current.tag == .dashdash) {
-            var first_refs = NodeRefSet.empty;
-            defer freeNodeRefSet(self.allocator, &first_refs);
-            try first_refs.append(self.allocator, .{
-                .id = first_id,
-                .port = first_port.compass,
-                .record_port = if (first_port.record_port) |port| try self.allocator.dupe(u8, port) else null,
-            });
-            for (first.items[1..]) |id| try first_refs.append(self.allocator, .{ .id = id });
             try self.parseEdgeTailRefs(graph, &first_refs);
         } else {
             var attrs = AttrList.empty;
             defer freeTempAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
-            for (first.items) |node_id| {
-                for (attrs.items) |attr| try self.setParsedNodeAttr(graph, node_id, attr.name, attr.value);
+            for (first_refs.items, 0..) |node_ref, index| {
+                var duplicate = false;
+                for (first_refs.items[0..index]) |previous| {
+                    if (previous.id == node_ref.id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) continue;
+                for (attrs.items) |attr| try self.setParsedNodeAttr(graph, node_ref.id, attr.name, attr.value);
             }
         }
     }
@@ -3283,6 +3320,7 @@ fn parseErrorMessage(err: anyerror) []const u8 {
         error.UnterminatedString => "unterminated quoted string",
         error.UnterminatedAngleString => "unterminated angle string",
         error.UnterminatedComment => "unterminated block comment",
+        error.BadNumber => "badly delimited DOT number",
         error.UnexpectedCharacter => "unexpected character in DOT input",
         else => @errorName(err),
     };
@@ -3297,7 +3335,8 @@ fn parseErrorHint(message: []const u8) []const u8 {
     if (std.mem.eql(u8, message, "unterminated quoted string")) return "Add the missing closing quote, or escape an embedded quote as \\\".";
     if (std.mem.eql(u8, message, "unterminated angle string")) return "Add the missing closing `>` for the angle-string label or id.";
     if (std.mem.eql(u8, message, "unterminated block comment")) return "Close the block comment with `*/`.";
-    if (std.mem.eql(u8, message, "unexpected character in DOT input")) return "Remove the marked character or quote it if it is meant to be part of an id or label.";
+    if (std.mem.eql(u8, message, "badly delimited DOT number")) return "Separate the number from the following id, or quote the full token if it is intended as text.";
+    if (std.mem.eql(u8, message, "unexpected character in DOT input")) return "Remove the marked character or quote it if it is meant to be part of an id or label; bare DOT ids cannot contain hyphens.";
     return "";
 }
 
@@ -27777,6 +27816,95 @@ test "non HTML DOT subgraph scope corpus parses with expected semantics" {
     try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items[3].nodes.len);
     try std.testing.expectEqual(@as(SubgraphId, 1), graph.edges.items[0].ltail.?);
     try std.testing.expectEqual(@as(SubgraphId, 3), graph.edges.items[1].lhead.?);
+}
+
+test "non HTML DOT lexical edge corpus parses operator adjacency and ports" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_lexical_edges.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expect(graph.directed);
+    try std.testing.expectEqual(@as(usize, 14), graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 10), graph.edges.items.len);
+
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    const d = nodeIdByLabel(&graph, "d");
+    var found_a_c = false;
+    var found_a_d = false;
+    var found_b_c = false;
+    var found_b_d = false;
+    for (graph.edges.items[0..4]) |edge_item| {
+        if (edge_item.from == a and edge_item.to == c) {
+            found_a_c = true;
+            try std.testing.expectEqualStrings("out", edge_item.tail_record_port.?);
+            try std.testing.expectEqual(CompassPort.east, edge_item.tail_port);
+            try std.testing.expectEqual(CompassPort.north, edge_item.head_port);
+        } else if (edge_item.from == a and edge_item.to == d) {
+            found_a_d = true;
+            try std.testing.expectEqualStrings("out", edge_item.tail_record_port.?);
+            try std.testing.expectEqual(CompassPort.east, edge_item.tail_port);
+            try std.testing.expectEqual(CompassPort.south, edge_item.head_port);
+        } else if (edge_item.from == b and edge_item.to == c) {
+            found_b_c = true;
+            try std.testing.expectEqualStrings("in", edge_item.tail_record_port.?);
+            try std.testing.expectEqual(CompassPort.west, edge_item.tail_port);
+            try std.testing.expectEqual(CompassPort.north, edge_item.head_port);
+        } else if (edge_item.from == b and edge_item.to == d) {
+            found_b_d = true;
+            try std.testing.expectEqualStrings("in", edge_item.tail_record_port.?);
+            try std.testing.expectEqual(CompassPort.west, edge_item.tail_port);
+            try std.testing.expectEqual(CompassPort.south, edge_item.head_port);
+        }
+    }
+    try std.testing.expect(found_a_c and found_a_d and found_b_c and found_b_d);
+    try std.testing.expect(nodeIdByLabel(&graph, "foo-bar") < graph.nodes.items.len);
+    try std.testing.expect(nodeIdByLabel(&graph, "graph") < graph.nodes.items.len);
+    try std.testing.expect(nodeIdByLabel(&graph, "café") < graph.nodes.items.len);
+    try std.testing.expect(nodeIdByLabel(&graph, "节点") < graph.nodes.items.len);
+}
+
+test "DOT lexer rejects bare hyphen ids and malformed numbers with diagnostics" {
+    const allocator = std.testing.allocator;
+    var hyphen = try parseDotDiagnostic(allocator, "digraph G { foo-bar; }");
+    switch (hyphen) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedParseDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("unexpected character in DOT input", diagnostic.message);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "bare DOT ids cannot contain hyphens") != null);
+        },
+    }
+
+    var malformed = try parseDotDiagnostic(allocator, "digraph G { 1.2.3 -> node; }");
+    switch (malformed) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedParseDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("badly delimited DOT number", diagnostic.message);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "Separate the number") != null);
+        },
+    }
+
+    var joined = try parseDotDiagnostic(allocator, "digraph G { 12node -> b; }");
+    switch (joined) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedParseDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("badly delimited DOT number", diagnostic.message);
+        },
+    }
 }
 
 test "cluster layout boxes contain member nodes and render to SVG" {

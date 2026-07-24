@@ -1,0 +1,11 @@
+﻿digraph LexicalEdges {
+  graph [label="operator adjacency"]
+  node [shape=record]
+
+  a:out:e,b:in:w->c:n,d:s [label="fanout"]
+  c->e->f
+  3.14->-2
+  .5->-.25
+  café->节点
+  "foo-bar"->"graph"
+}
