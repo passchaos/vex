@@ -3840,10 +3840,14 @@ fn spacingHasWord(value: []const u8, word: []const u8) bool {
 }
 
 fn parseGraphSpacing(value: []const u8, fallback: f64) f64 {
+    return parseGraphSpacingValue(value) orelse fallback;
+}
+
+fn parseGraphSpacingValue(value: []const u8) ?f64 {
     var parts = std.mem.tokenizeAny(u8, value, " \t,");
-    const first = parts.next() orelse return fallback;
-    const inches = std.fmt.parseFloat(f64, first) catch return fallback;
-    if (inches <= 0) return fallback;
+    const first = parts.next() orelse return null;
+    const inches = std.fmt.parseFloat(f64, first) catch return null;
+    if (inches <= 0) return null;
     // Graphviz ranksep/nodesep are in inches. Use a conservative 72 px/in
     // scale and keep the existing defaults as a lower bound for unset attrs.
     return @max(12.0, inches * 72.0);
@@ -4473,6 +4477,60 @@ fn clusterIndexContainingNode(graph: *const Graph, node_id: NodeId) ?usize {
     return null;
 }
 
+fn subgraphDepth(graph: *const Graph, index: usize) usize {
+    var depth: usize = 0;
+    var current: ?SubgraphId = if (index < graph.subgraphs.items.len) graph.subgraphs.items[index].parent else null;
+    while (current) |parent| {
+        if (parent >= graph.subgraphs.items.len) break;
+        depth += 1;
+        current = graph.subgraphs.items[parent].parent;
+    }
+    return depth;
+}
+
+fn subgraphNodePairGap(graph: *const Graph, left: NodeId, right: NodeId, fallback: f64) f64 {
+    var best_gap: ?f64 = null;
+    var best_depth: usize = 0;
+    for (graph.subgraphs.items, 0..) |cluster, index| {
+        if (!containsNode(cluster.nodes, left) or !containsNode(cluster.nodes, right)) continue;
+        const raw_nodesep = attrValue(cluster.attrs.items, "nodesep") orelse continue;
+        const gap = parseGraphSpacingValue(raw_nodesep) orelse continue;
+        const depth = subgraphDepth(graph, index);
+        if (best_gap == null or depth >= best_depth) {
+            best_gap = gap;
+            best_depth = depth;
+        }
+    }
+    return best_gap orelse fallback;
+}
+
+fn virtualNodePairGap(graph: *const Graph, left: VirtualNode, right: VirtualNode, fallback: f64) f64 {
+    var best_gap: ?f64 = null;
+    var best_depth: usize = 0;
+    for (graph.subgraphs.items, 0..) |cluster, index| {
+        if (!virtualNodeInSubgraph(graph, left, cluster) or !virtualNodeInSubgraph(graph, right, cluster)) continue;
+        const raw_nodesep = attrValue(cluster.attrs.items, "nodesep") orelse continue;
+        const gap = parseGraphSpacingValue(raw_nodesep) orelse continue;
+        const depth = subgraphDepth(graph, index);
+        if (best_gap == null or depth >= best_depth) {
+            best_gap = gap;
+            best_depth = depth;
+        }
+    }
+    return best_gap orelse fallback;
+}
+
+fn virtualNodeInSubgraph(graph: *const Graph, node: VirtualNode, cluster: Subgraph) bool {
+    return switch (node) {
+        .real => |node_id| containsNode(cluster.nodes, node_id),
+        .dummy => |edge_id| blk: {
+            if (edge_id >= graph.edges.items.len) break :blk false;
+            const edge_item = graph.edges.items[edge_id];
+            break :blk containsNode(cluster.nodes, edge_item.from) and containsNode(cluster.nodes, edge_item.to);
+        },
+    };
+}
+
 fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usize {
     for (level, 0..) |node, index| {
         if (std.meta.eql(node, needle)) return index;
@@ -4649,12 +4707,13 @@ fn computeVirtualPositionsPacked(virtual_levels: *const VirtualLevels, graph: *c
     var max_width: f64 = 0;
     for (virtual_levels.levels, 0..) |level, rank| {
         var left: f64 = 0;
-        for (level.items) |vnode| {
+        for (level.items, 0..) |vnode, index| {
             const width = virtualNodeWidth(vnode, sizes, graph);
             try positions[rank].append(allocator, left + width / 2.0);
-            left += width + gap;
+            left += width;
+            if (index + 1 < level.items.len) left += virtualNodePairGap(graph, level.items[index], level.items[index + 1], gap);
         }
-        if (level.items.len > 0) max_width = @max(max_width, left - gap);
+        if (level.items.len > 0) max_width = @max(max_width, left);
     }
     for (virtual_levels.levels, 0..) |level, rank| {
         if (level.items.len == 0) continue;
@@ -4684,7 +4743,10 @@ fn compactVirtualPositions(virtual_levels: *const VirtualLevels, graph: *const G
         for (level.items, 0..) |vnode, index| {
             if (index >= positions[rank].items.len) continue;
             const width = virtualNodeWidth(vnode, sizes, graph);
-            const min_center = if (index == 0) width / 2.0 else prev_right + gap + width / 2.0;
+            const min_center = if (index == 0) width / 2.0 else min_center: {
+                const prev = level.items[index - 1];
+                break :min_center prev_right + virtualNodePairGap(graph, prev, vnode, gap) + width / 2.0;
+            };
             if (positions[rank].items[index] < min_center) positions[rank].items[index] = min_center;
             prev_right = positions[rank].items[index] + width / 2.0;
         }
@@ -4758,8 +4820,10 @@ fn virtualNodeWidth(vnode: VirtualNode, sizes: []const NodeSize, graph: *const G
 fn virtualLevelWidth(level: []const VirtualNode, sizes: []const NodeSize, graph: *const Graph, gap: f64) f64 {
     if (level.len == 0) return 0;
     var width: f64 = 0;
-    for (level) |vnode| width += virtualNodeWidth(vnode, sizes, graph);
-    width += gap * @as(f64, @floatFromInt(level.len - 1));
+    for (level, 0..) |vnode, index| {
+        width += virtualNodeWidth(vnode, sizes, graph);
+        if (index + 1 < level.len) width += virtualNodePairGap(graph, vnode, level[index + 1], gap);
+    }
     return width;
 }
 
@@ -7063,7 +7127,7 @@ fn alignGroupedCenters(graph: *const Graph, levels: []const std.ArrayList(NodeId
             if (std.mem.eql(u8, group_name, group.name)) centers[id] = target;
         }
     }
-    for (levels) |level| compactLevelCenters(level.items, centers, sizes, gap);
+    for (levels) |level| compactLevelCentersForGraph(graph, level.items, centers, sizes, gap);
 }
 
 fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, cluster_gap: f64) void {
@@ -7330,14 +7394,14 @@ fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(Nod
         var rank: usize = 1;
         while (rank < levels.len) : (rank += 1) {
             nudgeLevelTowardNeighbors(graph, ranks, levels[rank].items, centers, true);
-            compactLevelCenters(levels[rank].items, centers, sizes, options.node_gap);
+            compactLevelCentersForGraph(graph, levels[rank].items, centers, sizes, options.node_gap);
         }
 
         rank = levels.len - 1;
         while (rank > 0) : (rank -= 1) {
             nudgeLevelTowardNeighbors(graph, ranks, levels[rank - 1].items, centers, false);
             centerLevelOnNeighborSpans(graph, ranks, levels[rank - 1].items, centers, sizes, false, 0.45);
-            compactLevelCenters(levels[rank - 1].items, centers, sizes, options.node_gap);
+            compactLevelCentersForGraph(graph, levels[rank - 1].items, centers, sizes, options.node_gap);
         }
     }
 }
@@ -7395,7 +7459,7 @@ fn alignLevelToNeighborSpansIfHelpful(graph: *const Graph, level: []const NodeId
         const target = neighborSpanCenter(graph, ranks, centers, sizes, node_id, use_parents) orelse continue;
         centers[node_id] = target;
     }
-    compactLevelCenters(level, centers, sizes, gap);
+    compactLevelCentersForGraph(graph, level, centers, sizes, gap);
 
     const after_stress = coordinateEdgeStress(graph, ranks, centers);
     const after_heavy = heavyEdgeDistancePenalty(graph, ranks, centers);
@@ -7474,7 +7538,7 @@ fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.Array
                 centers[node_id] = centers[node_id] + (target - centers[node_id]) * 0.20;
             }
         }
-        compactLevelCenters(level.items, centers, sizes, gap);
+        compactLevelCentersForGraph(graph, level.items, centers, sizes, gap);
     }
 }
 
@@ -7484,13 +7548,13 @@ fn straightenSimpleAdjacentEdges(graph: *const Graph, levels: []const std.ArrayL
         var rank: usize = 1;
         while (rank < levels.len) : (rank += 1) {
             straightenLevelTowardSimpleNeighbors(graph, ranks, levels[rank].items, centers, true);
-            compactLevelCenters(levels[rank].items, centers, sizes, gap);
+            compactLevelCentersForGraph(graph, levels[rank].items, centers, sizes, gap);
         }
 
         rank = levels.len - 1;
         while (rank > 0) : (rank -= 1) {
             straightenLevelTowardSimpleNeighbors(graph, ranks, levels[rank - 1].items, centers, false);
-            compactLevelCenters(levels[rank - 1].items, centers, sizes, gap);
+            compactLevelCentersForGraph(graph, levels[rank - 1].items, centers, sizes, gap);
         }
     }
 }
@@ -7657,6 +7721,11 @@ fn compactLevelCenters(level: []const NodeId, centers: []f64, sizes: []const Nod
     compactLevelCentersForward(level, centers, sizes, gap);
 }
 
+fn compactLevelCentersForGraph(graph: *const Graph, level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (level.len == 0) return;
+    compactLevelCentersForwardForGraph(graph, level, centers, sizes, gap);
+}
+
 fn compactLevelCentersSymmetric(level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
     if (level.len == 0) return;
     var forward: [128]f64 = undefined;
@@ -7672,6 +7741,26 @@ fn compactLevelCentersSymmetric(level: []const NodeId, centers: []f64, sizes: []
     }
     compactCenterSliceForward(level, sizes, gap, forward[0..level.len]);
     compactCenterSliceBackward(level, sizes, gap, backward[0..level.len], forward[level.len - 1] + sizes[level[level.len - 1]].width / 2.0);
+    for (level, 0..) |id, index| {
+        centers[id] = (forward[index] + backward[index]) / 2.0;
+    }
+}
+
+fn compactLevelCentersSymmetricForGraph(graph: *const Graph, level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (level.len == 0) return;
+    var forward: [128]f64 = undefined;
+    var backward: [128]f64 = undefined;
+    if (level.len > forward.len) {
+        compactLevelCentersForwardForGraph(graph, level, centers, sizes, gap);
+        return;
+    }
+
+    for (level, 0..) |id, index| {
+        forward[index] = centers[id];
+        backward[index] = centers[id];
+    }
+    compactCenterSliceForwardForGraph(graph, level, sizes, gap, forward[0..level.len]);
+    compactCenterSliceBackwardForGraph(graph, level, sizes, gap, backward[0..level.len], forward[level.len - 1] + sizes[level[level.len - 1]].width / 2.0);
     for (level, 0..) |id, index| {
         centers[id] = (forward[index] + backward[index]) / 2.0;
     }
@@ -7702,6 +7791,32 @@ fn compactLevelCentersForward(level: []const NodeId, centers: []f64, sizes: []co
     _ = satisfyCoordConstraints(centers, constraints_buf[0 .. level.len - 1]);
 }
 
+fn compactLevelCentersForwardForGraph(graph: *const Graph, level: []const NodeId, centers: []f64, sizes: []const NodeSize, gap: f64) void {
+    if (level.len == 0) return;
+    const first = level[0];
+    centers[first] = @max(centers[first], sizes[first].width / 2.0);
+    var constraints_buf: [128]CoordConstraint = undefined;
+    if (level.len - 1 > constraints_buf.len) {
+        var prev = first;
+        for (level[1..]) |id| {
+            const pair_gap = subgraphNodePairGap(graph, prev, id, gap);
+            const min_center = centers[prev] + sizes[prev].width / 2.0 + pair_gap + sizes[id].width / 2.0;
+            centers[id] = @max(centers[id], min_center);
+            prev = id;
+        }
+        return;
+    }
+    for (level[1..], 0..) |id, index| {
+        const prev = level[index];
+        constraints_buf[index] = .{
+            .left = prev,
+            .right = id,
+            .min_gap = sizes[prev].width / 2.0 + subgraphNodePairGap(graph, prev, id, gap) + sizes[id].width / 2.0,
+        };
+    }
+    _ = satisfyCoordConstraints(centers, constraints_buf[0 .. level.len - 1]);
+}
+
 fn compactCenterSliceForward(level: []const NodeId, sizes: []const NodeSize, gap: f64, slice: []f64) void {
     if (slice.len == 0) return;
     slice[0] = @max(slice[0], sizes[level[0]].width / 2.0);
@@ -7710,6 +7825,19 @@ fn compactCenterSliceForward(level: []const NodeId, sizes: []const NodeSize, gap
         const prev_id = level[index - 1];
         const id = level[index];
         const min_center = slice[index - 1] + sizes[prev_id].width / 2.0 + gap + sizes[id].width / 2.0;
+        slice[index] = @max(slice[index], min_center);
+    }
+}
+
+fn compactCenterSliceForwardForGraph(graph: *const Graph, level: []const NodeId, sizes: []const NodeSize, gap: f64, slice: []f64) void {
+    if (slice.len == 0) return;
+    slice[0] = @max(slice[0], sizes[level[0]].width / 2.0);
+    var index: usize = 1;
+    while (index < slice.len) : (index += 1) {
+        const prev_id = level[index - 1];
+        const id = level[index];
+        const pair_gap = subgraphNodePairGap(graph, prev_id, id, gap);
+        const min_center = slice[index - 1] + sizes[prev_id].width / 2.0 + pair_gap + sizes[id].width / 2.0;
         slice[index] = @max(slice[index], min_center);
     }
 }
@@ -7727,6 +7855,20 @@ fn compactCenterSliceBackward(level: []const NodeId, sizes: []const NodeSize, ga
     }
 }
 
+fn compactCenterSliceBackwardForGraph(graph: *const Graph, level: []const NodeId, sizes: []const NodeSize, gap: f64, slice: []f64, right_edge: f64) void {
+    if (slice.len == 0) return;
+    var index = slice.len - 1;
+    slice[index] = @min(slice[index], right_edge - sizes[level[index]].width / 2.0);
+    while (index > 0) {
+        const next_id = level[index];
+        const id = level[index - 1];
+        const pair_gap = subgraphNodePairGap(graph, id, next_id, gap);
+        const max_center = slice[index] - sizes[next_id].width / 2.0 - pair_gap - sizes[id].width / 2.0;
+        slice[index - 1] = @min(slice[index - 1], max_center);
+        index -= 1;
+    }
+}
+
 fn applySymmetricCompactionIfHelpful(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64) void {
     for (levels) |level| {
         if (level.items.len <= 1 or level.items.len > 128) continue;
@@ -7735,7 +7877,7 @@ fn applySymmetricCompactionIfHelpful(graph: *const Graph, levels: []const std.Ar
         var backup: [128]f64 = undefined;
         for (level.items, 0..) |node_id, index| backup[index] = centers[node_id];
 
-        compactLevelCentersSymmetric(level.items, centers, sizes, gap);
+        compactLevelCentersSymmetricForGraph(graph, level.items, centers, sizes, gap);
         const after_stress = coordinateEdgeStress(graph, ranks, centers);
         const after_extent = levelExtent(level.items, centers, sizes);
         if (after_stress > before_stress + 0.0001 or after_extent > before_extent + 0.0001) {
@@ -22101,6 +22243,48 @@ test "layout honors DOT ranksep and nodesep graph spacing attributes" {
 
     try std.testing.expect(spaced_rank_delta > default_rank_delta);
     try std.testing.expect(spaced_node_delta > default_node_delta);
+}
+
+test "layout honors subgraph nodesep for same-rank member spacing" {
+    const allocator = std.testing.allocator;
+    var default_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  a -> c;
+        \\  subgraph cluster_pair {
+        \\    b;
+        \\    c;
+        \\  }
+        \\}
+    );
+    defer default_graph.deinit();
+    var spaced_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\  a -> c;
+        \\  subgraph cluster_pair {
+        \\    nodesep=2.0;
+        \\    b;
+        \\    c;
+        \\  }
+        \\}
+    );
+    defer spaced_graph.deinit();
+
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+    var spaced_layout = try layoutLayered(allocator, &spaced_graph, .{});
+    defer spaced_layout.deinit();
+
+    const default_b = nodeIdByLabel(&default_graph, "b");
+    const default_c = nodeIdByLabel(&default_graph, "c");
+    const spaced_b = nodeIdByLabel(&spaced_graph, "b");
+    const spaced_c = nodeIdByLabel(&spaced_graph, "c");
+
+    const default_delta = @abs(default_layout.nodes[default_c].center.x - default_layout.nodes[default_b].center.x);
+    const spaced_delta = @abs(spaced_layout.nodes[spaced_c].center.x - spaced_layout.nodes[spaced_b].center.x);
+
+    try std.testing.expect(spaced_delta > default_delta + 40.0);
 }
 
 test "layout honors DOT ranksep equally center spacing" {
