@@ -46,6 +46,8 @@ pub const Shape = enum {
     component,
     underline,
     cylinder,
+    larrow,
+    rarrow,
     plain,
     plaintext,
     record,
@@ -1615,6 +1617,8 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "component")) return .component;
     if (std.ascii.eqlIgnoreCase(value, "underline")) return .underline;
     if (std.ascii.eqlIgnoreCase(value, "cylinder")) return .cylinder;
+    if (std.ascii.eqlIgnoreCase(value, "larrow")) return .larrow;
+    if (std.ascii.eqlIgnoreCase(value, "rarrow")) return .rarrow;
     if (std.ascii.eqlIgnoreCase(value, "plain")) return .plain;
     if (std.ascii.eqlIgnoreCase(value, "plaintext") or std.ascii.eqlIgnoreCase(value, "none")) return .plaintext;
     if (std.ascii.eqlIgnoreCase(value, "record")) return .record;
@@ -1657,6 +1661,8 @@ fn shapeName(shape: Shape) []const u8 {
         .component => "component",
         .underline => "underline",
         .cylinder => "cylinder",
+        .larrow => "larrow",
+        .rarrow => "rarrow",
         .plain => "plain",
         .plaintext => "plaintext",
         .record => "record",
@@ -4815,7 +4821,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
                 height = side;
             }
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .larrow, .rarrow => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .egg => {
@@ -11201,6 +11207,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .component => try renderSvgComponentShape(writer, shape_layout, visual),
         .underline => try renderSvgUnderlineShape(writer, shape_layout, visual),
         .cylinder => try renderSvgCylinderShape(writer, shape_layout, visual),
+        .larrow => try renderSvgPolygonRings(6, writer, shape_layout, visual, larrowPoints, diagonals),
+        .rarrow => try renderSvgPolygonRings(6, writer, shape_layout, visual, rarrowPoints, diagonals),
         .plain, .plaintext => {},
         .record => try renderSvgRecordNode(writer, node_item.label, shape_layout, visual, options, false),
         .mrecord => try renderSvgRecordNode(writer, node_item.label, shape_layout, visual, options, true),
@@ -11488,6 +11496,40 @@ fn invTrapeziumPoints(layout: NodeLayout) [6]Point {
         .{ .x = left + inset, .y = bottom },
         .{ .x = -1, .y = -1 },
         .{ .x = -1, .y = -1 },
+    };
+}
+
+fn larrowPoints(layout: NodeLayout) [6]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const mid = layout.center.y;
+    const head = @min(layout.width * 0.35, layout.height * 0.85);
+    return .{
+        .{ .x = left, .y = mid },
+        .{ .x = left + head, .y = top },
+        .{ .x = left + head, .y = top + layout.height * 0.25 },
+        .{ .x = right, .y = top + layout.height * 0.25 },
+        .{ .x = right, .y = bottom - layout.height * 0.25 },
+        .{ .x = left + head, .y = bottom - layout.height * 0.25 },
+    };
+}
+
+fn rarrowPoints(layout: NodeLayout) [6]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const mid = layout.center.y;
+    const head = @min(layout.width * 0.35, layout.height * 0.85);
+    return .{
+        .{ .x = left, .y = top + layout.height * 0.25 },
+        .{ .x = right - head, .y = top + layout.height * 0.25 },
+        .{ .x = right - head, .y = top },
+        .{ .x = right, .y = mid },
+        .{ .x = right - head, .y = bottom },
+        .{ .x = right - head, .y = bottom - layout.height * 0.25 },
     };
 }
 
@@ -14112,6 +14154,8 @@ test "code API sets typed node and edge options at creation" {
     });
     const b = try graph.addNode("b", .{ .shape = .diamond });
     const plain = try graph.addNode("plain", .{ .shape = .plain });
+    const larrow = try graph.addNode("larrow", .{ .shape = .larrow });
+    const rarrow = try graph.addNode("rarrow", .{ .shape = .rarrow });
     const edge = try graph.addEdge(a, b, .{
         .label = "edge",
         .color = "#16a34a",
@@ -14181,6 +14225,10 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("main", attrValue(node_item.attrs.items, "group").?);
     try std.testing.expectEqual(Shape.plain, graph.nodes.items[plain].shape);
     try std.testing.expectEqualStrings("plain", attrValue(graph.nodes.items[plain].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.larrow, graph.nodes.items[larrow].shape);
+    try std.testing.expectEqualStrings("larrow", attrValue(graph.nodes.items[larrow].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.rarrow, graph.nodes.items[rarrow].shape);
+    try std.testing.expectEqualStrings("rarrow", attrValue(graph.nodes.items[rarrow].attrs.items, "shape").?);
 
     const edge_item = graph.edges.items[edge];
     try std.testing.expectEqualStrings("edge", edge_item.label.?);
@@ -21580,7 +21628,9 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
         \\  component [label="Component", shape=component];
         \\  underline [label="Underline", shape=underline];
         \\  cylinder [label="Cylinder", shape=cylinder];
-        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder;
+        \\  left_arrow [label="LArrow", shape=larrow];
+        \\  right_arrow [label="RArrow", shape=rarrow];
+        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> left_arrow -> right_arrow;
         \\}
     );
     defer graph.deinit();
@@ -21592,6 +21642,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expectEqual(Shape.component, graph.nodes.items[nodeIdByLabel(&graph, "component")].shape);
     try std.testing.expectEqual(Shape.underline, graph.nodes.items[nodeIdByLabel(&graph, "underline")].shape);
     try std.testing.expectEqual(Shape.cylinder, graph.nodes.items[nodeIdByLabel(&graph, "cylinder")].shape);
+    try std.testing.expectEqual(Shape.larrow, graph.nodes.items[nodeIdByLabel(&graph, "left_arrow")].shape);
+    try std.testing.expectEqual(Shape.rarrow, graph.nodes.items[nodeIdByLabel(&graph, "right_arrow")].shape);
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
@@ -21604,6 +21656,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(svgPathCommandCount(svg, 'C') != 0);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Component") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Underline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "LArrow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "RArrow") != null);
 }
 
 test "DOT parser and SVG renderer support Graphviz M shapes star and egg" {
