@@ -9192,6 +9192,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const object_to_label = if (metadata and edge_item.to < graph.nodes.items.len) nodeFallbackTitle(graph.nodes.items[edge_item.to]) else null;
     const object_label = edgeFallbackTitle(edge_item, edge_context.edge_name);
     const edge_href = if (metadata) interactiveHref(edge_item.attrs.items, .edge) else null;
+    const object_waypoints = if (metadata and edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) layout.edge_waypoints[edge_item.id].points else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = edge_item.attrs.items,
@@ -9214,6 +9215,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_to = object_to,
         .object_from_label = object_from_label,
         .object_to_label = object_to_label,
+        .object_waypoints = object_waypoints,
         .collapse_member = collapse_member,
     });
     const edge_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9829,6 +9831,7 @@ const SvgGroupOpenOptions = struct {
     object_to: ?[]const u8 = null,
     object_from_label: ?[]const u8 = null,
     object_to_label: ?[]const u8 = null,
+    object_waypoints: ?[]const EdgeWaypoint = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
 };
@@ -9936,6 +9939,14 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         if (options.object_to_label) |to_label| {
             try writer.writeAll(" data-vex-object-to-label=\"");
             try writeXmlEscaped(writer, to_label);
+            try writer.writeByte('"');
+        }
+        if (options.object_waypoints) |waypoints| {
+            try writer.writeAll(" data-vex-object-waypoints=\"");
+            for (waypoints, 0..) |waypoint, index| {
+                if (index > 0) try writer.writeByte(' ');
+                try writer.print("{d}:{d:.2},{d:.2}", .{ waypoint.rank, waypoint.point.x, waypoint.point.y });
+            }
             try writer.writeByte('"');
         }
     }
@@ -15950,6 +15961,7 @@ test "SVG renderer emits opt-in metadata index" {
     defer allocator.free(static_svg);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-metadata") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-kind=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-waypoints=") == null);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
@@ -15970,6 +15982,11 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"edge\" data-vex-object-id=\"0\" data-vex-object-label=\"job\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from=\"0\" data-vex-object-to=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from-label=\"api\" data-vex-object-to-label=\"worker\"") != null);
+    const job_edge_fragment = svgGroupFragmentById(svg, "edge1") orelse return error.MissingJobEdgeGroup;
+    try std.testing.expect(std.mem.indexOf(u8, job_edge_fragment, "data-vex-object-waypoints=") == null);
+    const long_edge_fragment = svgGroupFragmentById(svg, "edge2") orelse return error.MissingLongEdgeGroup;
+    try std.testing.expect(std.mem.indexOf(u8, long_edge_fragment, "data-vex-object-waypoints=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, long_edge_fragment, "1:") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"service\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-y=\"") != null);
