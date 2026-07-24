@@ -174,11 +174,7 @@ pub const SplineMode = enum {
 
 pub const FontNames = svg_mod.font.Names;
 
-pub const OutputOrder = enum {
-    breadthfirst,
-    nodesfirst,
-    edgesfirst,
-};
+pub const OutputOrder = svg_mod.order.Order;
 
 pub const RankSep = union(enum) {
     value: f64,
@@ -1785,11 +1781,7 @@ fn splineModeName(mode: SplineMode) []const u8 {
 }
 
 fn outputOrderName(order: OutputOrder) []const u8 {
-    return switch (order) {
-        .breadthfirst => "breadthfirst",
-        .nodesfirst => "nodesfirst",
-        .edgesfirst => "edgesfirst",
-    };
+    return svg_mod.order.name(order);
 }
 
 fn fontNamesName(fontnames: FontNames) []const u8 {
@@ -8148,10 +8140,7 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
 }
 
 fn svgOutputOrder(graph: *const Graph) OutputOrder {
-    const value = attrValue(graph.attrs.items, "outputorder") orelse return .breadthfirst;
-    if (std.ascii.eqlIgnoreCase(value, "edgesfirst")) return .edgesfirst;
-    if (std.ascii.eqlIgnoreCase(value, "nodesfirst")) return .nodesfirst;
-    return .breadthfirst;
+    return svg_mod.order.parse(graph.attrs.items);
 }
 
 fn sortEdgesByTarget(graph: *const Graph, edge_ids: []EdgeId) void {
