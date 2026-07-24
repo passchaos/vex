@@ -4,6 +4,7 @@ pub const canvas = @import("canvas.zig");
 pub const color = @import("color.zig");
 pub const font = @import("font.zig");
 pub const gradient = @import("gradient.zig");
+pub const image = @import("image.zig");
 pub const interactive = @import("interactive.zig");
 pub const layers = @import("layers.zig");
 pub const marker = @import("marker.zig");

@@ -9660,13 +9660,7 @@ fn renderSvgNodeImage(writer: *Io.Writer, node_item: Node, layout: NodeLayout) I
 }
 
 fn nodeImageSource(attrs: []const Attr) ?[]const u8 {
-    if (attrValue(attrs, "image")) |image| {
-        if (image.len > 0) return image;
-    }
-    if (attrValue(attrs, "shapefile")) |shapefile| {
-        if (shapefile.len > 0) return shapefile;
-    }
-    return null;
+    return svg_mod.image.source(attrs);
 }
 
 fn nodeImageRect(node_item: Node, layout: NodeLayout) RectF {
@@ -9724,18 +9718,7 @@ fn nodeImagePosition(attrs: []const Attr) ImagePosition {
 }
 
 fn nodeImagePreserveAspectRatio(attrs: []const Attr) []const u8 {
-    if (nodeImageScale(attrs) == .both) return "none";
-    return switch (nodeImagePosition(attrs)) {
-        .top_left => "xMinYMin meet",
-        .top_center => "xMidYMin meet",
-        .top_right => "xMaxYMin meet",
-        .middle_left => "xMinYMid meet",
-        .middle_center => "xMidYMid meet",
-        .middle_right => "xMaxYMid meet",
-        .bottom_left => "xMinYMax meet",
-        .bottom_center => "xMidYMax meet",
-        .bottom_right => "xMaxYMax meet",
-    };
+    return svg_mod.image.preserveAspectRatio(nodeImageScale(attrs), nodeImagePosition(attrs));
 }
 
 fn nodeAuxLabelsEligible(shape: Shape) bool {
