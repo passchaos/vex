@@ -220,6 +220,9 @@ pub const GraphAttr = union(enum) {
     ratio: GraphRatio,
     dpi: f64,
     resolution: f64,
+    layers: []const u8,
+    layersep: []const u8,
+    layerselect: []const u8,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -325,6 +328,7 @@ pub const NodeAttr = union(enum) {
     comment: []const u8,
     ordering: OrderingMode,
     group: []const u8,
+    layer: []const u8,
 };
 
 pub const EdgeStyle = enum {
@@ -410,6 +414,7 @@ pub const NodeOptions = struct {
     comment: ?[]const u8 = null,
     ordering: ?OrderingMode = null,
     group: ?[]const u8 = null,
+    layer: ?[]const u8 = null,
 };
 
 pub const EdgeOptions = struct {
@@ -476,6 +481,7 @@ pub const EdgeOptions = struct {
     head_record_port: ?[]const u8 = null,
     ltail: ?SubgraphId = null,
     lhead: ?SubgraphId = null,
+    layer: ?[]const u8 = null,
 };
 
 pub const EdgeAttr = union(enum) {
@@ -540,6 +546,7 @@ pub const EdgeAttr = union(enum) {
     head_port: EdgePort,
     ltail: SubgraphId,
     lhead: SubgraphId,
+    layer: []const u8,
 };
 
 pub const SubgraphAttr = union(enum) {
@@ -576,6 +583,7 @@ pub const SubgraphAttr = union(enum) {
     target: []const u8,
     id: []const u8,
     class: []const u8,
+    layer: []const u8,
 };
 
 pub const SubgraphOptions = struct {
@@ -612,6 +620,7 @@ pub const SubgraphOptions = struct {
     target: ?[]const u8 = null,
     id: ?[]const u8 = null,
     class: ?[]const u8 = null,
+    layer: ?[]const u8 = null,
 };
 
 pub const Node = struct {
@@ -957,6 +966,9 @@ pub const Graph = struct {
             },
             .dpi => |value| try self.setGraphAttrFloat("dpi", value),
             .resolution => |value| try self.setGraphAttrFloat("resolution", value),
+            .layers => |value| try self.setGraphAttrRaw("layers", value),
+            .layersep => |value| try self.setGraphAttrRaw("layersep", value),
+            .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -1045,6 +1057,7 @@ pub const Graph = struct {
             .comment => |value| try self.setDefaultNodeAttrRaw("comment", value),
             .ordering => |value| try self.setDefaultNodeAttrRaw("ordering", orderingModeName(value)),
             .group => |value| try self.setDefaultNodeAttrRaw("group", value),
+            .layer => |value| try self.setDefaultNodeAttrRaw("layer", value),
         }
     }
 
@@ -1128,6 +1141,7 @@ pub const Graph = struct {
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
             .samehead => |value| try self.setDefaultEdgeAttrRaw("samehead", value),
             .sametail => |value| try self.setDefaultEdgeAttrRaw("sametail", value),
+            .layer => |value| try self.setDefaultEdgeAttrRaw("layer", value),
             .tail_port, .head_port, .ltail, .lhead => {},
         }
     }
@@ -1196,6 +1210,7 @@ pub const Graph = struct {
         if (options.comment) |value| try self.setNodeAttr(id, .{ .comment = value });
         if (options.ordering) |value| try self.setNodeAttr(id, .{ .ordering = value });
         if (options.group) |value| try self.setNodeAttr(id, .{ .group = value });
+        if (options.layer) |value| try self.setNodeAttr(id, .{ .layer = value });
     }
 
     pub fn setNodeAttr(self: *Graph, id: NodeId, attr: NodeAttr) !void {
@@ -1250,6 +1265,7 @@ pub const Graph = struct {
             .comment => |value| try self.setNodeAttrRaw(id, "comment", value),
             .ordering => |value| try self.setNodeAttrRaw(id, "ordering", orderingModeName(value)),
             .group => |value| try self.setNodeAttrRaw(id, "group", value),
+            .layer => |value| try self.setNodeAttrRaw(id, "layer", value),
         }
     }
 
@@ -1344,6 +1360,7 @@ pub const Graph = struct {
         if (options.head_port != .auto or options.head_record_port != null) try self.setEdgeAttr(id, .{ .head_port = .{ .record = options.head_record_port, .compass = options.head_port } });
         if (options.ltail) |value| try self.setEdgeAttr(id, .{ .ltail = value });
         if (options.lhead) |value| try self.setEdgeAttr(id, .{ .lhead = value });
+        if (options.layer) |value| try self.setEdgeAttr(id, .{ .layer = value });
     }
 
     pub fn setEdgeAttr(self: *Graph, id: EdgeId, attr: EdgeAttr) !void {
@@ -1413,6 +1430,7 @@ pub const Graph = struct {
             .head_port => |value| try self.setEdgePortAttr(id, "headport", value),
             .ltail => |value| try self.setEdgeSubgraphAttr(id, "ltail", value),
             .lhead => |value| try self.setEdgeSubgraphAttr(id, "lhead", value),
+            .layer => |value| try self.setEdgeAttrRaw(id, "layer", value),
         }
     }
 
@@ -1515,6 +1533,7 @@ pub const Graph = struct {
         if (options.target) |value| try self.setSubgraphAttr(id, .{ .target = value });
         if (options.id) |value| try self.setSubgraphAttr(id, .{ .id = value });
         if (options.class) |value| try self.setSubgraphAttr(id, .{ .class = value });
+        if (options.layer) |value| try self.setSubgraphAttr(id, .{ .layer = value });
     }
 
     pub fn setSubgraphAttr(self: *Graph, id: SubgraphId, attr: SubgraphAttr) !void {
@@ -1572,6 +1591,7 @@ pub const Graph = struct {
             .target => |value| try self.setSubgraphAttrRaw(id, "target", value),
             .id => |value| try self.setSubgraphAttrRaw(id, "id", value),
             .class => |value| try self.setSubgraphAttrRaw(id, "class", value),
+            .layer => |value| try self.setSubgraphAttrRaw(id, "layer", value),
         }
     }
 
@@ -8003,8 +8023,19 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</defs>\n");
     }
 
-    try renderSvgClusters(writer, graph, layout);
-    try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate);
+    if (svgGraphLayers(graph)) |layers| {
+        defer graph.allocator.free(layers.names);
+        for (layers.names, 0..) |layer_name, index| {
+            const context = SvgLayerContext{ .layers = layers, .index = index };
+            try writeSvgLayerOpen(writer, layer_name);
+            try renderSvgClusters(writer, graph, layout, context);
+            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context);
+            try writer.writeAll("</g>\n");
+        }
+    } else {
+        try renderSvgClusters(writer, graph, layout, null);
+        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null);
+    }
     try writer.writeAll("</g>\n</svg>");
 }
 
@@ -8019,23 +8050,135 @@ fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, la
     return first_baseline_y + block_height / 2.0 - line_height * 0.72;
 }
 
-fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
+const SvgLayers = struct {
+    names: []const []const u8,
+    delims: []const u8,
+};
+
+const SvgLayerContext = struct {
+    layers: SvgLayers,
+    index: usize,
+};
+
+fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
+    const raw = attrValue(graph.attrs.items, "layers") orelse return null;
+    const delims = attrValue(graph.attrs.items, "layersep") orelse ":\t ";
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, raw, delims);
+    while (iter.next()) |_| count += 1;
+    if (count == 0) return null;
+    var names = graph.allocator.alloc([]const u8, count) catch return null;
+    var fill_iter = std.mem.tokenizeAny(u8, raw, delims);
+    var index: usize = 0;
+    while (fill_iter.next()) |name| : (index += 1) names[index] = name;
+    return .{ .names = names, .delims = delims };
+}
+
+fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void {
+    try writer.writeAll("<g id=\"");
+    try writeXmlEscaped(writer, name);
+    try writer.writeAll("\" class=\"layer\">\n");
+}
+
+fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) bool {
+    if (attrValue(node_item.attrs.items, "layer")) |spec| {
+        if (svgLayerSpecMatches(layer, spec)) return true;
+        if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
+    }
+    var has_incident = false;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from != node_item.id and edge_item.to != node_item.id) continue;
+        has_incident = true;
+        if (attrValue(edge_item.attrs.items, "layer")) |edge_spec| {
+            if (std.mem.trim(u8, edge_spec, " \t\r\n").len == 0 or svgLayerSpecMatches(layer, edge_spec)) return true;
+        } else {
+            return true;
+        }
+    }
+    return !has_incident;
+}
+
+fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) bool {
+    if (attrValue(edge_item.attrs.items, "layer")) |spec| {
+        if (svgLayerSpecMatches(layer, spec)) return true;
+        if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
+    }
+    if (edge_item.from < graph.nodes.items.len) {
+        if (attrValue(graph.nodes.items[edge_item.from].attrs.items, "layer")) |spec| {
+            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svgLayerSpecMatches(layer, spec)) return true;
+        } else {
+            return true;
+        }
+    }
+    if (edge_item.to < graph.nodes.items.len) {
+        if (attrValue(graph.nodes.items[edge_item.to].attrs.items, "layer")) |spec| {
+            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svgLayerSpecMatches(layer, spec)) return true;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerContext) bool {
+    if (attrValue(cluster.attrs.items, "layer")) |spec| {
+        if (svgLayerSpecMatches(layer, spec)) return true;
+        if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
+    }
+    for (cluster.nodes) |node_id| {
+        if (node_id < graph.nodes.items.len and svgNodeInLayer(graph, graph.nodes.items[node_id], layer)) return true;
+    }
+    return false;
+}
+
+fn svgLayerSpecMatches(layer: SvgLayerContext, spec: []const u8) bool {
+    const current = layer.index + 1;
+    var parts = std.mem.tokenizeScalar(u8, spec, ',');
+    while (parts.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        var range = std.mem.tokenizeAny(u8, trimmed, layer.layers.delims);
+        const first = range.next() orelse continue;
+        if (range.next()) |second| {
+            const start = svgLayerIndex(layer.layers, first, 0) orelse continue;
+            const end = svgLayerIndex(layer.layers, second, layer.layers.names.len) orelse continue;
+            const lo = @min(start, end);
+            const hi = @max(start, end);
+            if (current >= lo and current <= hi) return true;
+        } else if (svgLayerIndex(layer.layers, first, current)) |index| {
+            if (index == current) return true;
+        }
+    }
+    return false;
+}
+
+fn svgLayerIndex(layers: SvgLayers, raw: []const u8, all_value: usize) ?usize {
+    const text = std.mem.trim(u8, raw, " \t\r\n");
+    if (std.ascii.eqlIgnoreCase(text, "all")) return all_value;
+    if (std.fmt.parseInt(usize, text, 10)) |value| return value else |_| {}
+    for (layers.names, 0..) |name, index| {
+        if (std.mem.eql(u8, text, name)) return index + 1;
+    }
+    return null;
+}
+
+fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext) Io.Writer.Error!void {
     switch (svgOutputOrder(graph)) {
         .edgesfirst => {
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
-            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer);
             return;
         },
         .nodesfirst => {
-            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer);
             return;
         },
         .breadthfirst => {},
     }
     if (graph.nodes.items.len > 512 or graph.edges.items.len > 1024) {
-        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
-        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer);
+        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer);
         return;
     }
 
@@ -8048,7 +8191,7 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
 
     for (graph.nodes.items) |node_item| {
         if (!node_written[node_item.id]) {
-            try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+            try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer);
             node_written[node_item.id] = true;
         }
         var outgoing: [1024]EdgeId = undefined;
@@ -8062,21 +8205,21 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
         for (outgoing[0..outgoing_len]) |edge_id| {
             const edge_item = graph.edges.items[edge_id];
             if (edge_item.to < node_written.len and !node_written[edge_item.to]) {
-                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to]);
+                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to], layer);
                 node_written[edge_item.to] = true;
             }
-            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer);
             edge_written[edge_item.id] = true;
         }
     }
 
     for (graph.edges.items) |edge_item| {
         if (edge_item.id < edge_written.len and edge_written[edge_item.id]) continue;
-        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate);
+        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer);
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id < node_written.len and node_written[node_item.id]) continue;
-        try renderSvgNodeGroup(writer, graph, layout, options, node_item);
+        try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer);
     }
 }
 
@@ -8098,8 +8241,11 @@ fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
     return a.to < b.to;
 }
 
-fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool) Io.Writer.Error!void {
+fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext) Io.Writer.Error!void {
     if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
+    if (layer) |context| {
+        if (!svgEdgeInLayer(graph, edge_item, context)) return;
+    }
     const visual = resolveEdgeVisual(graph, edge_item);
     if (visual.hidden) return;
     try writeSvgEdgeComment(writer, graph, edge_item);
@@ -8282,7 +8428,10 @@ fn rectsOverlap(a: RectF, b: RectF) bool {
         @max(a.y, b.y) < @min(a.y + a.height, b.y + b.height);
 }
 
-fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node) Io.Writer.Error!void {
+fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node, layer: ?SvgLayerContext) Io.Writer.Error!void {
+    if (layer) |context| {
+        if (!svgNodeInLayer(graph, node_item, context)) return;
+    }
     var visual = resolveNodeVisual(graph, node_item);
     if (visual.hidden) return;
     const l = graphvizRenderNodeLayout(graph, layout, node_item);
@@ -10031,6 +10180,30 @@ fn svgGroupFragmentByTitle(svg: []const u8, title: []const u8) ?[]const u8 {
     return svg[title_pos .. title_pos + end_rel];
 }
 
+fn svgGroupFragmentById(svg: []const u8, id: []const u8) ?[]const u8 {
+    var id_buf: [128]u8 = undefined;
+    const needle = std.fmt.bufPrint(&id_buf, "<g id=\"{s}\"", .{id}) catch return null;
+    const start = std.mem.indexOf(u8, svg, needle) orelse return null;
+    var search = start;
+    var depth: usize = 0;
+    while (search < svg.len) {
+        const next_open_rel = std.mem.indexOf(u8, svg[search..], "<g ");
+        const next_close_rel = std.mem.indexOf(u8, svg[search..], "</g>");
+        if (next_open_rel == null and next_close_rel == null) return null;
+        if (next_close_rel == null or (next_open_rel != null and next_open_rel.? < next_close_rel.?)) {
+            search += next_open_rel.? + "<g ".len;
+            depth += 1;
+            continue;
+        }
+        const close_start = search + next_close_rel.?;
+        if (depth == 0) return null;
+        depth -= 1;
+        search = close_start + "</g>".len;
+        if (depth == 0) return svg[start..search];
+    }
+    return null;
+}
+
 fn svgFragmentHasDash(fragment: []const u8) bool {
     return std.mem.indexOf(u8, fragment, "stroke-dasharray=") != null;
 }
@@ -11151,20 +11324,23 @@ const ClusterVisual = struct {
     hidden: bool,
 };
 
-fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout) Io.Writer.Error!void {
+fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, layer: ?SvgLayerContext) Io.Writer.Error!void {
     if (graph.subgraphs.items.len == 0) return;
-    try renderSvgClusterTree(writer, graph, layout, null);
+    try renderSvgClusterTree(writer, graph, layout, null, layer);
 }
 
-fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent: ?SubgraphId) Io.Writer.Error!void {
+fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent: ?SubgraphId, layer: ?SvgLayerContext) Io.Writer.Error!void {
     for (graph.subgraphs.items, 0..) |cluster, index| {
         if (cluster.parent != parent) continue;
-        try renderSvgClusterBox(writer, graph, cluster, layout, index);
-        try renderSvgClusterTree(writer, graph, layout, cluster.id);
+        try renderSvgClusterBox(writer, graph, cluster, layout, index, layer);
+        try renderSvgClusterTree(writer, graph, layout, cluster.id, layer);
     }
 }
 
-fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, layout: *const Layout, index: usize) Io.Writer.Error!void {
+fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, layout: *const Layout, index: usize, layer: ?SvgLayerContext) Io.Writer.Error!void {
+    if (layer) |context| {
+        if (!svgClusterInLayer(graph, cluster, context)) return;
+    }
     if (index >= layout.subgraphs.len) return;
     const box = layout.subgraphs[index];
     if (box.width <= 0 or box.height <= 0) return;
@@ -18065,6 +18241,50 @@ test "SVG renderer honors Graphviz graph dpi output attributes" {
 
     try resolution.setGraphAttr(.{ .dpi = 72 });
     try std.testing.expectApproxEqAbs(@as(f64, 1.0), graphSvgCanvas(&resolution, .{ .x = 100, .y = 80 }).scale, 0.001);
+}
+
+test "SVG renderer honors Graphviz graph layers" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail"];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\  c;
+        \\  a -> b [layer=detail];
+        \\  b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const base_layer = svgGroupFragmentById(svg, "base") orelse return error.MissingBaseLayer;
+    const detail_layer = svgGroupFragmentById(svg, "detail") orelse return error.MissingDetailLayer;
+    try std.testing.expect(std.mem.indexOf(u8, base_layer, "<title>a</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, base_layer, "<title>b</title>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, base_layer, "<title>a-&gt;b</title>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>b</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>a-&gt;b</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>b-&gt;c</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>c</title>") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .layers = "L1 L2" });
+    try typed.setGraphAttr(.{ .layersep = " " });
+    const n1 = try typed.addNode("N1", .{ .layer = "L1" });
+    const n2 = try typed.addNode("N2", .{ .layer = "L2" });
+    const edge = try typed.addEdge(n1, n2, .{ .layer = "L1:L2" });
+    const subgraph = try typed.addSubgraph("S", null, &.{n1}, .{ .layer = "L1" });
+    try std.testing.expectEqualStrings("L1 L2", attrValue(typed.attrs.items, "layers").?);
+    try std.testing.expectEqualStrings(" ", attrValue(typed.attrs.items, "layersep").?);
+    try std.testing.expectEqualStrings("L1", attrValue(typed.nodes.items[n1].attrs.items, "layer").?);
+    try std.testing.expectEqualStrings("L2", attrValue(typed.nodes.items[n2].attrs.items, "layer").?);
+    try std.testing.expectEqualStrings("L1:L2", attrValue(typed.edges.items[edge].attrs.items, "layer").?);
+    try std.testing.expectEqualStrings("L1", attrValue(typed.subgraphs.items[subgraph].attrs.items, "layer").?);
 }
 
 test "SVG renderer honors Graphviz landscape orientation attributes" {
