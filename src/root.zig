@@ -82,6 +82,26 @@ pub const Attr = struct {
     value: []const u8,
 };
 
+pub const ParseDiagnostic = struct {
+    message: []const u8,
+    line: usize,
+    column: usize,
+    source_line: []const u8,
+    token: []const u8,
+
+    pub fn deinit(self: *ParseDiagnostic, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+        allocator.free(self.source_line);
+        allocator.free(self.token);
+        self.* = undefined;
+    }
+};
+
+pub const ParseResult = union(enum) {
+    graph: Graph,
+    diagnostic: ParseDiagnostic,
+};
+
 pub const RankConstraint = struct {
     kind: RankKind,
     node_ids: []NodeId,
@@ -1771,6 +1791,8 @@ const Lexer = struct {
     index: usize = 0,
     line: usize = 1,
     column: usize = 1,
+    error_line: usize = 1,
+    error_column: usize = 1,
 
     fn next(self: *Lexer) !Token {
         try self.skipIgnored();
@@ -1779,6 +1801,8 @@ const Lexer = struct {
         const start = self.index;
         const line = self.line;
         const column = self.column;
+        self.error_line = line;
+        self.error_column = column;
         const c = self.advance();
         return switch (c) {
             '{' => .{ .tag = .lbrace, .lexeme = self.source[start..self.index], .line = line, .column = column },
@@ -1798,7 +1822,7 @@ const Lexer = struct {
                         while (lookahead < self.source.len and std.ascii.isWhitespace(self.source[lookahead])) : (lookahead += 1) {}
                         if (lookahead >= self.source.len or isAngleStringTerminator(self.source[lookahead])) break;
                     }
-                } else return error.UnterminatedAngleString;
+                } else return self.lexError(error.UnterminatedAngleString, line, column);
                 break :blk .{ .tag = .angle_string, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
             },
             '-' => blk: {
@@ -1825,7 +1849,7 @@ const Lexer = struct {
                     } else if (ch == '"') {
                         break;
                     }
-                } else return error.UnterminatedString;
+                } else return self.lexError(error.UnterminatedString, line, column);
                 break :blk .{ .tag = .string, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
             },
             else => blk: {
@@ -1847,6 +1871,8 @@ const Lexer = struct {
                 ' ', '\t', '\r' => _ = self.advance(),
                 '\n' => _ = self.advance(),
                 '/' => {
+                    const comment_line = self.line;
+                    const comment_column = self.column;
                     if (self.index + 1 >= self.source.len) return;
                     const next_c = self.source[self.index + 1];
                     if (next_c == '/') {
@@ -1860,7 +1886,7 @@ const Lexer = struct {
                                 _ = self.advance();
                                 break;
                             }
-                        } else return error.UnterminatedComment;
+                        } else return self.lexError(error.UnterminatedComment, comment_line, comment_column);
                     } else return;
                 },
                 '#' => {
@@ -1885,6 +1911,12 @@ const Lexer = struct {
             self.column += 1;
         }
         return c;
+    }
+
+    fn lexError(self: *Lexer, err: anyerror, line: usize, column: usize) anyerror {
+        self.error_line = line;
+        self.error_column = column;
+        return err;
     }
 };
 
@@ -2001,6 +2033,7 @@ const Parser = struct {
     subgraph_index: std.StringHashMap(SubgraphId),
     node_index_keys: std.ArrayList([]const u8) = .empty,
     subgraph_index_keys: std.ArrayList([]const u8) = .empty,
+    lex_error: ?anyerror = null,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
         var lexer: Lexer = .{ .source = source };
@@ -2531,7 +2564,9 @@ const Parser = struct {
 
     fn matchKeyword(self: *Parser, keyword: []const u8) bool {
         if (self.current.tag == .id and std.ascii.eqlIgnoreCase(self.current.lexeme, keyword)) {
-            self.advance() catch unreachable;
+            self.advance() catch |err| {
+                self.recordLexError(err);
+            };
             return true;
         }
         return false;
@@ -2539,7 +2574,9 @@ const Parser = struct {
 
     fn match(self: *Parser, tag: TokenTag) bool {
         if (self.current.tag == tag) {
-            self.advance() catch unreachable;
+            self.advance() catch |err| {
+                self.recordLexError(err);
+            };
             return true;
         }
         return false;
@@ -2552,6 +2589,11 @@ const Parser = struct {
 
     fn advance(self: *Parser) !void {
         self.current = try self.lexer.next();
+    }
+
+    fn recordLexError(self: *Parser, err: anyerror) void {
+        self.lex_error = err;
+        self.current = .{ .tag = .eof, .lexeme = "", .line = self.lexer.error_line, .column = self.lexer.error_column };
     }
 };
 
@@ -2687,6 +2729,77 @@ pub fn parseDot(allocator: std.mem.Allocator, source: []const u8) !Graph {
     return parser.parse();
 }
 
+pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
+    var parser = Parser.init(allocator, source) catch |err| {
+        return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
+    };
+    const graph = parser.parse() catch |err| {
+        return .{ .diagnostic = try parseDiagnosticFromParser(allocator, source, &parser, err) };
+    };
+    return .{ .graph = graph };
+}
+
+fn parseDiagnosticFromLexerError(allocator: std.mem.Allocator, source: []const u8, err: anyerror) !ParseDiagnostic {
+    var lexer: Lexer = .{ .source = source };
+    var last = Token{ .tag = .eof, .lexeme = "", .line = 1, .column = 1 };
+    while (true) {
+        const token = lexer.next() catch {
+            return makeParseDiagnostic(allocator, source, parseErrorMessage(err), lexer.error_line, lexer.error_column, "");
+        };
+        last = token;
+        if (token.tag == .eof) break;
+    }
+    return makeParseDiagnostic(allocator, source, parseErrorMessage(err), last.line, last.column, last.lexeme);
+}
+
+fn parseDiagnosticFromParser(allocator: std.mem.Allocator, source: []const u8, parser: *const Parser, err: anyerror) !ParseDiagnostic {
+    const effective_error = parser.lex_error orelse err;
+    return makeParseDiagnostic(allocator, source, parseErrorMessage(effective_error), parser.current.line, parser.current.column, parser.current.lexeme);
+}
+
+fn makeParseDiagnostic(allocator: std.mem.Allocator, source: []const u8, message: []const u8, line: usize, column: usize, token: []const u8) !ParseDiagnostic {
+    return .{
+        .message = try allocator.dupe(u8, message),
+        .line = @max(line, 1),
+        .column = @max(column, 1),
+        .source_line = try allocator.dupe(u8, sourceLineAt(source, @max(line, 1))),
+        .token = try allocator.dupe(u8, token),
+    };
+}
+
+fn sourceLineAt(source: []const u8, target_line: usize) []const u8 {
+    var current_line: usize = 1;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= source.len) : (i += 1) {
+        if (i == source.len or source[i] == '\n') {
+            if (current_line == target_line) {
+                var end = i;
+                if (end > start and source[end - 1] == '\r') end -= 1;
+                return source[start..end];
+            }
+            current_line += 1;
+            start = i + 1;
+        }
+    }
+    return "";
+}
+
+fn parseErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ExpectedGraph => "expected `graph` or `digraph` at start of DOT input",
+        error.UnexpectedToken => "unexpected DOT token",
+        error.ExpectedId => "expected DOT identifier, string, or angle-string",
+        error.ExpectedStringAfterConcat => "expected quoted string after `+` concatenation",
+        error.EdgeOpMismatch => "edge operator does not match graph direction",
+        error.UnterminatedString => "unterminated quoted string",
+        error.UnterminatedAngleString => "unterminated angle string",
+        error.UnterminatedComment => "unterminated block comment",
+        error.UnexpectedCharacter => "unexpected character in DOT input",
+        else => @errorName(err),
+    };
+}
+
 pub const InputFormat = enum {
     auto,
     dot,
@@ -2705,6 +2818,14 @@ pub fn parseInput(allocator: std.mem.Allocator, source: []const u8, format: Inpu
         .auto => unreachable,
         .dot => parseDot(allocator, source),
         .mermaid => parseMermaid(allocator, source),
+    };
+}
+
+pub fn parseInputDiagnostic(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !ParseResult {
+    return switch (if (format == .auto) detectInputFormat(source) else format) {
+        .auto => unreachable,
+        .dot => parseDotDiagnostic(allocator, source),
+        .mermaid => .{ .graph = try parseMermaid(allocator, source) },
     };
 }
 
@@ -14466,6 +14587,68 @@ test "DOT parser handles graphviz-like edge chain and attrs" {
     try std.testing.expectEqual(@as(usize, 3), graph.nodes.items.len);
     try std.testing.expectEqual(@as(usize, 2), graph.edges.items.len);
     try std.testing.expectEqualStrings("flow", graph.edges.items[0].label.?);
+}
+
+test "DOT parser diagnostic reports line column and source context" {
+    const allocator = std.testing.allocator;
+    var result = try parseDotDiagnostic(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\
+    );
+    switch (result) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("unexpected DOT token", diagnostic.message);
+            try std.testing.expectEqual(@as(usize, 3), diagnostic.line);
+            try std.testing.expectEqual(@as(usize, 1), diagnostic.column);
+            try std.testing.expectEqualStrings("", diagnostic.source_line);
+        },
+    }
+}
+
+test "DOT parser diagnostic reports lexical errors" {
+    const allocator = std.testing.allocator;
+    var result = try parseDotDiagnostic(allocator,
+        \\digraph G {
+        \\  a [label="unterminated];
+        \\}
+    );
+    switch (result) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("unterminated quoted string", diagnostic.message);
+            try std.testing.expectEqual(@as(usize, 2), diagnostic.line);
+            try std.testing.expect(diagnostic.column > 0);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.source_line, "unterminated") != null);
+        },
+    }
+}
+
+test "input diagnostic keeps Mermaid success path" {
+    const allocator = std.testing.allocator;
+    var result = try parseInputDiagnostic(allocator,
+        \\flowchart LR
+        \\  A --> B
+    , .auto);
+    switch (result) {
+        .graph => |*graph| {
+            defer graph.deinit();
+            try std.testing.expectEqual(@as(usize, 2), graph.nodes.items.len);
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            return error.UnexpectedDiagnostic;
+        },
+    }
 }
 
 test "Mermaid parser handles flowchart direction nodes and labels" {

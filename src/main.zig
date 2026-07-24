@@ -135,7 +135,16 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(dot);
 
-    var graph = try vex.parseInput(allocator, dot, input_format);
+    const parse_result = try vex.parseInputDiagnostic(allocator, dot, input_format);
+    var graph = switch (parse_result) {
+        .graph => |graph| graph,
+        .diagnostic => |diagnostic_value| {
+            var diagnostic = diagnostic_value;
+            defer diagnostic.deinit(allocator);
+            try writeParseDiagnostic(io, diagnostic);
+            std.process.exit(1);
+        },
+    };
     defer graph.deinit();
 
     var layered_options = vex.LayoutOptions{};
@@ -168,4 +177,21 @@ fn readStdin(allocator: std.mem.Allocator, io: Io) ![]u8 {
     var stdin_buffer: [4096]u8 = undefined;
     var stdin_reader = Io.File.stdin().readerStreaming(io, &stdin_buffer);
     return stdin_reader.interface.allocRemaining(allocator, .limited(64 * 1024 * 1024));
+}
+
+fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {
+    var stderr_buffer: [2048]u8 = undefined;
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    const writer = &stderr_file_writer.interface;
+    try writer.print("DOT parse error: {s}\n", .{diagnostic.message});
+    try writer.print("  at line {d}, column {d}\n", .{ diagnostic.line, diagnostic.column });
+    if (diagnostic.source_line.len > 0) {
+        try writer.print("{d} | {s}\n", .{ diagnostic.line, diagnostic.source_line });
+        try writer.writeAll("  | ");
+        var caret_col: usize = 1;
+        while (caret_col < diagnostic.column) : (caret_col += 1) try writer.writeByte(' ');
+        try writer.writeAll("^\n");
+    }
+    if (diagnostic.token.len > 0) try writer.print("  token: {s}\n", .{diagnostic.token});
+    try writer.flush();
 }
