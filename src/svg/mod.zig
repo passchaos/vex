@@ -2,6 +2,7 @@
 
 pub const canvas = @import("canvas.zig");
 pub const color = @import("color.zig");
+pub const edge = @import("edge.zig");
 pub const font = @import("font.zig");
 pub const gradient = @import("gradient.zig");
 pub const image = @import("image.zig");

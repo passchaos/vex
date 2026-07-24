@@ -12182,20 +12182,10 @@ fn parallelEdgeOffset(graph: *const Graph, edge_id: EdgeId) f64 {
     return (@as(f64, @floatFromInt(index)) - (@as(f64, @floatFromInt(count - 1)) / 2.0)) * 22.0;
 }
 
-const SvgEdgeRouting = enum {
-    curved,
-    line,
-    polyline,
-    ortho,
-};
+const SvgEdgeRouting = svg_mod.edge.Routing;
 
 fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
-    const value = attrValue(graph.attrs.items, "splines") orelse return .curved;
-    if (parseBool(value)) |enabled| return if (enabled) .curved else .line;
-    if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "line")) return .line;
-    if (std.ascii.eqlIgnoreCase(value, "polyline")) return .polyline;
-    if (std.ascii.eqlIgnoreCase(value, "ortho")) return .ortho;
-    return .curved;
+    return svg_mod.edge.routingMode(graph.attrs.items);
 }
 
 fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip, hints: EdgePathHints) Io.Writer.Error!void {
