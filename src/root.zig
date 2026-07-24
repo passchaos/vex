@@ -11595,11 +11595,7 @@ fn renderSvgBoxShape(writer: *Io.Writer, rect: RectF, visual: NodeVisual, radius
     try writer.writeAll("/>\n");
 }
 
-const RectPointOrder = enum {
-    top_left_clockwise,
-    bottom_left_clockwise,
-    top_right_counterclockwise,
-};
+const RectPointOrder = svg_mod.shape.RectPointOrder;
 
 fn renderSvgRectPolygon(writer: *Io.Writer, rect: RectF, visual: NodeVisual) Io.Writer.Error!void {
     try writer.print("<polygon fill=\"{s}\" stroke=\"{s}\" points=\"", .{
@@ -11626,37 +11622,7 @@ fn renderSvgRectPolygonPrecise(writer: *Io.Writer, rect: RectF, visual: NodeVisu
 }
 
 fn writeSvgRectPolygonPoints(writer: *Io.Writer, rect: RectF, order: RectPointOrder, precise: bool) Io.Writer.Error!void {
-    const left = rect.x;
-    const right = rect.x + rect.width;
-    const top = rect.y;
-    const bottom = rect.y + rect.height;
-    const points: [5]Point = switch (order) {
-        .top_left_clockwise => [_]Point{
-            .{ .x = left, .y = top },
-            .{ .x = right, .y = top },
-            .{ .x = right, .y = bottom },
-            .{ .x = left, .y = bottom },
-            .{ .x = left, .y = top },
-        },
-        .bottom_left_clockwise => [_]Point{
-            .{ .x = left, .y = bottom },
-            .{ .x = left, .y = top },
-            .{ .x = right, .y = top },
-            .{ .x = right, .y = bottom },
-            .{ .x = left, .y = bottom },
-        },
-        .top_right_counterclockwise => [_]Point{
-            .{ .x = right, .y = top },
-            .{ .x = left, .y = top },
-            .{ .x = left, .y = bottom },
-            .{ .x = right, .y = bottom },
-            .{ .x = right, .y = top },
-        },
-    };
-    for (points, 0..) |point, index| {
-        if (index > 0) try writer.writeByte(' ');
-        try writeSvgPointWithPrecision(writer, point, precise);
-    }
+    try svg_mod.shape.writeRectPolygonPoints(writer, rect, order, precise);
 }
 
 fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height: f64, visual: NodeVisual) Io.Writer.Error!void {

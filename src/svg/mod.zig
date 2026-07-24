@@ -10,6 +10,7 @@ pub const interactive = @import("interactive.zig");
 pub const layers = @import("layers.zig");
 pub const marker = @import("marker.zig");
 pub const order = @import("order.zig");
+pub const shape = @import("shape.zig");
 pub const style = @import("style.zig");
 pub const subgraph = @import("subgraph.zig");
 pub const test_helpers = @import("test_helpers.zig");
