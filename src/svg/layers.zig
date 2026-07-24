@@ -66,6 +66,24 @@ pub fn matches(layer: Context, spec: []const u8) bool {
     return false;
 }
 
+pub const Membership = enum {
+    inherit,
+    include,
+    exclude,
+};
+
+pub fn membership(layer: Context, attrs: anytype) Membership {
+    const spec = attrValue(attrs, "layer") orelse return .inherit;
+    if (matches(layer, spec)) return .include;
+    if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return .exclude;
+    return .inherit;
+}
+
+pub fn inheritsOrMatches(layer: Context, attrs: anytype) bool {
+    const spec = attrValue(attrs, "layer") orelse return true;
+    return std.mem.trim(u8, spec, " \t\r\n").len == 0 or matches(layer, spec);
+}
+
 fn partMatches(layer: Context, part: []const u8, current: usize) bool {
     const trimmed = std.mem.trim(u8, part, " \t\r\n");
     if (trimmed.len == 0) return false;

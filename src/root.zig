@@ -8028,49 +8028,40 @@ fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void 
 }
 
 fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) bool {
-    if (attrValue(node_item.attrs.items, "layer")) |spec| {
-        if (svg_mod.layers.matches(layer, spec)) return true;
-        if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
+    switch (svg_mod.layers.membership(layer, node_item.attrs.items)) {
+        .include => return true,
+        .exclude => return false,
+        .inherit => {},
     }
     var has_incident = false;
     for (graph.edges.items) |edge_item| {
         if (edge_item.from != node_item.id and edge_item.to != node_item.id) continue;
         has_incident = true;
-        if (attrValue(edge_item.attrs.items, "layer")) |edge_spec| {
-            if (std.mem.trim(u8, edge_spec, " \t\r\n").len == 0 or svg_mod.layers.matches(layer, edge_spec)) return true;
-        } else {
-            return true;
-        }
+        if (svg_mod.layers.inheritsOrMatches(layer, edge_item.attrs.items)) return true;
     }
     return !has_incident;
 }
 
 fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) bool {
-    if (attrValue(edge_item.attrs.items, "layer")) |spec| {
-        if (svg_mod.layers.matches(layer, spec)) return true;
-        if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
+    switch (svg_mod.layers.membership(layer, edge_item.attrs.items)) {
+        .include => return true,
+        .exclude => return false,
+        .inherit => {},
     }
     if (edge_item.from < graph.nodes.items.len) {
-        if (attrValue(graph.nodes.items[edge_item.from].attrs.items, "layer")) |spec| {
-            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_mod.layers.matches(layer, spec)) return true;
-        } else {
-            return true;
-        }
+        if (svg_mod.layers.inheritsOrMatches(layer, graph.nodes.items[edge_item.from].attrs.items)) return true;
     }
     if (edge_item.to < graph.nodes.items.len) {
-        if (attrValue(graph.nodes.items[edge_item.to].attrs.items, "layer")) |spec| {
-            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_mod.layers.matches(layer, spec)) return true;
-        } else {
-            return true;
-        }
+        if (svg_mod.layers.inheritsOrMatches(layer, graph.nodes.items[edge_item.to].attrs.items)) return true;
     }
     return false;
 }
 
 fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerContext) bool {
-    if (attrValue(cluster.attrs.items, "layer")) |spec| {
-        if (svg_mod.layers.matches(layer, spec)) return true;
-        if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
+    switch (svg_mod.layers.membership(layer, cluster.attrs.items)) {
+        .include => return true,
+        .exclude => return false,
+        .inherit => {},
     }
     for (cluster.nodes) |node_id| {
         if (node_id < graph.nodes.items.len and svgNodeInLayer(graph, graph.nodes.items[node_id], layer)) return true;
