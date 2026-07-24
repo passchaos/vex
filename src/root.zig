@@ -16809,6 +16809,61 @@ test "sfdp honors levels and repulsiveforce but ignores edge len and weight" {
     try expectNodeCentersEqual(&first, &second);
 }
 
+test "sfdp Barnes Hut repulsion approximates exact forces" {
+    const allocator = std.testing.allocator;
+    const node_count: usize = 96;
+    const positions = try allocator.alloc(Point, node_count);
+    defer allocator.free(positions);
+    for (positions, 0..) |*position, node| {
+        const angle = @as(f64, @floatFromInt(node)) * 2.399963229728653;
+        const radius = 20.0 + @as(f64, @floatFromInt(node % 13)) * 4.0;
+        position.* = .{
+            .x = 300.0 + std.math.cos(angle) * radius,
+            .y = 220.0 + std.math.sin(angle) * radius,
+        };
+    }
+    const exact = try allocator.alloc(Point, node_count);
+    defer allocator.free(exact);
+    const approximate = try allocator.alloc(Point, node_count);
+    defer allocator.free(approximate);
+    const exact_stats = try layout_mod.sfdp.repulsionForces(allocator, positions, 72, 1, 0.75, true, exact);
+    const approximate_stats = try layout_mod.sfdp.repulsionForces(allocator, positions, 72, 1, 0.75, false, approximate);
+
+    var relative_error_sum: f64 = 0;
+    var measured: usize = 0;
+    for (exact, approximate) |expected, actual| {
+        const expected_magnitude = std.math.hypot(expected.x, expected.y);
+        if (expected_magnitude < 0.001) continue;
+        relative_error_sum += std.math.hypot(expected.x - actual.x, expected.y - actual.y) / expected_magnitude;
+        measured += 1;
+    }
+    const average_relative_error = relative_error_sum / @as(f64, @floatFromInt(measured));
+    try std.testing.expect(average_relative_error < 0.18);
+    try std.testing.expect(approximate_stats.approximations > 0);
+    try std.testing.expect(approximate_stats.evaluations < exact_stats.evaluations * 3 / 5);
+}
+
+test "sfdp Barnes Hut work stays subquadratic at 512 nodes" {
+    const allocator = std.testing.allocator;
+    const node_count: usize = 512;
+    const positions = try allocator.alloc(Point, node_count);
+    defer allocator.free(positions);
+    for (positions, 0..) |*position, node| {
+        const angle = @as(f64, @floatFromInt(node)) * 2.399963229728653;
+        const radius = 40.0 + @as(f64, @floatFromInt(node % 31)) * 3.0;
+        position.* = .{
+            .x = 500.0 + std.math.cos(angle) * radius,
+            .y = 380.0 + std.math.sin(angle) * radius,
+        };
+    }
+    const displacement = try allocator.alloc(Point, node_count);
+    defer allocator.free(displacement);
+    const stats = try layout_mod.sfdp.repulsionForces(allocator, positions, 72, 1, 0.75, false, displacement);
+    const exact_evaluations = node_count * (node_count - 1);
+    try std.testing.expect(stats.approximations > node_count);
+    try std.testing.expect(stats.evaluations < exact_evaluations / 4);
+}
+
 test "force layout config iterations override graph fallback" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,

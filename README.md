@@ -58,7 +58,9 @@ semantics. `--layout fr` selects the deterministic Fruchterman-Reingold
 engine. `--layout sfdp`, `graph [layout=sfdp]`, and `-Ksfdp` select the
 independent deterministic multilevel spring-electrical engine. It supports
 Graphviz-style `levels`, `K`, and `repulsiveforce`; like Graphviz sfdp, it
-does not model clusters or edge `len` / `weight`.
+does not model clusters or edge `len` / `weight`. Fine-level repulsion uses a
+deterministic Barnes-Hut quadtree above the exact small-graph threshold, with
+tests bounding force error and repulsion work plus a 512-node SVG smoke.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
