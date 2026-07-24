@@ -57,6 +57,14 @@ pub const LayoutAlgorithm = enum {
         }
         return null;
     }
+
+    pub fn name(self: LayoutAlgorithm) []const u8 {
+        return switch (self) {
+            .auto => "auto",
+            .sugiyama => "dot",
+            .fruchterman_reingold => "neato",
+        };
+    }
 };
 
 pub const LayoutConfig = struct {

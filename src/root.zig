@@ -879,7 +879,7 @@ pub const Graph = struct {
                 self.rankdir = value;
                 try self.setGraphAttrRaw("rankdir", value.name());
             },
-            .layout => |value| try self.setGraphAttrRaw("layout", layoutAlgorithmName(value)),
+            .layout => |value| try self.setGraphAttrRaw("layout", value.name()),
             .rotate => |value| try self.setGraphAttrFloat("rotate", value),
             .landscape => |value| try self.setGraphAttrRaw("landscape", boolAttrValue(value)),
             .orientation => |value| try self.setGraphAttrRaw("orientation", value),
@@ -1490,7 +1490,7 @@ pub const Graph = struct {
         switch (attr) {
             .label => |value| try self.setSubgraphAttrRaw(id, "label", value),
             .rankdir => |value| try self.setSubgraphAttrRaw(id, "rankdir", value.name()),
-            .layout => |value| try self.setSubgraphAttrRaw(id, "layout", layoutAlgorithmName(value)),
+            .layout => |value| try self.setSubgraphAttrRaw(id, "layout", value.name()),
             .compound => |value| try self.setSubgraphAttrRaw(id, "compound", boolAttrValue(value)),
             .concentrate => |value| try self.setSubgraphAttrRaw(id, "concentrate", boolAttrValue(value)),
             .nodesep => |value| try self.setSubgraphAttrFloat(id, "nodesep", value),
@@ -1719,14 +1719,6 @@ fn shapeName(shape: Shape) []const u8 {
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
-    };
-}
-
-fn layoutAlgorithmName(algorithm: LayoutAlgorithm) []const u8 {
-    return switch (algorithm) {
-        .auto => "auto",
-        .sugiyama => "dot",
-        .fruchterman_reingold => "neato",
     };
 }
 
