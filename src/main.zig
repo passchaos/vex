@@ -10,6 +10,7 @@ const usage =
     \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-layers] [--interactive-search]
+    \\        [--interactive-viewport]
     \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
@@ -18,6 +19,7 @@ const usage =
     \\rankdir=TB|BT|LR|RL.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-search adds an SVG-native search and highlight panel.
+    \\--interactive-viewport adds SVG-native pan and zoom controls.
     \\
 ;
 
@@ -37,6 +39,7 @@ pub fn main(init: std.process.Init) !void {
     var input_format: vex.InputFormat = .auto;
     var interactive_layers = false;
     var interactive_search = false;
+    var interactive_viewport = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -69,6 +72,8 @@ pub fn main(init: std.process.Init) !void {
             interactive_layers = true;
         } else if (std.mem.eql(u8, arg, "--interactive-search")) {
             interactive_search = true;
+        } else if (std.mem.eql(u8, arg, "--interactive-viewport")) {
+            interactive_viewport = true;
         } else if (std.mem.eql(u8, arg, "--layout") or std.mem.eql(u8, arg, "-K")) {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
@@ -106,7 +111,7 @@ pub fn main(init: std.process.Init) !void {
 
     var layout = try vex.layoutGraph(allocator, &graph, .{ .algorithm = layout_arg });
     defer layout.deinit();
-    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_search = interactive_search } };
+    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);

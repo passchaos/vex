@@ -29,6 +29,7 @@ zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
 zig build run -- --input examples/simple.dot --output searchable.svg --interactive-search
+zig build run -- --input examples/simple.dot --output viewport.svg --interactive-viewport
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
 
@@ -48,6 +49,11 @@ search and highlight panel and annotates rendered nodes, edges, and subgraphs
 with searchable labels and metadata. It can also be enabled from DOT with
 `graph [vex_interactive_search=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_search = true } }`.
+
+`--interactive-viewport` adds a self-contained pan, zoom, and reset panel around
+the rendered graph content. It can also be enabled from DOT with
+`graph [vex_interactive_viewport=true]` or from the Zig API with
+`.{ .svg = .{ .interactive_viewport = true } }`.
 
 ## Zig API sketch
 
@@ -148,6 +154,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG output honors Graphviz `layers`, `layersep`, `layerlistsep`, `layerselect`, and node, edge, and subgraph `layer` attributes by emitting separate SVG layer groups.
 - Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `vex_interactive_layers=true`, or `SvgOptions.interactive_layers`.
 - Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `vex_interactive_search=true`, or `SvgOptions.interactive_search`.
+- Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes including `true` / `false`, `yes` / `no`, `on` / `off`, and `1` / `0`. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; Graphviz object escapes include `\G`, `\N`, `\E`, `\T`, `\H`, and `\L`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.
