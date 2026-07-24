@@ -11915,7 +11915,7 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
         .radius = if (rounded) 10 else 0,
         .dash = dashStyleFromAttr(style),
         .fill_opacity = "1.0",
-        .peripheries = parseAttrUsize(cluster.attrs.items, "peripheries", 1),
+        .peripheries = inheritedClusterPeripheries(graph, cluster, 1),
         .hidden = styleHas(style, "invis"),
     };
 }
@@ -11927,6 +11927,11 @@ fn inheritedClusterVisualAttr(graph: *const Graph, cluster: Subgraph, name: []co
 fn inheritedClusterPenWidth(graph: *const Graph, cluster: Subgraph, fallback: f64) f64 {
     const value = inheritedClusterVisualAttr(graph, cluster, "penwidth") orelse return fallback;
     return std.fmt.parseFloat(f64, value) catch fallback;
+}
+
+fn inheritedClusterPeripheries(graph: *const Graph, cluster: Subgraph, fallback: usize) usize {
+    const value = inheritedClusterVisualAttr(graph, cluster, "peripheries") orelse return fallback;
+    return std.fmt.parseInt(usize, value, 10) catch fallback;
 }
 
 fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
@@ -21145,6 +21150,48 @@ test "cluster peripheries zero hides border while preserving fill" {
     try std.testing.expectEqualStrings("0", attrValue(graph.subgraphs.items[0].attrs.items, "peripheries").?);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dbeafe\" stroke=\"none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#1d4ed8\"") == null);
+}
+
+test "cluster peripheries inherits from parent subgraphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    style=filled;
+        \\    fillcolor="#dbeafe";
+        \\    pencolor="#1d4ed8";
+        \\    peripheries=0;
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      peripheries=1;
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    const inner = graph.subgraphs.items[inner_index];
+    try std.testing.expect(attrValue(inner.attrs.items, "peripheries") == null);
+    try std.testing.expectEqual(@as(usize, 0), inheritedClusterPeripheries(&graph, inner, 1));
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#dbeafe\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "stroke=\"none\"") != null);
+
+    const explicit = graph.subgraphs.items[subgraphIndexByLabel(&graph, "Explicit").?];
+    try std.testing.expectEqual(@as(usize, 1), inheritedClusterPeripheries(&graph, explicit, 0));
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "stroke=\"#1d4ed8\"") != null);
 }
 
 test "cluster labels honor labelloc and labeljust" {
