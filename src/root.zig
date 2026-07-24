@@ -11928,13 +11928,14 @@ fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
 }
 
 fn inheritedClusterFontAttr(graph: *const Graph, cluster: Subgraph, name: []const u8) ?[]const u8 {
-    return attrValue(cluster.attrs.items, name) orelse attrValue(graph.attrs.items, name);
+    return layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, name) orelse attrValue(graph.attrs.items, name);
 }
 
 fn inheritedClusterFontSize(graph: *const Graph, cluster: Subgraph) f64 {
     const graph_font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
-    if (attrValue(cluster.attrs.items, "fontsize") != null) {
-        return parsePositiveAttrFloat(cluster.attrs.items, "fontsize", graph_font_size);
+    if (layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "fontsize")) |raw_font_size| {
+        const parsed = std.fmt.parseFloat(f64, raw_font_size) catch return graph_font_size;
+        return if (parsed > 0) parsed else graph_font_size;
     }
     return graph_font_size;
 }
@@ -21133,6 +21134,54 @@ test "cluster label layout inherits root graph fontsize" {
     const a = nodeIdByLabel(&graph, "a");
     const inherited_box = layout.subgraphs[inherited.id];
     try std.testing.expect(layout.nodes[a].center.y - layout.nodes[a].height / 2.0 >= inherited_box.y + inherited_band - 0.01);
+}
+
+test "cluster labels inherit parent subgraph font attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [fontname="Times", fontsize=10, fontcolor="#111111"];
+        \\  subgraph cluster_outer {
+        \\    label="Outer";
+        \\    fontname="Courier";
+        \\    fontsize=24;
+        \\    fontcolor="#dc2626";
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      fontname="Helvetica";
+        \\      fontsize=12;
+        \\      fontcolor="#2563eb";
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    const inner = graph.subgraphs.items[inner_index];
+    try std.testing.expect(attrValue(inner.attrs.items, "fontname") == null);
+    try std.testing.expect(attrValue(inner.attrs.items, "fontsize") == null);
+    try std.testing.expect(attrValue(inner.attrs.items, "fontcolor") == null);
+    try std.testing.expectEqual(@as(f64, 24), inheritedClusterFontSize(&graph, inner));
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "font-family=\"Courier") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "font-size=\"24.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#dc2626\"") != null);
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "font-family=\"Helvetica") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "font-size=\"12.00\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "fill=\"#2563eb\"") != null);
 }
 
 test "cluster labels honor DOT left and right line breaks" {
