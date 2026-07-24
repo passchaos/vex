@@ -94,6 +94,14 @@ pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {
     return result;
 }
 
+pub fn withForceGraphAttrs(base: ForceLayoutOptions, graph_attrs: anytype) ForceLayoutOptions {
+    var result = base;
+    if (attrValue(graph_attrs, "vex_layout_iterations") orelse attrValue(graph_attrs, "layout_iterations")) |value| {
+        result.iterations = positiveAttrUsize(value, result.iterations);
+    }
+    return result;
+}
+
 pub fn clusterAlongBudget(along_margin: f64) f64 {
     return @max(0.0, defaultClusterAlongExtentBudget - along_margin * 2.0);
 }
@@ -115,6 +123,11 @@ pub fn attrMargin(attrs: anytype, fallback: f64) BoxMargin {
 fn positiveAttrFloat(attrs: anytype, name: []const u8, fallback: f64) f64 {
     const value = attrValue(attrs, name) orelse return fallback;
     const parsed = std.fmt.parseFloat(f64, value) catch return fallback;
+    return if (parsed > 0) parsed else fallback;
+}
+
+fn positiveAttrUsize(value: []const u8, fallback: usize) usize {
+    const parsed = std.fmt.parseInt(usize, value, 10) catch return fallback;
     return if (parsed > 0) parsed else fallback;
 }
 

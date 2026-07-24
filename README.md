@@ -27,6 +27,7 @@ zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
+zig build run -- --input examples/simple.dot --layout neato --layout-iterations 20 --output force-fast.svg
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
 zig build run -- --input examples/subgraph.dot --output collapse.svg --interactive-collapse
 zig build run -- --input examples/simple.dot --output filtered.svg --interactive-filter
@@ -38,7 +39,11 @@ cat examples/simple.dot | zig build run -- --format svg > simple.svg
 Layout selection defaults to `dot`/Sugiyama, which honors
 `rankdir=TB|BT|LR|RL` during layout. `--layout fr`, `--layout neato`, `--layout
 fdp`, and Graphviz-style `-Kneato` select the deterministic
-Fruchterman-Reingold force-directed layout.
+Fruchterman-Reingold force-directed layout. `--layout-iterations` caps the
+force-layout iteration budget for fast previews or large graph workflows; DOT
+can set the same budget with `graph [vex_layout_iterations=20]` or
+`graph [layout_iterations=20]`, and the Zig API can pass
+`.{ .force = .{ .iterations = 20 } }`.
 
 `--interactive-layers` is a Vex SVG extension. When a graph declares
 Graphviz-style `layers`, it embeds a small self-contained SVG control panel for

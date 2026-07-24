@@ -8,6 +8,7 @@ const usage =
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
+    \\        [--layout-iterations count]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-layers] [--interactive-collapse]
     \\        [--interactive-filter] [--interactive-search]
@@ -18,6 +19,7 @@ const usage =
     \\output is written to stdout.
     \\Default input format is auto. Default layout is DOT/Sugiyama and honors
     \\rankdir=TB|BT|LR|RL.
+    \\--layout-iterations caps force/neato layout iterations.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
     \\--interactive-filter adds SVG-native type filter controls.
@@ -39,6 +41,7 @@ pub fn main(init: std.process.Init) !void {
     var output_path: ?[]const u8 = null;
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
+    var layout_iterations: ?usize = null;
     var input_format: vex.InputFormat = .auto;
     var interactive_layers = false;
     var interactive_collapse = false;
@@ -87,6 +90,11 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
             layout_arg = vex.LayoutAlgorithm.fromString(args[i]) orelse return error.UnknownLayout;
+        } else if (std.mem.eql(u8, arg, "--layout-iterations")) {
+            i += 1;
+            if (i >= args.len) return error.MissingLayoutIterations;
+            layout_iterations = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidLayoutIterations;
+            if (layout_iterations.? == 0) return error.InvalidLayoutIterations;
         } else if (std.mem.startsWith(u8, arg, "-K") and arg.len > 2) {
             layout_arg = vex.LayoutAlgorithm.fromString(arg[2..]) orelse return error.UnknownLayout;
         } else if (std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "-")) {
@@ -118,7 +126,11 @@ pub fn main(init: std.process.Init) !void {
     var graph = try vex.parseInput(allocator, dot, input_format);
     defer graph.deinit();
 
-    var layout = try vex.layoutGraph(allocator, &graph, .{ .algorithm = layout_arg });
+    const layout_config = vex.LayoutConfig{
+        .algorithm = layout_arg,
+        .force = if (layout_iterations) |iterations| .{ .iterations = iterations } else .{},
+    };
+    var layout = try vex.layoutGraph(allocator, &graph, layout_config);
     defer layout.deinit();
     const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport } };
     if (output_path) |path| {

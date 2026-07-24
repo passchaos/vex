@@ -145,6 +145,7 @@ pub const GraphAttr = union(enum) {
     ratio: GraphRatio,
     dpi: f64,
     resolution: f64,
+    vex_layout_iterations: usize,
     layers: []const u8,
     layersep: []const u8,
     layerlistsep: []const u8,
@@ -839,6 +840,11 @@ pub const Graph = struct {
             },
             .dpi => |value| try self.setGraphAttrFloat("dpi", value),
             .resolution => |value| try self.setGraphAttrFloat("resolution", value),
+            .vex_layout_iterations => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("vex_layout_iterations", text);
+            },
             .layers => |value| try self.setGraphAttrRaw("layers", value),
             .layersep => |value| try self.setGraphAttrRaw("layersep", value),
             .layerlistsep => |value| try self.setGraphAttrRaw("layerlistsep", value),
@@ -3373,7 +3379,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
     return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
         .auto => unreachable,
         .sugiyama => layoutLayered(allocator, graph, config.layered),
-        .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, config.force),
+        .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
     };
 }
 
@@ -3389,6 +3395,10 @@ fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) Layo
 
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
     return layout_mod.options.withGraphAttrs(options, graph.attrs.items);
+}
+
+fn forceLayoutOptionsWithGraphAttrs(options: ForceLayoutOptions, graph: *const Graph) ForceLayoutOptions {
+    return layout_mod.options.withForceGraphAttrs(options, graph.attrs.items);
 }
 
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
@@ -14254,6 +14264,44 @@ test "layoutGraph selects Fruchterman-Reingold from graph layout attr" {
     try std.testing.expectEqual(@as(usize, 1), layout.rank_depths.len);
     try std.testing.expectEqual(defaults.width, layout.width);
     try std.testing.expectEqual(defaults.height, layout.height);
+}
+
+test "force layout honors iteration budget from DOT and typed API" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, vex_layout_iterations=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer graph.deinit();
+
+    var low_budget = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer low_budget.deinit();
+
+    try graph.setGraphAttr(.{ .vex_layout_iterations = 40 });
+    var higher_budget = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer higher_budget.deinit();
+
+    try std.testing.expectEqualStrings("40", attrValue(graph.attrs.items, "vex_layout_iterations").?);
+    try std.testing.expect(distanceBetween(low_budget.nodes[0].center, higher_budget.nodes[0].center) > 0.1);
+}
+
+test "force layout config iterations override graph fallback" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato];
+        \\  a -- b -- c -- d;
+        \\}
+    );
+    defer graph.deinit();
+
+    var one = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = .{ .iterations = 1 } });
+    defer one.deinit();
+    var forty = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = .{ .iterations = 40 } });
+    defer forty.deinit();
+    try std.testing.expect(distanceBetween(one.nodes[0].center, forty.nodes[0].center) > 0.1);
 }
 
 test "layoutGraph default keeps Sugiyama rankdir as layout input" {
