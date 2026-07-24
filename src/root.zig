@@ -8025,7 +8025,17 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 
     if (svgGraphLayers(graph)) |layers| {
         defer graph.allocator.free(layers.names);
-        for (layers.names, 0..) |layer_name, index| {
+        if (layers.selected) |indices| {
+            defer graph.allocator.free(indices);
+            for (indices) |index| {
+                const layer_name = layers.names[index];
+                const context = SvgLayerContext{ .layers = layers, .index = index };
+                try writeSvgLayerOpen(writer, layer_name);
+                try renderSvgClusters(writer, graph, layout, context);
+                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context);
+                try writer.writeAll("</g>\n");
+            }
+        } else for (layers.names, 0..) |layer_name, index| {
             const context = SvgLayerContext{ .layers = layers, .index = index };
             try writeSvgLayerOpen(writer, layer_name);
             try renderSvgClusters(writer, graph, layout, context);
@@ -8053,6 +8063,7 @@ fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, la
 const SvgLayers = struct {
     names: []const []const u8,
     delims: []const u8,
+    selected: ?[]const usize,
 };
 
 const SvgLayerContext = struct {
@@ -8071,7 +8082,29 @@ fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
     var fill_iter = std.mem.tokenizeAny(u8, raw, delims);
     var index: usize = 0;
     while (fill_iter.next()) |name| : (index += 1) names[index] = name;
-    return .{ .names = names, .delims = delims };
+    const base = SvgLayers{ .names = names, .delims = delims, .selected = null };
+    return .{ .names = names, .delims = delims, .selected = svgLayerSelection(graph, base) };
+}
+
+fn svgLayerSelection(graph: *const Graph, layers: SvgLayers) ?[]const usize {
+    const spec = attrValue(graph.attrs.items, "layerselect") orelse return null;
+    if (std.mem.trim(u8, spec, " \t\r\n").len == 0) return null;
+    var count: usize = 0;
+    for (layers.names, 0..) |_, index| {
+        const context = SvgLayerContext{ .layers = layers, .index = index };
+        if (svgLayerSpecMatches(context, spec)) count += 1;
+    }
+    if (count == 0) return null;
+    var selected = graph.allocator.alloc(usize, count) catch return null;
+    var out: usize = 0;
+    for (layers.names, 0..) |_, index| {
+        const context = SvgLayerContext{ .layers = layers, .index = index };
+        if (svgLayerSpecMatches(context, spec)) {
+            selected[out] = index;
+            out += 1;
+        }
+    }
+    return selected;
 }
 
 fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void {
@@ -18285,6 +18318,49 @@ test "SVG renderer honors Graphviz graph layers" {
     try std.testing.expectEqualStrings("L2", attrValue(typed.nodes.items[n2].attrs.items, "layer").?);
     try std.testing.expectEqualStrings("L1:L2", attrValue(typed.edges.items[edge].attrs.items, "layer").?);
     try std.testing.expectEqualStrings("L1", attrValue(typed.subgraphs.items[subgraph].attrs.items, "layer").?);
+}
+
+test "SVG renderer honors Graphviz graph layerselect" {
+    const allocator = std.testing.allocator;
+    var selected = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail", layerselect=detail];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\  a -> b [layer=detail];
+        \\}
+    );
+    defer selected.deinit();
+
+    var selected_layout = try layoutLayered(allocator, &selected, .{});
+    defer selected_layout.deinit();
+    const selected_svg = try renderSvgAlloc(allocator, &selected, &selected_layout, .{});
+    defer allocator.free(selected_svg);
+    try std.testing.expect(svgGroupFragmentById(selected_svg, "base") == null);
+    const detail_layer = svgGroupFragmentById(selected_svg, "detail") orelse return error.MissingDetailLayer;
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>b</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>a-&gt;b</title>") != null);
+
+    var range = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail", layerselect="base:detail"];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\}
+    );
+    defer range.deinit();
+    var range_layout = try layoutLayered(allocator, &range, .{});
+    defer range_layout.deinit();
+    const range_svg = try renderSvgAlloc(allocator, &range, &range_layout, .{});
+    defer allocator.free(range_svg);
+    try std.testing.expect(svgGroupFragmentById(range_svg, "base") != null);
+    try std.testing.expect(svgGroupFragmentById(range_svg, "detail") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .layers = "L1:L2" });
+    try typed.setGraphAttr(.{ .layerselect = "L2" });
+    try std.testing.expectEqualStrings("L2", attrValue(typed.attrs.items, "layerselect").?);
 }
 
 test "SVG renderer honors Graphviz landscape orientation attributes" {
