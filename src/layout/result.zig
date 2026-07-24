@@ -27,3 +27,13 @@ pub const EdgeWaypoint = struct {
 pub const EdgeWaypoints = struct {
     points: []EdgeWaypoint,
 };
+
+pub const EdgeSplineSegment = struct {
+    points: []Point,
+    start_tip: ?Point = null,
+    end_tip: ?Point = null,
+};
+
+pub const EdgeSpline = struct {
+    segments: []EdgeSplineSegment,
+};

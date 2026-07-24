@@ -81,6 +81,12 @@ hierarchical array-packing engine. It recursively packs direct nodes and child
 subgraphs using their intrinsic rectangle sizes, ignores edges, and supports
 graph/subgraph `pack`, Graphviz-style `packmode=array_[ciutblr]N`, plus
 node/subgraph `sortv` ordering.
+`--layout nop` / `nop1` preserve required node `pos` coordinates and reroute
+edges, while `--layout nop2` additionally preserves valid Graphviz `3n+1`
+cubic edge `pos` splines and reroutes missing or invalid ones. Both support
+`notranslate=true`; the Zig API exposes typed `NodePosition` and
+`EdgeSplineSegmentInput` values instead of leaking DOT strings into core API
+calls.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
@@ -267,6 +273,7 @@ zig build run-api-twopi-layout-svg
 zig build run-api-circo-layout-svg
 zig build run-api-patchwork-layout-svg
 zig build run-api-osage-layout-svg
+zig build run-api-positioned-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -285,6 +292,7 @@ They progress from small SVG output to broader feature coverage:
 - `12_circo_layout_svg.zig`: biconnected blocks rendered as recursively connected circles.
 - `13_patchwork_layout_svg.zig`: hierarchical node/subgraph areas rendered as a squarified treemap.
 - `14_osage_layout_svg.zig`: nested subgraphs and intrinsic node rectangles rendered with deterministic array packing.
+- `15_positioned_layout_svg.zig`: typed pre-positioned nodes and a preserved nop2 cubic edge rendered to SVG.
 
 ## Graphviz compatibility target
 

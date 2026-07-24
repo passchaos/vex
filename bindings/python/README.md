@@ -43,6 +43,12 @@ svg = render_dot(
     "graph G { graph [packmode=array_i2]; a; b; c }",
     RenderConfig(layout="osage"),
 )
+
+svg = render_dot(
+    'digraph G { graph [notranslate=true]; a [pos="0,0"]; b [pos="120,0"]; '
+    'a -> b [pos="e,105,0 20,0 45,40 75,40 100,0"]; }',
+    RenderConfig(layout="nop2"),
+)
 ```
 
 Library lookup order:

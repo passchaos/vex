@@ -52,6 +52,9 @@ _LAYOUTS: Final = {
     "circo": 6,
     "patchwork": 7,
     "osage": 8,
+    "nop": 9,
+    "nop1": 9,
+    "nop2": 10,
 }
 
 

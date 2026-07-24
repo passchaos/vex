@@ -51,6 +51,27 @@ def main() -> None:
         vex.RenderConfig(layout="osage"),
     )
     assert "<title>O</title>" in osage_svg
+    nop_svg = vex.render_dot(
+        'graph N { a [pos="0,0"]; b [pos="120,0"]; a -- b; }',
+        vex.RenderConfig(layout="nop"),
+    )
+    assert "<title>N</title>" in nop_svg
+    nop2_svg = vex.render_dot(
+        'digraph N2 { graph [notranslate=true]; a [pos="0,0"]; b [pos="120,0"]; '
+        'a -> b [pos="e,105,0 20,0 45,40 75,40 100,0"]; }',
+        vex.RenderConfig(layout="nop2"),
+    )
+    assert "M20,0C45,-40 75,-40 100,0" in nop2_svg
+
+    try:
+        vex.render_dot(
+            'graph Missing { a [pos="0,0"]; b; }',
+            vex.RenderConfig(layout="nop"),
+        )
+    except vex.VexError as error:
+        assert "MissingNodePosition" in str(error)
+    else:
+        raise AssertionError("expected missing nop position error")
 
     try:
         vex.render_dot("digraph G { a ->")

@@ -34,6 +34,7 @@
 | circular/circo 布局 | 已验证 | Tarjan biconnected blocks、block-cut circles、root/mindist/oneblock、component packing、CLI/Zig/C/Python 和 SVG smoke | 持续补充复杂 articulation oracle corpus |
 | treemap/patchwork 布局 | 已验证 | hierarchical squarified treemap、typed node/subgraph area、nested containment、area override、edge independence、CLI/Zig/C/Python 和 SVG smoke | 持续补充大层级与 label-fit corpus |
 | array/osage 布局 | 已验证 | recursive child-subgraph-first packing、intrinsic node/cluster rectangles、typed `pack`/`packmode`/`sortv`、row/column-major 与 alignment flags、nested containment、edge independence、CLI/Zig/C/Python 和 SVG smoke | 持续补充复杂异形节点与 Graphviz residual corpus |
+| pre-positioned nop/nop2 布局 | 部分完成 | required node `pos`、typed `NodePosition`、`!` pin parsing、`notranslate`、nop edge reroute、nop2 `3n+1` cubic edge spline preservation/fallback、typed `EdgeSplineSegmentInput`、CLI/Zig/C/Python 和 SVG smoke | 补齐非默认 `overlap` 调整，以及输入 cluster `bb`、graph/edge/node label `lp`/`xlp` 等辅助几何 |
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |
 | records、ports、compound edges | 已验证 | record field、compass port、scoped ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
 | parent-scoped subgraph identity | 已验证 | Graphviz `agsubg` source oracle；same-parent reopen merge、different-parent isolation 和 file corpus 测试 | 保持成员/属性合并和最近作用域引用语义 |

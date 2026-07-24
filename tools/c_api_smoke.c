@@ -112,6 +112,24 @@ int main(void) {
     }
     const int osage_ok = svg.len > 0;
     vex_buffer_free(svg);
+    options.layout = VEX_LAYOUT_NOP;
+    svg.data = NULL;
+    svg.len = 0;
+    if (!check(vex_dot_render_svg(view("graph N { a [pos=\"0,0\"]; b [pos=\"120,0\"]; a -- b; }"), options, &svg, &error), &error)) {
+        vex_graph_destroy(graph);
+        return 10;
+    }
+    const int nop_ok = svg.len > 0;
+    vex_buffer_free(svg);
+    options.layout = VEX_LAYOUT_NOP2;
+    svg.data = NULL;
+    svg.len = 0;
+    if (!check(vex_dot_render_svg(view("digraph N2 { a [pos=\"0,0\"]; b [pos=\"120,0\"]; a -> b [pos=\"e,105,0 20,0 45,40 75,40 100,0\"]; }"), options, &svg, &error), &error)) {
+        vex_graph_destroy(graph);
+        return 11;
+    }
+    const int nop2_ok = svg.len > 0;
+    vex_buffer_free(svg);
     vex_graph_destroy(graph);
-    return ok && twopi_ok && circo_ok && patchwork_ok && osage_ok ? 0 : 5;
+    return ok && twopi_ok && circo_ok && patchwork_ok && osage_ok && nop_ok && nop2_ok ? 0 : 5;
 }

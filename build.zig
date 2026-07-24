@@ -250,6 +250,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/14_osage_layout_svg.zig",
             .desc = "Run API example: nested osage array packing",
         },
+        .{
+            .step_name = "run-api-positioned-layout-svg",
+            .exe_name = "api-positioned-layout-svg",
+            .source = "examples/api/15_positioned_layout_svg.zig",
+            .desc = "Run API example: nop2 positioned nodes and edge spline",
+        },
     };
 
     for (api_examples) |example| {

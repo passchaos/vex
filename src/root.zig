@@ -13,6 +13,19 @@ const svg_mod = @import("svg/mod.zig");
 pub const NodeId = usize;
 pub const EdgeId = usize;
 pub const SubgraphId = usize;
+pub const Point = layout_mod.result.Point;
+
+pub const NodePosition = struct {
+    x: f64,
+    y: f64,
+    pinned: bool = false,
+};
+
+pub const EdgeSplineSegmentInput = struct {
+    points: []const Point,
+    start_tip: ?Point = null,
+    end_tip: ?Point = null,
+};
 
 pub const Shape = enum {
     ellipse,
@@ -157,7 +170,7 @@ const label_right_break: u8 = 0x1f;
 const svg_label_breaks = svg_mod.text.LabelBreaks{ .left = label_left_break, .right = label_right_break };
 const svg_metadata_schema_version = "1";
 const svg_metadata_schema_uri = "https://vex.graph/svg-metadata/1";
-const svg_metadata_features = "attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy";
+const svg_metadata_features = "attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy";
 
 pub const GraphAttr = union(enum) {
     label: []const u8,
@@ -167,6 +180,7 @@ pub const GraphAttr = union(enum) {
     landscape: bool,
     orientation: []const u8,
     center: bool,
+    notranslate: bool,
     compound: bool,
     concentrate: bool,
     nodesep: f64,
@@ -259,6 +273,7 @@ pub const NodeAttr = union(enum) {
     height: f64,
     area: f64,
     sortv: usize,
+    position: NodePosition,
     fixedsize: NodeFixedSize,
     margin: []const u8,
     image: []const u8,
@@ -317,6 +332,7 @@ pub const NodeOptions = struct {
     height: ?f64 = null,
     area: ?f64 = null,
     sortv: ?usize = null,
+    position: ?NodePosition = null,
     fixedsize: ?NodeFixedSize = null,
     margin: ?[]const u8 = null,
     image: ?[]const u8 = null,
@@ -356,6 +372,7 @@ pub const EdgeOptions = struct {
     weight: ?f64 = null,
     constraint: ?bool = null,
     min_len: ?usize = null,
+    spline: ?[]const EdgeSplineSegmentInput = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -423,6 +440,7 @@ pub const EdgeAttr = union(enum) {
     weight: f64,
     constraint: bool,
     min_len: usize,
+    spline: []const EdgeSplineSegmentInput,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -904,6 +922,7 @@ pub const Graph = struct {
             .landscape => |value| try self.setGraphAttrRaw("landscape", boolAttrValue(value)),
             .orientation => |value| try self.setGraphAttrRaw("orientation", value),
             .center => |value| try self.setGraphAttrRaw("center", boolAttrValue(value)),
+            .notranslate => |value| try self.setGraphAttrRaw("notranslate", boolAttrValue(value)),
             .compound => |value| try self.setGraphAttrRaw("compound", boolAttrValue(value)),
             .concentrate => |value| try self.setGraphAttrRaw("concentrate", boolAttrValue(value)),
             .nodesep => |value| try self.setGraphAttrFloat("nodesep", value),
@@ -1041,6 +1060,11 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setDefaultNodeAttrRaw("sortv", text);
             },
+            .position => |value| {
+                var buffer: [160]u8 = undefined;
+                const text = try nodePositionAttrText(&buffer, value);
+                try self.setDefaultNodeAttrRaw("pos", text);
+            },
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
             .image => |value| try self.setDefaultNodeAttrRaw("image", value),
@@ -1102,6 +1126,12 @@ pub const Graph = struct {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setDefaultEdgeAttrRaw("minlen", text);
+            },
+            .spline => |value| {
+                var text = std.ArrayList(u8).empty;
+                defer text.deinit(self.allocator);
+                try appendEdgeSplineAttrText(&text, self.allocator, value);
+                try self.setDefaultEdgeAttrRaw("pos", text.items);
             },
             .url => |value| try self.setDefaultEdgeAttrRaw("URL", value),
             .href => |value| try self.setDefaultEdgeAttrRaw("href", value),
@@ -1196,6 +1226,7 @@ pub const Graph = struct {
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
         if (options.area) |value| try self.setNodeAttr(id, .{ .area = value });
         if (options.sortv) |value| try self.setNodeAttr(id, .{ .sortv = value });
+        if (options.position) |value| try self.setNodeAttr(id, .{ .position = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
         if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
         if (options.image) |value| try self.setNodeAttr(id, .{ .image = value });
@@ -1257,6 +1288,11 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setNodeAttrRaw(id, "sortv", text);
             },
+            .position => |value| {
+                var buffer: [160]u8 = undefined;
+                const text = try nodePositionAttrText(&buffer, value);
+                try self.setNodeAttrRaw(id, "pos", text);
+            },
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
             .image => |value| try self.setNodeAttrRaw(id, "image", value),
@@ -1287,6 +1323,11 @@ pub const Graph = struct {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
         try self.setNodeAttrRaw(id, name, text);
+    }
+
+    fn nodePositionAttrText(buffer: []u8, value: NodePosition) ![]const u8 {
+        if (!std.math.isFinite(value.x) or !std.math.isFinite(value.y)) return error.InvalidPosition;
+        return std.fmt.bufPrint(buffer, "{d},{d}{s}", .{ value.x, value.y, if (value.pinned) "!" else "" });
     }
 
     fn setNodeAttrRaw(self: *Graph, id: NodeId, name: []const u8, value: []const u8) !void {
@@ -1326,6 +1367,7 @@ pub const Graph = struct {
         if (options.weight) |value| try self.setEdgeAttr(id, .{ .weight = value });
         if (options.constraint) |value| try self.setEdgeAttr(id, .{ .constraint = value });
         if (options.min_len) |value| try self.setEdgeAttr(id, .{ .min_len = value });
+        if (options.spline) |value| try self.setEdgeAttr(id, .{ .spline = value });
         if (options.url) |value| try self.setEdgeAttr(id, .{ .url = value });
         if (options.href) |value| try self.setEdgeAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setEdgeAttr(id, .{ .tooltip = value });
@@ -1396,6 +1438,7 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setEdgeAttrRaw(id, "minlen", text);
             },
+            .spline => |value| try self.setEdgeSplineAttr(id, value),
             .url => |value| try self.setEdgeAttrRaw(id, "URL", value),
             .href => |value| try self.setEdgeAttrRaw(id, "href", value),
             .tooltip => |value| try self.setEdgeAttrRaw(id, "tooltip", value),
@@ -1490,6 +1533,39 @@ pub const Graph = struct {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
         try self.setEdgeAttrRaw(id, name, text);
+    }
+
+    fn setEdgeSplineAttr(self: *Graph, id: EdgeId, segments: []const EdgeSplineSegmentInput) !void {
+        var text = std.ArrayList(u8).empty;
+        defer text.deinit(self.allocator);
+        try appendEdgeSplineAttrText(&text, self.allocator, segments);
+        try self.setEdgeAttrRaw(id, "pos", text.items);
+    }
+
+    fn appendEdgeSplineAttrText(text: *std.ArrayList(u8), allocator: std.mem.Allocator, segments: []const EdgeSplineSegmentInput) !void {
+        if (segments.len == 0) return error.InvalidEdgePosition;
+        for (segments, 0..) |segment, segment_index| {
+            if (segment.points.len < 4 or segment.points.len % 3 != 1) return error.InvalidEdgePosition;
+            if (segment_index > 0) try text.append(allocator, ';');
+            if (segment.start_tip) |point| {
+                try appendPositionPoint(text, allocator, "s,", point);
+                try text.append(allocator, ' ');
+            }
+            if (segment.end_tip) |point| {
+                try appendPositionPoint(text, allocator, "e,", point);
+                try text.append(allocator, ' ');
+            }
+            for (segment.points, 0..) |point, point_index| {
+                if (point_index > 0) try text.append(allocator, ' ');
+                try appendPositionPoint(text, allocator, "", point);
+            }
+        }
+    }
+
+    fn appendPositionPoint(text: *std.ArrayList(u8), allocator: std.mem.Allocator, prefix: []const u8, point: Point) !void {
+        if (!std.math.isFinite(point.x) or !std.math.isFinite(point.y)) return error.InvalidPosition;
+        try text.appendSlice(allocator, prefix);
+        try text.print(allocator, "{d},{d}", .{ point.x, point.y });
     }
 
     fn setEdgeAttrRaw(self: *Graph, id: EdgeId, name: []const u8, value: []const u8) !void {
@@ -3673,11 +3749,12 @@ fn applyMermaidEdgeStyle(graph: *Graph, edge_id: EdgeId, arrow: []const u8) !voi
     if (!std.mem.endsWith(u8, arrow, ">")) try graph.setEdgeAttrRaw(edge_id, "arrowhead", "none");
 }
 
-pub const Point = layout_mod.result.Point;
 pub const NodeLayout = layout_mod.result.NodeLayout;
 pub const SubgraphLayout = layout_mod.result.SubgraphLayout;
 pub const EdgeWaypoint = layout_mod.result.EdgeWaypoint;
 pub const EdgeWaypoints = layout_mod.result.EdgeWaypoints;
+pub const EdgeSplineSegment = layout_mod.result.EdgeSplineSegment;
+pub const EdgeSpline = layout_mod.result.EdgeSpline;
 
 pub const Layout = struct {
     allocator: std.mem.Allocator,
@@ -3686,6 +3763,7 @@ pub const Layout = struct {
     nodes: []NodeLayout,
     subgraphs: []SubgraphLayout,
     edge_waypoints: []EdgeWaypoints,
+    edge_splines: ?[]EdgeSpline = null,
     ranks: []usize,
     rank_depths: []f64,
     rank_heights: []f64,
@@ -3696,6 +3774,13 @@ pub const Layout = struct {
     height: f64,
 
     pub fn deinit(self: *Layout) void {
+        if (self.edge_splines) |splines| {
+            for (splines) |spline| {
+                for (spline.segments) |segment| self.allocator.free(segment.points);
+                self.allocator.free(spline.segments);
+            }
+            self.allocator.free(splines);
+        }
         for (self.edge_waypoints) |waypoints| self.allocator.free(waypoints.points);
         self.allocator.free(self.nodes);
         self.allocator.free(self.subgraphs);
@@ -3822,6 +3907,8 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .array_packing => layoutOsageWithControl(allocator, graph, config.layered, &work),
+        .positioned => layoutPositionedWithControl(allocator, graph, config.layered, false, &work),
+        .positioned_with_edges => layoutPositionedWithControl(allocator, graph, config.layered, true, &work),
     };
 }
 
@@ -3838,6 +3925,8 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .array_packing => layoutOsageWithControl(allocator, graph, config.layered, &work),
+        .positioned => layoutPositionedWithControl(allocator, graph, config.layered, false, &work),
+        .positioned_with_edges => layoutPositionedWithControl(allocator, graph, config.layered, true, &work),
     };
 }
 
@@ -5281,6 +5370,168 @@ fn osagePackMarginFromValue(value: ?[]const u8, fallback: f64) f64 {
 fn osageSortValue(attrs: []const Attr) ?usize {
     const value = attrValue(attrs, "sortv") orelse return null;
     return std.fmt.parseInt(usize, value, 10) catch null;
+}
+
+pub fn layoutPositioned(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions, preserve_edge_splines: bool) !Layout {
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutPositionedWithControl(allocator, graph, options, preserve_edge_splines, &work);
+}
+
+fn layoutPositionedWithControl(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    options: LayoutOptions,
+    preserve_edge_splines: bool,
+    work: *LayoutWorkTracker,
+) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.edges.items.len +| 1);
+
+    const input_positions = try allocator.alloc(Point, n);
+    defer allocator.free(input_positions);
+    const sizes = try allocator.alloc(layout_mod.nop.Size, n);
+    defer allocator.free(sizes);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        const raw_position = attrValue(node_item.attrs.items, "pos") orelse return error.MissingNodePosition;
+        const parsed = layout_mod.nop.parseNodePosition(raw_position) catch return error.InvalidNodePosition;
+        input_positions[id] = parsed.point;
+        const size = measureNode(node_item, effective_options);
+        sizes[id] = .{ .width = size.width, .height = size.height };
+    }
+    var preserved_spline_points = std.ArrayList(Point).empty;
+    defer preserved_spline_points.deinit(allocator);
+    if (preserve_edge_splines) {
+        for (graph.edges.items) |edge_item| {
+            const raw = attrValue(edge_item.attrs.items, "pos") orelse continue;
+            var parsed = layout_mod.nop.parseSpline(allocator, raw) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                continue;
+            };
+            defer parsed.deinit();
+            for (parsed.segments) |segment| {
+                try preserved_spline_points.appendSlice(allocator, segment.points);
+                if (segment.start_tip) |tip| try preserved_spline_points.append(allocator, tip);
+                if (segment.end_tip) |tip| try preserved_spline_points.append(allocator, tip);
+            }
+        }
+    }
+
+    const translate = if (attrValue(graph.attrs.items, "notranslate")) |value|
+        !(parseBool(value) orelse false)
+    else
+        true;
+    var positioned = try layout_mod.nop.layout(
+        allocator,
+        input_positions,
+        sizes,
+        preserved_spline_points.items,
+        effective_options.margin,
+        effective_options.margin_y,
+        translate,
+    );
+    defer positioned.deinit();
+
+    const node_layouts = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(node_layouts);
+    for (positioned.positions, sizes, 0..) |position, size, id| {
+        node_layouts[id] = .{
+            .center = position,
+            .width = size.width,
+            .height = size.height,
+        };
+    }
+    const subgraph_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(subgraph_layouts);
+    computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), node_layouts, subgraph_layouts);
+
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const edge_splines = if (preserve_edge_splines)
+        try positionedEdgeSplines(allocator, graph, positioned.shift)
+    else
+        null;
+    errdefer if (edge_splines) |splines| freeEdgeSplines(allocator, splines);
+
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+    try work.checkpoint((n +| graph.edges.items.len +| 1) *| 3);
+
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = node_layouts,
+        .subgraphs = subgraph_layouts,
+        .edge_waypoints = edge_waypoints,
+        .edge_splines = edge_splines,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = effective_options.margin,
+        .margin_x = effective_options.margin,
+        .margin_y = effective_options.margin_y,
+        .width = positioned.width,
+        .height = positioned.height,
+    };
+}
+
+fn positionedEdgeSplines(allocator: std.mem.Allocator, graph: *const Graph, shift: Point) ![]EdgeSpline {
+    const splines = try allocator.alloc(EdgeSpline, graph.edges.items.len);
+    for (splines) |*spline| spline.* = .{ .segments = &.{} };
+    errdefer freeEdgeSplines(allocator, splines);
+
+    for (graph.edges.items) |edge_item| {
+        const raw = attrValue(edge_item.attrs.items, "pos") orelse continue;
+        splines[edge_item.id] = positionedEdgeSplineFromAttr(allocator, raw, shift) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            continue;
+        };
+    }
+    return splines;
+}
+
+fn positionedEdgeSplineFromAttr(allocator: std.mem.Allocator, raw: []const u8, shift: Point) !EdgeSpline {
+    var parsed = try layout_mod.nop.parseSpline(allocator, raw);
+    defer parsed.deinit();
+    layout_mod.nop.transformSpline(&parsed, shift);
+
+    const segments = try allocator.alloc(EdgeSplineSegment, parsed.segments.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (segments[0..initialized]) |segment| allocator.free(segment.points);
+        allocator.free(segments);
+    }
+    for (parsed.segments, 0..) |segment, index| {
+        segments[index] = .{
+            .points = try allocator.dupe(Point, segment.points),
+            .start_tip = segment.start_tip,
+            .end_tip = segment.end_tip,
+        };
+        initialized += 1;
+    }
+    return .{ .segments = segments };
+}
+
+fn freeEdgeSplines(allocator: std.mem.Allocator, splines: []EdgeSpline) void {
+    for (splines) |spline| {
+        for (spline.segments) |segment| allocator.free(segment.points);
+        allocator.free(spline.segments);
+    }
+    allocator.free(splines);
 }
 
 fn deepestSubgraphContainingNode(graph: *const Graph, node_id: NodeId) ?SubgraphId {
@@ -9588,14 +9839,30 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
                 rect.height,
             });
         }
-        if (edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) {
+        const preserved_spline = positionedEdgeSpline(layout, edge_item.id);
+        const has_waypoints = edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0;
+        if (has_waypoints or preserved_spline != null) {
             try writer.writeAll(">\n");
-            for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
-                try writer.print("<vex:waypoint rank=\"{d}\" x=\"{d:.2}\" y=\"{d:.2}\"/>\n", .{
-                    waypoint.rank,
-                    waypoint.point.x,
-                    waypoint.point.y,
-                });
+            if (has_waypoints) {
+                for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
+                    try writer.print("<vex:waypoint rank=\"{d}\" x=\"{d:.2}\" y=\"{d:.2}\"/>\n", .{
+                        waypoint.rank,
+                        waypoint.point.x,
+                        waypoint.point.y,
+                    });
+                }
+            }
+            if (preserved_spline) |spline| {
+                for (spline.segments, 0..) |segment, segment_index| {
+                    try writer.print("<vex:spline index=\"{d}\"", .{segment_index});
+                    if (segment.start_tip) |tip| try writer.print(" start-tip=\"{d:.2},{d:.2}\"", .{ tip.x, tip.y });
+                    if (segment.end_tip) |tip| try writer.print(" end-tip=\"{d:.2},{d:.2}\"", .{ tip.x, tip.y });
+                    try writer.writeAll(">\n");
+                    for (segment.points, 0..) |point, point_index| {
+                        try writer.print("<vex:point index=\"{d}\" x=\"{d:.2}\" y=\"{d:.2}\"/>\n", .{ point_index, point.x, point.y });
+                    }
+                    try writer.writeAll("</vex:spline>\n");
+                }
             }
             try writer.writeAll("</vex:edge>\n");
         } else {
@@ -10814,6 +11081,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const object_label = edgeFallbackTitle(edge_item, edge_context.edge_name);
     const edge_href = if (metadata) interactiveHref(edge_item.attrs.items, .edge) else null;
     const object_waypoints = if (metadata and edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) layout.edge_waypoints[edge_item.id].points else null;
+    const object_spline = if (metadata) positionedEdgeSpline(layout, edge_item.id) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = edge_item.attrs.items,
@@ -10847,6 +11115,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_min_len = if (metadata) edge_item.min_len else null,
         .object_rect = if (metadata) edgeObjectRect(graph, layout, edge_item) else null,
         .object_waypoints = object_waypoints,
+        .object_spline = object_spline,
         .collapse_member = collapse_member,
     });
     const edge_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -10860,6 +11129,29 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     if (edge_wrap == .none) {
         try writeSvgEdgeTitle(writer, graph, edge_item);
         try writer.writeByte('\n');
+    }
+    if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
+        const route = edgeSplineRoute(spline) orelse edgeRouteForRendering(graph, layout, edge_item);
+        const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
+        const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
+        try renderSvgPositionedEdgeSpline(writer, graph.directed, edge_item, spline, visual, edge_path_id);
+        var main_label_center: ?Point = null;
+        if (edge_item.label) |label| {
+            if (aligned_label) {
+                try renderSvgEdgeInteractiveTextPathLabel(writer, graph, edge_item, label, edge_path_id.?, visual.font_size, visual.font_color, visual.font);
+            } else {
+                const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
+                    Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+                else
+                    edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+                main_label_center = label_center;
+                try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
+            }
+        }
+        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center);
+        try writeSvgInteractiveClose(writer, edge_wrap);
+        try writer.writeAll("</g>\n");
+        return;
     }
     if (edge_item.from == edge_item.to) {
         const route = selfLoopRoute(layout.nodes[edge_item.from]);
@@ -11201,10 +11493,10 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
         if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) continue;
         const visual = resolveEdgeVisual(graph, edge_item);
         if (visual.hidden) continue;
-        const route = if (edge_item.from == edge_item.to)
-            selfLoopRoute(layout.nodes[edge_item.from])
-        else
-            edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, parallelEdgeOffset(graph, edge_item.id));
+        if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
+            includeEdgeSplineBounds(&bounds, spline);
+        }
+        const route = edgeRouteForRendering(graph, layout, edge_item);
         if (edge_item.label) |label| {
             const center = if (edge_item.from == edge_item.to)
                 route.label
@@ -11228,6 +11520,15 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
 fn edgeObjectRect(graph: *const Graph, layout: *const Layout, edge_item: Edge) ?RectF {
     if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return null;
     const visual = resolveEdgeVisual(graph, edge_item);
+    if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
+        var bounds = BoundsBuilder{};
+        includeEdgeSplineBounds(&bounds, spline);
+        const route = edgeSplineRoute(spline) orelse edgeRouteForRendering(graph, layout, edge_item);
+        includeEdgeLabelObjectBounds(&bounds, graph, layout, edge_item, route, visual);
+        const marker_padding = visual.marker_scale * 6.0;
+        const padding = @max(4.0, @max(visual.width / 2.0 + 2.0, marker_padding));
+        return bounds.rectExpanded(padding);
+    }
     const offset = if (edge_item.from == edge_item.to) 0 else parallelEdgeOffset(graph, edge_item.id);
     const route = if (edge_item.from == edge_item.to)
         selfLoopRoute(layout.nodes[edge_item.from])
@@ -11269,6 +11570,66 @@ fn edgeObjectRect(graph: *const Graph, layout: *const Layout, edge_item: Edge) ?
     const marker_padding = visual.marker_scale * 6.0;
     const padding = @max(4.0, @max(visual.width / 2.0 + 2.0, marker_padding));
     return bounds.rectExpanded(padding);
+}
+
+fn edgeRouteForRendering(graph: *const Graph, layout: *const Layout, edge_item: Edge) EdgeRoute {
+    if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
+        if (edgeSplineRoute(spline)) |route| return route;
+    }
+    return if (edge_item.from == edge_item.to)
+        selfLoopRoute(layout.nodes[edge_item.from])
+    else
+        edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, parallelEdgeOffset(graph, edge_item.id));
+}
+
+fn positionedEdgeSpline(layout: *const Layout, edge_id: EdgeId) ?*const EdgeSpline {
+    const splines = layout.edge_splines orelse return null;
+    if (edge_id >= splines.len or splines[edge_id].segments.len == 0) return null;
+    return &splines[edge_id];
+}
+
+fn includeEdgeSplineBounds(bounds: *BoundsBuilder, spline: *const EdgeSpline) void {
+    for (spline.segments) |segment| {
+        for (segment.points) |point| bounds.includePoint(point);
+        if (segment.start_tip) |point| bounds.includePoint(point);
+        if (segment.end_tip) |point| bounds.includePoint(point);
+    }
+}
+
+fn edgeSplineRoute(spline: *const EdgeSpline) ?EdgeRoute {
+    if (spline.segments.len == 0) return null;
+    const first = spline.segments[0];
+    const last = spline.segments[spline.segments.len - 1];
+    if (first.points.len < 4 or last.points.len < 4) return null;
+
+    var cubic_count: usize = 0;
+    for (spline.segments) |segment| cubic_count += (segment.points.len - 1) / 3;
+    const target_cubic = cubic_count / 2;
+    var cubic_index: usize = 0;
+    var label = first.points[0];
+    outer: for (spline.segments) |segment| {
+        var point_index: usize = 0;
+        while (point_index + 3 < segment.points.len) : (point_index += 3) {
+            if (cubic_index == target_cubic) {
+                label = cubicPoint(
+                    segment.points[point_index],
+                    segment.points[point_index + 1],
+                    segment.points[point_index + 2],
+                    segment.points[point_index + 3],
+                    0.5,
+                );
+                break :outer;
+            }
+            cubic_index += 1;
+        }
+    }
+    return .{
+        .start = first.start_tip orelse first.points[0],
+        .control1 = if (first.start_tip != null) first.points[0] else first.points[1],
+        .control2 = if (last.end_tip != null) last.points[last.points.len - 1] else last.points[last.points.len - 2],
+        .end = last.end_tip orelse last.points[last.points.len - 1],
+        .label = label,
+    };
 }
 
 fn includeBackEdgeObjectBounds(bounds: *BoundsBuilder, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute) void {
@@ -11606,6 +11967,7 @@ const SvgGroupOpenOptions = struct {
     object_constraint: ?bool = null,
     object_min_len: ?usize = null,
     object_waypoints: ?[]const EdgeWaypoint = null,
+    object_spline: ?*const EdgeSpline = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
 };
@@ -11751,6 +12113,11 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
                 if (index > 0) try writer.writeByte(' ');
                 try writer.print("{d}:{d:.2},{d:.2}", .{ waypoint.rank, waypoint.point.x, waypoint.point.y });
             }
+            try writer.writeByte('"');
+        }
+        if (options.object_spline) |spline| {
+            try writer.writeAll(" data-vex-object-path=\"");
+            try writePositionedEdgeSplinePath(writer, spline);
             try writer.writeByte('"');
         }
     }
@@ -12487,6 +12854,72 @@ fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, l
     else
         inlineArrowOptions(layout, edge_item, rankdir, render_route, hints);
     try writeSvgInlineArrowheads(writer, directed, inline_route, visual, inline_options);
+}
+
+fn renderSvgPositionedEdgeSpline(
+    writer: *Io.Writer,
+    directed: bool,
+    edge_item: Edge,
+    spline: *const EdgeSpline,
+    visual: EdgeVisual,
+    label_path_id: ?SvgGroupOpenOptions,
+) Io.Writer.Error!void {
+    const first_segment = spline.segments[0];
+    const last_segment = spline.segments[spline.segments.len - 1];
+    var arrow_visual = visual;
+    if (first_segment.start_tip == null) arrow_visual.marker_start = .none;
+    if (last_segment.end_tip == null) arrow_visual.marker_end = .none;
+    var path_visual = arrow_visual;
+    path_visual.marker_start = .none;
+    path_visual.marker_end = .none;
+
+    try writer.writeAll("<path");
+    if (label_path_id) |path_id| try writeSvgEdgePathIdAttr(writer, path_id);
+    try writer.print(" fill=\"none\" stroke=\"{s}\" d=\"", .{path_visual.stroke});
+    try writePositionedEdgeSplinePath(writer, spline);
+    try writer.writeByte('"');
+    try writeSvgStrokeWidth(writer, path_visual.width);
+    try writeSvgDash(writer, path_visual.dash);
+    try writer.writeAll("/>\n");
+    if (edgeSplineRoute(spline)) |route| {
+        try writeSvgInlineArrowheads(writer, directed, route, arrow_visual, .{});
+        try writePositionedEdgeSplineMarkers(writer, directed, edge_item.id, route, arrow_visual);
+    }
+}
+
+fn writePositionedEdgeSplineMarkers(writer: *Io.Writer, directed: bool, edge_id: EdgeId, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+    if (!directed or visual.marker_scale <= 0) return;
+    if (visual.marker_start != .none and visual.marker_start != .normal) {
+        var marker_visual = visual;
+        marker_visual.marker_end = .none;
+        try writer.writeAll("<path fill=\"none\" stroke=\"none\" d=\"");
+        try writePathMove(writer, route.start);
+        try writePathLine(writer, route.control1);
+        try writer.writeByte('"');
+        try writeSvgMarkerAttrs(writer, true, edge_id, marker_visual);
+        try writer.writeAll("/>\n");
+    }
+    if (visual.marker_end != .none and visual.marker_end != .normal) {
+        var marker_visual = visual;
+        marker_visual.marker_start = .none;
+        try writer.writeAll("<path fill=\"none\" stroke=\"none\" d=\"");
+        try writePathMove(writer, route.control2);
+        try writePathLine(writer, route.end);
+        try writer.writeByte('"');
+        try writeSvgMarkerAttrs(writer, true, edge_id, marker_visual);
+        try writer.writeAll("/>\n");
+    }
+}
+
+fn writePositionedEdgeSplinePath(writer: *Io.Writer, spline: *const EdgeSpline) Io.Writer.Error!void {
+    for (spline.segments) |segment| {
+        if (segment.points.len < 4) continue;
+        try writePathMove(writer, segment.points[0]);
+        var index: usize = 1;
+        while (index + 2 < segment.points.len) : (index += 3) {
+            try writePathCubic(writer, segment.points[index], segment.points[index + 1], segment.points[index + 2]);
+        }
+    }
 }
 
 fn writeSvgEdgeTextPathReference(writer: *Io.Writer, path_id: SvgGroupOpenOptions, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip, hints: EdgePathHints) Io.Writer.Error!void {
@@ -17395,6 +17828,9 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.treemap, LayoutAlgorithm.fromString("treemap").?);
     try std.testing.expectEqual(LayoutAlgorithm.array_packing, LayoutAlgorithm.fromString("osage").?);
     try std.testing.expectEqual(LayoutAlgorithm.array_packing, LayoutAlgorithm.fromString("array-packing").?);
+    try std.testing.expectEqual(LayoutAlgorithm.positioned, LayoutAlgorithm.fromString("nop").?);
+    try std.testing.expectEqual(LayoutAlgorithm.positioned, LayoutAlgorithm.fromString("nop1").?);
+    try std.testing.expectEqual(LayoutAlgorithm.positioned_with_edges, LayoutAlgorithm.fromString("nop2").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
@@ -18102,6 +18538,123 @@ test "osage ignores edges and differs from patchwork" {
     try std.testing.expect(sharedNodeDisplacement(&second, &patchwork, edged.nodes.items.len) > 10);
 }
 
+test "nop requires valid position for every node" {
+    const allocator = std.testing.allocator;
+    var missing = try parseDot(allocator, "graph G { a [pos=\"0,0\"]; b; }");
+    defer missing.deinit();
+    try std.testing.expectError(
+        error.MissingNodePosition,
+        layoutGraph(allocator, &missing, .{ .algorithm = .positioned }),
+    );
+
+    var invalid = try parseDot(allocator, "graph G { a [pos=bad]; }");
+    defer invalid.deinit();
+    try std.testing.expectError(
+        error.InvalidNodePosition,
+        layoutGraph(allocator, &invalid, .{ .algorithm = .positioned }),
+    );
+}
+
+test "nop preserves input node deltas and ignores edges" {
+    const allocator = std.testing.allocator;
+    var plain = try parseDot(allocator,
+        \\graph G {
+        \\  a [pos="10,20!"];
+        \\  b [pos="110,70"];
+        \\}
+    );
+    defer plain.deinit();
+    var edged = try parseDot(allocator,
+        \\graph G {
+        \\  a [pos="10,20!"];
+        \\  b [pos="110,70"];
+        \\  a -- b [pos="0,0 10,20 20,20 30,0"];
+        \\}
+    );
+    defer edged.deinit();
+    var first = try layoutGraph(allocator, &plain, .{ .algorithm = .positioned });
+    defer first.deinit();
+    var second = try layoutGraph(allocator, &edged, .{ .algorithm = .positioned });
+    defer second.deinit();
+
+    try expectNodeCentersEqual(&first, &second);
+    try std.testing.expectApproxEqAbs(@as(f64, 100), first.nodes[1].center.x - first.nodes[0].center.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -50), first.nodes[1].center.y - first.nodes[0].center.y, 0.001);
+    try std.testing.expect(first.edge_splines == null);
+}
+
+test "nop typed API serializes node positions" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false, .name = "NopTyped" });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .layout = .positioned });
+    const a = try graph.addNode("a", .{ .position = .{ .x = 12.5, .y = -7, .pinned = true } });
+    const b = try graph.addNode("b", .{ .position = .{ .x = 90, .y = 30 } });
+    try std.testing.expectEqualStrings("12.5,-7!", attrValue(graph.nodes.items[a].attrs.items, "pos").?);
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    try std.testing.expectApproxEqAbs(@as(f64, 77.5), layout.nodes[b].center.x - layout.nodes[a].center.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, -37), layout.nodes[b].center.y - layout.nodes[a].center.y, 0.001);
+}
+
+test "nop2 preserves typed cubic edge spline in SVG" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "Nop2Typed" });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .layout = .positioned_with_edges });
+    try graph.setGraphAttr(.{ .notranslate = true });
+    const a = try graph.addNode("a", .{ .position = .{ .x = 0, .y = 0 } });
+    const b = try graph.addNode("b", .{ .position = .{ .x = 120, .y = 0 } });
+    _ = try graph.addEdge(a, b, .{
+        .spline = &.{.{
+            .points = &.{
+                .{ .x = 20, .y = 0 },
+                .{ .x = 45, .y = 40 },
+                .{ .x = 75, .y = 40 },
+                .{ .x = 100, .y = 0 },
+            },
+            .end_tip = .{ .x = 105, .y = 0 },
+        }},
+    });
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    try std.testing.expect(layout.edge_splines != null);
+    try std.testing.expectEqual(@as(usize, 1), layout.edge_splines.?[0].segments.len);
+    try std.testing.expectApproxEqAbs(@as(f64, -40), layout.edge_splines.?[0].segments[0].points[1].y, 0.001);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M20,0C45,-40 75,-40 100,0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-path=\"M20,0C45,-40 75,-40 100,0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:spline index=\"0\" end-tip=\"105.00,0.00\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:point index=\"1\" x=\"45.00\" y=\"-40.00\"/>") != null);
+}
+
+test "nop2 reroutes malformed edge position" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layout=nop2, notranslate=true];
+        \\  a [pos="0,0"];
+        \\  b [pos="120,0"];
+        \\  a -> b [pos="0,0 60,40 120,0"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    try std.testing.expect(layout.edge_splines != null);
+    try std.testing.expectEqual(@as(usize, 0), layout.edge_splines.?[0].segments.len);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M20,0C45,-40 75,-40 100,0") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<path") != null);
+}
+
 fn rectContainsRect(outer: RectF, inner: RectF) bool {
     return inner.x >= outer.x - 0.001 and
         inner.y >= outer.y - 0.001 and
@@ -18147,6 +18700,8 @@ test "layout work budget cancels every layout engine" {
         .circular,
         .treemap,
         .array_packing,
+        .positioned,
+        .positioned_with_edges,
     };
     for (algorithms) |algorithm| {
         var budget = LayoutWorkBudget{ .limit = 1 };
@@ -18894,7 +19449,7 @@ test "SVG renderer emits opt-in metadata index" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\" data-vex-schema-version=\"1\" data-vex-schema-uri=\"https://vex.graph/svg-metadata/1\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"Meta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"Meta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "layout-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "layout-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-width=\"") != null);
@@ -18903,7 +19458,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"Meta\" data-vex-object-label=\"Meta\" data-vex-object-x=\"0.00\" data-vex-object-y=\"0.00\" data-vex-object-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-directed=\"true\" data-vex-object-strict=\"false\" data-vex-object-rankdir=\"TB\" data-vex-object-nodes=\"3\" data-vex-object-edges=\"2\" data-vex-object-subgraphs=\"1\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-schema-version=\"1\" data-vex-object-schema-uri=\"https://vex.graph/svg-metadata/1\" data-vex-object-schema-features=\"attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-schema-version=\"1\" data-vex-object-schema-uri=\"https://vex.graph/svg-metadata/1\" data-vex-object-schema-features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" rank=\"0\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
@@ -18973,7 +19528,7 @@ test "SVG metadata index records effective link attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"LinkMeta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"LinkMeta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"LinkMeta\" data-vex-object-label=\"Graph Label\" data-vex-object-href=\"https://example.com/graph/LinkMeta/Graph Label\" data-vex-object-tooltip=\"Graph LinkMeta Graph Label\" data-vex-object-target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-directed=\"true\" data-vex-object-strict=\"false\" data-vex-object-rankdir=\"TB\" data-vex-object-nodes=\"2\" data-vex-object-edges=\"1\" data-vex-object-subgraphs=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A &amp; B\" shape=\"ellipse\" href=\"https://example.com/node/A &amp; B/A &amp; B/LinkMeta\" tooltip=\"Node A &amp; B A &amp; B LinkMeta\" target=\"node-A &amp; B\"") != null);

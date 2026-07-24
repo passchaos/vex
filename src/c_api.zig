@@ -36,6 +36,8 @@ pub const Layout = enum(c_int) {
     circo = 6,
     patchwork = 7,
     osage = 8,
+    nop = 9,
+    nop2 = 10,
     _,
 };
 
@@ -181,6 +183,8 @@ fn layoutAlgorithm(layout: Layout) ?vex.LayoutAlgorithm {
         .circo => .circular,
         .patchwork => .treemap,
         .osage => .array_packing,
+        .nop => .positioned,
+        .nop2 => .positioned_with_edges,
         else => null,
     };
 }
@@ -208,6 +212,11 @@ fn failFromError(err: anyerror, out_error: ?*CBuffer) Status {
         fail(.out_of_memory, out_error, @errorName(err))
     else if (err == error.InvalidNodeId)
         fail(.invalid_node, out_error, @errorName(err))
+    else if (err == error.MissingNodePosition or
+        err == error.InvalidNodePosition or
+        err == error.InvalidPosition or
+        err == error.InvalidEdgePosition)
+        fail(.invalid_argument, out_error, @errorName(err))
     else if (err == error.LayoutCanceled)
         fail(.layout_canceled, out_error, @errorName(err))
     else
@@ -283,6 +292,20 @@ test "C API renders DOT and reports parse errors" {
     defer vex_buffer_free(error_buffer);
     try std.testing.expectEqual(@as(usize, 0), svg.len);
     try std.testing.expect(error_buffer.len > 0);
+}
+
+test "C API reports missing nop position as invalid argument" {
+    var svg = CBuffer{ .data = null, .len = 0 };
+    var error_buffer = CBuffer{ .data = null, .len = 0 };
+    try std.testing.expectEqual(Status.invalid_argument, vex_dot_render_svg(cString("graph G { a [pos=\"0,0\"]; b; }"), .{
+        .layout = .nop,
+        .iterations = 0,
+        .work_budget = 0,
+        .metadata = false,
+    }, &svg, &error_buffer));
+    defer vex_buffer_free(error_buffer);
+    try std.testing.expectEqual(@as(usize, 0), svg.len);
+    try std.testing.expectEqualStrings("MissingNodePosition", bufferSlice(error_buffer));
 }
 
 test "C API exposes layout cancellation" {

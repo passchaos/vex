@@ -11,7 +11,7 @@ const usage =
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--check|--validate|--validate-all]
     \\        [--max-diagnostics count]
-    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo|patchwork|osage]
+    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo|patchwork|osage|nop|nop2]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
     \\        [--layout-work-budget count]
@@ -246,6 +246,10 @@ pub fn main(init: std.process.Init) !void {
             try writeLayoutCanceled(io, &work_budget);
             std.process.exit(2);
         }
+        if (err == error.MissingNodePosition or err == error.InvalidNodePosition) {
+            try writePositionedLayoutError(io, err);
+            std.process.exit(2);
+        }
         return err;
     };
     defer layout.deinit();
@@ -342,6 +346,18 @@ fn writeLayoutCanceled(io: Io, budget: *const vex.LayoutWorkBudget) !void {
         .{ budget.limit, budget.last_work, budget.checkpoints },
     );
     try stderr_file_writer.interface.flush();
+}
+
+fn writePositionedLayoutError(io: Io, err: anyerror) !void {
+    var stderr_buffer: [512]u8 = undefined;
+    var stderr_writer = Io.File.stderr().writer(io, &stderr_buffer);
+    const message = switch (err) {
+        error.MissingNodePosition => "positioned layout requires a pos attribute for every node",
+        error.InvalidNodePosition => "positioned layout found an invalid node pos attribute",
+        else => @errorName(err),
+    };
+    try stderr_writer.interface.print("layout error: {s}\n", .{message});
+    try stderr_writer.interface.flush();
 }
 
 fn writeCheckSummaryWriter(writer: *Io.Writer, graph: *const vex.Graph) Io.Writer.Error!void {

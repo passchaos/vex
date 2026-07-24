@@ -23,10 +23,12 @@ namespace URI 的最后一段是 schema major version。消费者必须按 names
 - `<vex:attributes>`，保留 graph/node/edge/subgraph 的自定义和未来属性。
 - `<vex:node>`，包含 shape、rank 和 geometry。
 - `<vex:edge>`，包含端点、ports、compound subgraph endpoints、有效布局属性、
-  geometry 和 `<vex:waypoint>`。
+  geometry、`<vex:waypoint>`，以及 nop2 保留路径的 `<vex:spline>` /
+  `<vex:point>`。
 - `<vex:subgraph>`，包含 parent/member 关系和 geometry。
 
-渲染 group 上的 `data-vex-object-*` 是同一对象索引的 DOM 快速访问面。
+渲染 group 上的 `data-vex-object-*` 是同一对象索引的 DOM 快速访问面；
+nop2 的保留路径通过 `data-vex-object-path` 暴露为 SVG path command。
 
 ## 兼容策略
 
@@ -41,6 +43,6 @@ namespace URI 的最后一段是 schema major version。消费者必须按 names
 
 `features` 是空格分隔、可扩展的能力列表。v1 当前声明：
 
-`attributes edge-geometry edge-layout edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy`
+`attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy`
 
 消费者应以实际元素/属性为准，feature token 用于快速能力发现。

@@ -43,7 +43,9 @@ typedef enum vex_layout {
     VEX_LAYOUT_TWOPI = 5,
     VEX_LAYOUT_CIRCO = 6,
     VEX_LAYOUT_PATCHWORK = 7,
-    VEX_LAYOUT_OSAGE = 8
+    VEX_LAYOUT_OSAGE = 8,
+    VEX_LAYOUT_NOP = 9,
+    VEX_LAYOUT_NOP2 = 10
 } vex_layout;
 
 typedef struct vex_render_options {
