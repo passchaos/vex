@@ -399,6 +399,7 @@ pub const EdgeOptions = struct {
     labeldistance: ?f64 = null,
     labelangle: ?f64 = null,
     labelfloat: ?bool = null,
+    labelaligned: ?bool = null,
     nojustify: ?bool = null,
     decorate: ?bool = null,
     tailclip: ?bool = null,
@@ -464,6 +465,7 @@ pub const EdgeAttr = union(enum) {
     labeldistance: f64,
     labelangle: f64,
     labelfloat: bool,
+    labelaligned: bool,
     nojustify: bool,
     decorate: bool,
     tailclip: bool,
@@ -1038,6 +1040,7 @@ pub const Graph = struct {
             .labeldistance => |value| try self.setDefaultEdgeAttrFloat("labeldistance", value),
             .labelangle => |value| try self.setDefaultEdgeAttrFloat("labelangle", value),
             .labelfloat => |value| try self.setDefaultEdgeAttrRaw("labelfloat", boolAttrValue(value)),
+            .labelaligned => |value| try self.setDefaultEdgeAttrRaw("labelaligned", boolAttrValue(value)),
             .nojustify => |value| try self.setDefaultEdgeAttrRaw("nojustify", boolAttrValue(value)),
             .decorate => |value| try self.setDefaultEdgeAttrRaw("decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
@@ -1241,6 +1244,7 @@ pub const Graph = struct {
         if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
         if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
         if (options.labelfloat) |value| try self.setEdgeAttr(id, .{ .labelfloat = value });
+        if (options.labelaligned) |value| try self.setEdgeAttr(id, .{ .labelaligned = value });
         if (options.nojustify) |value| try self.setEdgeAttr(id, .{ .nojustify = value });
         if (options.decorate) |value| try self.setEdgeAttr(id, .{ .decorate = value });
         if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
@@ -1309,6 +1313,7 @@ pub const Graph = struct {
             .labeldistance => |value| try self.setEdgeAttrFloat(id, "labeldistance", value),
             .labelangle => |value| try self.setEdgeAttrFloat(id, "labelangle", value),
             .labelfloat => |value| try self.setEdgeAttrRaw(id, "labelfloat", boolAttrValue(value)),
+            .labelaligned => |value| try self.setEdgeAttrRaw(id, "labelaligned", boolAttrValue(value)),
             .nojustify => |value| try self.setEdgeAttrRaw(id, "nojustify", boolAttrValue(value)),
             .decorate => |value| try self.setEdgeAttrRaw(id, "decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
@@ -7936,9 +7941,15 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     }
     if (edge_item.from == edge_item.to) {
         const route = selfLoopRoute(layout.nodes[edge_item.from]);
-        try renderSvgSelfLoopPaths(writer, graph, graph.directed, edge_item, route, visual);
+        const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
+        const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
+        try renderSvgSelfLoopPaths(writer, graph, graph.directed, edge_item, route, visual, edge_path_id);
         if (edge_item.label) |label| {
-            try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font);
+            if (aligned_label) {
+                try renderSvgEdgeInteractiveTextPathLabel(writer, graph, edge_item, label, edge_path_id.?, visual.font_size, visual.font_color, visual.font);
+            } else {
+                try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, route.label, visual.font_size, visual.font_color, visual.font);
+            }
         }
         try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, route.label);
         try writeSvgInteractiveClose(writer, edge_wrap);
@@ -7952,15 +7963,21 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .tail_mdiamond = graph.nodes.items[edge_item.from].shape == .mdiamond,
         .head_msquare = graph.nodes.items[edge_item.to].shape == .msquare,
     };
-    try renderSvgEdgePaths(writer, graph, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints);
+    const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
+    const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
+    try renderSvgEdgePaths(writer, graph, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints, edge_path_id);
     var main_label_center: ?Point = null;
     if (edge_item.label) |label| {
-        const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
-            Point{ .x = route.label.x, .y = route.label.y - 6.0 }
-        else
-            edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
-        main_label_center = label_center;
-        try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
+        if (aligned_label) {
+            try renderSvgEdgeInteractiveTextPathLabel(writer, graph, edge_item, label, edge_path_id.?, visual.font_size, visual.font_color, visual.font);
+        } else {
+            const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
+                Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+            else
+                edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+            main_label_center = label_center;
+            try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
+        }
     }
     try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center);
     try writeSvgInteractiveClose(writer, edge_wrap);
@@ -8212,6 +8229,8 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
             edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, parallelEdgeOffset(graph, edge_item.id));
         if (edge_item.label) |label| {
             const center = if (edge_item.from == edge_item.to)
+                route.label
+            else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
                 route.label
             else if (edgeLabelFloatEnabled(edge_item.attrs.items))
                 Point{ .x = route.label.x, .y = route.label.y - 6.0 }
@@ -8899,6 +8918,41 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
     try writeSvgInteractiveClose(writer, wrap);
 }
 
+fn renderSvgEdgeInteractiveTextPathLabel(writer: *Io.Writer, graph: *const Graph, edge_item: Edge, label: []const u8, path_id: SvgGroupOpenOptions, font_size: f64, font_color: []const u8, font: SvgFont) Io.Writer.Error!void {
+    var edge_name_buf: [256]u8 = undefined;
+    var context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
+    context.node_name = label;
+    context.label_name = label;
+    var default_id_buf: [32]u8 = undefined;
+    const default_id = std.fmt.bufPrint(&default_id_buf, "edge{d}", .{edge_item.id + 1}) catch unreachable;
+    const label_anchor_id = SvgAnchorIdOptions{
+        .group = .{
+            .graph = graph,
+            .attrs = edge_item.attrs.items,
+            .default_id = default_id,
+            .default_class = "edge",
+            .context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf),
+        },
+        .suffix = svgEdgeLabelAnchorSuffix(.label),
+    };
+    const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, .label, context, label, label_anchor_id);
+    try renderSvgTextPathLabel(writer, label, path_id, font_size, font_color, font);
+    try writeSvgInteractiveClose(writer, wrap);
+}
+
+fn renderSvgTextPathLabel(writer: *Io.Writer, text: []const u8, path_id: SvgGroupOpenOptions, font_size: f64, fill: []const u8, font: SvgFont) Io.Writer.Error!void {
+    try writer.writeAll("<text xml:space=\"preserve\" text-anchor=\"middle\"");
+    try writeSvgFontAttrs(writer, font, font_size);
+    try writeSvgTextFill(writer, fill);
+    try writer.writeAll("><textPath xlink:href=\"#");
+    try writeSvgGroupId(writer, path_id);
+    try writer.writeAll("_p\" startOffset=\"50%\"><tspan x=\"0\" dy=\"");
+    try writeSvgNumber(writer, font_size * 0.35);
+    try writer.writeAll("\">");
+    try writeXmlEscaped(writer, text);
+    try writer.writeAll("</tspan></textPath></text>\n");
+}
+
 fn svgEdgeLabelAnchorSuffix(kind: SvgInteractiveKind) ?[]const u8 {
     return switch (kind) {
         .label => "label",
@@ -8908,9 +8962,15 @@ fn svgEdgeLabelAnchorSuffix(kind: SvgInteractiveKind) ?[]const u8 {
     };
 }
 
-fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints) Io.Writer.Error!void {
+fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints, label_path_id: ?SvgGroupOpenOptions) Io.Writer.Error!void {
     const render_route = graphvizMsquareHeadRoute(graphvizDiamondTailRoute(graphvizCrossClusterLongRoute(layout, edge_item, rankdir, crossClusterLeftDiagonalRoute(layout, edge_item, rankdir, route)), rankdir, hints), rankdir, hints);
     if (edgeColorList(edge_item)) |colors| {
+        if (label_path_id) |path_id| {
+            const back_edge = isBackEdge(layout, edge_item);
+            const text_path_route = if (back_edge) render_route else routeForPathMarkers(render_route, visual);
+            const text_path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
+            try writeSvgEdgeTextPathReference(writer, path_id, layout, edge_item, rankdir, base_offset, text_path_route, routing, text_path_clip, hints);
+        }
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
             const color_offset = colorListOffset(colors.len, index, spacing);
@@ -8920,7 +8980,8 @@ fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, l
             const back_edge = isBackEdge(layout, edge_item);
             const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
             const path_clip = if (back_edge) edgePathClip(segment_visual) else EdgePathClip{};
-            try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{color});
+            try writer.writeAll("<path");
+            try writer.print(" fill=\"none\" stroke=\"{s}\" d=\"", .{color});
             try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip, hints);
             try writer.writeByte('"');
             try writeSvgStrokeWidth(writer, visual.width);
@@ -8935,7 +8996,9 @@ fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, l
     const back_edge = isBackEdge(layout, edge_item);
     const path_route = if (back_edge) render_route else routeForPathMarkers(render_route, visual);
     const path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
-    try writer.print("<path fill=\"none\" stroke=\"{s}\" d=\"", .{visual.stroke});
+    try writer.writeAll("<path");
+    if (label_path_id) |path_id| try writeSvgEdgePathIdAttr(writer, path_id);
+    try writer.print(" fill=\"none\" stroke=\"{s}\" d=\"", .{visual.stroke});
     try writeEdgePath(writer, layout, edge_item, rankdir, base_offset, path_route, routing, path_clip, hints);
     try writer.writeByte('"');
     try writeSvgStrokeWidth(writer, visual.width);
@@ -8951,6 +9014,20 @@ fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, l
     else
         inlineArrowOptions(layout, edge_item, rankdir, render_route, hints);
     try writeSvgInlineArrowheads(writer, directed, inline_route, visual, inline_options);
+}
+
+fn writeSvgEdgeTextPathReference(writer: *Io.Writer, path_id: SvgGroupOpenOptions, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip, hints: EdgePathHints) Io.Writer.Error!void {
+    try writer.writeAll("<path");
+    try writeSvgEdgePathIdAttr(writer, path_id);
+    try writer.writeAll(" fill=\"none\" stroke=\"none\" d=\"");
+    try writeEdgePath(writer, layout, edge_item, rankdir, offset, route, routing, path_clip, hints);
+    try writer.writeAll("\"/>\n");
+}
+
+fn writeSvgEdgePathIdAttr(writer: *Io.Writer, path_id: SvgGroupOpenOptions) Io.Writer.Error!void {
+    try writer.writeAll(" id=\"");
+    try writeSvgGroupId(writer, path_id);
+    try writer.writeAll("_p\"");
 }
 
 fn inlineArrowOptions(layout: *const Layout, edge_item: Edge, rankdir: RankDir, route: EdgeRoute, hints: EdgePathHints) InlineArrowOptions {
@@ -9119,15 +9196,16 @@ fn graphvizSameClusterBackEdgePathStartOnlyShift(layout: *const Layout, edge_ite
     return .{ .x = 0.0, .y = y_shift };
 }
 
-fn renderSvgSelfLoopPaths(writer: *Io.Writer, graph: *const Graph, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
+fn renderSvgSelfLoopPaths(writer: *Io.Writer, graph: *const Graph, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, label_path_id: ?SvgGroupOpenOptions) Io.Writer.Error!void {
     if (edgeColorList(edge_item)) |colors| {
+        if (label_path_id) |path_id| try writeSvgSelfLoopTextPathReference(writer, path_id, route);
         const spacing = @max(4.0, visual.width + 3.0);
         for (colors.segments[0..colors.len], 0..) |segment, index| {
             const color_offset = colorListOffset(colors.len, index, spacing);
             const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
             const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
             const shifted = offsetEdgeRoute(route, .TB, color_offset);
-            try writeSvgSelfLoopPath(writer, shifted, segment_visual);
+            try writeSvgSelfLoopPath(writer, shifted, segment_visual, null);
             try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
             try writer.writeAll("/>\n");
             try writeSvgInlineArrowheads(writer, directed, shifted, segment_visual, .{});
@@ -9135,19 +9213,30 @@ fn renderSvgSelfLoopPaths(writer: *Io.Writer, graph: *const Graph, directed: boo
         return;
     }
 
-    try writeSvgSelfLoopPath(writer, route, visual);
+    try writeSvgSelfLoopPath(writer, route, visual, label_path_id);
     try writeSvgMarkerAttrs(writer, directed, edge_item.id, visual);
     try writer.writeAll("/>\n");
     try writeSvgInlineArrowheads(writer, directed, route, visual, .{});
 }
 
-fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"", .{});
+fn writeSvgSelfLoopPath(writer: *Io.Writer, route: EdgeRoute, visual: EdgeVisual, label_path_id: ?SvgGroupOpenOptions) Io.Writer.Error!void {
+    try writer.writeAll("<path");
+    if (label_path_id) |path_id| try writeSvgEdgePathIdAttr(writer, path_id);
+    try writer.writeAll(" d=\"");
     try writePathMove(writer, route.start);
     try writePathCubic(writer, route.control1, route.control2, route.end);
     try writer.print("\" stroke=\"{s}\"", .{visual.stroke});
     try writeSvgStrokeWidth(writer, visual.width);
     try writeSvgDash(writer, visual.dash);
+}
+
+fn writeSvgSelfLoopTextPathReference(writer: *Io.Writer, path_id: SvgGroupOpenOptions, route: EdgeRoute) Io.Writer.Error!void {
+    try writer.writeAll("<path");
+    try writeSvgEdgePathIdAttr(writer, path_id);
+    try writer.writeAll(" fill=\"none\" stroke=\"none\" d=\"");
+    try writePathMove(writer, route.start);
+    try writePathCubic(writer, route.control1, route.control2, route.end);
+    try writer.writeAll("\"/>\n");
 }
 
 fn edgeColorList(edge_item: Edge) ?ColorList {
@@ -9411,6 +9500,11 @@ fn edgeDecorateEnabled(attrs: []const Attr) bool {
 
 fn edgeLabelFloatEnabled(attrs: []const Attr) bool {
     const value = attrValue(attrs, "labelfloat") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn edgeLabelAlignedEnabled(attrs: []const Attr) bool {
+    const value = attrValue(attrs, "labelaligned") orelse return false;
     return parseBool(value) orelse false;
 }
 
@@ -13599,7 +13693,12 @@ fn writeSvgTextOpen(writer: *Io.Writer, text_anchor: []const u8, x: f64, y: f64,
     try writeSvgNumber(writer, x);
     try writer.writeAll("\" y=\"");
     try writeSvgNumber(writer, y);
-    try writer.print("\" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ font.family, font_size });
+    try writer.writeByte('"');
+    try writeSvgFontAttrs(writer, font, font_size);
+}
+
+fn writeSvgFontAttrs(writer: *Io.Writer, font: SvgFont, font_size: f64) Io.Writer.Error!void {
+    try writer.print(" font-family=\"{s}\" font-size=\"{d:.2}\"", .{ font.family, font_size });
     if (font.weight) |weight| try writer.print(" font-weight=\"{s}\"", .{weight});
     if (font.stretch) |stretch| try writer.print(" font-stretch=\"{s}\"", .{stretch});
     if (font.style) |style| try writer.print(" font-style=\"{s}\"", .{style});
@@ -13864,6 +13963,7 @@ test "code API sets typed node and edge options at creation" {
         .labeldistance = 1.5,
         .labelangle = 25,
         .labelfloat = true,
+        .labelaligned = true,
         .decorate = true,
         .tailclip = false,
         .headclip = false,
@@ -13926,6 +14026,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("1.5", attrValue(edge_item.attrs.items, "labeldistance").?);
     try std.testing.expectEqualStrings("25", attrValue(edge_item.attrs.items, "labelangle").?);
     try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "labelfloat").?);
+    try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "labelaligned").?);
     try std.testing.expectEqualStrings("true", attrValue(edge_item.attrs.items, "decorate").?);
     try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "tailclip").?);
     try std.testing.expectEqualStrings("false", attrValue(edge_item.attrs.items, "headclip").?);
@@ -17590,6 +17691,66 @@ test "SVG renderer preserves text spacing like Graphviz" {
     try std.testing.expect(countSubstrings(svg, "xml:space=\"preserve\"") >= 4);
 }
 
+test "SVG renderer aligns plain edge labels to paths" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "Aligned" });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .id = "root-\\G" });
+    const a = try graph.addNode("A", .{});
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{
+        .label = "go",
+        .labelaligned = true,
+        .id = "edge-\\E",
+        .label_url = "https://example.com/label",
+        .label_tooltip = "Main label",
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<path id=\"edge-A-&gt;B_p\" fill=\"none\" stroke=\"black\" d=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<text xml:space=\"preserve\" text-anchor=\"middle\" font-family=\"Times,serif\" font-size=\"14.00\"><textPath xlink:href=\"#edge-A-&gt;B_p\" startOffset=\"50%\"><tspan x=\"0\" dy=\"4.9\">go</tspan></textPath></text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"a_edge-A-&gt;B-label\"><a href=\"https://example.com/label\"") != null);
+
+    var default_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [id="root-\G"];
+        \\  edge [labelaligned=true];
+        \\  a -> b [label="dot"];
+        \\}
+    );
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+    const default_svg = try renderSvgAlloc(allocator, &default_graph, &default_layout, .{});
+    defer allocator.free(default_svg);
+    try std.testing.expect(std.mem.indexOf(u8, default_svg, "<path id=\"root-G_edge1_p\" fill=\"none\" stroke=\"black\" d=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, default_svg, "<textPath xlink:href=\"#root-G_edge1_p\" startOffset=\"50%\"><tspan x=\"0\" dy=\"4.9\">dot</tspan></textPath>") != null);
+}
+
+test "SVG renderer keeps ordinary edge labels when labelaligned is false" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  edge [labelaligned=true];
+        \\  a -> b [label="ordinary", labelaligned=false];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "textPath") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">ordinary</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "_p\"") == null);
+}
+
 test "SVG renderer uses Graphviz default text color" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -20178,9 +20339,9 @@ test "DOT parser propagates edge constraint and minlen controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  edge [constraint=false, minlen=2, weight=3, labelfloat=true];
+        \\  edge [constraint=false, minlen=2, weight=3, labelfloat=true, labelaligned=true];
         \\  a -> b;
-        \\  b -> c [constraint=true, min_len=4, weight=5, labelfloat=false];
+        \\  b -> c [constraint=true, min_len=4, weight=5, labelfloat=false, labelaligned=false];
         \\}
     );
     defer graph.deinit();
@@ -20190,10 +20351,12 @@ test "DOT parser propagates edge constraint and minlen controls" {
     try std.testing.expectEqual(@as(usize, 2), graph.edges.items[0].min_len);
     try std.testing.expectEqual(@as(f64, 3.0), graph.edges.items[0].weight);
     try std.testing.expectEqualStrings("true", attrValue(graph.edges.items[0].attrs.items, "labelfloat").?);
+    try std.testing.expectEqualStrings("true", attrValue(graph.edges.items[0].attrs.items, "labelaligned").?);
     try std.testing.expect(graph.edges.items[1].constraint);
     try std.testing.expectEqual(@as(usize, 4), graph.edges.items[1].min_len);
     try std.testing.expectEqual(@as(f64, 5.0), graph.edges.items[1].weight);
     try std.testing.expectEqualStrings("false", attrValue(graph.edges.items[1].attrs.items, "labelfloat").?);
+    try std.testing.expectEqualStrings("false", attrValue(graph.edges.items[1].attrs.items, "labelaligned").?);
 }
 
 test "DOT parser accepts Graphviz boolean aliases" {
