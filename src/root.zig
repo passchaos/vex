@@ -13127,8 +13127,7 @@ fn edgeHeadCompoundEnabled(graph: *const Graph, edge_item: Edge) bool {
 
 fn subgraphCompoundEnabled(graph: *const Graph, id: SubgraphId) bool {
     if (id >= graph.subgraphs.items.len) return false;
-    const value = attrValue(graph.subgraphs.items[id].attrs.items, "compound") orelse return false;
-    return parseBool(value) orelse false;
+    return layout_mod.subgraph.compoundEnabled(graph.subgraphs.items[id].attrs.items);
 }
 
 fn edgeClipEnabled(attrs: []const Attr, name: []const u8) bool {
