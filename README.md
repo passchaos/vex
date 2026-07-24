@@ -67,6 +67,10 @@ tests bounding force error and repulsion work plus a 512-node SVG smoke.
 radial engine. It honors graph `root`, node `root=true`, `ranksep`, BFS
 graph-distance rings, subtree-weighted angular spans, and disconnected
 component packing.
+`--layout circo`, `graph [layout=circo]`, and `-Kcirco` select the independent
+circular engine. It uses Tarjan biconnected blocks, places each block on a
+circle, recursively joins the block-cut tree at articulation nodes, packs
+disconnected components, and honors `root`, `mindist`, and `oneblock`.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
@@ -245,6 +249,7 @@ zig build run-api-incremental-layout-svg
 zig build run-api-fdp-layout-svg
 zig build run-api-sfdp-layout-svg
 zig build run-api-twopi-layout-svg
+zig build run-api-circo-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -260,6 +265,7 @@ They progress from small SVG output to broader feature coverage:
 - `09_fdp_layout_svg.zig`: clustered undirected graph rendered with the independent spring-electrical fdp engine.
 - `10_sfdp_layout_svg.zig`: larger graph rendered with deterministic coarsen/prolongate/refine sfdp layout.
 - `11_twopi_layout_svg.zig`: explicitly rooted graph rendered on BFS rings with subtree-weighted angular spans.
+- `12_circo_layout_svg.zig`: biconnected blocks rendered as recursively connected circles.
 
 ## Graphviz compatibility target
 

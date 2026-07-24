@@ -36,6 +36,11 @@ def main() -> None:
         vex.RenderConfig(layout="twopi"),
     )
     assert "<title>R</title>" in radial_svg
+    circular_svg = vex.render_dot(
+        "graph C { a -- b -- c -- a; c -- d -- e -- c; }",
+        vex.RenderConfig(layout="circo"),
+    )
+    assert "<title>C</title>" in circular_svg
 
     try:
         vex.render_dot("digraph G { a ->")

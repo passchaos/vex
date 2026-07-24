@@ -49,6 +49,7 @@ _LAYOUTS: Final = {
     "sfdp": 3,
     "fr": 4,
     "twopi": 5,
+    "circo": 6,
 }
 
 

@@ -3658,6 +3658,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
+        .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
     };
 }
 
@@ -3671,6 +3672,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
+        .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
     };
 }
 
@@ -4794,6 +4796,88 @@ fn fitRadialPositionsToCanvas(positions: []Point, sizes: []const NodeSize, optio
         position.x = options.width / 2.0 + (position.x - center_x) * scale;
         position.y = options.height / 2.0 + (position.y - center_y) * scale;
     }
+}
+
+pub fn layoutCircular(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutCircularWithControl(allocator, graph, options, &work);
+}
+
+fn layoutCircularWithControl(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions, work: *LayoutWorkTracker) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.edges.items.len +| 1);
+
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    const default_layout_options = LayoutOptions{};
+    var largest_node: f64 = 0;
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNode(node_item, default_layout_options);
+        largest_node = @max(largest_node, @max(sizes[id].width, sizes[id].height));
+    }
+    const edges = try allocator.alloc(layout_mod.circo.Edge, graph.edges.items.len);
+    defer allocator.free(edges);
+    var edge_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= n or edge_item.to >= n or edge_item.from == edge_item.to) continue;
+        edges[edge_count] = .{ .from = edge_item.from, .to = edge_item.to };
+        edge_count += 1;
+    }
+    const mindist = @max(1.0, parsePositiveAttrFloat(graph.attrs.items, "mindist", 1.0) * 72.0 + largest_node);
+    const one_block = if (attrValue(graph.attrs.items, "oneblock")) |value| parseBool(value) orelse false else false;
+    var circular = try layout_mod.circo.layout(allocator, n, edges[0..edge_count], radialRootNode(graph), .{
+        .min_dist = mindist,
+        .component_gap = @max(mindist * 1.5, 96.0),
+        .one_block = one_block,
+    });
+    defer circular.deinit();
+    try work.checkpoint(n *| 6 +| graph.edges.items.len +| circular.block_count +| 1);
+    fitRadialPositionsToCanvas(circular.positions, sizes, options);
+    for (nodes, 0..) |*node, id| {
+        var center = circular.positions[id];
+        center.x = std.math.clamp(center.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
+        center.y = std.math.clamp(center.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
+        node.* = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
+    }
+    computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = nodes,
+        .subgraphs = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
+        .width = options.width,
+        .height = options.height,
+    };
 }
 
 fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: *Layout, node_gap: f64, options: IncrementalLayoutOptions) !void {
@@ -16882,6 +16966,8 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.multilevel_spring_electrical, LayoutAlgorithm.fromString("multilevel-spring-electrical").?);
     try std.testing.expectEqual(LayoutAlgorithm.radial, LayoutAlgorithm.fromString("twopi").?);
     try std.testing.expectEqual(LayoutAlgorithm.radial, LayoutAlgorithm.fromString("radial").?);
+    try std.testing.expectEqual(LayoutAlgorithm.circular, LayoutAlgorithm.fromString("circo").?);
+    try std.testing.expectEqual(LayoutAlgorithm.circular, LayoutAlgorithm.fromString("circular").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
@@ -17316,6 +17402,90 @@ fn angleSpan(points: []const Point) f64 {
         max_angle = @max(max_angle, angle);
     }
     return max_angle - min_angle;
+}
+
+test "circo places a biconnected cycle on one circle" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=circo, mindist=1.2];
+        \\  a -- b -- c -- d -- e -- a;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 560, .height = 400, .margin = 30 },
+    });
+    defer layout.deinit();
+    var center = Point{ .x = 0, .y = 0 };
+    for (layout.nodes) |node| {
+        center.x += node.center.x;
+        center.y += node.center.y;
+    }
+    center.x /= @as(f64, @floatFromInt(layout.nodes.len));
+    center.y /= @as(f64, @floatFromInt(layout.nodes.len));
+    const radius = distanceBetween(center, layout.nodes[0].center);
+    for (layout.nodes[1..]) |node| {
+        try std.testing.expectApproxEqAbs(radius, distanceBetween(center, node.center), 2.0);
+    }
+}
+
+test "circo lays out articulation blocks and oneblock mode" {
+    const allocator = std.testing.allocator;
+    const edges = [_]layout_mod.circo.Edge{
+        .{ .from = 0, .to = 1 },
+        .{ .from = 1, .to = 2 },
+        .{ .from = 2, .to = 0 },
+        .{ .from = 2, .to = 3 },
+        .{ .from = 3, .to = 4 },
+        .{ .from = 4, .to = 2 },
+    };
+    var blocks = try layout_mod.circo.layout(allocator, 5, &edges, 2, .{ .min_dist = 72 });
+    defer blocks.deinit();
+    var one_block = try layout_mod.circo.layout(allocator, 5, &edges, 2, .{ .min_dist = 72, .one_block = true });
+    defer one_block.deinit();
+    try std.testing.expectEqual(@as(usize, 2), blocks.block_count);
+    try std.testing.expectEqual(@as(usize, 1), one_block.block_count);
+    var displacement: f64 = 0;
+    for (blocks.positions, one_block.positions) |separate, single| displacement += distanceBetween(separate, single);
+    try std.testing.expect(displacement > 10);
+}
+
+test "circo packs disconnected circular components" {
+    const allocator = std.testing.allocator;
+    const edges = [_]layout_mod.circo.Edge{
+        .{ .from = 0, .to = 1 },
+        .{ .from = 1, .to = 2 },
+        .{ .from = 2, .to = 0 },
+        .{ .from = 3, .to = 4 },
+        .{ .from = 4, .to = 5 },
+        .{ .from = 5, .to = 3 },
+    };
+    var result = try layout_mod.circo.layout(allocator, 6, &edges, null, .{});
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.component_count);
+    const left_center = (result.positions[0].x + result.positions[1].x + result.positions[2].x) / 3.0;
+    const right_center = (result.positions[3].x + result.positions[4].x + result.positions[5].x) / 3.0;
+    try std.testing.expect(left_center < right_center);
+}
+
+test "circo is distinct from twopi" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  a -- b -- c -- a;
+        \\  c -- d -- e -- c;
+        \\}
+    );
+    defer graph.deinit();
+    const config = ForceLayoutOptions{ .width = 560, .height = 400, .margin = 30 };
+    var circo = try layoutGraph(allocator, &graph, .{ .algorithm = .circular, .force = config });
+    defer circo.deinit();
+    var twopi = try layoutGraph(allocator, &graph, .{ .algorithm = .radial, .force = config });
+    defer twopi.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&circo, &twopi, graph.nodes.items.len) > 10);
 }
 
 test "force layout config iterations override graph fallback" {

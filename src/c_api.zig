@@ -33,6 +33,7 @@ pub const Layout = enum(c_int) {
     sfdp = 3,
     fr = 4,
     twopi = 5,
+    circo = 6,
     _,
 };
 
@@ -175,6 +176,7 @@ fn layoutAlgorithm(layout: Layout) ?vex.LayoutAlgorithm {
         .sfdp => .multilevel_spring_electrical,
         .fr => .fruchterman_reingold,
         .twopi => .radial,
+        .circo => .circular,
         else => null,
     };
 }

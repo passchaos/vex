@@ -85,6 +85,15 @@ int main(void) {
     }
     const int twopi_ok = svg.len > 0;
     vex_buffer_free(svg);
+    options.layout = VEX_LAYOUT_CIRCO;
+    svg.data = NULL;
+    svg.len = 0;
+    if (!check(vex_graph_render_svg(graph, options, &svg, &error), &error)) {
+        vex_graph_destroy(graph);
+        return 7;
+    }
+    const int circo_ok = svg.len > 0;
+    vex_buffer_free(svg);
     vex_graph_destroy(graph);
-    return ok && twopi_ok ? 0 : 5;
+    return ok && twopi_ok && circo_ok ? 0 : 5;
 }

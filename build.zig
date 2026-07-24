@@ -232,6 +232,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/11_twopi_layout_svg.zig",
             .desc = "Run API example: rooted twopi SVG layout",
         },
+        .{
+            .step_name = "run-api-circo-layout-svg",
+            .exe_name = "api-circo-layout-svg",
+            .source = "examples/api/12_circo_layout_svg.zig",
+            .desc = "Run API example: block-tree circo SVG layout",
+        },
     };
 
     for (api_examples) |example| {

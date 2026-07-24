@@ -31,6 +31,7 @@
 | layered/Sugiyama 布局 | 部分完成 | rank、crossing、coordinate、long-edge、compound 与 cluster 测试 | 完整目标 cluster 语义 corpus；大图质量与性能门槛 |
 | force-directed 布局 | 已验证 | independent neato stress-majorization；independent fdp spring-electrical with K/T0/len/weight and cluster boxes；independent sfdp deterministic coarsen/prolongate/refine with levels/K/repulsiveforce；deterministic Fruchterman-Reingold；规模、能量、属性、引擎区分和预算测试 | 保持四条引擎路径独立，持续扩展规模基准 |
 | radial/twopi 布局 | 已验证 | explicit/auto root、BFS rings、ranksep、subtree angular spans、component packing、CLI/Zig/C/Python 和 SVG smoke | 保持 root `NodeId` 与 textual id/display label 分离 |
+| circular/circo 布局 | 已验证 | Tarjan biconnected blocks、block-cut circles、root/mindist/oneblock、component packing、CLI/Zig/C/Python 和 SVG smoke | 持续补充复杂 articulation oracle corpus |
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |
 | records、ports、compound edges | 已验证 | record field、compass port、scoped ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
 | parent-scoped subgraph identity | 已验证 | Graphviz `agsubg` source oracle；same-parent reopen merge、different-parent isolation 和 file corpus 测试 | 保持成员/属性合并和最近作用域引用语义 |
