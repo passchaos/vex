@@ -9135,6 +9135,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_kind = "edge",
         .object_id = object_id,
         .object_label = object_label,
+        .object_layer = if (metadata) attrValue(edge_item.attrs.items, "layer") else null,
         .collapse_member = collapse_member,
     });
     const edge_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9345,6 +9346,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_kind = "node",
         .object_id = object_id,
         .object_label = node_fallback_title,
+        .object_layer = if (metadata) attrValue(node_item.attrs.items, "layer") else null,
         .collapse_member = collapse_member,
     });
     const node_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9733,6 +9735,7 @@ const SvgGroupOpenOptions = struct {
     object_kind: ?[]const u8 = null,
     object_id: ?[]const u8 = null,
     object_label: ?[]const u8 = null,
+    object_layer: ?[]const u8 = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
 };
@@ -9793,6 +9796,11 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         if (options.object_label) |object_label| {
             try writer.writeAll(" data-vex-object-label=\"");
             try writeXmlEscaped(writer, object_label);
+            try writer.writeByte('"');
+        }
+        if (options.object_layer) |object_layer| {
+            try writer.writeAll(" data-vex-object-layer=\"");
+            try writeXmlEscaped(writer, object_layer);
             try writer.writeByte('"');
         }
     }
@@ -11698,6 +11706,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .object_kind = "subgraph",
         .object_id = object_id,
         .object_label = cluster.label,
+        .object_layer = if (metadata) layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "layer") else null,
         .collapse_target = collapse_target,
     });
     try writeSvgTitle(writer, cluster.label);
@@ -15824,6 +15833,11 @@ test "SVG metadata index records layers" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" layer=\"base:detail\" label=\"a&amp;b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"outer\" layer=\"detail\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "label=\"Inner\" layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"A\" data-vex-object-layer=\"base\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"1\" data-vex-object-label=\"b\" data-vex-object-layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"edge\" data-vex-object-id=\"0\" data-vex-object-label=\"a&amp;b\" data-vex-object-layer=\"base:detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"0\" data-vex-object-label=\"outer\" data-vex-object-layer=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"subgraph\" data-vex-object-id=\"1\" data-vex-object-label=\"Inner\" data-vex-object-layer=\"detail\"") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
