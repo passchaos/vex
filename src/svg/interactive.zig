@@ -40,6 +40,15 @@ pub fn target(attrs: anytype, kind: Kind) ?[]const u8 {
     };
 }
 
+pub fn labelAnchorSuffix(kind: Kind) ?[]const u8 {
+    return switch (kind) {
+        .label => "label",
+        .head => "headlabel",
+        .tail => "taillabel",
+        .default, .edge => null,
+    };
+}
+
 fn attrValue(attrs: anytype, name: []const u8) ?[]const u8 {
     var i = attrs.len;
     while (i > 0) {

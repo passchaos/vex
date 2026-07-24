@@ -9099,12 +9099,7 @@ fn renderSvgTextPathLabel(writer: *Io.Writer, text: []const u8, path_id: SvgGrou
 }
 
 fn svgEdgeLabelAnchorSuffix(kind: SvgInteractiveKind) ?[]const u8 {
-    return switch (kind) {
-        .label => "label",
-        .head => "headlabel",
-        .tail => "taillabel",
-        .default, .edge => null,
-    };
+    return svg_mod.interactive.labelAnchorSuffix(kind);
 }
 
 fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints, label_path_id: ?SvgGroupOpenOptions) Io.Writer.Error!void {
