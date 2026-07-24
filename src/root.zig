@@ -8775,6 +8775,26 @@ fn resolveSvgGradientFill(writer: *Io.Writer, graph: *const Graph, id_prefix: []
     fill.* = url;
 }
 
+fn resolveSvgClusterGradientFill(writer: *Io.Writer, graph: *const Graph, id_prefix: []const u8, id: usize, cluster: Subgraph, rect: RectF, fill: *[]const u8, buffer: *[96]u8) Io.Writer.Error!void {
+    const style = inheritedClusterVisualAttr(graph, cluster, "style");
+    if (!styleHas(style, "filled") and !styleHas(style, "radial")) return;
+    const fillcolor = inheritedClusterVisualAttr(graph, cluster, "fillcolor") orelse return;
+    const colors = parseColorList(fillcolor) orelse return;
+    if (colors.len < 2) return;
+
+    const angle = if (inheritedClusterVisualAttr(graph, cluster, "gradientangle")) |value|
+        std.fmt.parseFloat(f64, value) catch 0.0
+    else
+        0.0;
+    const url = std.fmt.bufPrint(buffer, "url(#{s}-{d})", .{ id_prefix, id }) catch unreachable;
+    if (styleHas(style, "radial")) {
+        try writeSvgRadialGradientDef(writer, graph, cluster.attrs.items, id_prefix, id, colors.segments[0], colors.segments[1], angle);
+    } else {
+        try writeSvgLinearGradientDef(writer, graph, cluster.attrs.items, id_prefix, id, rect, colors.segments[0], colors.segments[1], angle);
+    }
+    fill.* = url;
+}
+
 fn renderSvgStripedRectFill(writer: *Io.Writer, graph: *const Graph, id_prefix: []const u8, id: usize, attrs: []const Attr, rect: RectF, radius: f64, fallback_fill: []const u8) Io.Writer.Error!bool {
     if (!styleHas(attrValue(attrs, "style"), "striped")) return false;
     const fillcolor = attrValue(attrs, "fillcolor") orelse fallback_fill;
@@ -8792,6 +8812,30 @@ fn renderSvgStripedRectFill(writer: *Io.Writer, graph: *const Graph, id_prefix: 
         if (stripe_width <= 0) continue;
         try writeSvgRectOpen(writer, .{ .x = cursor, .y = rect.y, .width = stripe_width, .height = rect.height }, radius);
         try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{resolveSvgColor(graph, attrs, segment.color)});
+        cursor += stripe_width;
+        if (cursor >= rect.x + rect.width) break;
+    }
+    try writer.writeAll("</g>\n");
+    return true;
+}
+
+fn renderSvgClusterStripedRectFill(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, id: usize, rect: RectF, radius: f64, fallback_fill: []const u8) Io.Writer.Error!bool {
+    if (!styleHas(inheritedClusterVisualAttr(graph, cluster, "style"), "striped")) return false;
+    const fillcolor = inheritedClusterVisualAttr(graph, cluster, "fillcolor") orelse fallback_fill;
+    const colors = parseColorList(fillcolor) orelse return false;
+    if (colors.len < 2) return false;
+
+    try writer.print("<g id=\"vex-cluster-stripes-{d}\" class=\"striped-fill\">\n", .{id});
+    var cursor = rect.x;
+    for (colors.segments[0..colors.len], 0..) |segment, index| {
+        if (segment.fraction <= 0) continue;
+        const stripe_width = if (index + 1 == colors.len)
+            rect.x + rect.width - cursor
+        else
+            rect.width * segment.fraction;
+        if (stripe_width <= 0) continue;
+        try writeSvgRectOpen(writer, .{ .x = cursor, .y = rect.y, .width = stripe_width, .height = rect.height }, radius);
+        try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{resolveSvgColor(graph, cluster.attrs.items, segment.color)});
         cursor += stripe_width;
         if (cursor >= rect.x + rect.width) break;
     }
@@ -10421,11 +10465,11 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     } };
     const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, cluster_context, cluster.label, cluster_anchor_id);
     const rect = clusterVisualRect(graph, layout, index);
-    if (try renderSvgStripedRectFill(writer, graph, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
+    if (try renderSvgClusterStripedRectFill(writer, graph, cluster, index + 1, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
     } else {
         var fill_buf: [96]u8 = undefined;
-        try resolveSvgGradientFill(writer, graph, "vex-cluster-fill", index + 1, cluster.attrs.items, rect, &visual.fill, &fill_buf);
+        try resolveSvgClusterGradientFill(writer, graph, "vex-cluster-fill", index + 1, cluster, rect, &visual.fill, &fill_buf);
     }
     const stroke = if (visual.peripheries == 0) "none" else visual.stroke;
     if (visual.radius <= 0.001) {
@@ -16516,6 +16560,38 @@ test "SVG renderer uses typed gradientangle attributes" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<linearGradient id=\"vex-node-fill-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<radialGradient id=\"vex-cluster-fill-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fx=\"50%\" fy=\"0%\"") != null);
+}
+
+test "cluster gradient attrs inherit from parent subgraphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    style="filled,radial";
+        \\    fillcolor="white:#2563eb";
+        \\    gradientangle=90;
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "style") == null);
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "fillcolor") == null);
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "gradientangle") == null);
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"url(#vex-cluster-fill-2)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<radialGradient id=\"vex-cluster-fill-2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fx=\"50%\" fy=\"0%\"") != null);
 }
 
