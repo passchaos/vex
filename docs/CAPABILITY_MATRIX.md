@@ -30,6 +30,7 @@
 | strict / keyed edge identity | 已验证 | Graphviz `agedge` source oracle；strict DOT/API duplicate-edge、non-strict same-key reopen、different-key parallel edge、undirected canonicalization 和 file corpus 测试 | strict 保持端点唯一；`key` 仅留在 parser 边界 |
 | layered/Sugiyama 布局 | 部分完成 | rank、crossing、coordinate、long-edge、compound 与 cluster 测试 | 完整目标 cluster 语义 corpus；大图质量与性能门槛 |
 | force-directed 布局 | 已验证 | independent neato stress-majorization；independent fdp spring-electrical with K/T0/len/weight and cluster boxes；independent sfdp deterministic coarsen/prolongate/refine with levels/K/repulsiveforce；deterministic Fruchterman-Reingold；规模、能量、属性、引擎区分和预算测试 | 保持四条引擎路径独立，持续扩展规模基准 |
+| radial/twopi 布局 | 已验证 | explicit/auto root、BFS rings、ranksep、subtree angular spans、component packing、CLI/Zig/C/Python 和 SVG smoke | 保持 root `NodeId` 与 textual id/display label 分离 |
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |
 | records、ports、compound edges | 已验证 | record field、compass port、scoped ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
 | parent-scoped subgraph identity | 已验证 | Graphviz `agsubg` source oracle；same-parent reopen merge、different-parent isolation 和 file corpus 测试 | 保持成员/属性合并和最近作用域引用语义 |
@@ -43,7 +44,7 @@
 | 自包含交互 SVG | 已验证 | layer、collapse、filter、labels、focus、inspector、search、viewport、minimap、stats 和 `interactive-all` 测试 | 键盘/ARIA 与静态模式回归持续通过 |
 | 机器可读 SVG 对象索引 | 已验证 | graph/node/edge/subgraph 结构、attrs、rank constraints、ports、waypoints、geometry；`SVG_METADATA_V1.md` namespace/version/features/additive policy；静态模式与 CLI/API smoke | v1 只做 additive 扩展，破坏性变化发布新 namespace major |
 | 精确解析诊断 | 部分完成 | line/column/source/caret/hint 测试 | 扩展到目标 grammar 的语义错误和批量诊断 |
-| 可配置布局/输入预算 | 部分完成 | parse-only、max input、force iterations、layered pass budgets；五引擎 `LayoutControl` / `LayoutWorkBudget` 取消和 CLI exit-2 smoke；sfdp Barnes-Hut 精度/交互次数门槛和 512-node SVG smoke | 增加稳定时间/峰值内存观测和更大规模基准门槛 |
+| 可配置布局/输入预算 | 部分完成 | parse-only、max input、iterative engine budgets、layered pass budgets；六引擎 `LayoutControl` / `LayoutWorkBudget` 取消和 CLI exit-2 smoke；sfdp Barnes-Hut 精度/交互次数门槛和 512-node SVG smoke | 增加稳定时间/峰值内存观测和更大规模基准门槛 |
 | 增量布局与心理地图稳定性 | 已验证 | `layoutGraphIncremental`；layered/force 共享节点位移门槛、无重叠/边界和 `stability=0` 等价测试 | 保持 NodeId 驱动；共享节点位移显著低于完整重排 |
 | 多语言/运行时绑定 | 部分完成 | stable C ABI v1；installed header/static/shared library；Zig ABI 和真实 C smoke；dependency-free Python ctypes builder/DOT/error/cancel smoke | 按产品需求继续提供 WASM 或 JS 原生绑定 |
 | 流式/并行大图管线 | 未实现 | 当前 parser/layout 为内存内串行流程 | 建立代表性规模、吞吐、峰值内存和取消门槛 |

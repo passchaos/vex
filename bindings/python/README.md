@@ -23,6 +23,11 @@ svg = render_dot(
     "graph G { a -- b }",
     RenderConfig(layout="neato", iterations=40),
 )
+
+svg = render_dot(
+    "graph G { graph [root=center]; center -- a; center -- b }",
+    RenderConfig(layout="twopi"),
+)
 ```
 
 Library lookup order:

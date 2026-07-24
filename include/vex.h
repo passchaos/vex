@@ -39,7 +39,8 @@ typedef enum vex_layout {
     VEX_LAYOUT_NEATO = 1,
     VEX_LAYOUT_FDP = 2,
     VEX_LAYOUT_SFDP = 3,
-    VEX_LAYOUT_FR = 4
+    VEX_LAYOUT_FR = 4,
+    VEX_LAYOUT_TWOPI = 5
 } vex_layout;
 
 typedef struct vex_render_options {

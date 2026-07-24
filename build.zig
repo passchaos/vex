@@ -226,6 +226,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/10_sfdp_layout_svg.zig",
             .desc = "Run API example: multilevel sfdp SVG layout",
         },
+        .{
+            .step_name = "run-api-twopi-layout-svg",
+            .exe_name = "api-twopi-layout-svg",
+            .source = "examples/api/11_twopi_layout_svg.zig",
+            .desc = "Run API example: rooted twopi SVG layout",
+        },
     };
 
     for (api_examples) |example| {

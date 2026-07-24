@@ -31,6 +31,11 @@ def main() -> None:
         vex.RenderConfig(layout="neato", iterations=20),
     )
     assert "<title>D</title>" in dot_svg
+    radial_svg = vex.render_dot(
+        'graph R { graph [root=center]; center -- a; center -- b; a -- c; }',
+        vex.RenderConfig(layout="twopi"),
+    )
+    assert "<title>R</title>" in radial_svg
 
     try:
         vex.render_dot("digraph G { a ->")

@@ -10,7 +10,7 @@ const usage =
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--check|--validate]
-    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp]
+    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
     \\        [--layout-work-budget count]

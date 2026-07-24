@@ -582,6 +582,7 @@ pub const Graph = struct {
     strict: bool,
     name: []const u8,
     rankdir: RankDir,
+    radial_root: ?NodeId = null,
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
     subgraphs: std.ArrayList(Subgraph) = .empty,
@@ -770,6 +771,11 @@ pub const Graph = struct {
         const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
         errdefer self.allocator.free(owned_nodes);
         try self.rank_constraints.append(self.allocator, .{ .kind = kind, .node_ids = owned_nodes });
+    }
+
+    pub fn setRadialRoot(self: *Graph, id: NodeId) !void {
+        if (id >= self.nodes.items.len) return error.InvalidNodeId;
+        self.radial_root = id;
     }
 
     pub fn addSubgraph(self: *Graph, label: []const u8, parent: ?SubgraphId, node_ids: []const NodeId, options: SubgraphOptions) !SubgraphId {
@@ -2123,6 +2129,9 @@ const Parser = struct {
         try self.parseStmtList(&graph);
         try self.expect(.rbrace);
         try self.expect(.eof);
+        if (attrValue(graph.attrs.items, "root")) |root_name| {
+            if (self.node_index.get(root_name)) |root_id| graph.radial_root = root_id;
+        }
         return graph;
     }
 
@@ -3555,6 +3564,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
     result.edge_defaults.weight = source.edge_defaults.weight;
     result.edge_defaults.constraint = source.edge_defaults.constraint;
     result.edge_defaults.min_len = source.edge_defaults.min_len;
+    result.radial_root = source.radial_root;
 
     result.attrs = try copyAttrList(allocator, source.attrs.items);
     result.node_default_attrs = try copyAttrList(allocator, source.node_default_attrs.items);
@@ -3647,6 +3657,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
+        .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
     };
 }
 
@@ -3659,6 +3670,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
+        .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
     };
 }
 
@@ -4658,6 +4670,130 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
         .width = options.width,
         .height = options.height,
     };
+}
+
+pub fn layoutRadial(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutRadialWithControl(allocator, graph, options, &work);
+}
+
+fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions, work: *LayoutWorkTracker) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.edges.items.len +| 1);
+
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else n);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else n);
+    errdefer allocator.free(rank_heights);
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    const default_layout_options = LayoutOptions{};
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+
+    const edges = try allocator.alloc(layout_mod.twopi.Edge, graph.edges.items.len);
+    defer allocator.free(edges);
+    var edge_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= n or edge_item.to >= n or edge_item.from == edge_item.to) continue;
+        if (edge_item.weight == 0) continue;
+        edges[edge_count] = .{ .from = edge_item.from, .to = edge_item.to };
+        edge_count += 1;
+    }
+
+    const preferred_root = radialRootNode(graph);
+    const ranksep = layout_mod.spacing.graph(attrValue(graph.attrs.items, "ranksep") orelse "1", 72.0);
+    var radial = try layout_mod.twopi.layout(allocator, n, edges[0..edge_count], preferred_root, .{
+        .ring_gap = ranksep,
+        .component_gap = @max(ranksep * 1.5, 72.0),
+    });
+    defer radial.deinit();
+    try work.checkpoint(n *| 4 +| graph.edges.items.len +| 1);
+
+    fitRadialPositionsToCanvas(radial.positions, sizes, options);
+    @memcpy(ranks, radial.depths);
+    @memset(rank_heights, 0);
+    for (rank_depths, 0..) |*depth, rank| depth.* = @as(f64, @floatFromInt(rank)) * ranksep;
+    for (nodes, 0..) |*node, id| {
+        var center = radial.positions[id];
+        center.x = std.math.clamp(center.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
+        center.y = std.math.clamp(center.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
+        node.* = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
+    }
+    computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = nodes,
+        .subgraphs = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
+        .width = options.width,
+        .height = options.height,
+    };
+}
+
+fn radialRootNode(graph: *const Graph) ?NodeId {
+    if (graph.radial_root) |root_id| {
+        if (root_id < graph.nodes.items.len) return root_id;
+    }
+    if (attrValue(graph.attrs.items, "root")) |root_name| {
+        for (graph.nodes.items) |node_item| {
+            if (std.mem.eql(u8, svgNodeName(node_item), root_name) or
+                std.mem.eql(u8, node_item.label, root_name))
+            {
+                return node_item.id;
+            }
+        }
+    }
+    for (graph.nodes.items) |node_item| {
+        const value = attrValue(node_item.attrs.items, "root") orelse continue;
+        if (parseBool(value) orelse false) return node_item.id;
+    }
+    return null;
+}
+
+fn fitRadialPositionsToCanvas(positions: []Point, sizes: []const NodeSize, options: ForceLayoutOptions) void {
+    if (positions.len == 0) return;
+    var min_x = std.math.floatMax(f64);
+    var min_y = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    var max_y: f64 = -std.math.floatMax(f64);
+    for (positions, 0..) |position, id| {
+        min_x = @min(min_x, position.x - sizes[id].width / 2.0);
+        min_y = @min(min_y, position.y - sizes[id].height / 2.0);
+        max_x = @max(max_x, position.x + sizes[id].width / 2.0);
+        max_y = @max(max_y, position.y + sizes[id].height / 2.0);
+    }
+    const source_width = @max(1.0, max_x - min_x);
+    const source_height = @max(1.0, max_y - min_y);
+    const target_width = @max(1.0, options.width - options.margin * 2.0);
+    const target_height = @max(1.0, options.height - options.margin * 2.0);
+    const scale = @min(1.0, @min(target_width / source_width, target_height / source_height));
+    const center_x = (min_x + max_x) / 2.0;
+    const center_y = (min_y + max_y) / 2.0;
+    for (positions) |*position| {
+        position.x = options.width / 2.0 + (position.x - center_x) * scale;
+        position.y = options.height / 2.0 + (position.y - center_y) * scale;
+    }
 }
 
 fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: *Layout, node_gap: f64, options: IncrementalLayoutOptions) !void {
@@ -16744,6 +16880,8 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.spring_electrical, LayoutAlgorithm.fromString("spring-electrical").?);
     try std.testing.expectEqual(LayoutAlgorithm.multilevel_spring_electrical, LayoutAlgorithm.fromString("sfdp").?);
     try std.testing.expectEqual(LayoutAlgorithm.multilevel_spring_electrical, LayoutAlgorithm.fromString("multilevel-spring-electrical").?);
+    try std.testing.expectEqual(LayoutAlgorithm.radial, LayoutAlgorithm.fromString("twopi").?);
+    try std.testing.expectEqual(LayoutAlgorithm.radial, LayoutAlgorithm.fromString("radial").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
@@ -17090,6 +17228,94 @@ test "sfdp Barnes Hut work stays subquadratic at 512 nodes" {
     const exact_evaluations = node_count * (node_count - 1);
     try std.testing.expect(stats.approximations > node_count);
     try std.testing.expect(stats.evaluations < exact_evaluations / 4);
+}
+
+test "twopi honors explicit root and BFS rings" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=twopi, root=center, ranksep=1.5];
+        \\  center [label=Hub];
+        \\  center -- a;
+        \\  center -- b;
+        \\  a -- c;
+        \\  a -- d;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 520, .height = 360, .margin = 30 },
+    });
+    defer layout.deinit();
+    const center = nodeIdByLabel(&graph, "center");
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    const d = nodeIdByLabel(&graph, "d");
+    try std.testing.expectEqual(center, graph.radial_root.?);
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[center]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[a]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[b]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[c]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[d]);
+
+    const radius_a = distanceBetween(layout.nodes[center].center, layout.nodes[a].center);
+    const radius_b = distanceBetween(layout.nodes[center].center, layout.nodes[b].center);
+    const radius_c = distanceBetween(layout.nodes[center].center, layout.nodes[c].center);
+    const radius_d = distanceBetween(layout.nodes[center].center, layout.nodes[d].center);
+    try std.testing.expectApproxEqAbs(radius_a, radius_b, 2.0);
+    try std.testing.expectApproxEqAbs(radius_c, radius_d, 2.0);
+    try std.testing.expect(radius_c > radius_a * 1.8);
+}
+
+test "twopi allocates branch angular spans by subtree leaves" {
+    const allocator = std.testing.allocator;
+    const edges = [_]layout_mod.twopi.Edge{
+        .{ .from = 0, .to = 1 },
+        .{ .from = 0, .to = 2 },
+        .{ .from = 1, .to = 3 },
+        .{ .from = 1, .to = 4 },
+        .{ .from = 1, .to = 5 },
+    };
+    var result = try layout_mod.twopi.layout(allocator, 6, &edges, 0, .{ .ring_gap = 72 });
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 0), result.depths[0]);
+    try std.testing.expectEqual(@as(usize, 1), result.depths[1]);
+    try std.testing.expectEqual(@as(usize, 1), result.depths[2]);
+    const branch_one_span = angleSpan(&.{
+        result.positions[3],
+        result.positions[4],
+        result.positions[5],
+    });
+    try std.testing.expect(branch_one_span > std.math.pi);
+}
+
+test "twopi selects component centers and packs disconnected graphs" {
+    const allocator = std.testing.allocator;
+    const edges = [_]layout_mod.twopi.Edge{
+        .{ .from = 0, .to = 1 },
+        .{ .from = 1, .to = 2 },
+        .{ .from = 3, .to = 4 },
+    };
+    var result = try layout_mod.twopi.layout(allocator, 5, &edges, null, .{});
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.component_count);
+    try std.testing.expectEqual(@as(usize, 2), result.roots.len);
+    try std.testing.expectEqual(@as(usize, 1), result.roots[0]);
+    try std.testing.expect(result.positions[0].x < result.positions[3].x);
+}
+
+fn angleSpan(points: []const Point) f64 {
+    var min_angle = std.math.floatMax(f64);
+    var max_angle: f64 = -std.math.floatMax(f64);
+    for (points) |point| {
+        const angle = std.math.atan2(point.y, point.x);
+        min_angle = @min(min_angle, angle);
+        max_angle = @max(max_angle, angle);
+    }
+    return max_angle - min_angle;
 }
 
 test "force layout config iterations override graph fallback" {

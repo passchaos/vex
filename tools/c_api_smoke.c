@@ -74,6 +74,17 @@ int main(void) {
         contains(svg.data, svg.len, "<title>C Smoke</title>") &&
         contains(svg.data, svg.len, "data-vex-schema-version=\"1\"");
     vex_buffer_free(svg);
+
+    options.layout = VEX_LAYOUT_TWOPI;
+    options.metadata = false;
+    svg.data = NULL;
+    svg.len = 0;
+    if (!check(vex_graph_render_svg(graph, options, &svg, &error), &error)) {
+        vex_graph_destroy(graph);
+        return 6;
+    }
+    const int twopi_ok = svg.len > 0;
+    vex_buffer_free(svg);
     vex_graph_destroy(graph);
-    return ok ? 0 : 5;
+    return ok && twopi_ok ? 0 : 5;
 }

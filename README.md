@@ -63,6 +63,10 @@ Graphviz-style `levels`, `K`, and `repulsiveforce`; like Graphviz sfdp, it
 does not model clusters or edge `len` / `weight`. Fine-level repulsion uses a
 deterministic Barnes-Hut quadtree above the exact small-graph threshold, with
 tests bounding force error and repulsion work plus a 512-node SVG smoke.
+`--layout twopi`, `graph [layout=twopi]`, and `-Ktwopi` select the independent
+radial engine. It honors graph `root`, node `root=true`, `ranksep`, BFS
+graph-distance rings, subtree-weighted angular spans, and disconnected
+component packing.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
@@ -215,7 +219,7 @@ Default node and edge label attributes set through the API apply to subsequently
 
 `zig build` installs `zig-out/include/vex.h` and
 `zig-out/lib/libvex_c.a` plus the platform shared library. The C ABI supports
-graph construction, DOT-to-SVG, all five layout engines, layout work budgets,
+graph construction, DOT-to-SVG, all six layout engines, layout work budgets,
 and SVG metadata v1. Run `zig build test-c-api` for a real C compiler/linker
 smoke.
 
@@ -240,6 +244,7 @@ zig build run-api-force-layout-svg
 zig build run-api-incremental-layout-svg
 zig build run-api-fdp-layout-svg
 zig build run-api-sfdp-layout-svg
+zig build run-api-twopi-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -254,6 +259,7 @@ They progress from small SVG output to broader feature coverage:
 - `08_incremental_layout_svg.zig`: add a node after the first layout, preserve shared-node positions with `layoutGraphIncremental`, and write the final SVG.
 - `09_fdp_layout_svg.zig`: clustered undirected graph rendered with the independent spring-electrical fdp engine.
 - `10_sfdp_layout_svg.zig`: larger graph rendered with deterministic coarsen/prolongate/refine sfdp layout.
+- `11_twopi_layout_svg.zig`: explicitly rooted graph rendered on BFS rings with subtree-weighted angular spans.
 
 ## Graphviz compatibility target
 

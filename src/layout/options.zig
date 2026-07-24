@@ -73,6 +73,7 @@ pub const LayoutAlgorithm = enum {
     stress_majorization,
     spring_electrical,
     multilevel_spring_electrical,
+    radial,
 
     pub fn fromString(value: []const u8) ?LayoutAlgorithm {
         if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
@@ -101,6 +102,11 @@ pub const LayoutAlgorithm = enum {
         {
             return .multilevel_spring_electrical;
         }
+        if (std.ascii.eqlIgnoreCase(value, "twopi") or
+            std.ascii.eqlIgnoreCase(value, "radial"))
+        {
+            return .radial;
+        }
         if (std.ascii.eqlIgnoreCase(value, "fr") or
             std.ascii.eqlIgnoreCase(value, "force") or
             std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
@@ -119,6 +125,7 @@ pub const LayoutAlgorithm = enum {
             .stress_majorization => "neato",
             .spring_electrical => "fdp",
             .multilevel_spring_electrical => "sfdp",
+            .radial => "twopi",
         };
     }
 };
