@@ -8987,10 +8987,8 @@ fn svgClusterSearchText(buffer: []u8, cluster: Subgraph) []const u8 {
 fn svgNodeInspectorText(buffer: []u8, node_item: Node, node_name: []const u8, fallback_title: []const u8) []const u8 {
     var builder = SvgSearchTextBuilder.init(buffer);
     builder.append("type=node");
-    builder.append("id=");
-    builder.append(node_name);
-    builder.append("label=");
-    builder.append(fallback_title);
+    builder.appendPair("id", node_name);
+    builder.appendPair("label", fallback_title);
     builder.appendAttr(node_item.attrs.items, "shape");
     builder.appendAttr(node_item.attrs.items, "class");
     return builder.slice();
@@ -9000,12 +8998,10 @@ fn svgEdgeInspectorText(buffer: []u8, edge_item: Edge, edge_name: ?[]const u8) [
     var builder = SvgSearchTextBuilder.init(buffer);
     builder.append("type=edge");
     if (edge_name) |name| {
-        builder.append("id=");
-        builder.append(name);
+        builder.appendPair("id", name);
     }
     if (edge_item.label) |label| {
-        builder.append("label=");
-        builder.append(label);
+        builder.appendPair("label", label);
     }
     builder.appendAttr(edge_item.attrs.items, "class");
     builder.appendAttr(edge_item.attrs.items, "style");
@@ -9015,8 +9011,7 @@ fn svgEdgeInspectorText(buffer: []u8, edge_item: Edge, edge_name: ?[]const u8) [
 fn svgClusterInspectorText(buffer: []u8, cluster: Subgraph) []const u8 {
     var builder = SvgSearchTextBuilder.init(buffer);
     builder.append("type=subgraph");
-    builder.append("label=");
-    builder.append(cluster.label);
+    builder.appendPair("label", cluster.label);
     builder.appendAttr(cluster.attrs.items, "class");
     builder.appendAttr(cluster.attrs.items, "style");
     return builder.slice();
@@ -9059,6 +9054,16 @@ const SvgSearchTextBuilder = struct {
 
     fn appendAttr(self: *SvgSearchTextBuilder, attrs: []const Attr, name: []const u8) void {
         if (attrValue(attrs, name)) |value| self.append(value);
+    }
+
+    fn appendPair(self: *SvgSearchTextBuilder, key: []const u8, value: []const u8) void {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n");
+        if (trimmed.len == 0 or self.len >= self.buffer.len) return;
+        if (self.has_token) self.appendByte(' ');
+        for (key) |byte| self.appendByte(byte);
+        self.appendByte('=');
+        for (trimmed) |byte| self.appendByte(byte);
+        self.has_token = true;
     }
 
     fn append(self: *SvgSearchTextBuilder, token: []const u8) void {
@@ -18183,9 +18188,9 @@ test "SVG renderer emits opt-in Vex inspector controls" {
     const inspector_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_inspector = true });
     defer allocator.free(inspector_svg);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "id=\"vex-inspector-controls\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=node id= api label= API box\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=edge id= api-&gt;worker label= job") != null);
-    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=subgraph label= Service") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=node id=api label=API box\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=edge id=api-&gt;worker label=job") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=subgraph label=Service") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "vex-inspect-selected") != null);
 }
 
