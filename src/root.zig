@@ -7970,6 +7970,7 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         canvas.view_box.x * canvas.scale,
         canvas.view_box.y * canvas.scale,
     });
+    try writeSvgRankConstraintIndex(writer, graph);
     try writeSvgAttributeIndex(writer, graph);
     for (graph.nodes.items) |node_item| {
         const node_layout = if (node_item.id < layout.nodes.len) layout.nodes[node_item.id] else NodeLayout{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
@@ -8093,6 +8094,21 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         });
     }
     try writer.writeAll("</vex:graph>\n</metadata>\n");
+}
+
+fn writeSvgRankConstraintIndex(writer: *Io.Writer, graph: *const Graph) Io.Writer.Error!void {
+    try writer.writeAll("<vex:rank-constraints>\n");
+    for (graph.rank_constraints.items) |constraint| {
+        try writer.writeAll("<vex:rank kind=\"");
+        try writer.writeAll(@tagName(constraint.kind));
+        try writer.writeAll("\" nodes=\"");
+        for (constraint.node_ids, 0..) |node_id, index| {
+            if (index > 0) try writer.writeByte(' ');
+            try writer.print("{d}", .{node_id});
+        }
+        try writer.writeAll("\"/>\n");
+    }
+    try writer.writeAll("</vex:rank-constraints>\n");
 }
 
 fn writeSvgAttributeIndex(writer: *Io.Writer, graph: *const Graph) Io.Writer.Error!void {
@@ -16291,6 +16307,31 @@ test "SVG metadata indexes arbitrary object attributes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"subgraph\" id=\"0\" name=\"x_subgraph\" value=\"s&amp;&lt;\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "name=\"vex_text_id\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "</vex:attributes>") != null);
+}
+
+test "SVG metadata indexes rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Ranks {
+        \\  { rank=same; A; B; }
+        \\  { rank=source; Start; }
+        \\  { rank=sink; End; }
+        \\  Start -> A -> End;
+        \\  Start -> B -> End;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank-constraints>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank kind=\"same\" nodes=\"0 1\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank kind=\"source\" nodes=\"2\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank kind=\"sink\" nodes=\"3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "</vex:rank-constraints>") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
