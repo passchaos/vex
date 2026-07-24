@@ -3,6 +3,48 @@
 const std = @import("std");
 const color = @import("color.zig");
 
+pub const CompassPort = enum {
+    auto,
+    center,
+    north,
+    north_east,
+    east,
+    south_east,
+    south,
+    south_west,
+    west,
+    north_west,
+
+    pub fn name(self: CompassPort) []const u8 {
+        return switch (self) {
+            .auto => "_",
+            .center => "c",
+            .north => "n",
+            .north_east => "ne",
+            .east => "e",
+            .south_east => "se",
+            .south => "s",
+            .south_west => "sw",
+            .west => "w",
+            .north_west => "nw",
+        };
+    }
+
+    pub fn fromString(value: []const u8) ?CompassPort {
+        if (std.ascii.eqlIgnoreCase(value, "n")) return .north;
+        if (std.ascii.eqlIgnoreCase(value, "ne")) return .north_east;
+        if (std.ascii.eqlIgnoreCase(value, "e")) return .east;
+        if (std.ascii.eqlIgnoreCase(value, "se")) return .south_east;
+        if (std.ascii.eqlIgnoreCase(value, "s")) return .south;
+        if (std.ascii.eqlIgnoreCase(value, "sw")) return .south_west;
+        if (std.ascii.eqlIgnoreCase(value, "w")) return .west;
+        if (std.ascii.eqlIgnoreCase(value, "nw")) return .north_west;
+        if (std.ascii.eqlIgnoreCase(value, "c")) return .center;
+        if (std.ascii.eqlIgnoreCase(value, "_")) return .auto;
+        return null;
+    }
+};
+
 pub const ArrowShape = enum {
     normal,
     none,

@@ -87,18 +87,7 @@ pub const RankConstraint = struct {
     node_ids: []NodeId,
 };
 
-pub const CompassPort = enum {
-    auto,
-    center,
-    north,
-    north_east,
-    east,
-    south_east,
-    south,
-    south_west,
-    west,
-    north_west,
-};
+pub const CompassPort = svg_mod.edge.CompassPort;
 
 pub const SubgraphStyle = svg_mod.style.SubgraphStyle;
 
@@ -1340,9 +1329,9 @@ pub const Graph = struct {
     fn edgePortAttrText(buffer: []u8, port: EdgePort) ![]const u8 {
         if (port.record) |record| {
             if (port.compass == .auto) return record;
-            return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, compassPortName(port.compass) });
+            return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, port.compass.name() });
         }
-        return compassPortName(port.compass);
+        return port.compass.name();
     }
 
     fn setEdgeSubgraphAttr(self: *Graph, id: EdgeId, name: []const u8, subgraph_id: SubgraphId) !void {
@@ -1656,21 +1645,6 @@ fn shapeName(shape: Shape) []const u8 {
     };
 }
 
-fn compassPortName(port: CompassPort) []const u8 {
-    return switch (port) {
-        .auto => "_",
-        .center => "c",
-        .north => "n",
-        .north_east => "ne",
-        .east => "e",
-        .south_east => "se",
-        .south => "s",
-        .south_west => "sw",
-        .west => "w",
-        .north_west => "nw",
-    };
-}
-
 fn orderingModeName(mode: OrderingMode) []const u8 {
     return switch (mode) {
         .none => "",
@@ -1747,22 +1721,8 @@ fn parseBool(value: []const u8) ?bool {
     return null;
 }
 
-fn isCompassPort(value: []const u8) bool {
-    return parseCompassPort(value) != null;
-}
-
 fn parseCompassPort(value: []const u8) ?CompassPort {
-    if (std.ascii.eqlIgnoreCase(value, "n")) return .north;
-    if (std.ascii.eqlIgnoreCase(value, "ne")) return .north_east;
-    if (std.ascii.eqlIgnoreCase(value, "e")) return .east;
-    if (std.ascii.eqlIgnoreCase(value, "se")) return .south_east;
-    if (std.ascii.eqlIgnoreCase(value, "s")) return .south;
-    if (std.ascii.eqlIgnoreCase(value, "sw")) return .south_west;
-    if (std.ascii.eqlIgnoreCase(value, "w")) return .west;
-    if (std.ascii.eqlIgnoreCase(value, "nw")) return .north_west;
-    if (std.ascii.eqlIgnoreCase(value, "c")) return .center;
-    if (std.ascii.eqlIgnoreCase(value, "_")) return .auto;
-    return null;
+    return CompassPort.fromString(value);
 }
 
 const TokenTag = enum {
@@ -2661,9 +2621,9 @@ fn edgeEndpointText(buffer: []u8, node_name: []const u8, record_port: ?[]const u
 fn edgePortText(buffer: []u8, record_port: ?[]const u8, port: CompassPort) ![]const u8 {
     if (record_port) |record| {
         if (port == .auto) return record;
-        return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, compassPortName(port) });
+        return std.fmt.bufPrint(buffer, "{s}:{s}", .{ record, port.name() });
     }
-    return compassPortName(port);
+    return port.name();
 }
 
 const LabelEscapeContext = struct {
