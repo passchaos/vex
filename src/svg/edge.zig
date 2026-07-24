@@ -1,6 +1,7 @@
 //! SVG edge rendering option helpers.
 
 const std = @import("std");
+const color = @import("color.zig");
 
 pub const Routing = enum {
     curved,
@@ -36,6 +37,16 @@ pub fn isConcentratedDuplicate(directed: bool, edges: anytype, edge_id: usize) b
         }
     }
     return false;
+}
+
+pub fn colorList(edge: anytype) ?color.List {
+    const raw_color = attrValue(edge.attrs.items, "color") orelse edge.color;
+    return color.parseList(raw_color);
+}
+
+pub fn colorListOffset(count: usize, index: usize, spacing: f64) f64 {
+    if (count <= 1) return 0;
+    return (@as(f64, @floatFromInt(index)) - @as(f64, @floatFromInt(count - 1)) / 2.0) * spacing;
 }
 
 fn parseBool(value: []const u8) ?bool {

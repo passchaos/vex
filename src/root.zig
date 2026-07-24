@@ -9380,8 +9380,7 @@ fn writeSvgSelfLoopTextPathReference(writer: *Io.Writer, path_id: SvgGroupOpenOp
 }
 
 fn edgeColorList(edge_item: Edge) ?ColorList {
-    const color = attrValue(edge_item.attrs.items, "color") orelse edge_item.color;
-    return parseColorList(color);
+    return svg_mod.edge.colorList(edge_item);
 }
 
 fn edgeMarkerColor(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
@@ -9408,8 +9407,7 @@ fn edgeVisualForSegment(graph: *const Graph, edge_item: Edge, visual: EdgeVisual
 }
 
 fn colorListOffset(count: usize, index: usize, spacing: f64) f64 {
-    if (count <= 1) return 0;
-    return (@as(f64, @floatFromInt(index)) - @as(f64, @floatFromInt(count - 1)) / 2.0) * spacing;
+    return svg_mod.edge.colorListOffset(count, index, spacing);
 }
 
 fn edgeRouteForEdgeWithColorOffset(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
