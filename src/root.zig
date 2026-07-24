@@ -11625,6 +11625,10 @@ fn writeSvgRectPolygonPoints(writer: *Io.Writer, rect: RectF, order: RectPointOr
     try svg_mod.shape.writeRectPolygonPoints(writer, rect, order, precise);
 }
 
+fn svgPaint(visual: NodeVisual) svg_mod.shape.Paint {
+    return .{ .fill = visual.fill, .stroke = visual.stroke, .width = visual.width, .dash = visual.dash };
+}
+
 fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height: f64, visual: NodeVisual) Io.Writer.Error!void {
     try writeSvgPolylinePath(writer, &.{
         .{ .x = x + width, .y = y },
@@ -11635,92 +11639,33 @@ fn renderSvgComponentTab(writer: *Io.Writer, x: f64, y: f64, width: f64, height:
 }
 
 fn writeSvgLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"", .{});
-    try writePathMove(writer, .{ .x = x1, .y = y1 });
-    try writePathLine(writer, .{ .x = x2, .y = y2 });
-    try writer.print("\" fill=\"none\" stroke=\"{s}\"", .{visual.stroke});
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writeLine(writer, x1, y1, x2, y2, svgPaint(visual));
 }
 
 fn writeSvgPolylinePath(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
-    if (points.len == 0) return;
-    try writer.print("<path d=\"", .{});
-    try writePathMove(writer, points[0]);
-    for (points[1..]) |point| try writePathLine(writer, point);
-    try writer.print("\" fill=\"none\" stroke=\"{s}\"", .{visual.stroke});
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writePolylinePath(writer, points, svgPaint(visual));
 }
 
 fn writeSvgClosedPath(writer: *Io.Writer, points: []const Point, visual: NodeVisual) Io.Writer.Error!void {
-    if (points.len == 0) return;
-    try writer.print("<path d=\"", .{});
-    try writePathMove(writer, points[0]);
-    for (points[1..]) |point| try writePathLine(writer, point);
-    try writer.print("Z\" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writeClosedPath(writer, points, svgPaint(visual));
 }
 
-const CubicSegment = struct {
-    c1: Point,
-    c2: Point,
-    end: Point,
-};
+const CubicSegment = svg_mod.shape.CubicSegment;
 
 fn writeSvgClosedCubicPath(writer: *Io.Writer, start: Point, segments: []const CubicSegment, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<path d=\"", .{});
-    try writePathMove(writer, start);
-    for (segments) |segment| try writePathCubic(writer, segment.c1, segment.c2, segment.end);
-    try writer.print("Z\" fill=\"{s}\" stroke=\"{s}\"", .{ visual.fill, visual.stroke });
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writeClosedCubicPath(writer, start, segments, svgPaint(visual));
 }
 
 fn writeSvgPolylineLine(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<polyline fill=\"none\" stroke=\"{s}\" points=\"", .{visual.stroke});
-    try writeSvgPoint(writer, .{ .x = x1, .y = y1 });
-    try writer.writeByte(' ');
-    try writeSvgPoint(writer, .{ .x = x2, .y = y2 });
-    try writer.writeByte('"');
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writePolylineLine(writer, x1, y1, x2, y2, svgPaint(visual));
 }
 
 fn writeSvgPolylineLinePrecise(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<polyline fill=\"none\" stroke=\"{s}\" points=\"", .{visual.stroke});
-    try writeSvgNumberPrecise(writer, x1);
-    try writer.writeByte(',');
-    try writeSvgNumberPrecise(writer, y1);
-    try writer.writeByte(' ');
-    try writeSvgNumberPrecise(writer, x2);
-    try writer.writeByte(',');
-    try writeSvgNumberPrecise(writer, y2);
-    try writer.writeByte('"');
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writePolylineLinePrecise(writer, x1, y1, x2, y2, svgPaint(visual));
 }
 
 fn writeSvgPolylineLineYPrecise(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y2: f64, visual: NodeVisual) Io.Writer.Error!void {
-    try writer.print("<polyline fill=\"none\" stroke=\"{s}\" points=\"", .{visual.stroke});
-    try writeSvgNumber(writer, x1);
-    try writer.writeByte(',');
-    try writeSvgNumberPrecise(writer, y1);
-    try writer.writeByte(' ');
-    try writeSvgNumber(writer, x2);
-    try writer.writeByte(',');
-    try writeSvgNumberPrecise(writer, y2);
-    try writer.writeByte('"');
-    try writeSvgStrokeWidth(writer, visual.width);
-    try writeSvgDash(writer, visual.dash);
-    try writer.writeAll("/>\n");
+    try svg_mod.shape.writePolylineLineYPrecise(writer, x1, y1, x2, y2, svgPaint(visual));
 }
 
 fn writeSvgPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
