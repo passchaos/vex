@@ -51,8 +51,8 @@ same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
 `crossing_passes` / `coordinate_passes` aliases, and the Zig API can pass
 `LayoutConfig.layered`.
 
-DOT parse failures report a line, column, source excerpt, and caret so input
-mistakes can be fixed without rerunning through another tool.
+DOT parse failures report a line, column, source excerpt, caret, and repair hint
+so input mistakes can be fixed without rerunning through another tool.
 
 `--interactive-layers` is a Vex SVG extension. When a graph declares
 Graphviz-style `layers`, it embeds a small self-contained SVG control panel for

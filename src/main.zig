@@ -193,5 +193,6 @@ fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {
         try writer.writeAll("^\n");
     }
     if (diagnostic.token.len > 0) try writer.print("  token: {s}\n", .{diagnostic.token});
+    if (diagnostic.hint.len > 0) try writer.print("  hint: {s}\n", .{diagnostic.hint});
     try writer.flush();
 }

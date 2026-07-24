@@ -88,11 +88,13 @@ pub const ParseDiagnostic = struct {
     column: usize,
     source_line: []const u8,
     token: []const u8,
+    hint: []const u8,
 
     pub fn deinit(self: *ParseDiagnostic, allocator: std.mem.Allocator) void {
         allocator.free(self.message);
         allocator.free(self.source_line);
         allocator.free(self.token);
+        allocator.free(self.hint);
         self.* = undefined;
     }
 };
@@ -2764,6 +2766,7 @@ fn makeParseDiagnostic(allocator: std.mem.Allocator, source: []const u8, message
         .column = @max(column, 1),
         .source_line = try allocator.dupe(u8, sourceLineAt(source, @max(line, 1))),
         .token = try allocator.dupe(u8, token),
+        .hint = try allocator.dupe(u8, parseErrorHint(message)),
     };
 }
 
@@ -2798,6 +2801,19 @@ fn parseErrorMessage(err: anyerror) []const u8 {
         error.UnexpectedCharacter => "unexpected character in DOT input",
         else => @errorName(err),
     };
+}
+
+fn parseErrorHint(message: []const u8) []const u8 {
+    if (std.mem.eql(u8, message, "expected `graph` or `digraph` at start of DOT input")) return "Start DOT input with `graph name { ... }` or `digraph name { ... }`.";
+    if (std.mem.eql(u8, message, "unexpected DOT token")) return "Check for a missing closing brace, bracket, semicolon, comma, or edge operand near the marked token.";
+    if (std.mem.eql(u8, message, "expected DOT identifier, string, or angle-string")) return "Use an identifier, a quoted string like \"node id\", or an angle-string like <label>.";
+    if (std.mem.eql(u8, message, "expected quoted string after `+` concatenation")) return "DOT string concatenation only accepts another quoted string after `+`.";
+    if (std.mem.eql(u8, message, "edge operator does not match graph direction")) return "Use `->` inside digraphs and `--` inside undirected graphs.";
+    if (std.mem.eql(u8, message, "unterminated quoted string")) return "Add the missing closing quote, or escape an embedded quote as \\\".";
+    if (std.mem.eql(u8, message, "unterminated angle string")) return "Add the missing closing `>` for the angle-string label or id.";
+    if (std.mem.eql(u8, message, "unterminated block comment")) return "Close the block comment with `*/`.";
+    if (std.mem.eql(u8, message, "unexpected character in DOT input")) return "Remove the marked character or quote it if it is meant to be part of an id or label.";
+    return "";
 }
 
 pub const InputFormat = enum {
@@ -14607,6 +14623,7 @@ test "DOT parser diagnostic reports line column and source context" {
             try std.testing.expectEqual(@as(usize, 3), diagnostic.line);
             try std.testing.expectEqual(@as(usize, 1), diagnostic.column);
             try std.testing.expectEqualStrings("", diagnostic.source_line);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "missing closing brace") != null);
         },
     }
 }
@@ -14629,6 +14646,27 @@ test "DOT parser diagnostic reports lexical errors" {
             try std.testing.expectEqual(@as(usize, 2), diagnostic.line);
             try std.testing.expect(diagnostic.column > 0);
             try std.testing.expect(std.mem.indexOf(u8, diagnostic.source_line, "unterminated") != null);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "closing quote") != null);
+        },
+    }
+}
+
+test "DOT parser diagnostic suggests valid graph header" {
+    const allocator = std.testing.allocator;
+    var result = try parseDotDiagnostic(allocator,
+        \\nonsense G {
+        \\  a -- b;
+        \\}
+    );
+    switch (result) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("expected `graph` or `digraph` at start of DOT input", diagnostic.message);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "Start DOT input") != null);
         },
     }
 }
