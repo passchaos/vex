@@ -18,6 +18,26 @@ pub fn routingMode(attrs: anytype) Routing {
     return .curved;
 }
 
+pub fn concentrateEnabled(attrs: anytype) bool {
+    const value = attrValue(attrs, "concentrate") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+pub fn isConcentratedDuplicate(directed: bool, edges: anytype, edge_id: usize) bool {
+    const edge_item = edges[edge_id];
+    for (edges[0..edge_id]) |candidate| {
+        if (candidate.from == candidate.to or edge_item.from == edge_item.to) continue;
+        if (directed) {
+            if (candidate.from == edge_item.from and candidate.to == edge_item.to) return true;
+        } else {
+            const same = candidate.from == edge_item.from and candidate.to == edge_item.to;
+            const reverse = candidate.from == edge_item.to and candidate.to == edge_item.from;
+            if (same or reverse) return true;
+        }
+    }
+    return false;
+}
+
 fn parseBool(value: []const u8) ?bool {
     if (std.ascii.eqlIgnoreCase(value, "true") or
         std.ascii.eqlIgnoreCase(value, "yes") or

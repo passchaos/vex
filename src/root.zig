@@ -10233,23 +10233,11 @@ fn nextSvgElementName(svg: []const u8, index: *usize) ?SvgElementName {
 }
 
 fn graphConcentrateEnabled(graph: *const Graph) bool {
-    const value = attrValue(graph.attrs.items, "concentrate") orelse return false;
-    return parseBool(value) orelse false;
+    return svg_mod.edge.concentrateEnabled(graph.attrs.items);
 }
 
 fn isConcentratedDuplicateEdge(graph: *const Graph, edge_id: EdgeId) bool {
-    const edge_item = graph.edges.items[edge_id];
-    for (graph.edges.items[0..edge_id]) |candidate| {
-        if (candidate.from == candidate.to or edge_item.from == edge_item.to) continue;
-        if (graph.directed) {
-            if (candidate.from == edge_item.from and candidate.to == edge_item.to) return true;
-        } else {
-            const same = candidate.from == edge_item.from and candidate.to == edge_item.to;
-            const reverse = candidate.from == edge_item.to and candidate.to == edge_item.from;
-            if (same or reverse) return true;
-        }
-    }
-    return false;
+    return svg_mod.edge.isConcentratedDuplicate(graph.directed, graph.edges.items, edge_id);
 }
 
 fn graphFontNamesMode(graph: *const Graph) FontNames {
