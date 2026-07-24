@@ -2193,7 +2193,6 @@ const Parser = struct {
             for (operands.items) |*operand| freeNodeRefSet(self.allocator, operand);
             operands.deinit(self.allocator);
         }
-        errdefer freeNodeRefSet(self.allocator, first_refs);
         try operands.append(self.allocator, first_refs.*);
         first_refs.* = .empty;
 
@@ -14667,6 +14666,27 @@ test "DOT parser diagnostic suggests valid graph header" {
             defer diagnostic.deinit(allocator);
             try std.testing.expectEqualStrings("expected `graph` or `digraph` at start of DOT input", diagnostic.message);
             try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "Start DOT input") != null);
+        },
+    }
+}
+
+test "DOT parser diagnostic suggests matching edge operator" {
+    const allocator = std.testing.allocator;
+    var result = try parseDotDiagnostic(allocator,
+        \\graph G {
+        \\  a -> b;
+        \\}
+    );
+    switch (result) {
+        .graph => |*graph| {
+            graph.deinit();
+            return error.ExpectedDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqualStrings("edge operator does not match graph direction", diagnostic.message);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "`--` inside undirected graphs") != null);
+            try std.testing.expectEqual(@as(usize, 2), diagnostic.line);
         },
     }
 }
