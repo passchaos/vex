@@ -8758,13 +8758,7 @@ const SvgInteractiveWrap = enum {
     group,
 };
 
-const SvgInteractiveKind = enum {
-    default,
-    edge,
-    label,
-    head,
-    tail,
-};
+const SvgInteractiveKind = svg_mod.interactive.Kind;
 
 const ColorSegment = svg_mod.color.Segment;
 const ColorList = svg_mod.color.List;
@@ -9025,33 +9019,15 @@ fn writeSvgAnchorGroupOpen(writer: *Io.Writer, anchor_id: ?SvgAnchorIdOptions) I
 }
 
 fn interactiveHref(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
-    return switch (kind) {
-        .default => attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url"),
-        .edge => attrValue(attrs, "edgehref") orelse attrValue(attrs, "edgeURL") orelse attrValue(attrs, "edgeurl") orelse attrValue(attrs, "href") orelse attrValue(attrs, "URL") orelse attrValue(attrs, "url"),
-        .label => attrValue(attrs, "labelhref") orelse attrValue(attrs, "labelURL") orelse attrValue(attrs, "labelurl") orelse interactiveHref(attrs, .edge),
-        .head => attrValue(attrs, "headhref") orelse attrValue(attrs, "headURL") orelse attrValue(attrs, "headurl") orelse interactiveHref(attrs, .edge),
-        .tail => attrValue(attrs, "tailhref") orelse attrValue(attrs, "tailURL") orelse attrValue(attrs, "tailurl") orelse interactiveHref(attrs, .edge),
-    };
+    return svg_mod.interactive.href(attrs, kind);
 }
 
 fn interactiveTooltip(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
-    return switch (kind) {
-        .default => attrValue(attrs, "tooltip") orelse attrValue(attrs, "title"),
-        .edge => attrValue(attrs, "edgetooltip") orelse attrValue(attrs, "tooltip") orelse attrValue(attrs, "title"),
-        .label => attrValue(attrs, "labeltooltip"),
-        .head => attrValue(attrs, "headtooltip"),
-        .tail => attrValue(attrs, "tailtooltip"),
-    };
+    return svg_mod.interactive.tooltip(attrs, kind);
 }
 
 fn interactiveTarget(attrs: []const Attr, kind: SvgInteractiveKind) ?[]const u8 {
-    return switch (kind) {
-        .default => attrValue(attrs, "target"),
-        .edge => attrValue(attrs, "edgetarget") orelse attrValue(attrs, "target"),
-        .label => attrValue(attrs, "labeltarget") orelse interactiveTarget(attrs, .edge),
-        .head => attrValue(attrs, "headtarget") orelse interactiveTarget(attrs, .edge),
-        .tail => attrValue(attrs, "tailtarget") orelse interactiveTarget(attrs, .edge),
-    };
+    return svg_mod.interactive.target(attrs, kind);
 }
 
 fn writeSvgTitle(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
