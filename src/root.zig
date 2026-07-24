@@ -174,6 +174,7 @@ pub const GraphAttr = union(enum) {
     layersep: []const u8,
     layerlistsep: []const u8,
     layerselect: []const u8,
+    vex_interactive_all: bool,
     vex_interactive_layers: bool,
     vex_interactive_collapse: bool,
     vex_interactive_filter: bool,
@@ -889,6 +890,7 @@ pub const Graph = struct {
             .layersep => |value| try self.setGraphAttrRaw("layersep", value),
             .layerlistsep => |value| try self.setGraphAttrRaw("layerlistsep", value),
             .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
+            .vex_interactive_all => |value| try self.setGraphAttrRaw("vex_interactive_all", boolAttrValue(value)),
             .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
             .vex_interactive_collapse => |value| try self.setGraphAttrRaw("vex_interactive_collapse", boolAttrValue(value)),
             .vex_interactive_filter => |value| try self.setGraphAttrRaw("vex_interactive_filter", boolAttrValue(value)),
@@ -7642,6 +7644,7 @@ pub const SvgOptions = struct {
     background: []const u8 = "white",
     font_family: []const u8 = default_svg_font_family,
     show_title: bool = true,
+    interactive_all: bool = false,
     interactive_layers: bool = false,
     interactive_collapse: bool = false,
     interactive_filter: bool = false,
@@ -7897,6 +7900,7 @@ fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
 }
 
 fn svgMetadataEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.metadata) return true;
     const value = attrValue(graph.attrs.items, "vex_svg_metadata") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
@@ -7995,61 +7999,77 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     try writer.writeAll("</vex:graph>\n</metadata>\n");
 }
 
+fn svgInteractiveAllEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_all) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_all") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
 fn svgInteractiveLayersEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_layers) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_layers") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveCollapseEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_collapse) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_collapse") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveFilterEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_filter) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_filter") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveLabelsEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_labels) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_labels") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveFocusEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_focus) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_focus") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveInspectorEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_inspector) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_inspector") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveSearchEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_search) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_search") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveViewportEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_viewport) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_viewport") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveMinimapEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_minimap) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_minimap") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveStatsEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_stats) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_stats") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
@@ -19165,6 +19185,76 @@ test "DOT and typed API can enable Vex stats panel" {
     try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_stats").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-stats-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "directed=false") != null);
+}
+
+test "SVG renderer emits Vex interactive all preset" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail"];
+        \\  subgraph service { api; worker; }
+        \\  api [layer=base];
+        \\  worker [layer=detail];
+        \\  api -> worker [label=job, layer=detail];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_all = true });
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-metadata\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-layer-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-collapse-control=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-filter-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-label-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-focus-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-inspector-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-minimap-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"vex-stats-controls\"") != null);
+}
+
+test "DOT and typed API can enable Vex interactive all preset" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_all=true];
+        \\  subgraph service { api; worker; }
+        \\  api -> worker [label=job];
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_all").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-metadata\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-filter-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-minimap-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-stats-controls\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_all = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{ .label = "edge" });
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_all").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-metadata\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-filter-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-minimap-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-stats-controls\"") != null);
 }
 
 test "SVG renderer emits opt-in Vex interactive viewport controls" {

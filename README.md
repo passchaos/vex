@@ -31,6 +31,7 @@ zig build run -- --input examples/simple.dot --max-input-bytes 1048576 --output 
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 zig build run -- --input examples/simple.dot --layout neato --layout-iterations 20 --output force-fast.svg
 zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-passes 1 --output layered-fast.svg
+zig build run -- --input examples/layers.dot --output interactive.svg --interactive-all
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
 zig build run -- --input examples/subgraph.dot --output collapse.svg --interactive-collapse
 zig build run -- --input examples/simple.dot --output filtered.svg --interactive-filter
@@ -74,6 +75,12 @@ element. It includes graph layout/canvas facts, node geometry, edge waypoints,
 subgraph geometry, and layer metadata when present. DOT can enable the same
 index with `graph [vex_svg_metadata=true]`, and the Zig API can pass
 `.{ .svg = .{ .metadata = true } }`.
+
+`--interactive-all` enables the current SVG-native tool surface at once:
+metadata, layer controls when layers exist, collapse, filters, label toggles,
+focus, inspector, search, viewport controls, minimap, and stats. DOT can enable
+the same preset with `graph [vex_interactive_all=true]`, and the Zig API can
+pass `.{ .svg = .{ .interactive_all = true } }`.
 
 `--interactive-layers` is a Vex SVG extension. When a graph declares
 Graphviz-style `layers`, it embeds a small self-contained SVG control panel for
@@ -226,6 +233,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG output honors Graphviz `rotate=90`, `landscape=true`, and `orientation=landscape`.
 - SVG output honors Graphviz `center=true` by centering drawings in oversized SVG canvases.
 - SVG output honors Graphviz `layers`, `layersep`, `layerlistsep`, `layerselect`, and node, edge, and subgraph `layer` attributes by emitting separate SVG layer groups.
+- Vex SVG output can optionally enable the current SVG-native tool surface plus metadata via `--interactive-all`, `vex_interactive_all=true`, or `SvgOptions.interactive_all`.
 - Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `vex_interactive_layers=true`, or `SvgOptions.interactive_layers`.
 - Vex SVG output can optionally embed native subgraph collapse controls via `--interactive-collapse`, `vex_interactive_collapse=true`, or `SvgOptions.interactive_collapse`.
 - Vex SVG output can optionally embed native object-type filter controls via `--interactive-filter`, `vex_interactive_filter=true`, or `SvgOptions.interactive_filter`.

@@ -15,6 +15,7 @@ const usage =
     \\        [--layout-iterations count]
     \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
+    \\        [--interactive-all]
     \\        [--interactive-layers] [--interactive-collapse]
     \\        [--interactive-filter] [--interactive-labels]
     \\        [--interactive-focus]
@@ -34,6 +35,7 @@ const usage =
     \\--max-input-bytes caps DOT/Mermaid input reads.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps force/neato layout iterations.
+    \\--interactive-all enables all SVG-native controls and metadata.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
     \\--interactive-filter adds SVG-native type filter controls.
@@ -67,6 +69,7 @@ pub fn main(init: std.process.Init) !void {
     var crossing_passes: ?usize = null;
     var coordinate_passes: ?usize = null;
     var input_format: vex.InputFormat = .auto;
+    var interactive_all = false;
     var interactive_layers = false;
     var interactive_collapse = false;
     var interactive_filter = false;
@@ -113,6 +116,8 @@ pub fn main(init: std.process.Init) !void {
             if (max_input_bytes == 0) return error.InvalidMaxInputBytes;
         } else if (std.mem.eql(u8, arg, "--mermaid")) {
             input_format = .mermaid;
+        } else if (std.mem.eql(u8, arg, "--interactive-all")) {
+            interactive_all = true;
         } else if (std.mem.eql(u8, arg, "--interactive-layers")) {
             interactive_layers = true;
         } else if (std.mem.eql(u8, arg, "--interactive-collapse")) {
@@ -207,7 +212,7 @@ pub fn main(init: std.process.Init) !void {
     };
     var layout = try vex.layoutGraph(allocator, &graph, layout_config);
     defer layout.deinit();
-    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
+    const render_options = vex.RenderOptions{ .svg = .{ .interactive_all = interactive_all, .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);
