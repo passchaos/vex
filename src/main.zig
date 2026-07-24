@@ -16,6 +16,7 @@ const usage =
     \\        [--interactive-inspector]
     \\        [--interactive-search]
     \\        [--interactive-viewport]
+    \\        [--svg-metadata]
     \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
@@ -31,6 +32,7 @@ const usage =
     \\--interactive-inspector adds SVG-native object metadata inspection.
     \\--interactive-search adds an SVG-native search and highlight panel.
     \\--interactive-viewport adds SVG-native pan and zoom controls.
+    \\--svg-metadata embeds a machine-readable SVG object index.
     \\
 ;
 
@@ -58,6 +60,7 @@ pub fn main(init: std.process.Init) !void {
     var interactive_inspector = false;
     var interactive_search = false;
     var interactive_viewport = false;
+    var svg_metadata = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -100,6 +103,8 @@ pub fn main(init: std.process.Init) !void {
             interactive_search = true;
         } else if (std.mem.eql(u8, arg, "--interactive-viewport")) {
             interactive_viewport = true;
+        } else if (std.mem.eql(u8, arg, "--svg-metadata")) {
+            svg_metadata = true;
         } else if (std.mem.eql(u8, arg, "--layout") or std.mem.eql(u8, arg, "-K")) {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
@@ -167,7 +172,7 @@ pub fn main(init: std.process.Init) !void {
     };
     var layout = try vex.layoutGraph(allocator, &graph, layout_config);
     defer layout.deinit();
-    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport } };
+    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .metadata = svg_metadata } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);

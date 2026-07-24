@@ -181,6 +181,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_inspector: bool,
     vex_interactive_search: bool,
     vex_interactive_viewport: bool,
+    vex_svg_metadata: bool,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -892,6 +893,7 @@ pub const Graph = struct {
             .vex_interactive_inspector => |value| try self.setGraphAttrRaw("vex_interactive_inspector", boolAttrValue(value)),
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
             .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
+            .vex_svg_metadata => |value| try self.setGraphAttrRaw("vex_svg_metadata", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -7641,6 +7643,7 @@ pub const SvgOptions = struct {
     interactive_inspector: bool = false,
     interactive_search: bool = false,
     interactive_viewport: bool = false,
+    metadata: bool = false,
 };
 
 const svg_clip_padding: f64 = 4.0;
@@ -7691,6 +7694,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         },
     );
     try writer.writeAll(">\n");
+    if (svgMetadataEnabled(graph, options)) try writeSvgMetadata(writer, graph);
     const write_interactive_viewport = svgInteractiveViewportEnabled(graph, options);
     if (write_interactive_viewport) try writer.writeAll("<g id=\"vex-viewport-content\" class=\"vex-viewport-content\">\n");
     try writeSvgGroupOpenStart(writer, .{
@@ -7864,6 +7868,49 @@ const SvgLayerContext = svg_mod.layers.Context;
 
 fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
     return svg_mod.layers.parse(graph.allocator, graph.attrs.items);
+}
+
+fn svgMetadataEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.metadata) return true;
+    const value = attrValue(graph.attrs.items, "vex_svg_metadata") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph) Io.Writer.Error!void {
+    try writer.writeAll("<metadata id=\"vex-metadata\">\n");
+    try writer.print("<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"", .{});
+    try writeXmlEscaped(writer, graph.name);
+    try writer.print("\" directed=\"{s}\" nodes=\"{d}\" edges=\"{d}\" subgraphs=\"{d}\">\n", .{
+        if (graph.directed) "true" else "false",
+        graph.nodes.items.len,
+        graph.edges.items.len,
+        graph.subgraphs.items.len,
+    });
+    for (graph.nodes.items) |node_item| {
+        try writer.print("<vex:node id=\"{d}\" label=\"", .{node_item.id});
+        try writeXmlEscaped(writer, nodeFallbackTitle(node_item));
+        try writer.writeAll("\"/>\n");
+    }
+    for (graph.edges.items) |edge_item| {
+        try writer.print("<vex:edge id=\"{d}\" from=\"{d}\" to=\"{d}\"", .{ edge_item.id, edge_item.from, edge_item.to });
+        if (edge_item.label) |label| {
+            try writer.writeAll(" label=\"");
+            try writeXmlEscaped(writer, label);
+            try writer.writeByte('"');
+        }
+        try writer.writeAll("/>\n");
+    }
+    for (graph.subgraphs.items) |subgraph| {
+        try writer.print("<vex:subgraph id=\"{d}\" label=\"", .{subgraph.id});
+        try writeXmlEscaped(writer, subgraph.label);
+        try writer.writeAll("\" nodes=\"");
+        for (subgraph.nodes, 0..) |node_id, index| {
+            if (index > 0) try writer.writeByte(' ');
+            try writer.print("{d}", .{node_id});
+        }
+        try writer.writeAll("\"/>\n");
+    }
+    try writer.writeAll("</vex:graph>\n</metadata>\n");
 }
 
 fn svgInteractiveLayersEnabled(graph: *const Graph, options: SvgOptions) bool {
@@ -15194,6 +15241,61 @@ test "SVG renderer emits document" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.startsWith(u8, svg, "<svg"));
     try std.testing.expect(std.mem.indexOf(u8, svg, "test") != null);
+}
+
+test "SVG renderer emits opt-in metadata index" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Meta {
+        \\  subgraph service { api; worker; }
+        \\  api -> worker [label=job];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-metadata") == null);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"Meta\" directed=\"true\" nodes=\"2\" edges=\"1\" subgraphs=\"1\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" label=\"job\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\"/>") != null);
+}
+
+test "DOT and typed API can enable SVG metadata index" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_svg_metadata=true];
+        \\  a -> b;
+        \\}
+    );
+    defer parsed.deinit();
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_svg_metadata").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-metadata\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_svg_metadata = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{});
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_svg_metadata").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-metadata\"") != null);
 }
 
 test "SVG renderer emits graph stylesheet processing instruction" {
