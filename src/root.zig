@@ -3594,6 +3594,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
         .stress_majorization => layoutStressMajorization(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
         .spring_electrical => layoutSpringElectrical(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
+        .multilevel_spring_electrical => layoutMultilevelSpringElectrical(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
     };
 }
 
@@ -3604,6 +3605,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .fruchterman_reingold => layoutFruchtermanReingoldIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
         .stress_majorization => layoutStressMajorizationIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
         .spring_electrical => layoutSpringElectricalIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
+        .multilevel_spring_electrical => layoutMultilevelSpringElectricalIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
     };
 }
 
@@ -4462,6 +4464,108 @@ fn springElectricalEnergy(graph: *const Graph, positions: []const Point) f64 {
         energy += @max(edge_item.weight, 0.1) * delta * delta / @max(edge_length, 1.0);
     }
     return energy;
+}
+
+pub fn layoutMultilevelSpringElectrical(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    return layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, options, .{});
+}
+
+pub fn layoutMultilevelSpringElectricalIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    return layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, options, incremental);
+}
+
+fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const n = graph.nodes.items.len;
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    const default_layout_options = LayoutOptions{};
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+
+    const sfdp_edges = try allocator.alloc(layout_mod.sfdp.Edge, graph.edges.items.len);
+    defer allocator.free(sfdp_edges);
+    var edge_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= n or edge_item.to >= n or edge_item.from == edge_item.to) continue;
+        sfdp_edges[edge_count] = .{ .from = edge_item.from, .to = edge_item.to };
+        edge_count += 1;
+    }
+
+    const initial = if (previous) |prior|
+        if (prior.rankdir == graph.rankdir) blk: {
+            const positions = try allocator.alloc(Point, n);
+            errdefer allocator.free(positions);
+            for (positions, 0..) |*position, id| {
+                position.* = if (id < prior.nodes.len)
+                    prior.nodes[id].center
+                else
+                    .{ .x = options.width / 2.0, .y = options.height / 2.0 };
+            }
+            break :blk positions;
+        } else null
+    else
+        null;
+    defer if (initial) |positions| allocator.free(positions);
+
+    const max_levels = parseAttrUsize(graph.attrs.items, "levels", 32);
+    const repulsive_power = parsePositiveAttrFloat(graph.attrs.items, "repulsiveforce", 1.0);
+    const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 1.0) * 72.0);
+    var result = try layout_mod.sfdp.layout(allocator, n, sfdp_edges[0..edge_count], .{
+        .width = options.width,
+        .height = options.height,
+        .margin = options.margin,
+        .iterations = options.iterations,
+        .max_levels = max_levels,
+        .repulsive_power = repulsive_power,
+        .spring_length = spring_length,
+        .stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0,
+    }, initial);
+    defer result.deinit();
+
+    for (nodes, 0..) |*node, id| {
+        var center = result.positions[id];
+        center.x = std.math.clamp(center.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
+        center.y = std.math.clamp(center.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
+        node.* = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
+    }
+    computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = nodes,
+        .subgraphs = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
+        .width = options.width,
+        .height = options.height,
+    };
 }
 
 fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: *Layout, node_gap: f64, options: IncrementalLayoutOptions) !void {
@@ -16410,7 +16514,8 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.stress_majorization, LayoutAlgorithm.fromString("stress-majorization").?);
     try std.testing.expectEqual(LayoutAlgorithm.spring_electrical, LayoutAlgorithm.fromString("fdp").?);
     try std.testing.expectEqual(LayoutAlgorithm.spring_electrical, LayoutAlgorithm.fromString("spring-electrical").?);
-    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("sfdp").?);
+    try std.testing.expectEqual(LayoutAlgorithm.multilevel_spring_electrical, LayoutAlgorithm.fromString("sfdp").?);
+    try std.testing.expectEqual(LayoutAlgorithm.multilevel_spring_electrical, LayoutAlgorithm.fromString("multilevel-spring-electrical").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
@@ -16598,6 +16703,110 @@ test "fdp is distinct and supports cluster boxes" {
         try std.testing.expect(subgraph.width > 0);
         try std.testing.expect(subgraph.height > 0);
     }
+}
+
+test "sfdp coarsens and refines large graphs" {
+    const allocator = std.testing.allocator;
+    const node_count: usize = 64;
+    const edges = try allocator.alloc(layout_mod.sfdp.Edge, node_count);
+    defer allocator.free(edges);
+    for (edges, 0..) |*edge, node| {
+        edge.* = .{ .from = node, .to = (node + 1) % node_count };
+    }
+
+    var multilevel = try layout_mod.sfdp.layout(allocator, node_count, edges, .{
+        .width = 720,
+        .height = 480,
+        .margin = 30,
+        .iterations = 80,
+        .max_levels = 8,
+        .repulsive_power = 1,
+        .spring_length = 72,
+    }, null);
+    defer multilevel.deinit();
+    var single_level = try layout_mod.sfdp.layout(allocator, node_count, edges, .{
+        .width = 720,
+        .height = 480,
+        .margin = 30,
+        .iterations = 80,
+        .max_levels = 1,
+        .repulsive_power = 1,
+        .spring_length = 72,
+    }, null);
+    defer single_level.deinit();
+
+    try std.testing.expect(multilevel.levels >= 3);
+    try std.testing.expectEqual(@as(usize, 1), single_level.levels);
+    var displacement: f64 = 0;
+    for (multilevel.positions, single_level.positions) |multi, single| {
+        displacement += distanceBetween(multi, single);
+    }
+    try std.testing.expect(displacement > 10);
+}
+
+test "sfdp is distinct from fdp and neato on a larger graph" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false, .name = "SfdpDistinct" });
+    defer graph.deinit();
+    const node_count: usize = 48;
+    for (0..node_count) |node| {
+        var label_buf: [32]u8 = undefined;
+        const label = try std.fmt.bufPrint(&label_buf, "n{d}", .{node});
+        _ = try graph.addNode(label, .{});
+    }
+    for (0..node_count) |node| {
+        _ = try graph.addEdge(node, (node + 1) % node_count, .{});
+        _ = try graph.addEdge(node, (node + 7) % node_count, .{});
+    }
+    const options = ForceLayoutOptions{ .width = 720, .height = 480, .margin = 30, .iterations = 80 };
+    var sfdp = try layoutGraph(allocator, &graph, .{ .algorithm = .multilevel_spring_electrical, .force = options });
+    defer sfdp.deinit();
+    var fdp = try layoutGraph(allocator, &graph, .{ .algorithm = .spring_electrical, .force = options });
+    defer fdp.deinit();
+    var neato = try layoutGraph(allocator, &graph, .{ .algorithm = .stress_majorization, .force = options });
+    defer neato.deinit();
+
+    try std.testing.expect(sharedNodeDisplacement(&sfdp, &fdp, node_count) > 50);
+    try std.testing.expect(sharedNodeDisplacement(&sfdp, &neato, node_count) > 50);
+    for (sfdp.nodes) |node| {
+        try std.testing.expect(node.center.x - node.width / 2.0 >= options.margin - 0.001);
+        try std.testing.expect(node.center.x + node.width / 2.0 <= options.width - options.margin + 0.001);
+        try std.testing.expect(node.center.y - node.height / 2.0 >= options.margin - 0.001);
+        try std.testing.expect(node.center.y + node.height / 2.0 <= options.height - options.margin + 0.001);
+    }
+}
+
+test "sfdp honors levels and repulsiveforce but ignores edge len and weight" {
+    const allocator = std.testing.allocator;
+    var baseline = try parseDot(allocator,
+        \\graph G {
+        \\  graph [levels=5, repulsiveforce=2];
+        \\  a -- b;
+        \\  b -- c;
+        \\  c -- d;
+        \\  d -- a;
+        \\}
+    );
+    defer baseline.deinit();
+    var decorated = try parseDot(allocator,
+        \\graph G {
+        \\  graph [levels=5, repulsiveforce=2];
+        \\  a -- b [len=5, weight=20];
+        \\  b -- c [len=0.2, weight=0.1];
+        \\  c -- d [len=3, weight=12];
+        \\  d -- a [len=0.5, weight=8];
+        \\}
+    );
+    defer decorated.deinit();
+    const config = LayoutConfig{
+        .algorithm = .multilevel_spring_electrical,
+        .force = .{ .width = 500, .height = 340, .margin = 30, .iterations = 60 },
+    };
+    var first = try layoutGraph(allocator, &baseline, config);
+    defer first.deinit();
+    var second = try layoutGraph(allocator, &decorated, config);
+    defer second.deinit();
+    try expectNodeCentersEqual(&first, &second);
 }
 
 test "force layout config iterations override graph fallback" {

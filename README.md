@@ -55,8 +55,10 @@ stress-majorization engine. `--layout fdp`, `graph [layout=fdp]`, and `-Kfdp`
 select the independent spring-electrical engine with all-pairs repulsion,
 edge-only springs, cluster boxes, graph `K` / `T0`, and edge `len` / `weight`
 semantics. `--layout fr` selects the deterministic Fruchterman-Reingold
-engine. `--layout sfdp` currently remains a compatibility alias for
-Fruchterman-Reingold until its independent multilevel engine is implemented.
+engine. `--layout sfdp`, `graph [layout=sfdp]`, and `-Ksfdp` select the
+independent deterministic multilevel spring-electrical engine. It supports
+Graphviz-style `levels`, `K`, and `repulsiveforce`; like Graphviz sfdp, it
+does not model clusters or edge `len` / `weight`.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
@@ -213,6 +215,7 @@ zig build run-api-shapes-styles-svg
 zig build run-api-force-layout-svg
 zig build run-api-incremental-layout-svg
 zig build run-api-fdp-layout-svg
+zig build run-api-sfdp-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -226,6 +229,7 @@ They progress from small SVG output to broader feature coverage:
 - `07_force_layout_svg.zig`: cyclic undirected graph rendered with the independent neato stress-majorization engine.
 - `08_incremental_layout_svg.zig`: add a node after the first layout, preserve shared-node positions with `layoutGraphIncremental`, and write the final SVG.
 - `09_fdp_layout_svg.zig`: clustered undirected graph rendered with the independent spring-electrical fdp engine.
+- `10_sfdp_layout_svg.zig`: larger graph rendered with deterministic coarsen/prolongate/refine sfdp layout.
 
 ## Graphviz compatibility target
 

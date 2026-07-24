@@ -175,6 +175,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/09_fdp_layout_svg.zig",
             .desc = "Run API example: clustered fdp SVG layout",
         },
+        .{
+            .step_name = "run-api-sfdp-layout-svg",
+            .exe_name = "api-sfdp-layout-svg",
+            .source = "examples/api/10_sfdp_layout_svg.zig",
+            .desc = "Run API example: multilevel sfdp SVG layout",
+        },
     };
 
     for (api_examples) |example| {
