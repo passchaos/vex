@@ -4026,7 +4026,11 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     if (effective_options.ranksep_equally) {
         var max_rank_height: f64 = 0;
         for (rank_heights) |rank_height| max_rank_height = @max(max_rank_height, rank_height);
-        const rank_step = max_rank_height + effective_options.rank_gap;
+        var equal_rank_gap = effective_options.rank_gap;
+        for (0..if (rank_heights.len == 0) 0 else rank_heights.len - 1) |rank| {
+            equal_rank_gap = @max(equal_rank_gap, subgraphRankGapBetween(graph, ranks, rank, effective_options.rank_gap));
+        }
+        const rank_step = max_rank_height + equal_rank_gap;
         for (rank_heights, 0..) |rank_height, rank| {
             const center_depth = @as(f64, @floatFromInt(rank)) * rank_step + max_rank_height / 2.0;
             rank_depths[rank] = center_depth - rank_height / 2.0;
@@ -4036,7 +4040,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
         for (rank_heights, 0..) |rank_height, rank| {
             rank_depths[rank] = total_depth;
             total_depth += rank_height;
-            if (rank + 1 < rank_heights.len) total_depth += effective_options.rank_gap;
+            if (rank + 1 < rank_heights.len) total_depth += subgraphRankGapBetween(graph, ranks, rank, effective_options.rank_gap);
         }
     }
 
@@ -4502,6 +4506,24 @@ fn subgraphNodePairGap(graph: *const Graph, left: NodeId, right: NodeId, fallbac
         }
     }
     return best_gap orelse fallback;
+}
+
+fn subgraphRankGapBetween(graph: *const Graph, ranks: []const usize, upper_rank: usize, fallback: f64) f64 {
+    var best_gap = fallback;
+    for (graph.subgraphs.items) |cluster| {
+        if (!subgraphHasMemberOnRank(cluster, ranks, upper_rank) or !subgraphHasMemberOnRank(cluster, ranks, upper_rank + 1)) continue;
+        const raw_ranksep = attrValue(cluster.attrs.items, "ranksep") orelse continue;
+        const gap = parseGraphSpacingValue(raw_ranksep) orelse continue;
+        best_gap = @max(best_gap, gap);
+    }
+    return best_gap;
+}
+
+fn subgraphHasMemberOnRank(cluster: Subgraph, ranks: []const usize, rank: usize) bool {
+    for (cluster.nodes) |node_id| {
+        if (node_id < ranks.len and ranks[node_id] == rank) return true;
+    }
+    return false;
 }
 
 fn virtualNodePairGap(graph: *const Graph, left: VirtualNode, right: VirtualNode, fallback: f64) f64 {
@@ -22283,6 +22305,42 @@ test "layout honors subgraph nodesep for same-rank member spacing" {
 
     const default_delta = @abs(default_layout.nodes[default_c].center.x - default_layout.nodes[default_b].center.x);
     const spaced_delta = @abs(spaced_layout.nodes[spaced_c].center.x - spaced_layout.nodes[spaced_b].center.x);
+
+    try std.testing.expect(spaced_delta > default_delta + 40.0);
+}
+
+test "layout honors subgraph ranksep for member rank spacing" {
+    const allocator = std.testing.allocator;
+    var default_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_chain {
+        \\    a -> b;
+        \\  }
+        \\}
+    );
+    defer default_graph.deinit();
+    var spaced_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_chain {
+        \\    ranksep=2.0;
+        \\    a -> b;
+        \\  }
+        \\}
+    );
+    defer spaced_graph.deinit();
+
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+    var spaced_layout = try layoutLayered(allocator, &spaced_graph, .{});
+    defer spaced_layout.deinit();
+
+    const default_a = nodeIdByLabel(&default_graph, "a");
+    const default_b = nodeIdByLabel(&default_graph, "b");
+    const spaced_a = nodeIdByLabel(&spaced_graph, "a");
+    const spaced_b = nodeIdByLabel(&spaced_graph, "b");
+
+    const default_delta = @abs(default_layout.nodes[default_b].center.y - default_layout.nodes[default_a].center.y);
+    const spaced_delta = @abs(spaced_layout.nodes[spaced_b].center.y - spaced_layout.nodes[spaced_a].center.y);
 
     try std.testing.expect(spaced_delta > default_delta + 40.0);
 }
