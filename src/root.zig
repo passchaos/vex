@@ -20225,6 +20225,47 @@ test "SVG renderer honors edge label URL tooltip target metadata" {
     try std.testing.expect(std.mem.indexOf(u8, inherited_svg, ">tail</tspan>") != null);
 }
 
+test "DOT parser preserves edge label URL tooltip target aliases" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [
+        \\    label="main",
+        \\    xlabel="external",
+        \\    headlabel="head",
+        \\    taillabel="tail",
+        \\    edgeURL="https://example.com/edge",
+        \\    edgetooltip="Edge path",
+        \\    edgetarget="_self",
+        \\    labelURL="https://example.com/label",
+        \\    labeltooltip="Main label",
+        \\    labeltarget="_blank",
+        \\    headURL="https://example.com/head",
+        \\    headtooltip="Head label",
+        \\    headtarget="_parent",
+        \\    tailURL="https://example.com/tail",
+        \\    tailtooltip="Tail label",
+        \\    tailtarget="_top"
+        \\  ];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings("https://example.com/edge", attrValue(graph.edges.items[0].attrs.items, "edgeURL").?);
+    try std.testing.expectEqualStrings("https://example.com/label", attrValue(graph.edges.items[0].attrs.items, "labelURL").?);
+    try std.testing.expectEqualStrings("https://example.com/head", attrValue(graph.edges.items[0].attrs.items, "headURL").?);
+    try std.testing.expectEqualStrings("https://example.com/tail", attrValue(graph.edges.items[0].attrs.items, "tailURL").?);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/edge\" xlink:href=\"https://example.com/edge\" xlink:title=\"Edge path\" target=\"_self\"><title>Edge path</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/label\" xlink:href=\"https://example.com/label\" xlink:title=\"Main label\" target=\"_blank\"><title>Main label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/head\" xlink:href=\"https://example.com/head\" xlink:title=\"Head label\" target=\"_parent\"><title>Head label</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<a href=\"https://example.com/tail\" xlink:href=\"https://example.com/tail\" xlink:title=\"Tail label\" target=\"_top\"><title>Tail label</title>") != null);
+}
+
 test "SVG renderer emits default Graphviz-like node and edge titles" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
