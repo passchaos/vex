@@ -8,6 +8,8 @@ Graphviz ecosystem's strengths while exploring a cleaner, modern layout and
 rendering architecture.
 
 See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide.
+See [`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md) for the auditable
+completion criteria, current gaps, and explicitly excluded features.
 
 ## Current MVP
 
