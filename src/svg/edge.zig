@@ -61,6 +61,24 @@ pub const Dir = enum {
     }
 };
 
+pub const SplineMode = enum {
+    curved,
+    polyline,
+    line,
+    ortho,
+    none,
+
+    pub fn name(self: SplineMode) []const u8 {
+        return switch (self) {
+            .curved => "curved",
+            .polyline => "polyline",
+            .line => "line",
+            .ortho => "ortho",
+            .none => "none",
+        };
+    }
+};
+
 pub const Routing = enum {
     curved,
     line,

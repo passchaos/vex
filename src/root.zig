@@ -126,13 +126,7 @@ pub const OrderingMode = enum {
     out,
 };
 
-pub const SplineMode = enum {
-    curved,
-    polyline,
-    line,
-    ortho,
-    none,
-};
+pub const SplineMode = svg_mod.edge.SplineMode;
 
 pub const FontNames = svg_mod.font.Names;
 
@@ -843,7 +837,7 @@ pub const Graph = struct {
                     try self.setGraphAttrRaw("ranksep", text);
                 },
             },
-            .splines => |value| try self.setGraphAttrRaw("splines", splineModeName(value)),
+            .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
             .samplepoints => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
@@ -1450,7 +1444,7 @@ pub const Graph = struct {
                     try self.setSubgraphAttrRaw(id, "ranksep", text);
                 },
             },
-            .splines => |value| try self.setSubgraphAttrRaw(id, "splines", splineModeName(value)),
+            .splines => |value| try self.setSubgraphAttrRaw(id, "splines", value.name()),
             .bgcolor => |value| try self.setSubgraphAttrRaw(id, "bgcolor", value),
             .ordering => |value| try self.setSubgraphAttrRaw(id, "ordering", orderingModeName(value)),
             .color => |value| try self.setSubgraphAttrRaw(id, "color", value),
@@ -1667,16 +1661,6 @@ fn shapeName(shape: Shape) []const u8 {
         .plaintext => "plaintext",
         .record => "record",
         .mrecord => "Mrecord",
-    };
-}
-
-fn splineModeName(mode: SplineMode) []const u8 {
-    return switch (mode) {
-        .curved => "curved",
-        .polyline => "polyline",
-        .line => "line",
-        .ortho => "ortho",
-        .none => "none",
     };
 }
 
