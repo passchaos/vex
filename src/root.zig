@@ -7730,7 +7730,14 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\">\n",
         .{ canvas_width, canvas_height, canvas_width, canvas_height },
     );
-    try writeSvgGroupOpenStart(writer, graph.attrs.items, "graph0", "graph");
+    try writeSvgGroupOpenStart(writer, .{
+        .graph = graph,
+        .attrs = graph.attrs.items,
+        .default_id = "graph0",
+        .default_class = "graph",
+        .context = .{ .graph_name = graph.name, .label_name = graphFallbackTitle(graph) },
+        .is_root_graph = true,
+    });
     try writer.writeAll(" transform=\"scale(1 1) rotate(0) translate(");
     try writeSvgNumber(writer, content_translate.x);
     try writer.writeByte(' ');
@@ -7898,9 +7905,15 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     try writeSvgEdgeComment(writer, graph, edge_item);
     var default_id_buf: [32]u8 = undefined;
     const default_id = std.fmt.bufPrint(&default_id_buf, "edge{d}", .{edge_item.id + 1}) catch unreachable;
-    try writeSvgGroupOpen(writer, edge_item.attrs.items, default_id, "edge");
     var edge_name_buf: [256]u8 = undefined;
     const edge_context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
+    try writeSvgGroupOpen(writer, .{
+        .graph = graph,
+        .attrs = edge_item.attrs.items,
+        .default_id = default_id,
+        .default_class = "edge",
+        .context = edge_context,
+    });
     const edge_wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, .edge, edge_context, edgeFallbackTitle(edge_item, edge_context.edge_name));
     if (edge_wrap == .none) {
         try writeSvgEdgeTitle(writer, graph, edge_item);
@@ -8057,10 +8070,17 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     try writeSvgNodeNameComment(writer, node_item);
     var default_id_buf: [32]u8 = undefined;
     const default_id = std.fmt.bufPrint(&default_id_buf, "node{d}", .{node_item.id + 1}) catch unreachable;
-    try writeSvgGroupOpen(writer, node_item.attrs.items, default_id, "node");
     const node_name = svgNodeName(node_item);
     const node_fallback_title = nodeFallbackTitle(node_item);
-    const node_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, node_item.attrs.items, .{ .graph_name = graph.name, .node_name = node_name, .label_name = node_fallback_title }, node_fallback_title);
+    const node_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = node_name, .label_name = node_fallback_title };
+    try writeSvgGroupOpen(writer, .{
+        .graph = graph,
+        .attrs = node_item.attrs.items,
+        .default_id = default_id,
+        .default_class = "node",
+        .context = node_context,
+    });
+    const node_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, node_item.attrs.items, node_context, node_fallback_title);
     if (node_wrap == .none) {
         try writeSvgNodeNameTitle(writer, node_item);
         try writer.writeByte('\n');
@@ -8230,24 +8250,52 @@ fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
     };
 }
 
-fn writeSvgGroupOpen(writer: *Io.Writer, attrs: []const Attr, default_id: []const u8, default_class: []const u8) Io.Writer.Error!void {
-    try writeSvgGroupOpenStart(writer, attrs, default_id, default_class);
+const SvgGroupOpenOptions = struct {
+    graph: *const Graph,
+    attrs: []const Attr,
+    default_id: []const u8,
+    default_class: []const u8,
+    context: LabelEscapeContext,
+    is_root_graph: bool = false,
+};
+
+fn writeSvgGroupOpen(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.Writer.Error!void {
+    try writeSvgGroupOpenStart(writer, options);
     try writer.writeAll(">\n");
 }
 
-fn writeSvgGroupOpenStart(writer: *Io.Writer, attrs: []const Attr, default_id: []const u8, default_class: []const u8) Io.Writer.Error!void {
-    const id = attrValue(attrs, "id") orelse default_id;
+fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.Writer.Error!void {
     try writer.writeAll("<g id=\"");
-    try writeXmlEscaped(writer, id);
+    try writeSvgGroupId(writer, options);
     try writer.writeAll("\" class=\"");
-    try writeXmlEscaped(writer, default_class);
-    if (attrValue(attrs, "class")) |class| {
+    try writeXmlEscaped(writer, options.default_class);
+    if (attrValue(options.attrs, "class")) |class| {
         if (class.len > 0) {
             try writer.writeByte(' ');
             try writeXmlEscaped(writer, class);
         }
     }
     try writer.writeByte('"');
+}
+
+fn writeSvgGroupId(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.Writer.Error!void {
+    if (attrValue(options.attrs, "id")) |id| {
+        const expanded = expandLabelEscapes(options.graph.allocator, id, options.context) catch id;
+        defer if (expanded.ptr != id.ptr) options.graph.allocator.free(expanded);
+        try writeXmlEscaped(writer, expanded);
+        return;
+    }
+    if (!options.is_root_graph) {
+        if (attrValue(options.graph.attrs.items, "id")) |graph_id| {
+            const expanded = expandLabelEscapes(options.graph.allocator, graph_id, .{ .graph_name = options.graph.name, .label_name = graphFallbackTitle(options.graph) }) catch graph_id;
+            defer if (expanded.ptr != graph_id.ptr) options.graph.allocator.free(expanded);
+            if (expanded.len > 0) {
+                try writeXmlEscaped(writer, expanded);
+                try writer.writeByte('_');
+            }
+        }
+    }
+    try writeXmlEscaped(writer, options.default_id);
 }
 
 fn writeSvgCommentEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
@@ -10560,10 +10608,17 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     if (visual.hidden) return;
     var default_id_buf: [32]u8 = undefined;
     const default_id = std.fmt.bufPrint(&default_id_buf, "clust{d}", .{index + 1}) catch unreachable;
-    try writeSvgGroupOpen(writer, cluster.attrs.items, default_id, "cluster");
+    const cluster_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = cluster.label, .label_name = cluster.label };
+    try writeSvgGroupOpen(writer, .{
+        .graph = graph,
+        .attrs = cluster.attrs.items,
+        .default_id = default_id,
+        .default_class = "cluster",
+        .context = cluster_context,
+    });
     try writeSvgTitle(writer, cluster.label);
     try writer.writeByte('\n');
-    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, .{ .graph_name = graph.name, .node_name = cluster.label, .label_name = cluster.label }, cluster.label);
+    const cluster_wrap = try writeSvgInteractiveOpen(writer, graph.allocator, cluster.attrs.items, cluster_context, cluster.label);
     const rect = clusterVisualRect(graph, layout, index);
     if (try renderSvgStripedRectFill(writer, graph, "vex-cluster-stripes", index + 1, cluster.attrs.items, rect, visual.radius, visual.fill)) {
         visual.fill = "none";
@@ -17152,26 +17207,26 @@ test "SVG renderer expands URL escape sequences with object context" {
 
 test "SVG renderer honors typed id and class metadata" {
     const allocator = std.testing.allocator;
-    var graph = try Graph.init(allocator, .{ .directed = true, .name = "meta" });
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "MetaGraph" });
     defer graph.deinit();
-    try graph.setGraphAttr(.{ .id = "graph-custom" });
+    try graph.setGraphAttr(.{ .id = "graph-\\G" });
     try graph.setGraphAttr(.{ .class = "diagram primary" });
 
-    const a = try graph.addNode("A", .{ .id = "node-a", .class = "entry highlighted" });
+    const a = try graph.addNode("A", .{ .id = "node-\\N-\\G-\\L", .class = "entry highlighted" });
     const b = try graph.addNode("B", .{});
-    _ = try graph.addEdge(a, b, .{ .id = "edge-a-b", .class = "critical flow" });
-    _ = try graph.addSubgraph("Group", null, &.{a}, .{ .id = "cluster-custom", .class = "lane hot" });
+    _ = try graph.addEdge(a, b, .{ .id = "edge-\\E-\\T-\\H-\\G-\\L", .class = "critical flow", .label = "go" });
+    _ = try graph.addSubgraph("Group", null, &.{a}, .{ .id = "cluster-\\N-\\G-\\L", .class = "lane hot" });
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph-custom\" class=\"graph diagram primary\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node-a\" class=\"node entry highlighted\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge-a-b\" class=\"edge critical flow\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"cluster-custom\" class=\"cluster lane hot\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node2\" class=\"node\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph-MetaGraph\" class=\"graph diagram primary\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"node-A-MetaGraph-A\" class=\"node entry highlighted\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"edge-A-&gt;B-A-B-MetaGraph-go\" class=\"edge critical flow\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"cluster-Group-MetaGraph-Group\" class=\"cluster lane hot\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph-MetaGraph_node2\" class=\"node\">") != null);
 }
 
 test "SVG renderer honors graph node and edge comment metadata" {
