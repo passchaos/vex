@@ -7,9 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
-const svg_canvas_mod = @import("svg_canvas.zig");
-const svg_layers_mod = @import("svg_layers.zig");
-const svg_writer = @import("svg_writer.zig");
+const svg_mod = @import("svg/mod.zig");
 
 pub const NodeId = usize;
 pub const EdgeId = usize;
@@ -8070,11 +8068,11 @@ fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, la
     return first_baseline_y + block_height / 2.0 - line_height * 0.72;
 }
 
-const SvgLayers = svg_layers_mod.Layers;
-const SvgLayerContext = svg_layers_mod.Context;
+const SvgLayers = svg_mod.layers.Layers;
+const SvgLayerContext = svg_mod.layers.Context;
 
 fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
-    return svg_layers_mod.parse(graph.allocator, graph.attrs.items);
+    return svg_mod.layers.parse(graph.allocator, graph.attrs.items);
 }
 
 fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void {
@@ -8085,7 +8083,7 @@ fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void 
 
 fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) bool {
     if (attrValue(node_item.attrs.items, "layer")) |spec| {
-        if (svg_layers_mod.matches(layer, spec)) return true;
+        if (svg_mod.layers.matches(layer, spec)) return true;
         if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
     }
     var has_incident = false;
@@ -8093,7 +8091,7 @@ fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) 
         if (edge_item.from != node_item.id and edge_item.to != node_item.id) continue;
         has_incident = true;
         if (attrValue(edge_item.attrs.items, "layer")) |edge_spec| {
-            if (std.mem.trim(u8, edge_spec, " \t\r\n").len == 0 or svg_layers_mod.matches(layer, edge_spec)) return true;
+            if (std.mem.trim(u8, edge_spec, " \t\r\n").len == 0 or svg_mod.layers.matches(layer, edge_spec)) return true;
         } else {
             return true;
         }
@@ -8103,19 +8101,19 @@ fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) 
 
 fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) bool {
     if (attrValue(edge_item.attrs.items, "layer")) |spec| {
-        if (svg_layers_mod.matches(layer, spec)) return true;
+        if (svg_mod.layers.matches(layer, spec)) return true;
         if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
     }
     if (edge_item.from < graph.nodes.items.len) {
         if (attrValue(graph.nodes.items[edge_item.from].attrs.items, "layer")) |spec| {
-            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_layers_mod.matches(layer, spec)) return true;
+            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_mod.layers.matches(layer, spec)) return true;
         } else {
             return true;
         }
     }
     if (edge_item.to < graph.nodes.items.len) {
         if (attrValue(graph.nodes.items[edge_item.to].attrs.items, "layer")) |spec| {
-            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_layers_mod.matches(layer, spec)) return true;
+            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_mod.layers.matches(layer, spec)) return true;
         } else {
             return true;
         }
@@ -8125,7 +8123,7 @@ fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) 
 
 fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerContext) bool {
     if (attrValue(cluster.attrs.items, "layer")) |spec| {
-        if (svg_layers_mod.matches(layer, spec)) return true;
+        if (svg_mod.layers.matches(layer, spec)) return true;
         if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
     }
     for (cluster.nodes) |node_id| {
@@ -8496,11 +8494,11 @@ fn graphSvgPad(graph: *const Graph) BoxMargin {
 }
 
 fn graphSvgLandscape(graph: *const Graph) bool {
-    return svg_canvas_mod.landscape(graph.attrs.items);
+    return svg_mod.canvas.landscape(graph.attrs.items);
 }
 
 fn graphSvgCenterTranslate(graph: *const Graph, output: Point, natural: Point, landscape: bool) Point {
-    const translated = svg_canvas_mod.centerTranslate(
+    const translated = svg_mod.canvas.centerTranslate(
         graph.attrs.items,
         .{ .x = output.x, .y = output.y },
         .{ .x = natural.x, .y = natural.y },
@@ -8516,7 +8514,7 @@ const GraphSvgCanvas = struct {
 };
 
 fn graphSvgCanvas(graph: *const Graph, natural: Point) GraphSvgCanvas {
-    const computed = svg_canvas_mod.canvas(graph.attrs.items, .{ .x = natural.x, .y = natural.y });
+    const computed = svg_mod.canvas.canvas(graph.attrs.items, .{ .x = natural.x, .y = natural.y });
     return .{
         .view_box = .{ .x = computed.view_box.x, .y = computed.view_box.y },
         .output = .{ .x = computed.output.x, .y = computed.output.y },
@@ -8618,7 +8616,7 @@ pub fn renderSvgAlloc(allocator: std.mem.Allocator, graph: *const Graph, layout:
 }
 
 fn writeXmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
-    try svg_writer.xmlEscapedWithLineBreaks(writer, text, label_left_break, label_right_break);
+    try svg_mod.writer.xmlEscapedWithLineBreaks(writer, text, label_left_break, label_right_break);
 }
 
 const SvgGroupOpenOptions = struct {
@@ -12692,31 +12690,31 @@ fn writeSvgPolylineLineYPrecise(writer: *Io.Writer, x1: f64, y1: f64, x2: f64, y
 }
 
 fn writeSvgPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try svg_writer.point(writer, .{ .x = point.x, .y = point.y });
+    try svg_mod.writer.point(writer, .{ .x = point.x, .y = point.y });
 }
 
 fn writeSvgPointWithPrecision(writer: *Io.Writer, point: Point, precise: bool) Io.Writer.Error!void {
     if (precise) {
-        try svg_writer.pointPrecise(writer, .{ .x = point.x, .y = point.y });
+        try svg_mod.writer.pointPrecise(writer, .{ .x = point.x, .y = point.y });
     } else {
         try writeSvgPoint(writer, point);
     }
 }
 
 fn writeSvgNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
-    try svg_writer.number(writer, value);
+    try svg_mod.writer.number(writer, value);
 }
 
 fn writeSvgNumberPrecise(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
-    try svg_writer.numberPrecise(writer, value);
+    try svg_mod.writer.numberPrecise(writer, value);
 }
 
 fn writeSvgRectOpen(writer: *Io.Writer, rect: RectF, radius: f64) Io.Writer.Error!void {
-    try svg_writer.rectOpen(writer, .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, radius);
+    try svg_mod.writer.rectOpen(writer, .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height }, radius);
 }
 
 fn writeSvgCircleOpen(writer: *Io.Writer, center: Point, radius: f64) Io.Writer.Error!void {
-    try svg_writer.circleOpen(writer, .{ .x = center.x, .y = center.y }, radius);
+    try svg_mod.writer.circleOpen(writer, .{ .x = center.x, .y = center.y }, radius);
 }
 
 fn nodeRect(layout: NodeLayout) RectF {
