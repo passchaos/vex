@@ -7950,6 +7950,7 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
     });
     for (graph.nodes.items) |node_item| {
         const node_layout = if (node_item.id < layout.nodes.len) layout.nodes[node_item.id] else NodeLayout{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
+        const node_rank = if (node_item.id < layout.ranks.len) layout.ranks[node_item.id] else 0;
         const node_title = nodeFallbackTitle(node_item);
         const node_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = svgNodeName(node_item), .label_name = node_title };
         const node_href = interactiveHref(node_item.attrs.items, .default);
@@ -7972,7 +7973,8 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             interactiveTarget(node_item.attrs.items, .default),
             node_context,
         );
-        try writer.print(" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"/>\n", .{
+        try writer.print(" rank=\"{d}\" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"/>\n", .{
+            node_rank,
             node_layout.center.x,
             node_layout.center.y,
             node_layout.width,
@@ -9412,6 +9414,8 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const focus_related = if (focus) svgNodeFocusRelated(&focus_related_buf, graph, node_item.id) else null;
     var object_id_buf: [32]u8 = undefined;
     const object_id = if (metadata) std.fmt.bufPrint(&object_id_buf, "{d}", .{node_item.id}) catch null else null;
+    var object_rank_buf: [32]u8 = undefined;
+    const object_rank = if (metadata and node_item.id < layout.ranks.len) std.fmt.bufPrint(&object_rank_buf, "{d}", .{layout.ranks[node_item.id]}) catch null else null;
     const node_href = if (metadata) interactiveHref(node_item.attrs.items, .default) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
@@ -9433,6 +9437,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_tooltip = if (metadata) svgInteractiveTooltipWithFallback(node_item.attrs.items, .default, node_href, node_fallback_title) else null,
         .object_target = if (metadata) interactiveTarget(node_item.attrs.items, .default) else null,
         .object_rect = if (metadata) nodeRect(l) else null,
+        .object_rank = object_rank,
         .collapse_member = collapse_member,
     });
     const node_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9827,6 +9832,7 @@ const SvgGroupOpenOptions = struct {
     object_tooltip: ?[]const u8 = null,
     object_target: ?[]const u8 = null,
     object_rect: ?RectF = null,
+    object_rank: ?[]const u8 = null,
     object_from: ?[]const u8 = null,
     object_to: ?[]const u8 = null,
     object_from_label: ?[]const u8 = null,
@@ -9920,6 +9926,11 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
                 rect.width,
                 rect.height,
             });
+        }
+        if (options.object_rank) |rank| {
+            try writer.writeAll(" data-vex-object-rank=\"");
+            try writeXmlEscaped(writer, rank);
+            try writer.writeByte('"');
         }
         if (options.object_from) |from| {
             try writer.writeAll(" data-vex-object-from=\"");
@@ -15962,6 +15973,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-metadata") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-kind=") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-waypoints=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-rank=") == null);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
@@ -15973,7 +15985,9 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" rank=\"0\" x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\"/>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
@@ -15992,6 +16006,10 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-y=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-height=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-label=\"api\" data-vex-object-shape=\"ellipse\" data-vex-object-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-rank=\"0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-rank=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-rank=\"2\"") != null);
 }
 
 test "SVG metadata index records effective link attributes" {
