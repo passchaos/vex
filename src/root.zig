@@ -150,6 +150,7 @@ pub const GraphAttr = union(enum) {
     layerlistsep: []const u8,
     layerselect: []const u8,
     vex_interactive_layers: bool,
+    vex_interactive_collapse: bool,
     vex_interactive_search: bool,
     vex_interactive_viewport: bool,
     pad: []const u8,
@@ -842,6 +843,7 @@ pub const Graph = struct {
             .layerlistsep => |value| try self.setGraphAttrRaw("layerlistsep", value),
             .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
             .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
+            .vex_interactive_collapse => |value| try self.setGraphAttrRaw("vex_interactive_collapse", boolAttrValue(value)),
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
             .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
@@ -7469,6 +7471,7 @@ pub const SvgOptions = struct {
     font_family: []const u8 = default_svg_font_family,
     show_title: bool = true,
     interactive_layers: bool = false,
+    interactive_collapse: bool = false,
     interactive_search: bool = false,
     interactive_viewport: bool = false,
 };
@@ -7627,6 +7630,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         }
     };
     const write_interactive_layers = if (maybe_layers) |_| svgInteractiveLayersEnabled(graph, options) else false;
+    const write_interactive_collapse = svgInteractiveCollapseEnabled(graph, options);
     const write_interactive_search = svgInteractiveSearchEnabled(graph, options);
 
     if (maybe_layers) |layers| {
@@ -7635,20 +7639,20 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
                 const layer_name = layers.names[index];
                 const context = SvgLayerContext{ .layers = layers, .index = index };
                 try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
-                try renderSvgClusters(writer, graph, layout, context, write_interactive_search);
-                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search);
+                try renderSvgClusters(writer, graph, layout, context, write_interactive_search, write_interactive_collapse);
+                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse);
                 try writer.writeAll("</g>\n");
             }
         } else for (layers.names, 0..) |layer_name, index| {
             const context = SvgLayerContext{ .layers = layers, .index = index };
             try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
-            try renderSvgClusters(writer, graph, layout, context, write_interactive_search);
-            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search);
+            try renderSvgClusters(writer, graph, layout, context, write_interactive_search, write_interactive_collapse);
+            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse);
             try writer.writeAll("</g>\n");
         }
     } else {
-        try renderSvgClusters(writer, graph, layout, null, write_interactive_search);
-        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null, write_interactive_search);
+        try renderSvgClusters(writer, graph, layout, null, write_interactive_search, write_interactive_collapse);
+        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null, write_interactive_search, write_interactive_collapse);
     }
     try writer.writeAll("</g>\n");
     if (write_interactive_viewport) try writer.writeAll("</g>\n");
@@ -7664,6 +7668,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         controls_y += svgSearchControlsHeight() + 8.0;
     }
     if (write_interactive_viewport) try writeSvgViewportControls(writer, controls_x, controls_y);
+    if (write_interactive_collapse) try writeSvgCollapseScript(writer);
     try writer.writeAll("</svg>");
 }
 
@@ -7682,6 +7687,12 @@ fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
 fn svgInteractiveLayersEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_layers) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_layers") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn svgInteractiveCollapseEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_collapse) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_collapse") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -7966,6 +7977,84 @@ fn writeSvgViewportButton(writer: *Io.Writer, label: []const u8, action: []const
     try writer.writeAll("</text>\n</g>\n");
 }
 
+fn writeSvgCollapseScript(writer: *Io.Writer) Io.Writer.Error!void {
+    try writer.writeAll(
+        \\<style>
+        \\.vex-collapse-control { cursor: pointer; }
+        \\.vex-collapse-control rect { fill: #f8fafc; fill-opacity: 0.95; stroke: #475569; stroke-width: 1; }
+        \\.vex-collapse-control text { fill: #0f172a; font-family: Arial,sans-serif; font-size: 10px; pointer-events: none; }
+        \\.vex-collapse-control[data-vex-collapse-state="collapsed"] rect { fill: #fef3c7; stroke: #d97706; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.writeAll(
+        \\<script type="application/ecmascript"><![CDATA[
+        \\(function () {
+        \\  var script = document.currentScript;
+        \\  var root = script && script.ownerSVGElement ? script.ownerSVGElement : document.documentElement;
+        \\  var collapsed = {};
+        \\  function memberHidden(memberList) {
+        \\    var ids = (memberList || '').split(/\s+/);
+        \\    for (var i = 0; i < ids.length; i += 1) {
+        \\      if (ids[i] && collapsed[ids[i]]) return true;
+        \\    }
+        \\    return false;
+        \\  }
+        \\  function setControl(control, isCollapsed) {
+        \\    control.setAttribute('data-vex-collapse-state', isCollapsed ? 'collapsed' : 'expanded');
+        \\    control.setAttribute('aria-pressed', isCollapsed ? 'true' : 'false');
+        \\    var label = control.querySelector('text');
+        \\    if (label) label.textContent = isCollapsed ? 'Expand' : 'Collapse';
+        \\  }
+        \\  function applyCollapse() {
+        \\    var members = root.querySelectorAll('[data-vex-collapse-member]');
+        \\    for (var i = 0; i < members.length; i += 1) {
+        \\      members[i].style.display = memberHidden(members[i].getAttribute('data-vex-collapse-member')) ? 'none' : '';
+        \\    }
+        \\    var controls = root.querySelectorAll('[data-vex-collapse-control]');
+        \\    for (var j = 0; j < controls.length; j += 1) {
+        \\      var id = controls[j].getAttribute('data-vex-collapse-control');
+        \\      setControl(controls[j], !!collapsed[id]);
+        \\    }
+        \\  }
+        \\  function toggle(control) {
+        \\    var id = control.getAttribute('data-vex-collapse-control');
+        \\    collapsed[id] = !collapsed[id];
+        \\    applyCollapse();
+        \\  }
+        \\  var controls = root.querySelectorAll('[data-vex-collapse-control]');
+        \\  for (var i = 0; i < controls.length; i += 1) {
+        \\    setControl(controls[i], false);
+        \\    controls[i].addEventListener('click', function (event) {
+        \\      event.preventDefault();
+        \\      toggle(this);
+        \\    });
+        \\    controls[i].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        toggle(this);
+        \\      }
+        \\    });
+        \\  }
+        \\}());
+        \\]]></script>
+        \\
+    );
+}
+
+fn renderSvgCollapseButton(writer: *Io.Writer, cluster: Subgraph, rect: RectF) Io.Writer.Error!void {
+    var id_buf: [32]u8 = undefined;
+    const collapse_id = svgCollapseId(&id_buf, cluster.id);
+    const x = @max(rect.x + rect.width - 54.0, rect.x + 4.0);
+    const y = rect.y + 4.0;
+    try writer.writeAll("<g class=\"vex-collapse-control\" data-vex-collapse-control=\"");
+    try writeXmlEscaped(writer, collapse_id);
+    try writer.print("\" data-vex-collapse-state=\"expanded\" role=\"button\" tabindex=\"0\" aria-pressed=\"false\" transform=\"translate({d:.1} {d:.1})\">\n<title>Toggle subgraph ", .{ x, y });
+    try writeXmlEscaped(writer, cluster.label);
+    try writer.writeAll("</title>\n<rect x=\"0\" y=\"0\" width=\"50\" height=\"16\" rx=\"3\"/>\n<text x=\"25\" y=\"11\" text-anchor=\"middle\">Collapse</text>\n</g>\n");
+}
+
 fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) bool {
     switch (svg_mod.layers.membership(layer, node_item.attrs.items)) {
         .include => return true,
@@ -8015,23 +8104,23 @@ fn clusterLayerMembership(graph: *const Graph, cluster: Subgraph, layer: SvgLaye
     return .inherit;
 }
 
-fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool) Io.Writer.Error!void {
+fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool) Io.Writer.Error!void {
     switch (svgOutputOrder(graph)) {
         .edgesfirst => {
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search);
-            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse);
             return;
         },
         .nodesfirst => {
-            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search);
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse);
             return;
         },
         .breadthfirst => {},
     }
     if (graph.nodes.items.len > 512 or graph.edges.items.len > 1024) {
-        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search);
-        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search);
+        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse);
+        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse);
         return;
     }
 
@@ -8044,7 +8133,7 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
 
     for (graph.nodes.items) |node_item| {
         if (!node_written[node_item.id]) {
-            try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search);
+            try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse);
             node_written[node_item.id] = true;
         }
         var outgoing: [1024]EdgeId = undefined;
@@ -8058,21 +8147,21 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
         for (outgoing[0..outgoing_len]) |edge_id| {
             const edge_item = graph.edges.items[edge_id];
             if (edge_item.to < node_written.len and !node_written[edge_item.to]) {
-                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to], layer, search);
+                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to], layer, search, collapse);
                 node_written[edge_item.to] = true;
             }
-            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search);
+            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse);
             edge_written[edge_item.id] = true;
         }
     }
 
     for (graph.edges.items) |edge_item| {
         if (edge_item.id < edge_written.len and edge_written[edge_item.id]) continue;
-        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search);
+        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse);
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id < node_written.len and node_written[node_item.id]) continue;
-        try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search);
+        try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse);
     }
 }
 
@@ -8091,7 +8180,7 @@ fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
     return a.to < b.to;
 }
 
-fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool) Io.Writer.Error!void {
+fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool) Io.Writer.Error!void {
     const edge_concentrate = svgConcentrateForEdge(graph, edge_item, concentrate);
     if (edge_concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
     if (layer) |context| {
@@ -8106,6 +8195,8 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const edge_context = svgEdgeEscapeContext(graph, edge_item, &edge_name_buf);
     var search_text_buf: [2048]u8 = undefined;
     const search_text = if (search) svgEdgeSearchText(&search_text_buf, graph, edge_item, edge_context.edge_name) else null;
+    var collapse_member_buf: [512]u8 = undefined;
+    const collapse_member = if (collapse) svgEdgeCollapseMembership(&collapse_member_buf, graph, edge_item) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = edge_item.attrs.items,
@@ -8113,6 +8204,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .default_class = "edge",
         .context = edge_context,
         .search_text = search_text,
+        .collapse_member = collapse_member,
     });
     const edge_anchor_id = SvgAnchorIdOptions{ .group = .{
         .graph = graph,
@@ -8283,7 +8375,7 @@ fn rectsOverlap(a: RectF, b: RectF) bool {
         @max(a.y, b.y) < @min(a.y + a.height, b.y + b.height);
 }
 
-fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node, layer: ?SvgLayerContext, search: bool) Io.Writer.Error!void {
+fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node, layer: ?SvgLayerContext, search: bool, collapse: bool) Io.Writer.Error!void {
     if (layer) |context| {
         if (!svgNodeInLayer(graph, node_item, context)) return;
     }
@@ -8298,6 +8390,8 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const node_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = node_name, .label_name = node_fallback_title };
     var search_text_buf: [2048]u8 = undefined;
     const search_text = if (search) svgNodeSearchText(&search_text_buf, node_item, node_name, node_fallback_title) else null;
+    var collapse_member_buf: [512]u8 = undefined;
+    const collapse_member = if (collapse) svgNodeCollapseMembership(&collapse_member_buf, graph, node_item.id) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = node_item.attrs.items,
@@ -8305,6 +8399,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .default_class = "node",
         .context = node_context,
         .search_text = search_text,
+        .collapse_member = collapse_member,
     });
     const node_anchor_id = SvgAnchorIdOptions{ .group = .{
         .graph = graph,
@@ -8542,6 +8637,32 @@ fn svgClusterSearchText(buffer: []u8, cluster: Subgraph) []const u8 {
     return builder.slice();
 }
 
+fn svgCollapseId(buffer: []u8, id: SubgraphId) []const u8 {
+    return std.fmt.bufPrint(buffer, "subgraph-{d}", .{id + 1}) catch "";
+}
+
+fn svgNodeCollapseMembership(buffer: []u8, graph: *const Graph, node_id: NodeId) ?[]const u8 {
+    var builder = SvgSearchTextBuilder.init(buffer);
+    var id_buf: [32]u8 = undefined;
+    for (graph.subgraphs.items) |cluster| {
+        if (!containsNode(cluster.nodes, node_id)) continue;
+        builder.append(svgCollapseId(&id_buf, cluster.id));
+    }
+    const result = builder.slice();
+    return if (result.len == 0) null else result;
+}
+
+fn svgEdgeCollapseMembership(buffer: []u8, graph: *const Graph, edge_item: Edge) ?[]const u8 {
+    var builder = SvgSearchTextBuilder.init(buffer);
+    var id_buf: [32]u8 = undefined;
+    for (graph.subgraphs.items) |cluster| {
+        if (!containsNode(cluster.nodes, edge_item.from) or !containsNode(cluster.nodes, edge_item.to)) continue;
+        builder.append(svgCollapseId(&id_buf, cluster.id));
+    }
+    const result = builder.slice();
+    return if (result.len == 0) null else result;
+}
+
 const SvgSearchTextBuilder = struct {
     buffer: []u8,
     len: usize = 0,
@@ -8586,6 +8707,8 @@ const SvgGroupOpenOptions = struct {
     context: LabelEscapeContext,
     is_root_graph: bool = false,
     search_text: ?[]const u8 = null,
+    collapse_member: ?[]const u8 = null,
+    collapse_target: ?[]const u8 = null,
 };
 
 const SvgAnchorIdOptions = struct {
@@ -8613,6 +8736,16 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
     if (options.search_text) |search_text| {
         try writer.writeAll(" data-vex-search-text=\"");
         try writeXmlEscaped(writer, search_text);
+        try writer.writeByte('"');
+    }
+    if (options.collapse_member) |collapse_member| {
+        try writer.writeAll(" data-vex-collapse-member=\"");
+        try writeXmlEscaped(writer, collapse_member);
+        try writer.writeByte('"');
+    }
+    if (options.collapse_target) |collapse_target| {
+        try writer.writeAll(" data-vex-collapse-target=\"");
+        try writeXmlEscaped(writer, collapse_target);
         try writer.writeByte('"');
     }
 }
@@ -10448,20 +10581,20 @@ const ClusterVisual = struct {
     hidden: bool,
 };
 
-fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, layer: ?SvgLayerContext, search: bool) Io.Writer.Error!void {
+fn renderSvgClusters(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, layer: ?SvgLayerContext, search: bool, collapse: bool) Io.Writer.Error!void {
     if (graph.subgraphs.items.len == 0) return;
-    try renderSvgClusterTree(writer, graph, layout, null, layer, search);
+    try renderSvgClusterTree(writer, graph, layout, null, layer, search, collapse);
 }
 
-fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent: ?SubgraphId, layer: ?SvgLayerContext, search: bool) Io.Writer.Error!void {
+fn renderSvgClusterTree(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, parent: ?SubgraphId, layer: ?SvgLayerContext, search: bool, collapse: bool) Io.Writer.Error!void {
     for (graph.subgraphs.items, 0..) |cluster, index| {
         if (cluster.parent != parent) continue;
-        try renderSvgClusterBox(writer, graph, cluster, layout, index, layer, search);
-        try renderSvgClusterTree(writer, graph, layout, cluster.id, layer, search);
+        try renderSvgClusterBox(writer, graph, cluster, layout, index, layer, search, collapse);
+        try renderSvgClusterTree(writer, graph, layout, cluster.id, layer, search, collapse);
     }
 }
 
-fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, layout: *const Layout, index: usize, layer: ?SvgLayerContext, search: bool) Io.Writer.Error!void {
+fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgraph, layout: *const Layout, index: usize, layer: ?SvgLayerContext, search: bool, collapse: bool) Io.Writer.Error!void {
     if (layer) |context| {
         if (!svgClusterInLayer(graph, cluster, context)) return;
     }
@@ -10475,6 +10608,8 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     const cluster_context = LabelEscapeContext{ .graph_name = graph.name, .node_name = cluster.label, .label_name = cluster.label };
     var search_text_buf: [2048]u8 = undefined;
     const search_text = if (search) svgClusterSearchText(&search_text_buf, cluster) else null;
+    var collapse_target_buf: [32]u8 = undefined;
+    const collapse_target = if (collapse) svgCollapseId(&collapse_target_buf, cluster.id) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = cluster.attrs.items,
@@ -10482,6 +10617,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         .default_class = "cluster",
         .context = cluster_context,
         .search_text = search_text,
+        .collapse_target = collapse_target,
     });
     try writeSvgTitle(writer, cluster.label);
     try writer.writeByte('\n');
@@ -10538,6 +10674,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
         try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
     }
+    if (collapse) try renderSvgCollapseButton(writer, cluster, rect);
     try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
 }
@@ -17307,6 +17444,80 @@ test "SVG interactive layer controls escape layer names" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-layer-control=\"three&quot;four\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">one&amp;two</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">three&quot;four</text>") != null);
+}
+
+test "SVG renderer emits opt-in Vex collapse controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service {
+        \\    label="Service";
+        \\    api;
+        \\    worker;
+        \\    api -> worker [label="job"];
+        \\  }
+        \\  api -> outside [label="external"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-collapse-control=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-collapse-member=") == null);
+
+    const interactive_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_collapse = true });
+    defer allocator.free(interactive_svg);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-collapse-target=\"subgraph-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-collapse-control=\"subgraph-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-collapse-member=\"subgraph-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "class=\"vex-collapse-control\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "memberHidden(memberList)") != null);
+
+    try std.testing.expectEqual(@as(usize, 3), countSubstrings(interactive_svg, "data-vex-collapse-member=\"subgraph-1\""));
+    const external_edge = svgGroupFragmentByTitle(interactive_svg, "api-&gt;outside") orelse return error.MissingExternalEdge;
+    try std.testing.expect(std.mem.indexOf(u8, external_edge, "external") != null);
+}
+
+test "DOT and typed API can enable Vex collapse controls" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_collapse=true];
+        \\  subgraph inner {
+        \\    label="Inner";
+        \\    a;
+        \\    b;
+        \\  }
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_collapse").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-collapse-control=\"subgraph-1\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_collapse = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{});
+    _ = try typed.addSubgraph("Group", null, &.{ a, b }, .{});
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_collapse").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-collapse-control=\"subgraph-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-collapse-member=\"subgraph-1\"") != null);
 }
 
 test "SVG renderer emits opt-in Vex interactive search controls" {

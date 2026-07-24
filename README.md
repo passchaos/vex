@@ -28,6 +28,7 @@ zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
+zig build run -- --input examples/subgraph.dot --output collapse.svg --interactive-collapse
 zig build run -- --input examples/simple.dot --output searchable.svg --interactive-search
 zig build run -- --input examples/simple.dot --output viewport.svg --interactive-viewport
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
@@ -43,6 +44,12 @@ Graphviz-style `layers`, it embeds a small self-contained SVG control panel for
 toggling layer visibility. The same behavior can be enabled from DOT with
 `graph [vex_interactive_layers=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_layers = true } }`.
+
+`--interactive-collapse` embeds subgraph collapse and expand controls. It marks
+member nodes and internal edges so a generated SVG can hide or restore a
+subgraph's contents without re-rendering. It can also be enabled from DOT with
+`graph [vex_interactive_collapse=true]` or from the Zig API with
+`.{ .svg = .{ .interactive_collapse = true } }`.
 
 `--interactive-search` is another Vex SVG extension. It embeds a self-contained
 search and highlight panel and annotates rendered nodes, edges, and subgraphs
@@ -153,6 +160,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG output honors Graphviz `center=true` by centering drawings in oversized SVG canvases.
 - SVG output honors Graphviz `layers`, `layersep`, `layerlistsep`, `layerselect`, and node, edge, and subgraph `layer` attributes by emitting separate SVG layer groups.
 - Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `vex_interactive_layers=true`, or `SvgOptions.interactive_layers`.
+- Vex SVG output can optionally embed native subgraph collapse controls via `--interactive-collapse`, `vex_interactive_collapse=true`, or `SvgOptions.interactive_collapse`.
 - Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `vex_interactive_search=true`, or `SvgOptions.interactive_search`.
 - Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
