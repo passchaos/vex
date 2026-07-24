@@ -9,12 +9,14 @@ const usage =
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--format svg] [--layout dot|sugiyama|fr|neato|fdp]
     \\        [--input-format auto|dot|mermaid]
+    \\        [--interactive-layers]
     \\  vex --help
     \\
     \\If --input is omitted, DOT is read from stdin. If --output is omitted,
     \\output is written to stdout.
     \\Default input format is auto. Default layout is DOT/Sugiyama and honors
     \\rankdir=TB|BT|LR|RL.
+    \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\
 ;
 
@@ -32,6 +34,7 @@ pub fn main(init: std.process.Init) !void {
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var input_format: vex.InputFormat = .auto;
+    var interactive_layers = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -60,6 +63,8 @@ pub fn main(init: std.process.Init) !void {
             input_format = vex.InputFormat.fromString(args[i]) orelse return error.UnknownInputFormat;
         } else if (std.mem.eql(u8, arg, "--mermaid")) {
             input_format = .mermaid;
+        } else if (std.mem.eql(u8, arg, "--interactive-layers")) {
+            interactive_layers = true;
         } else if (std.mem.eql(u8, arg, "--layout") or std.mem.eql(u8, arg, "-K")) {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
@@ -97,17 +102,18 @@ pub fn main(init: std.process.Init) !void {
 
     var layout = try vex.layoutGraph(allocator, &graph, .{ .algorithm = layout_arg });
     defer layout.deinit();
+    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try vex.render(&file_writer.interface, &layout, format, .{});
+        try vex.render(&file_writer.interface, &layout, format, render_options);
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try vex.render(&stdout_file_writer.interface, &layout, format, .{});
+        try vex.render(&stdout_file_writer.interface, &layout, format, render_options);
         try stdout_file_writer.interface.flush();
     }
 }

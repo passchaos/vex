@@ -1,0 +1,15 @@
+digraph Layered {
+  graph [rankdir=LR, layers="base:runtime:ops"];
+  node [shape=box];
+
+  parse [label="Parse", layer=base];
+  model [label="Model", layer=base];
+  layout [label="Layout", layer=runtime];
+  svg [label="SVG", layer=runtime];
+  alerts [label="Alerts", layer=ops];
+
+  parse -> model [layer=base];
+  model -> layout [layer=runtime];
+  layout -> svg [layer=runtime];
+  svg -> alerts [style=dashed, layer=ops];
+}

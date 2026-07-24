@@ -149,6 +149,7 @@ pub const GraphAttr = union(enum) {
     layersep: []const u8,
     layerlistsep: []const u8,
     layerselect: []const u8,
+    vex_interactive_layers: bool,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -838,6 +839,7 @@ pub const Graph = struct {
             .layersep => |value| try self.setGraphAttrRaw("layersep", value),
             .layerlistsep => |value| try self.setGraphAttrRaw("layerlistsep", value),
             .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
+            .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -7462,6 +7464,7 @@ pub const SvgOptions = struct {
     background: []const u8 = "white",
     font_family: []const u8 = default_svg_font_family,
     show_title: bool = true,
+    interactive_layers: bool = false,
 };
 
 const svg_clip_padding: f64 = 4.0;
@@ -7608,21 +7611,28 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writer.writeAll("</defs>\n");
     }
 
-    if (svgGraphLayers(graph)) |layers| {
-        defer graph.allocator.free(layers.names);
+    const maybe_layers = svgGraphLayers(graph);
+    defer if (maybe_layers) |layers| {
+        graph.allocator.free(layers.names);
         if (layers.selected) |indices| {
-            defer graph.allocator.free(indices);
+            graph.allocator.free(indices);
+        }
+    };
+    const write_interactive_layers = if (maybe_layers) |_| svgInteractiveLayersEnabled(graph, options) else false;
+
+    if (maybe_layers) |layers| {
+        if (layers.selected) |indices| {
             for (indices) |index| {
                 const layer_name = layers.names[index];
                 const context = SvgLayerContext{ .layers = layers, .index = index };
-                try writeSvgLayerOpen(writer, layer_name);
+                try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
                 try renderSvgClusters(writer, graph, layout, context);
                 try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context);
                 try writer.writeAll("</g>\n");
             }
         } else for (layers.names, 0..) |layer_name, index| {
             const context = SvgLayerContext{ .layers = layers, .index = index };
-            try writeSvgLayerOpen(writer, layer_name);
+            try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
             try renderSvgClusters(writer, graph, layout, context);
             try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context);
             try writer.writeAll("</g>\n");
@@ -7631,7 +7641,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try renderSvgClusters(writer, graph, layout, null);
         try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null);
     }
-    try writer.writeAll("</g>\n</svg>");
+    try writer.writeAll("</g>\n");
+    if (write_interactive_layers) try writeSvgLayerControls(writer, maybe_layers.?);
+    try writer.writeAll("</svg>");
 }
 
 fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, label_loc: ?[]const u8) f64 {
@@ -7646,10 +7658,119 @@ fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
     return svg_mod.layers.parse(graph.allocator, graph.attrs.items);
 }
 
-fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void {
+fn svgInteractiveLayersEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_layers) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_layers") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8, interactive: bool) Io.Writer.Error!void {
     try writer.writeAll("<g id=\"");
     try writeXmlEscaped(writer, name);
-    try writer.writeAll("\" class=\"layer\">\n");
+    try writer.writeAll("\" class=\"layer\"");
+    if (interactive) {
+        try writer.writeAll(" data-vex-layer=\"");
+        try writeXmlEscaped(writer, name);
+        try writer.writeByte('"');
+    }
+    try writer.writeAll(">\n");
+}
+
+fn writeSvgLayerControls(writer: *Io.Writer, layers: SvgLayers) Io.Writer.Error!void {
+    const count = svgLayerControlCount(layers);
+    if (count == 0) return;
+    const panel_width = svgLayerControlsWidth(layers);
+    const panel_height = @as(f64, @floatFromInt(count)) * 22.0 + 8.0;
+    try writer.writeAll(
+        \\<style>
+        \\.vex-layer-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-layer-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-layer-control { cursor: pointer; }
+        \\.vex-layer-control rect.vex-layer-button { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
+        \\.vex-layer-control text { fill: #0f172a; pointer-events: none; }
+        \\.vex-layer-control .vex-layer-check { fill: #2563eb; stroke: none; }
+        \\.vex-layer-control[data-vex-layer-state="off"] rect.vex-layer-button { fill: #f1f5f9; stroke: #94a3b8; }
+        \\.vex-layer-control[data-vex-layer-state="off"] text { fill: #64748b; }
+        \\.vex-layer-control[data-vex-layer-state="off"] .vex-layer-check { fill: none; stroke: #94a3b8; stroke-width: 1; }
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-layer-controls\" class=\"vex-layer-panel\" transform=\"translate(8 8)\">\n<rect class=\"vex-layer-panel-bg\" x=\"0\" y=\"0\" width=\"{d:.1}\" height=\"{d:.1}\" rx=\"4\"/>\n", .{ panel_width, panel_height });
+    for (0..count) |control_index| {
+        const layer_name = svgLayerControlName(layers, control_index);
+        const y = @as(f64, @floatFromInt(control_index)) * 22.0 + 4.0;
+        try writer.print("<g class=\"vex-layer-control\" data-vex-layer-control=\"", .{});
+        try writeXmlEscaped(writer, layer_name);
+        try writer.print("\" data-vex-layer-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" transform=\"translate(4 {d:.1})\">\n<title>Toggle layer ", .{y});
+        try writeXmlEscaped(writer, layer_name);
+        try writer.writeAll("</title>\n<rect class=\"vex-layer-button\" x=\"0\" y=\"0\" width=\"");
+        try writeSvgNumber(writer, panel_width - 8.0);
+        try writer.writeAll("\" height=\"18\" rx=\"3\"/>\n<rect class=\"vex-layer-check\" x=\"5\" y=\"5\" width=\"8\" height=\"8\" rx=\"1\"/>\n<text x=\"18\" y=\"13\">");
+        try writeXmlEscaped(writer, layer_name);
+        try writer.writeAll("</text>\n</g>\n");
+    }
+    try writer.writeAll(
+        \\</g>
+        \\<script type="application/ecmascript"><![CDATA[
+        \\(function () {
+        \\  var script = document.currentScript;
+        \\  var root = script && script.ownerSVGElement ? script.ownerSVGElement : document.documentElement;
+        \\  function setControlState(control, visible) {
+        \\    control.setAttribute('data-vex-layer-state', visible ? 'on' : 'off');
+        \\    control.setAttribute('aria-pressed', visible ? 'true' : 'false');
+        \\  }
+        \\  function setLayerVisible(name, visible) {
+        \\    var groups = root.querySelectorAll('g.layer[data-vex-layer]');
+        \\    for (var i = 0; i < groups.length; i += 1) {
+        \\      if (groups[i].getAttribute('data-vex-layer') === name) {
+        \\        groups[i].style.display = visible ? '' : 'none';
+        \\      }
+        \\    }
+        \\    var controls = root.querySelectorAll('[data-vex-layer-control]');
+        \\    for (var j = 0; j < controls.length; j += 1) {
+        \\      if (controls[j].getAttribute('data-vex-layer-control') === name) setControlState(controls[j], visible);
+        \\    }
+        \\  }
+        \\  function toggle(control) {
+        \\    var name = control.getAttribute('data-vex-layer-control');
+        \\    var visible = control.getAttribute('data-vex-layer-state') !== 'off';
+        \\    setLayerVisible(name, !visible);
+        \\  }
+        \\  var controls = root.querySelectorAll('[data-vex-layer-control]');
+        \\  for (var i = 0; i < controls.length; i += 1) {
+        \\    controls[i].addEventListener('click', function (event) {
+        \\      event.preventDefault();
+        \\      toggle(this);
+        \\    });
+        \\    controls[i].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        toggle(this);
+        \\      }
+        \\    });
+        \\  }
+        \\}());
+        \\]]></script>
+        \\
+    );
+}
+
+fn svgLayerControlCount(layers: SvgLayers) usize {
+    return if (layers.selected) |indices| indices.len else layers.names.len;
+}
+
+fn svgLayerControlName(layers: SvgLayers, control_index: usize) []const u8 {
+    if (layers.selected) |indices| return layers.names[indices[control_index]];
+    return layers.names[control_index];
+}
+
+fn svgLayerControlsWidth(layers: SvgLayers) f64 {
+    var max_len: usize = 0;
+    const count = svgLayerControlCount(layers);
+    for (0..count) |control_index| {
+        max_len = @max(max_len, svgLayerControlName(layers, control_index).len);
+    }
+    return @max(@as(f64, 96.0), @as(f64, @floatFromInt(max_len)) * 7.0 + 34.0);
 }
 
 fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) bool {
@@ -16812,6 +16933,92 @@ test "SVG renderer honors Graphviz graph layerselect" {
     try typed.setGraphAttr(.{ .layers = "L1:L2" });
     try typed.setGraphAttr(.{ .layerselect = "L2" });
     try std.testing.expectEqualStrings("L2", attrValue(typed.attrs.items, "layerselect").?);
+}
+
+test "SVG renderer emits opt-in Vex interactive layer controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail"];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\  a -> b [layer=detail];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-layer-controls") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-layer=") == null);
+
+    const interactive_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_layers = true });
+    defer allocator.free(interactive_svg);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "id=\"vex-layer-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-layer=\"base\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-layer-control=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "setLayerVisible(name, !visible)") != null);
+}
+
+test "DOT and typed API can enable Vex interactive layer controls" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="draft:final", layerselect=final, vex_interactive_layers=true];
+        \\  draft [layer=draft];
+        \\  final [layer=final];
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_layers").?);
+    try std.testing.expect(svgGroupFragmentById(parsed_svg, "draft") == null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-layer-control=\"final\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-layer-control=\"draft\"") == null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .layers = "alpha:beta" });
+    try typed.setGraphAttr(.{ .vex_interactive_layers = true });
+    const alpha = try typed.addNode("Alpha", .{ .layer = "alpha" });
+    const beta = try typed.addNode("Beta", .{ .layer = "beta" });
+    _ = try typed.addEdge(alpha, beta, .{ .layer = "alpha:beta" });
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_layers").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-layer-control=\"alpha\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-layer-control=\"beta\"") != null);
+}
+
+test "SVG interactive layer controls escape layer names" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="one&two|three\"four", layersep="|", vex_interactive_layers=true];
+        \\  a [layer="one&two"];
+        \\  b [layer="three\"four"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-layer-control=\"one&amp;two\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-layer-control=\"three&quot;four\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">one&amp;two</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">three&quot;four</text>") != null);
 }
 
 test "SVG renderer honors Graphviz graph layerlistsep" {

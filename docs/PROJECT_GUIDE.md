@@ -60,7 +60,7 @@ try vex.render(writer, &layout, .svg, .{});
 ## 超越 Graphviz 的长期方向
 
 - 更清晰的模块边界：parser / model / layout / renderer / CLI 分离。
-- 保持输出后端可插拔：当前只保留 SVG；未来可按产品需要新增 Web Canvas/WebGPU、可搜索/可折叠交互图或其他格式。
+- 保持输出后端可插拔：当前只保留 SVG；未来可按产品需要新增 Web Canvas/WebGPU、可搜索/可折叠交互图或其他格式。SVG 后端已经开始提供 Vex 原生扩展，例如通过 `--interactive-layers` / `vex_interactive_layers=true` / `SvgOptions.interactive_layers` 生成自包含图层可见性控制。
 - 更好的增量布局：大图局部更新时保持心理地图稳定。
 - 更强的可编程接口：Zig 原生 API，后续可提供 C ABI、WASM、Python/JS 绑定。
 - 更好的错误诊断：DOT 解析错误带位置、上下文和修复建议。
