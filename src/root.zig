@@ -13913,122 +13913,55 @@ fn splineCurveAmount(rankdir: RankDir, dx: f64, dy: f64, min_curve: f64, max_cur
 }
 
 fn writePathMove(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writer.writeByte('M');
-    try writeSvgPathPoint(writer, point);
+    try svg_mod.writer.pathMove(writer, .{ .x = point.x, .y = point.y });
 }
 
 fn writePathMovePrecise(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writer.writeByte('M');
-    try writeSvgPathPointPrecise(writer, point);
+    try svg_mod.writer.pathMovePrecise(writer, .{ .x = point.x, .y = point.y });
 }
 
 fn writePathLine(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writer.writeByte('L');
-    try writeSvgPathPoint(writer, point);
+    try svg_mod.writer.pathLine(writer, .{ .x = point.x, .y = point.y });
 }
 
 fn writePathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte('C');
-    try writeSvgPathPoint(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, end);
+    try svg_mod.writer.pathCubic(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicC1Precise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte('C');
-    try writeSvgPathPointPrecise(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, end);
+    try svg_mod.writer.pathCubicC1Precise(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte('C');
-    try writeSvgPathPointPrecise(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, end);
+    try svg_mod.writer.pathCubicPrecise(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicPreciseControls(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte('C');
-    try writeSvgPathPointPrecise(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, end);
+    try svg_mod.writer.pathCubicPreciseControls(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicEndPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte('C');
-    try writeSvgPathPoint(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, end);
+    try svg_mod.writer.pathCubicEndPrecise(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicContinuation(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, end);
+    try svg_mod.writer.pathCubicContinuation(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicContinuationPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, end);
+    try svg_mod.writer.pathCubicContinuationPrecise(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writePathCubicContinuationPreciseControls(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, c1);
-    try writer.writeByte(' ');
-    try writeSvgPathPointPrecise(writer, c2);
-    try writer.writeByte(' ');
-    try writeSvgPathPoint(writer, end);
+    try svg_mod.writer.pathCubicContinuationPreciseControls(writer, .{ .x = c1.x, .y = c1.y }, .{ .x = c2.x, .y = c2.y }, .{ .x = end.x, .y = end.y });
 }
 
 fn writeSvgPathPoint(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writeSvgPathNumber(writer, point.x);
-    try writer.writeByte(',');
-    try writeSvgPathNumber(writer, point.y);
-}
-
-fn writeSvgPathPointPrecise(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
-    try writeSvgPathNumberPrecise(writer, point.x);
-    try writer.writeByte(',');
-    try writeSvgPathNumberPrecise(writer, point.y);
+    try svg_mod.writer.point(writer, .{ .x = point.x, .y = point.y });
 }
 
 fn writeSvgPathNumber(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
-    const normalized = if (@abs(value) < 0.05) 0.0 else value;
-    const rounded = @round(normalized);
-    if (@abs(normalized - rounded) < 0.05) {
-        try writer.print("{d:.0}", .{rounded});
-    } else {
-        try writer.print("{d:.1}", .{normalized});
-    }
-}
-
-fn writeSvgPathNumberPrecise(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
-    const normalized = if (@abs(value) < 0.005) 0.0 else value;
-    const rounded = @round(normalized);
-    if (@abs(normalized - rounded) < 0.005) {
-        try writer.print("{d:.0}", .{rounded});
-    } else {
-        try writer.print("{d:.2}", .{normalized});
-    }
+    try svg_mod.writer.number(writer, value);
 }
 
 fn writeSmoothSegment(writer: *Io.Writer, from: Point, to: Point, rankdir: RankDir) Io.Writer.Error!void {

@@ -110,3 +110,102 @@ pub fn circleOpen(writer: *Io.Writer, center: Point, radius: f64) Io.Writer.Erro
     try number(writer, radius);
     try writer.writeByte('"');
 }
+
+pub fn pathMove(writer: *Io.Writer, value: Point) Io.Writer.Error!void {
+    try writer.writeByte('M');
+    try pathPoint(writer, value);
+}
+
+pub fn pathMovePrecise(writer: *Io.Writer, value: Point) Io.Writer.Error!void {
+    try writer.writeByte('M');
+    try pathPointPrecise(writer, value);
+}
+
+pub fn pathLine(writer: *Io.Writer, value: Point) Io.Writer.Error!void {
+    try writer.writeByte('L');
+    try pathPoint(writer, value);
+}
+
+pub fn pathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try pathPoint(writer, c1);
+    try writer.writeByte(' ');
+    try pathPoint(writer, c2);
+    try writer.writeByte(' ');
+    try pathPoint(writer, end);
+}
+
+pub fn pathCubicC1Precise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try pathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try pathPoint(writer, c2);
+    try writer.writeByte(' ');
+    try pathPoint(writer, end);
+}
+
+pub fn pathCubicPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try pathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, end);
+}
+
+pub fn pathCubicPreciseControls(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try pathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try pathPoint(writer, end);
+}
+
+pub fn pathCubicEndPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('C');
+    try pathPoint(writer, c1);
+    try writer.writeByte(' ');
+    try pathPoint(writer, c2);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, end);
+}
+
+pub fn pathCubicContinuation(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte(' ');
+    try pathPoint(writer, c1);
+    try writer.writeByte(' ');
+    try pathPoint(writer, c2);
+    try writer.writeByte(' ');
+    try pathPoint(writer, end);
+}
+
+pub fn pathCubicContinuationPrecise(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, end);
+}
+
+pub fn pathCubicContinuationPreciseControls(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, c1);
+    try writer.writeByte(' ');
+    try pathPointPrecise(writer, c2);
+    try writer.writeByte(' ');
+    try pathPoint(writer, end);
+}
+
+fn pathPoint(writer: *Io.Writer, value: Point) Io.Writer.Error!void {
+    try number(writer, value.x);
+    try writer.writeByte(',');
+    try number(writer, value.y);
+}
+
+fn pathPointPrecise(writer: *Io.Writer, value: Point) Io.Writer.Error!void {
+    try numberPrecise(writer, value.x);
+    try writer.writeByte(',');
+    try numberPrecise(writer, value.y);
+}
