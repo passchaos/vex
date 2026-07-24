@@ -100,17 +100,7 @@ pub const CompassPort = enum {
     north_west,
 };
 
-pub const SubgraphStyle = enum {
-    solid,
-    filled,
-    bold,
-    dashed,
-    dotted,
-    rounded,
-    striped,
-    radial,
-    invis,
-};
+pub const SubgraphStyle = svg_mod.style.SubgraphStyle;
 
 pub const GraphOptions = struct {
     directed: bool = true,
@@ -210,19 +200,7 @@ pub const GraphAttr = union(enum) {
     comment: []const u8,
 };
 
-pub const NodeStyle = enum {
-    solid,
-    filled,
-    bold,
-    dashed,
-    dotted,
-    rounded,
-    diagonals,
-    striped,
-    radial,
-    wedged,
-    invis,
-};
+pub const NodeStyle = svg_mod.style.NodeStyle;
 
 pub const NodeFixedSize = enum {
     none,
@@ -279,13 +257,7 @@ pub const NodeAttr = union(enum) {
     layer: []const u8,
 };
 
-pub const EdgeStyle = enum {
-    solid,
-    bold,
-    dashed,
-    dotted,
-    invis,
-};
+pub const EdgeStyle = svg_mod.style.EdgeStyle;
 
 pub const ArrowShape = enum {
     normal,
@@ -966,7 +938,7 @@ pub const Graph = struct {
             .fontname => |value| try self.setDefaultNodeAttrRaw("fontname", value),
             .fontsize => |value| try self.setDefaultNodeAttrFloat("fontsize", value),
             .shape => |value| try self.setDefaultNodeAttrRaw("shape", shapeName(value)),
-            .style => |value| try self.setDefaultNodeAttrRaw("style", nodeStyleName(value)),
+            .style => |value| try self.setDefaultNodeAttrRaw("style", value.name()),
             .styles => |values| try setDefaultNodeStylesAttrRaw(self, values),
             .penwidth => |value| try self.setDefaultNodeAttrFloat("penwidth", value),
             .peripheries => |value| {
@@ -1037,7 +1009,7 @@ pub const Graph = struct {
             .fontcolor => |value| try self.setDefaultEdgeAttrRaw("fontcolor", value),
             .fontname => |value| try self.setDefaultEdgeAttrRaw("fontname", value),
             .fontsize => |value| try self.setDefaultEdgeAttrFloat("fontsize", value),
-            .style => |value| try self.setDefaultEdgeAttrRaw("style", edgeStyleName(value)),
+            .style => |value| try self.setDefaultEdgeAttrRaw("style", value.name()),
             .styles => |values| try setDefaultEdgeStylesAttrRaw(self, values),
             .penwidth => |value| try self.setDefaultEdgeAttrFloat("penwidth", value),
             .weight => |value| try self.setDefaultEdgeAttrFloat("weight", value),
@@ -1174,7 +1146,7 @@ pub const Graph = struct {
             .fontname => |value| try self.setNodeAttrRaw(id, "fontname", value),
             .fontsize => |value| try self.setNodeAttrFloat(id, "fontsize", value),
             .shape => |value| try self.setNodeShape(id, value),
-            .style => |value| try self.setNodeAttrRaw(id, "style", nodeStyleName(value)),
+            .style => |value| try self.setNodeAttrRaw(id, "style", value.name()),
             .styles => |values| try setNodeStylesAttrRaw(self, id, values),
             .penwidth => |value| try self.setNodeAttrFloat(id, "penwidth", value),
             .peripheries => |value| {
@@ -1322,7 +1294,7 @@ pub const Graph = struct {
             .fontcolor => |value| try self.setEdgeAttrRaw(id, "fontcolor", value),
             .fontname => |value| try self.setEdgeAttrRaw(id, "fontname", value),
             .fontsize => |value| try self.setEdgeAttrFloat(id, "fontsize", value),
-            .style => |value| try self.setEdgeAttrRaw(id, "style", edgeStyleName(value)),
+            .style => |value| try self.setEdgeAttrRaw(id, "style", value.name()),
             .styles => |values| try setEdgeStylesAttrRaw(self, id, values),
             .penwidth => |value| try self.setEdgeAttrFloat(id, "penwidth", value),
             .weight => |value| try self.setEdgeAttrFloat(id, "weight", value),
@@ -1513,14 +1485,14 @@ pub const Graph = struct {
             .fontcolor => |value| try self.setSubgraphAttrRaw(id, "fontcolor", value),
             .fontname => |value| try self.setSubgraphAttrRaw(id, "fontname", value),
             .fontsize => |value| try self.setSubgraphAttrFloat(id, "fontsize", value),
-            .style => |value| try self.setSubgraphAttrRaw(id, "style", subgraphStyleName(value)),
+            .style => |value| try self.setSubgraphAttrRaw(id, "style", value.name()),
             .styles => |values| {
                 if (values.len == 0) return;
                 var text = std.ArrayList(u8).empty;
                 defer text.deinit(self.allocator);
                 for (values, 0..) |value, index| {
                     if (index > 0) try text.append(self.allocator, ',');
-                    try text.appendSlice(self.allocator, subgraphStyleName(value));
+                    try text.appendSlice(self.allocator, value.name());
                 }
                 try self.setSubgraphAttrRaw(id, "style", text.items);
             },
@@ -1778,29 +1750,13 @@ fn orderingModeName(mode: OrderingMode) []const u8 {
     };
 }
 
-fn nodeStyleName(style: NodeStyle) []const u8 {
-    return switch (style) {
-        .solid => "solid",
-        .filled => "filled",
-        .bold => "bold",
-        .dashed => "dashed",
-        .dotted => "dotted",
-        .rounded => "rounded",
-        .diagonals => "diagonals",
-        .striped => "striped",
-        .radial => "radial",
-        .wedged => "wedged",
-        .invis => "invis",
-    };
-}
-
 fn setNodeStylesAttrRaw(graph: *Graph, id: NodeId, values: []const NodeStyle) !void {
     if (values.len == 0) return;
     var text = std.ArrayList(u8).empty;
     defer text.deinit(graph.allocator);
     for (values, 0..) |value, index| {
         if (index > 0) try text.append(graph.allocator, ',');
-        try text.appendSlice(graph.allocator, nodeStyleName(value));
+        try text.appendSlice(graph.allocator, value.name());
     }
     try graph.setNodeAttrRaw(id, "style", text.items);
 }
@@ -1811,7 +1767,7 @@ fn setDefaultNodeStylesAttrRaw(graph: *Graph, values: []const NodeStyle) !void {
     defer text.deinit(graph.allocator);
     for (values, 0..) |value, index| {
         if (index > 0) try text.append(graph.allocator, ',');
-        try text.appendSlice(graph.allocator, nodeStyleName(value));
+        try text.appendSlice(graph.allocator, value.name());
     }
     try graph.setDefaultNodeAttrRaw("style", text.items);
 }
@@ -1822,7 +1778,7 @@ fn setEdgeStylesAttrRaw(graph: *Graph, id: EdgeId, values: []const EdgeStyle) !v
     defer text.deinit(graph.allocator);
     for (values, 0..) |value, index| {
         if (index > 0) try text.append(graph.allocator, ',');
-        try text.appendSlice(graph.allocator, edgeStyleName(value));
+        try text.appendSlice(graph.allocator, value.name());
     }
     try graph.setEdgeAttrRaw(id, "style", text.items);
 }
@@ -1833,23 +1789,9 @@ fn setDefaultEdgeStylesAttrRaw(graph: *Graph, values: []const EdgeStyle) !void {
     defer text.deinit(graph.allocator);
     for (values, 0..) |value, index| {
         if (index > 0) try text.append(graph.allocator, ',');
-        try text.appendSlice(graph.allocator, edgeStyleName(value));
+        try text.appendSlice(graph.allocator, value.name());
     }
     try graph.setDefaultEdgeAttrRaw("style", text.items);
-}
-
-fn subgraphStyleName(style: SubgraphStyle) []const u8 {
-    return switch (style) {
-        .solid => "solid",
-        .filled => "filled",
-        .bold => "bold",
-        .dashed => "dashed",
-        .dotted => "dotted",
-        .rounded => "rounded",
-        .striped => "striped",
-        .radial => "radial",
-        .invis => "invis",
-    };
 }
 
 fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
@@ -1866,16 +1808,6 @@ fn imageScaleName(scale: ImageScale) []const u8 {
 
 fn imagePositionName(position: ImagePosition) []const u8 {
     return svg_mod.image.positionName(position);
-}
-
-fn edgeStyleName(style: EdgeStyle) []const u8 {
-    return switch (style) {
-        .solid => "solid",
-        .bold => "bold",
-        .dashed => "dashed",
-        .dotted => "dotted",
-        .invis => "invis",
-    };
 }
 
 fn arrowShapeName(shape: ArrowShape) []const u8 {

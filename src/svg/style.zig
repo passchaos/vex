@@ -7,6 +7,80 @@ const std = @import("std");
 const Io = std.Io;
 const svg_writer = @import("writer.zig");
 
+pub const NodeStyle = enum {
+    solid,
+    filled,
+    bold,
+    dashed,
+    dotted,
+    rounded,
+    diagonals,
+    striped,
+    radial,
+    wedged,
+    invis,
+
+    pub fn name(self: NodeStyle) []const u8 {
+        return switch (self) {
+            .solid => "solid",
+            .filled => "filled",
+            .bold => "bold",
+            .dashed => "dashed",
+            .dotted => "dotted",
+            .rounded => "rounded",
+            .diagonals => "diagonals",
+            .striped => "striped",
+            .radial => "radial",
+            .wedged => "wedged",
+            .invis => "invis",
+        };
+    }
+};
+
+pub const SubgraphStyle = enum {
+    solid,
+    filled,
+    bold,
+    dashed,
+    dotted,
+    rounded,
+    striped,
+    radial,
+    invis,
+
+    pub fn name(self: SubgraphStyle) []const u8 {
+        return switch (self) {
+            .solid => "solid",
+            .filled => "filled",
+            .bold => "bold",
+            .dashed => "dashed",
+            .dotted => "dotted",
+            .rounded => "rounded",
+            .striped => "striped",
+            .radial => "radial",
+            .invis => "invis",
+        };
+    }
+};
+
+pub const EdgeStyle = enum {
+    solid,
+    bold,
+    dashed,
+    dotted,
+    invis,
+
+    pub fn name(self: EdgeStyle) []const u8 {
+        return switch (self) {
+            .solid => "solid",
+            .bold => "bold",
+            .dashed => "dashed",
+            .dotted => "dotted",
+            .invis => "invis",
+        };
+    }
+};
+
 pub const Dash = enum {
     none,
     dashed,
