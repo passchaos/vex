@@ -7712,13 +7712,23 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const write_interactive_viewport_controls = svgInteractiveViewportEnabled(graph, options);
     const write_interactive_viewport = write_interactive_viewport_controls or write_interactive_minimap;
     if (write_interactive_viewport) try writer.writeAll("<g id=\"vex-viewport-content\" class=\"vex-viewport-content\">\n");
+    const graph_fallback_title = graphFallbackTitle(graph);
+    const graph_href = if (write_svg_metadata) interactiveHref(graph.attrs.items, .default) else null;
     try writeSvgGroupOpenStart(writer, .{
         .graph = graph,
         .attrs = graph.attrs.items,
         .default_id = "graph0",
         .default_class = "graph",
-        .context = .{ .graph_name = graph.name, .label_name = graphFallbackTitle(graph) },
+        .context = .{ .graph_name = graph.name, .label_name = graph_fallback_title },
         .is_root_graph = true,
+        .write_object_attrs = write_svg_metadata,
+        .object_kind = "graph",
+        .object_id = graph.name,
+        .object_label = graph_fallback_title,
+        .object_href = graph_href,
+        .object_tooltip = if (write_svg_metadata) svgInteractiveTooltipWithFallback(graph.attrs.items, .default, graph_href, graph_fallback_title) else null,
+        .object_target = if (write_svg_metadata) interactiveTarget(graph.attrs.items, .default) else null,
+        .object_rect = if (write_svg_metadata) .{ .x = 0, .y = 0, .width = layout.width, .height = layout.height } else null,
     });
     try writer.writeAll(" transform=\"scale(");
     try writeSvgNumber(writer, svg_canvas.scale);
@@ -7745,7 +7755,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("<title>");
     try writeXmlEscaped(writer, graph.name);
     try writer.writeAll("</title>\n");
-    const graph_fallback_title = graphFallbackTitle(graph);
     const graph_anchor_id = SvgAnchorIdOptions{ .group = .{
         .graph = graph,
         .attrs = graph.attrs.items,
@@ -15972,6 +15981,7 @@ test "SVG renderer emits opt-in metadata index" {
     defer allocator.free(static_svg);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-metadata") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-kind=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "<g id=\"graph0\" class=\"graph\" transform=") != null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-waypoints=") == null);
     try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-rank=") == null);
 
@@ -15985,6 +15995,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"Meta\" data-vex-object-label=\"Meta\" data-vex-object-x=\"0.00\" data-vex-object-y=\"0.00\" data-vex-object-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" rank=\"0\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
@@ -16054,6 +16065,7 @@ test "SVG metadata index records effective link attributes" {
     defer allocator.free(svg);
 
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"LinkMeta\" directed=\"true\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"LinkMeta\" data-vex-object-label=\"Graph Label\" data-vex-object-href=\"https://example.com/graph/LinkMeta/Graph Label\" data-vex-object-tooltip=\"Graph LinkMeta Graph Label\" data-vex-object-target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A &amp; B\" shape=\"ellipse\" href=\"https://example.com/node/A &amp; B/A &amp; B/LinkMeta\" tooltip=\"Node A &amp; B A &amp; B LinkMeta\" target=\"node-A &amp; B\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"A &amp; B\" to-label=\"sink\" label=\"go\" href=\"https://example.com/edge/A &amp; B-&gt;sink/A &amp; B/sink/LinkMeta/go\" tooltip=\"Edge A &amp; B-&gt;sink A &amp; B sink LinkMeta go\" target=\"edge-A &amp; B-&gt;sink\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"API\" href=\"https://example.com/cluster/API/API/LinkMeta\" tooltip=\"Cluster API API LinkMeta\" target=\"cluster-API\"") != null);
