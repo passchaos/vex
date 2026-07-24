@@ -8113,7 +8113,9 @@ fn writeSvgLayerControls(writer: *Io.Writer, layers: SvgLayers, x: f64, y: f64) 
         const control_y = @as(f64, @floatFromInt(control_index)) * 22.0 + 4.0;
         try writer.print("<g class=\"vex-layer-control\" data-vex-layer-control=\"", .{});
         try writeXmlEscaped(writer, layer_name);
-        try writer.print("\" data-vex-layer-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" transform=\"translate(4 {d:.1})\">\n<title>Toggle layer ", .{control_y});
+        try writer.writeAll("\" data-vex-layer-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" aria-label=\"Toggle layer ");
+        try writeXmlEscaped(writer, layer_name);
+        try writer.print("\" transform=\"translate(4 {d:.1})\">\n<title>Toggle layer ", .{control_y});
         try writeXmlEscaped(writer, layer_name);
         try writer.writeAll("</title>\n<rect class=\"vex-layer-button\" x=\"0\" y=\"0\" width=\"");
         try writeSvgNumber(writer, panel_width - 8.0);
@@ -8270,7 +8272,7 @@ fn writeSvgFilterControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!vo
 }
 
 fn writeSvgFilterButton(writer: *Io.Writer, label: []const u8, kind: []const u8, y: f64) Io.Writer.Error!void {
-    try writer.print("<g class=\"vex-filter-control\" data-vex-filter-kind=\"{s}\" data-vex-filter-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" transform=\"translate(4 {d:.1})\">\n<title>Toggle {s}</title>\n", .{ kind, y, label });
+    try writer.print("<g class=\"vex-filter-control\" data-vex-filter-kind=\"{s}\" data-vex-filter-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" aria-label=\"Toggle {s}\" transform=\"translate(4 {d:.1})\">\n<title>Toggle {s}</title>\n", .{ kind, label, y, label });
     try writer.writeAll("<rect class=\"vex-filter-button\" x=\"0\" y=\"0\" width=\"110\" height=\"18\" rx=\"3\"/>\n<rect class=\"vex-filter-check\" x=\"5\" y=\"5\" width=\"8\" height=\"8\" rx=\"1\"/>\n<text x=\"18\" y=\"13\">");
     try writeXmlEscaped(writer, label);
     try writer.writeAll("</text>\n</g>\n");
@@ -8361,7 +8363,7 @@ fn writeSvgLabelControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!voi
 }
 
 fn writeSvgLabelButton(writer: *Io.Writer, label: []const u8, kind: []const u8, y: f64) Io.Writer.Error!void {
-    try writer.print("<g class=\"vex-label-control\" data-vex-label-kind=\"{s}\" data-vex-label-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" transform=\"translate(4 {d:.1})\">\n<title>Toggle {s}</title>\n", .{ kind, y, label });
+    try writer.print("<g class=\"vex-label-control\" data-vex-label-kind=\"{s}\" data-vex-label-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" aria-label=\"Toggle {s}\" transform=\"translate(4 {d:.1})\">\n<title>Toggle {s}</title>\n", .{ kind, label, y, label });
     try writer.writeAll("<rect class=\"vex-label-button\" x=\"0\" y=\"0\" width=\"140\" height=\"18\" rx=\"3\"/>\n<rect class=\"vex-label-check\" x=\"5\" y=\"5\" width=\"8\" height=\"8\" rx=\"1\"/>\n<text x=\"18\" y=\"13\">");
     try writeXmlEscaped(writer, label);
     try writer.writeAll("</text>\n</g>\n");
@@ -8462,7 +8464,7 @@ fn writeSvgFocusControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!voi
     );
     try writer.print("<g id=\"vex-focus-controls\" class=\"vex-focus-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
     try writer.writeAll("<rect class=\"vex-focus-panel-bg\" x=\"0\" y=\"0\" width=\"132\" height=\"34\" rx=\"4\"/>\n");
-    try writer.writeAll("<g class=\"vex-focus-control\" data-vex-focus-action=\"clear\" role=\"button\" tabindex=\"0\" transform=\"translate(4 4)\">\n<title>Clear focus</title>\n<rect x=\"0\" y=\"0\" width=\"92\" height=\"20\" rx=\"3\"/>\n<text x=\"14\" y=\"14\">Clear focus</text>\n</g>\n</g>\n");
+    try writer.writeAll("<g class=\"vex-focus-control\" data-vex-focus-action=\"clear\" role=\"button\" tabindex=\"0\" aria-label=\"Clear focus\" transform=\"translate(4 4)\">\n<title>Clear focus</title>\n<rect x=\"0\" y=\"0\" width=\"92\" height=\"20\" rx=\"3\"/>\n<text x=\"14\" y=\"14\">Clear focus</text>\n</g>\n</g>\n");
     try writer.writeAll(
         \\<script type="application/ecmascript"><![CDATA[
         \\(function () {
@@ -8557,8 +8559,8 @@ fn writeSvgSearchControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!vo
     );
     try writer.print("<g id=\"vex-search-controls\" class=\"vex-search-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
     try writer.writeAll("<rect class=\"vex-search-panel-bg\" x=\"0\" y=\"0\" width=\"166\" height=\"54\" rx=\"4\"/>\n");
-    try writer.writeAll("<g class=\"vex-search-control\" data-vex-search-action=\"search\" role=\"button\" tabindex=\"0\" transform=\"translate(4 4)\">\n<title>Search graph</title>\n<rect x=\"0\" y=\"0\" width=\"72\" height=\"20\" rx=\"3\"/>\n<text x=\"12\" y=\"14\">Search</text>\n</g>\n");
-    try writer.writeAll("<g class=\"vex-search-control\" data-vex-search-action=\"clear\" role=\"button\" tabindex=\"0\" transform=\"translate(82 4)\">\n<title>Clear search</title>\n<rect x=\"0\" y=\"0\" width=\"72\" height=\"20\" rx=\"3\"/>\n<text x=\"16\" y=\"14\">Clear</text>\n</g>\n");
+    try writer.writeAll("<g class=\"vex-search-control\" data-vex-search-action=\"search\" role=\"button\" tabindex=\"0\" aria-label=\"Search graph\" transform=\"translate(4 4)\">\n<title>Search graph</title>\n<rect x=\"0\" y=\"0\" width=\"72\" height=\"20\" rx=\"3\"/>\n<text x=\"12\" y=\"14\">Search</text>\n</g>\n");
+    try writer.writeAll("<g class=\"vex-search-control\" data-vex-search-action=\"clear\" role=\"button\" tabindex=\"0\" aria-label=\"Clear search\" transform=\"translate(82 4)\">\n<title>Clear search</title>\n<rect x=\"0\" y=\"0\" width=\"72\" height=\"20\" rx=\"3\"/>\n<text x=\"16\" y=\"14\">Clear</text>\n</g>\n");
     try writer.writeAll("<text id=\"vex-search-status\" x=\"8\" y=\"43\"></text>\n</g>\n");
     try writer.writeAll(
         \\<script type="application/ecmascript"><![CDATA[
@@ -8756,7 +8758,9 @@ fn writeSvgViewportControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!
 }
 
 fn writeSvgViewportButton(writer: *Io.Writer, label: []const u8, action: []const u8, x: f64, y: f64, title: []const u8) Io.Writer.Error!void {
-    try writer.print("<g class=\"vex-viewport-control\" data-vex-viewport-action=\"{s}\" role=\"button\" tabindex=\"0\" transform=\"translate({d:.1} {d:.1})\">\n<title>", .{ action, x, y });
+    try writer.print("<g class=\"vex-viewport-control\" data-vex-viewport-action=\"{s}\" role=\"button\" tabindex=\"0\" aria-label=\"", .{action});
+    try writeXmlEscaped(writer, title);
+    try writer.print("\" transform=\"translate({d:.1} {d:.1})\">\n<title>", .{ x, y });
     try writeXmlEscaped(writer, title);
     try writer.writeAll("</title>\n<rect x=\"0\" y=\"0\" width=\"24\" height=\"20\" rx=\"3\"/>\n<text x=\"12\" y=\"14\" text-anchor=\"middle\">");
     try writeXmlEscaped(writer, label);
@@ -8843,9 +8847,15 @@ fn writeSvgMinimapControls(writer: *Io.Writer, graph: *const Graph, layout: *con
         const cluster_rect = svgMinimapRect(clusterVisualRect(graph, layout, index), content_bounds, frame);
         const center = svgMinimapScreenPoint(.{ .x = cluster_box.x + cluster_box.width / 2.0, .y = cluster_box.y + cluster_box.height / 2.0 }, content_translate, canvas, landscape, render_canvas_height);
         try writer.print(
-            "<rect class=\"vex-minimap-subgraph\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" role=\"button\" tabindex=\"0\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\">\n<title>Center subgraph ",
-            .{ cluster_rect.x, cluster_rect.y, cluster_rect.width, cluster_rect.height, center.x, center.y },
+            "<rect class=\"vex-minimap-subgraph\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" role=\"button\" tabindex=\"0\" aria-label=\"Center subgraph ",
+            .{ cluster_rect.x, cluster_rect.y, cluster_rect.width, cluster_rect.height },
         );
+        try writeXmlEscaped(writer, graph.subgraphs.items[index].label);
+        try writer.writeAll("\" data-vex-minimap-target-x=\"");
+        try writeSvgNumber(writer, center.x);
+        try writer.writeAll("\" data-vex-minimap-target-y=\"");
+        try writeSvgNumber(writer, center.y);
+        try writer.writeAll("\">\n<title>Center subgraph ");
         try writeXmlEscaped(writer, graph.subgraphs.items[index].label);
         try writer.writeAll("</title>\n</rect>\n");
     }
@@ -8857,9 +8867,15 @@ fn writeSvgMinimapControls(writer: *Io.Writer, graph: *const Graph, layout: *con
         const node_rect = svgMinimapRect(nodeRect(node_layout), content_bounds, frame);
         const center = svgMinimapScreenPoint(node_layout.center, content_translate, canvas, landscape, render_canvas_height);
         try writer.print(
-            "<rect class=\"vex-minimap-node\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" role=\"button\" tabindex=\"0\" data-vex-minimap-target-x=\"{d:.1}\" data-vex-minimap-target-y=\"{d:.1}\">\n<title>Center node ",
-            .{ node_rect.x, node_rect.y, node_rect.width, node_rect.height, center.x, center.y },
+            "<rect class=\"vex-minimap-node\" x=\"{d:.1}\" y=\"{d:.1}\" width=\"{d:.1}\" height=\"{d:.1}\" role=\"button\" tabindex=\"0\" aria-label=\"Center node ",
+            .{ node_rect.x, node_rect.y, node_rect.width, node_rect.height },
         );
+        try writeXmlEscaped(writer, nodeFallbackTitle(node_item));
+        try writer.writeAll("\" data-vex-minimap-target-x=\"");
+        try writeSvgNumber(writer, center.x);
+        try writer.writeAll("\" data-vex-minimap-target-y=\"");
+        try writeSvgNumber(writer, center.y);
+        try writer.writeAll("\">\n<title>Center node ");
         try writeXmlEscaped(writer, nodeFallbackTitle(node_item));
         try writer.writeAll("</title>\n</rect>\n");
     }
@@ -8947,7 +8963,9 @@ fn renderSvgCollapseButton(writer: *Io.Writer, cluster: Subgraph, rect: RectF) I
     const y = rect.y + 4.0;
     try writer.writeAll("<g class=\"vex-collapse-control\" data-vex-collapse-control=\"");
     try writeXmlEscaped(writer, collapse_id);
-    try writer.print("\" data-vex-collapse-state=\"expanded\" role=\"button\" tabindex=\"0\" aria-pressed=\"false\" transform=\"translate({d:.1} {d:.1})\">\n<title>Toggle subgraph ", .{ x, y });
+    try writer.writeAll("\" data-vex-collapse-state=\"expanded\" role=\"button\" tabindex=\"0\" aria-pressed=\"false\" aria-label=\"Toggle subgraph ");
+    try writeXmlEscaped(writer, cluster.label);
+    try writer.print("\" transform=\"translate({d:.1} {d:.1})\">\n<title>Toggle subgraph ", .{ x, y });
     try writeXmlEscaped(writer, cluster.label);
     try writer.writeAll("</title>\n<rect x=\"0\" y=\"0\" width=\"50\" height=\"16\" rx=\"3\"/>\n<text x=\"25\" y=\"11\" text-anchor=\"middle\">Collapse</text>\n</g>\n");
 }
@@ -18730,6 +18748,7 @@ test "SVG renderer emits opt-in Vex interactive layer controls" {
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "id=\"vex-layer-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-layer=\"base\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-layer-control=\"detail\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "aria-label=\"Toggle layer base\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "setLayerVisible(name, !visible)") != null);
 }
 
@@ -18818,6 +18837,7 @@ test "SVG renderer emits opt-in Vex collapse controls" {
     defer allocator.free(interactive_svg);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-collapse-target=\"subgraph-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-collapse-control=\"subgraph-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "aria-label=\"Toggle subgraph Service\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-collapse-member=\"subgraph-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "class=\"vex-collapse-control\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "memberHidden(memberList)") != null);
@@ -18891,6 +18911,7 @@ test "SVG renderer emits opt-in Vex filter controls" {
     try std.testing.expect(std.mem.indexOf(u8, filter_svg, "data-vex-filter-kind=\"nodes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, filter_svg, "data-vex-filter-kind=\"edges\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, filter_svg, "data-vex-filter-kind=\"subgraphs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "aria-label=\"Toggle Nodes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, filter_svg, "vex-filter-hide-nodes .node { display: none; }") != null);
     try std.testing.expect(std.mem.indexOf(u8, filter_svg, "state[kind] = !state[kind]") != null);
 }
@@ -18954,6 +18975,7 @@ test "SVG renderer emits opt-in Vex label visibility controls" {
     try std.testing.expect(std.mem.indexOf(u8, label_svg, "data-vex-label-kind=\"nodes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, label_svg, "data-vex-label-kind=\"edges\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, label_svg, "data-vex-label-kind=\"subgraphs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "aria-label=\"Toggle Node labels\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, label_svg, "vex-label-hide-nodes .node text { display: none; }") != null);
     try std.testing.expect(std.mem.indexOf(u8, label_svg, "vex-label-hide-edges .edge text { display: none; }") != null);
     try std.testing.expect(std.mem.indexOf(u8, label_svg, "vex-label-hide-subgraphs .cluster text { display: none; }") != null);
@@ -19014,6 +19036,7 @@ test "SVG renderer emits opt-in Vex focus controls" {
     const focus_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_focus = true });
     defer allocator.free(focus_svg);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "id=\"vex-focus-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "aria-label=\"Clear focus\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"node-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"edge-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-related=\"node-1 edge-1 node-1 node-2 edge-2 node-1 node-3 edge-3 node-4 node-1\"") != null);
@@ -19155,6 +19178,8 @@ test "SVG renderer emits opt-in Vex interactive search controls" {
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "id=\"vex-search-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-search-action=\"search\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-search-action=\"clear\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "aria-label=\"Search graph\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "aria-label=\"Clear search\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-search-text=\"api API Node API Node lookup endpoint\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-search-text=\"api-&gt;db api API Node db Database query path query path read\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, interactive_svg, "data-vex-search-text=\"Service Group Service Group\"") != null);
@@ -19375,6 +19400,8 @@ test "SVG renderer emits opt-in Vex interactive viewport controls" {
     try std.testing.expect(std.mem.indexOf(u8, viewport_svg, "id=\"vex-viewport-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, viewport_svg, "data-vex-viewport-action=\"zoom-in\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, viewport_svg, "data-vex-viewport-action=\"pan-left\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, viewport_svg, "aria-label=\"Zoom in\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, viewport_svg, "aria-label=\"Pan left\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, viewport_svg, "content.setAttribute('transform'") != null);
 }
 
@@ -19435,7 +19462,10 @@ test "SVG renderer emits opt-in Vex minimap controls" {
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-node\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-subgraph\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "class=\"vex-minimap-viewport\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "role=\"button\" tabindex=\"0\" data-vex-minimap-target-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "role=\"button\" tabindex=\"0\" aria-label=\"Center") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "data-vex-minimap-target-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "aria-label=\"Center node api\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "aria-label=\"Center subgraph service\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "<title>Center node api</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "<title>Center subgraph service</title>") != null);
     try std.testing.expect(std.mem.indexOf(u8, minimap_svg, "data-vex-minimap-target-x=\"") != null);
