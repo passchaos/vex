@@ -34,6 +34,7 @@ zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-pa
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
 zig build run -- --input examples/subgraph.dot --output collapse.svg --interactive-collapse
 zig build run -- --input examples/simple.dot --output filtered.svg --interactive-filter
+zig build run -- --input examples/simple.dot --output labels.svg --interactive-labels
 zig build run -- --input examples/simple.dot --output focus.svg --interactive-focus
 zig build run -- --input examples/subgraph.dot --output inspect.svg --interactive-inspector
 zig build run -- --input examples/simple.dot --output searchable.svg --interactive-search
@@ -89,6 +90,11 @@ subgraph's contents without re-rendering. It can also be enabled from DOT with
 subgraphs. It can also be enabled from DOT with
 `graph [vex_interactive_filter=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_filter = true } }`.
+
+`--interactive-labels` embeds label visibility controls for nodes, edges, and
+subgraphs. It can also be enabled from DOT with
+`graph [vex_interactive_labels=true]` or from the Zig API with
+`.{ .svg = .{ .interactive_labels = true } }`.
 
 `--interactive-focus` lets generated SVGs focus a selected node or edge and its
 neighborhood while dimming unrelated objects. It can also be enabled from DOT
@@ -222,6 +228,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `vex_interactive_layers=true`, or `SvgOptions.interactive_layers`.
 - Vex SVG output can optionally embed native subgraph collapse controls via `--interactive-collapse`, `vex_interactive_collapse=true`, or `SvgOptions.interactive_collapse`.
 - Vex SVG output can optionally embed native object-type filter controls via `--interactive-filter`, `vex_interactive_filter=true`, or `SvgOptions.interactive_filter`.
+- Vex SVG output can optionally embed native label visibility controls via `--interactive-labels`, `vex_interactive_labels=true`, or `SvgOptions.interactive_labels`.
 - Vex SVG output can optionally embed native neighborhood focus controls via `--interactive-focus`, `vex_interactive_focus=true`, or `SvgOptions.interactive_focus`.
 - Vex SVG output can optionally embed native object inspector controls via `--interactive-inspector`, `vex_interactive_inspector=true`, or `SvgOptions.interactive_inspector`.
 - Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `vex_interactive_search=true`, or `SvgOptions.interactive_search`.

@@ -177,6 +177,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_layers: bool,
     vex_interactive_collapse: bool,
     vex_interactive_filter: bool,
+    vex_interactive_labels: bool,
     vex_interactive_focus: bool,
     vex_interactive_inspector: bool,
     vex_interactive_search: bool,
@@ -891,6 +892,7 @@ pub const Graph = struct {
             .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
             .vex_interactive_collapse => |value| try self.setGraphAttrRaw("vex_interactive_collapse", boolAttrValue(value)),
             .vex_interactive_filter => |value| try self.setGraphAttrRaw("vex_interactive_filter", boolAttrValue(value)),
+            .vex_interactive_labels => |value| try self.setGraphAttrRaw("vex_interactive_labels", boolAttrValue(value)),
             .vex_interactive_focus => |value| try self.setGraphAttrRaw("vex_interactive_focus", boolAttrValue(value)),
             .vex_interactive_inspector => |value| try self.setGraphAttrRaw("vex_interactive_inspector", boolAttrValue(value)),
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
@@ -7643,6 +7645,7 @@ pub const SvgOptions = struct {
     interactive_layers: bool = false,
     interactive_collapse: bool = false,
     interactive_filter: bool = false,
+    interactive_labels: bool = false,
     interactive_focus: bool = false,
     interactive_inspector: bool = false,
     interactive_search: bool = false,
@@ -7811,6 +7814,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const write_interactive_layers = if (maybe_layers) |_| svgInteractiveLayersEnabled(graph, options) else false;
     const write_interactive_collapse = svgInteractiveCollapseEnabled(graph, options);
     const write_interactive_filter = svgInteractiveFilterEnabled(graph, options);
+    const write_interactive_labels = svgInteractiveLabelsEnabled(graph, options);
     const write_interactive_focus = svgInteractiveFocusEnabled(graph, options);
     const write_interactive_inspector = svgInteractiveInspectorEnabled(graph, options);
     const write_interactive_search = svgInteractiveSearchEnabled(graph, options);
@@ -7849,6 +7853,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (write_interactive_filter) {
         try writeSvgFilterControls(writer, controls_x, controls_y);
         controls_y += svgFilterControlsHeight() + 8.0;
+    }
+    if (write_interactive_labels) {
+        try writeSvgLabelControls(writer, controls_x, controls_y);
+        controls_y += svgLabelControlsHeight() + 8.0;
     }
     if (write_interactive_focus) {
         try writeSvgFocusControls(writer, controls_x, controls_y);
@@ -7970,6 +7978,12 @@ fn svgInteractiveCollapseEnabled(graph: *const Graph, options: SvgOptions) bool 
 fn svgInteractiveFilterEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_filter) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_filter") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn svgInteractiveLabelsEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_labels) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_labels") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -8210,6 +8224,97 @@ fn writeSvgFilterButton(writer: *Io.Writer, label: []const u8, kind: []const u8,
 }
 
 fn svgFilterControlsHeight() f64 {
+    return 74.0;
+}
+
+fn writeSvgLabelControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
+    try writer.writeAll(
+        \\<style>
+        \\.vex-label-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-label-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-label-control { cursor: pointer; }
+        \\.vex-label-control rect.vex-label-button { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
+        \\.vex-label-control text { fill: #0f172a; pointer-events: none; }
+        \\.vex-label-control .vex-label-check { fill: #2563eb; stroke: none; }
+        \\.vex-label-control[data-vex-label-state="off"] rect.vex-label-button { fill: #f1f5f9; stroke: #94a3b8; }
+        \\.vex-label-control[data-vex-label-state="off"] text { fill: #64748b; }
+        \\.vex-label-control[data-vex-label-state="off"] .vex-label-check { fill: none; stroke: #94a3b8; stroke-width: 1; }
+        \\.vex-label-hide-nodes .node text { display: none; }
+        \\.vex-label-hide-edges .edge text { display: none; }
+        \\.vex-label-hide-subgraphs .cluster text { display: none; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-label-controls\" class=\"vex-label-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
+    try writer.writeAll("<rect class=\"vex-label-panel-bg\" x=\"0\" y=\"0\" width=\"148\" height=\"74\" rx=\"4\"/>\n");
+    try writeSvgLabelButton(writer, "Node labels", "nodes", 4);
+    try writeSvgLabelButton(writer, "Edge labels", "edges", 26);
+    try writeSvgLabelButton(writer, "Subgraph labels", "subgraphs", 48);
+    try writer.writeAll("</g>\n");
+    try writer.writeAll(
+        \\<script type="application/ecmascript"><![CDATA[
+        \\(function () {
+        \\  var script = document.currentScript;
+        \\  var root = script && script.ownerSVGElement ? script.ownerSVGElement : document.documentElement;
+        \\  var state = { nodes: true, edges: true, subgraphs: true };
+        \\  function setRootClass(name, enabled) {
+        \\    if (root.classList) {
+        \\      root.classList.toggle(name, enabled);
+        \\      return;
+        \\    }
+        \\    var classes = root.getAttribute('class') || '';
+        \\    var has = classes.indexOf(name) !== -1;
+        \\    if (enabled && !has) root.setAttribute('class', classes + ' ' + name);
+        \\    if (!enabled && has) root.setAttribute('class', classes.replace(name, ''));
+        \\  }
+        \\  function setControl(control, visible) {
+        \\    control.setAttribute('data-vex-label-state', visible ? 'on' : 'off');
+        \\    control.setAttribute('aria-pressed', visible ? 'true' : 'false');
+        \\  }
+        \\  function applyLabels() {
+        \\    setRootClass('vex-label-hide-nodes', !state.nodes);
+        \\    setRootClass('vex-label-hide-edges', !state.edges);
+        \\    setRootClass('vex-label-hide-subgraphs', !state.subgraphs);
+        \\    var controls = root.querySelectorAll('[data-vex-label-kind]');
+        \\    for (var i = 0; i < controls.length; i += 1) {
+        \\      var kind = controls[i].getAttribute('data-vex-label-kind');
+        \\      setControl(controls[i], !!state[kind]);
+        \\    }
+        \\  }
+        \\  function toggle(control) {
+        \\    var kind = control.getAttribute('data-vex-label-kind');
+        \\    state[kind] = !state[kind];
+        \\    applyLabels();
+        \\  }
+        \\  var controls = root.querySelectorAll('[data-vex-label-kind]');
+        \\  for (var i = 0; i < controls.length; i += 1) {
+        \\    setControl(controls[i], true);
+        \\    controls[i].addEventListener('click', function (event) {
+        \\      event.preventDefault();
+        \\      toggle(this);
+        \\    });
+        \\    controls[i].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        toggle(this);
+        \\      }
+        \\    });
+        \\  }
+        \\}());
+        \\]]></script>
+        \\
+    );
+}
+
+fn writeSvgLabelButton(writer: *Io.Writer, label: []const u8, kind: []const u8, y: f64) Io.Writer.Error!void {
+    try writer.print("<g class=\"vex-label-control\" data-vex-label-kind=\"{s}\" data-vex-label-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" transform=\"translate(4 {d:.1})\">\n<title>Toggle {s}</title>\n", .{ kind, y, label });
+    try writer.writeAll("<rect class=\"vex-label-button\" x=\"0\" y=\"0\" width=\"140\" height=\"18\" rx=\"3\"/>\n<rect class=\"vex-label-check\" x=\"5\" y=\"5\" width=\"8\" height=\"8\" rx=\"1\"/>\n<text x=\"18\" y=\"13\">");
+    try writeXmlEscaped(writer, label);
+    try writer.writeAll("</text>\n</g>\n");
+}
+
+fn svgLabelControlsHeight() f64 {
     return 74.0;
 }
 
@@ -18651,6 +18756,71 @@ test "DOT and typed API can enable Vex filter controls" {
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-filter-controls\"") != null);
 }
 
+test "SVG renderer emits opt-in Vex label visibility controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service {
+        \\    label="Service";
+        \\    api [label="API"];
+        \\  }
+        \\  api -> db [label="query", xlabel="read"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-label-controls") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-label-kind=") == null);
+
+    const label_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_labels = true });
+    defer allocator.free(label_svg);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "id=\"vex-label-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "data-vex-label-kind=\"nodes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "data-vex-label-kind=\"edges\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "data-vex-label-kind=\"subgraphs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "vex-label-hide-nodes .node text { display: none; }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "vex-label-hide-edges .edge text { display: none; }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "vex-label-hide-subgraphs .cluster text { display: none; }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, label_svg, "state[kind] = !state[kind]") != null);
+}
+
+test "DOT and typed API can enable Vex label visibility controls" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_labels=true];
+        \\  parse -> render;
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_labels").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-label-controls\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_labels = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{ .label = "edge" });
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_labels").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-label-controls\"") != null);
+}
+
 test "SVG renderer emits opt-in Vex focus controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -19109,6 +19279,7 @@ test "SVG interactive controls include filter in panel stack" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{
         .interactive_layers = true,
         .interactive_filter = true,
+        .interactive_labels = true,
         .interactive_focus = true,
         .interactive_inspector = true,
         .interactive_search = true,
@@ -19120,6 +19291,7 @@ test "SVG interactive controls include filter in panel stack" {
 
     const layer_pos = std.mem.indexOf(u8, svg, "id=\"vex-layer-controls\"") orelse return error.MissingLayerControls;
     const filter_pos = std.mem.indexOf(u8, svg, "id=\"vex-filter-controls\"") orelse return error.MissingFilterControls;
+    const label_pos = std.mem.indexOf(u8, svg, "id=\"vex-label-controls\"") orelse return error.MissingLabelControls;
     const focus_pos = std.mem.indexOf(u8, svg, "id=\"vex-focus-controls\"") orelse return error.MissingFocusControls;
     const inspector_pos = std.mem.indexOf(u8, svg, "id=\"vex-inspector-controls\"") orelse return error.MissingInspectorControls;
     const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
@@ -19127,7 +19299,8 @@ test "SVG interactive controls include filter in panel stack" {
     const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
     const minimap_pos = std.mem.indexOf(u8, svg, "id=\"vex-minimap-controls\"") orelse return error.MissingMinimapControls;
     try std.testing.expect(layer_pos < filter_pos);
-    try std.testing.expect(filter_pos < focus_pos);
+    try std.testing.expect(filter_pos < label_pos);
+    try std.testing.expect(label_pos < focus_pos);
     try std.testing.expect(focus_pos < inspector_pos);
     try std.testing.expect(inspector_pos < search_pos);
     try std.testing.expect(search_pos < stats_pos);

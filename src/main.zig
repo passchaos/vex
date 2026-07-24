@@ -16,7 +16,8 @@ const usage =
     \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-layers] [--interactive-collapse]
-    \\        [--interactive-filter] [--interactive-focus]
+    \\        [--interactive-filter] [--interactive-labels]
+    \\        [--interactive-focus]
     \\        [--interactive-inspector]
     \\        [--interactive-search]
     \\        [--interactive-viewport]
@@ -36,6 +37,7 @@ const usage =
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
     \\--interactive-filter adds SVG-native type filter controls.
+    \\--interactive-labels adds SVG-native label visibility controls.
     \\--interactive-focus adds SVG-native neighborhood highlighting.
     \\--interactive-inspector adds SVG-native object metadata inspection.
     \\--interactive-search adds an SVG-native search and highlight panel.
@@ -68,6 +70,7 @@ pub fn main(init: std.process.Init) !void {
     var interactive_layers = false;
     var interactive_collapse = false;
     var interactive_filter = false;
+    var interactive_labels = false;
     var interactive_focus = false;
     var interactive_inspector = false;
     var interactive_search = false;
@@ -116,6 +119,8 @@ pub fn main(init: std.process.Init) !void {
             interactive_collapse = true;
         } else if (std.mem.eql(u8, arg, "--interactive-filter")) {
             interactive_filter = true;
+        } else if (std.mem.eql(u8, arg, "--interactive-labels")) {
+            interactive_labels = true;
         } else if (std.mem.eql(u8, arg, "--interactive-focus")) {
             interactive_focus = true;
         } else if (std.mem.eql(u8, arg, "--interactive-inspector")) {
@@ -202,7 +207,7 @@ pub fn main(init: std.process.Init) !void {
     };
     var layout = try vex.layoutGraph(allocator, &graph, layout_config);
     defer layout.deinit();
-    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
+    const render_options = vex.RenderOptions{ .svg = .{ .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);
