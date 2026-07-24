@@ -22,6 +22,21 @@ pub const Endpoints = struct {
     end: Point,
 };
 
+pub const GroupIdClass = struct {
+    id: []const u8,
+    class: []const u8,
+};
+
+pub const TextPosition = struct {
+    text: []const u8,
+    point: Point,
+};
+
+pub const ElementName = struct {
+    closing: bool,
+    name: []const u8,
+};
+
 pub fn pathCommandCount(svg: []const u8, command: u8) usize {
     var count: usize = 0;
     var search_start: usize = 0;
@@ -323,6 +338,120 @@ pub fn polylineCount(svg: []const u8, title: []const u8) usize {
     return countSubstrings(fragment, "<polyline");
 }
 
+pub fn nextGroupIdClass(svg: []const u8, index: *usize) ?GroupIdClass {
+    while (std.mem.indexOf(u8, svg[index.*..], "<g ")) |rel| {
+        const group_start = index.* + rel;
+        const tag_end_rel = std.mem.indexOfScalar(u8, svg[group_start..], '>') orelse return null;
+        const tag = svg[group_start .. group_start + tag_end_rel];
+        index.* = group_start + tag_end_rel + 1;
+        const id = attributeValue(tag, "id") orelse continue;
+        const class = attributeValue(tag, "class") orelse continue;
+        return .{ .id = id, .class = class };
+    }
+    return null;
+}
+
+pub fn attributeValue(tag: []const u8, attr: []const u8) ?[]const u8 {
+    var marker_buf: [64]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, "{s}=\"", .{attr}) catch return null;
+    const attr_start = std.mem.indexOf(u8, tag, marker) orelse return null;
+    const value_start = attr_start + marker.len;
+    const value_end_rel = std.mem.indexOfScalar(u8, tag[value_start..], '"') orelse return null;
+    return tag[value_start .. value_start + value_end_rel];
+}
+
+pub fn attributeSlice(fragment: []const u8, attr_name: []const u8) ?[]const u8 {
+    var marker_buf: [64]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return null;
+    const attr_start = std.mem.indexOf(u8, fragment, marker) orelse return null;
+    const value_start = attr_start + marker.len;
+    const value_end_rel = std.mem.indexOfScalar(u8, fragment[value_start..], '"') orelse return null;
+    return fragment[value_start .. value_start + value_end_rel];
+}
+
+pub fn nextPathCommand(d: []const u8, index: *usize) ?u8 {
+    while (index.* < d.len) : (index.* += 1) {
+        const c = d[index.*];
+        if (c == 'M' or c == 'L' or c == 'C' or c == 'Q' or c == 'Z' or c == 'z') {
+            index.* += 1;
+            return c;
+        }
+    }
+    return null;
+}
+
+pub fn nextTextPosition(svg: []const u8, index: *usize) ?TextPosition {
+    while (std.mem.indexOf(u8, svg[index.*..], "<text")) |rel| {
+        const text_start = index.* + rel;
+        const open_end_rel = std.mem.indexOfScalar(u8, svg[text_start..], '>') orelse return null;
+        const tag = svg[text_start .. text_start + open_end_rel + 1];
+        const content_start = text_start + open_end_rel + 1;
+        const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
+        index.* = content_start + close_rel + "</text>".len;
+        const content = svg[content_start .. content_start + close_rel];
+        const text = textVisibleContent(content) orelse continue;
+        const x = numberAfter(tag, " x=\"") orelse return null;
+        const y = numberAfter(tag, " y=\"") orelse return null;
+        return .{ .text = text, .point = .{ .x = x, .y = y } };
+    }
+    return null;
+}
+
+pub fn nextTextContent(svg: []const u8, index: *usize) ?[]const u8 {
+    while (std.mem.indexOf(u8, svg[index.*..], "<text")) |rel| {
+        const text_start = index.* + rel;
+        const open_end_rel = std.mem.indexOfScalar(u8, svg[text_start..], '>') orelse return null;
+        const content_start = text_start + open_end_rel + 1;
+        const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
+        index.* = content_start + close_rel + "</text>".len;
+        const content = svg[content_start .. content_start + close_rel];
+        if (textVisibleContent(content)) |text| return text;
+    }
+    return null;
+}
+
+pub fn textVisibleContent(content: []const u8) ?[]const u8 {
+    if (std.mem.indexOfScalar(u8, content, '<') == null) return content;
+    const tspan_start_rel = std.mem.indexOf(u8, content, "<tspan") orelse return null;
+    const tspan_open_end_rel = std.mem.indexOfScalar(u8, content[tspan_start_rel..], '>') orelse return null;
+    const text_start = tspan_start_rel + tspan_open_end_rel + 1;
+    const text_end_rel = std.mem.indexOf(u8, content[text_start..], "</tspan>") orelse return null;
+    const text = content[text_start .. text_start + text_end_rel];
+    if (std.mem.indexOfScalar(u8, text, '<') != null) return null;
+    return text;
+}
+
+pub fn nextOpeningTag(svg: []const u8, index: *usize) ?[]const u8 {
+    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
+        const tag_start = index.* + rel;
+        index.* = tag_start + 1;
+        if (index.* >= svg.len) return null;
+        if (svg[index.*] == '!' or svg[index.*] == '?' or svg[index.*] == '/') continue;
+        const tag_end_rel = std.mem.indexOfScalar(u8, svg[index.*..], '>') orelse return null;
+        index.* += tag_end_rel + 1;
+        return svg[tag_start..index.*];
+    }
+    return null;
+}
+
+pub fn nextElementName(svg: []const u8, index: *usize) ?ElementName {
+    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
+        const tag_start = index.* + rel;
+        index.* = tag_start + 1;
+        if (index.* >= svg.len) return null;
+        if (svg[index.*] == '!' or svg[index.*] == '?') continue;
+        const closing = svg[index.*] == '/';
+        const name_start = index.* + @intFromBool(closing);
+        var name_end = name_start;
+        while (name_end < svg.len and isNameChar(svg[name_end])) : (name_end += 1) {}
+        if (name_end == name_start) continue;
+        const name = svg[name_start..name_end];
+        if (std.mem.eql(u8, name, "svg")) continue;
+        return .{ .closing = closing, .name = name };
+    }
+    return null;
+}
+
 pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
     var marker_buf: [64]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return 0;
@@ -337,6 +466,10 @@ pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f6
         count += 1;
     }
     return count;
+}
+
+fn isNameChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == ':';
 }
 
 pub fn pathDataCommandCount(path_data: []const u8, command: u8) usize {

@@ -10521,31 +10521,14 @@ fn expectSvgGroupSequenceEqual(svg: []const u8, oracle: []const u8) !void {
     }
 }
 
-const SvgGroupIdClass = struct {
-    id: []const u8,
-    class: []const u8,
-};
+const SvgGroupIdClass = svg_mod.test_helpers.GroupIdClass;
 
 fn nextSvgGroupIdClass(svg: []const u8, index: *usize) ?SvgGroupIdClass {
-    while (std.mem.indexOf(u8, svg[index.*..], "<g ")) |rel| {
-        const group_start = index.* + rel;
-        const tag_end_rel = std.mem.indexOfScalar(u8, svg[group_start..], '>') orelse return null;
-        const tag = svg[group_start .. group_start + tag_end_rel];
-        index.* = group_start + tag_end_rel + 1;
-        const id = svgAttributeValue(tag, "id") orelse continue;
-        const class = svgAttributeValue(tag, "class") orelse continue;
-        return .{ .id = id, .class = class };
-    }
-    return null;
+    return svg_mod.test_helpers.nextGroupIdClass(svg, index);
 }
 
 fn svgAttributeValue(tag: []const u8, attr: []const u8) ?[]const u8 {
-    var marker_buf: [64]u8 = undefined;
-    const marker = std.fmt.bufPrint(&marker_buf, "{s}=\"", .{attr}) catch return null;
-    const attr_start = std.mem.indexOf(u8, tag, marker) orelse return null;
-    const value_start = attr_start + marker.len;
-    const value_end_rel = std.mem.indexOfScalar(u8, tag[value_start..], '"') orelse return null;
-    return tag[value_start .. value_start + value_end_rel];
+    return svg_mod.test_helpers.attributeValue(tag, attr);
 }
 
 fn expectSvgEdgePathCommandSequencesEqual(svg: []const u8, oracle: []const u8) !void {
@@ -10580,23 +10563,11 @@ fn expectSvgPathCommandSequenceEqual(svg_fragment: []const u8, oracle_fragment: 
 }
 
 fn svgAttributeSlice(fragment: []const u8, attr_name: []const u8) ?[]const u8 {
-    var marker_buf: [64]u8 = undefined;
-    const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return null;
-    const attr_start = std.mem.indexOf(u8, fragment, marker) orelse return null;
-    const value_start = attr_start + marker.len;
-    const value_end_rel = std.mem.indexOfScalar(u8, fragment[value_start..], '"') orelse return null;
-    return fragment[value_start .. value_start + value_end_rel];
+    return svg_mod.test_helpers.attributeSlice(fragment, attr_name);
 }
 
 fn nextSvgPathCommand(d: []const u8, index: *usize) ?u8 {
-    while (index.* < d.len) : (index.* += 1) {
-        const c = d[index.*];
-        if (c == 'M' or c == 'L' or c == 'C' or c == 'Q' or c == 'Z' or c == 'z') {
-            index.* += 1;
-            return c;
-        }
-    }
-    return null;
+    return svg_mod.test_helpers.nextPathCommand(d, index);
 }
 
 fn expectSvgTextSequenceEqual(svg: []const u8, oracle: []const u8) !void {
@@ -10636,44 +10607,16 @@ const SvgTextPosition = struct {
 };
 
 fn nextSvgTextPosition(svg: []const u8, index: *usize) ?SvgTextPosition {
-    while (std.mem.indexOf(u8, svg[index.*..], "<text")) |rel| {
-        const text_start = index.* + rel;
-        const open_end_rel = std.mem.indexOfScalar(u8, svg[text_start..], '>') orelse return null;
-        const tag = svg[text_start .. text_start + open_end_rel + 1];
-        const content_start = text_start + open_end_rel + 1;
-        const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
-        index.* = content_start + close_rel + "</text>".len;
-        const content = svg[content_start .. content_start + close_rel];
-        const text = svgTextVisibleContent(content) orelse continue;
-        const x = svgNumberAfter(tag, " x=\"") orelse return null;
-        const y = svgNumberAfter(tag, " y=\"") orelse return null;
-        return .{ .text = text, .point = .{ .x = x, .y = y } };
-    }
-    return null;
+    const text = svg_mod.test_helpers.nextTextPosition(svg, index) orelse return null;
+    return .{ .text = text.text, .point = .{ .x = text.point.x, .y = text.point.y } };
 }
 
 fn nextSvgTextContent(svg: []const u8, index: *usize) ?[]const u8 {
-    while (std.mem.indexOf(u8, svg[index.*..], "<text")) |rel| {
-        const text_start = index.* + rel;
-        const open_end_rel = std.mem.indexOfScalar(u8, svg[text_start..], '>') orelse return null;
-        const content_start = text_start + open_end_rel + 1;
-        const close_rel = std.mem.indexOf(u8, svg[content_start..], "</text>") orelse return null;
-        index.* = content_start + close_rel + "</text>".len;
-        const content = svg[content_start .. content_start + close_rel];
-        if (svgTextVisibleContent(content)) |text| return text;
-    }
-    return null;
+    return svg_mod.test_helpers.nextTextContent(svg, index);
 }
 
 fn svgTextVisibleContent(content: []const u8) ?[]const u8 {
-    if (std.mem.indexOfScalar(u8, content, '<') == null) return content;
-    const tspan_start_rel = std.mem.indexOf(u8, content, "<tspan") orelse return null;
-    const tspan_open_end_rel = std.mem.indexOfScalar(u8, content[tspan_start_rel..], '>') orelse return null;
-    const text_start = tspan_start_rel + tspan_open_end_rel + 1;
-    const text_end_rel = std.mem.indexOf(u8, content[text_start..], "</tspan>") orelse return null;
-    const text = content[text_start .. text_start + text_end_rel];
-    if (std.mem.indexOfScalar(u8, text, '<') != null) return null;
-    return text;
+    return svg_mod.test_helpers.textVisibleContent(content);
 }
 
 fn expectSvgElementSequenceEqual(svg: []const u8, oracle: []const u8) !void {
@@ -10720,16 +10663,7 @@ fn expectSvgLinesNumericNormalizedEqual(svg: []const u8, oracle: []const u8) !vo
 }
 
 fn nextSvgOpeningTag(svg: []const u8, index: *usize) ?[]const u8 {
-    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
-        const tag_start = index.* + rel;
-        index.* = tag_start + 1;
-        if (index.* >= svg.len) return null;
-        if (svg[index.*] == '!' or svg[index.*] == '?' or svg[index.*] == '/') continue;
-        const tag_end_rel = std.mem.indexOfScalar(u8, svg[index.*..], '>') orelse return null;
-        index.* += tag_end_rel + 1;
-        return svg[tag_start..index.*];
-    }
-    return null;
+    return svg_mod.test_helpers.nextOpeningTag(svg, index);
 }
 
 fn expectNumericNormalizedEqual(a: []const u8, b: []const u8) !void {
@@ -10766,27 +10700,10 @@ fn skipSvgNumber(text: []const u8, index: usize) usize {
     return i;
 }
 
-const SvgElementName = struct {
-    closing: bool,
-    name: []const u8,
-};
+const SvgElementName = svg_mod.test_helpers.ElementName;
 
 fn nextSvgElementName(svg: []const u8, index: *usize) ?SvgElementName {
-    while (std.mem.indexOfScalar(u8, svg[index.*..], '<')) |rel| {
-        const tag_start = index.* + rel;
-        index.* = tag_start + 1;
-        if (index.* >= svg.len) return null;
-        if (svg[index.*] == '!' or svg[index.*] == '?') continue;
-        const closing = svg[index.*] == '/';
-        const name_start = index.* + @intFromBool(closing);
-        var name_end = name_start;
-        while (name_end < svg.len and isSvgNameChar(svg[name_end])) : (name_end += 1) {}
-        if (name_end == name_start) continue;
-        const name = svg[name_start..name_end];
-        if (std.mem.eql(u8, name, "svg")) continue;
-        return .{ .closing = closing, .name = name };
-    }
-    return null;
+    return svg_mod.test_helpers.nextElementName(svg, index);
 }
 
 fn isSvgNameChar(c: u8) bool {
