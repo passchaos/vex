@@ -3506,33 +3506,11 @@ fn applyMermaidEdgeStyle(graph: *Graph, edge_id: EdgeId, arrow: []const u8) !voi
     if (!std.mem.endsWith(u8, arrow, ">")) try graph.setEdgeAttrRaw(edge_id, "arrowhead", "none");
 }
 
-pub const Point = struct {
-    x: f64,
-    y: f64,
-};
-
-pub const NodeLayout = struct {
-    center: Point,
-    width: f64,
-    height: f64,
-};
-
-pub const SubgraphLayout = struct {
-    id: usize,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-};
-
-pub const EdgeWaypoint = struct {
-    rank: usize,
-    point: Point,
-};
-
-pub const EdgeWaypoints = struct {
-    points: []EdgeWaypoint,
-};
+pub const Point = layout_mod.result.Point;
+pub const NodeLayout = layout_mod.result.NodeLayout;
+pub const SubgraphLayout = layout_mod.result.SubgraphLayout;
+pub const EdgeWaypoint = layout_mod.result.EdgeWaypoint;
+pub const EdgeWaypoints = layout_mod.result.EdgeWaypoints;
 
 pub const Layout = struct {
     allocator: std.mem.Allocator,
