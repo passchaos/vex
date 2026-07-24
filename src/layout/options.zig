@@ -8,7 +8,64 @@ pub const defaultInterClusterGap: f64 = 35.0;
 pub const defaultClusterAlongExtentBudget: f64 = 224.0;
 pub const defaultClusterAlongShift: f64 = 4.0;
 
-pub fn withGraphAttrs(base: anytype, graph_attrs: anytype) @TypeOf(base) {
+pub const LayoutOptions = struct {
+    node_width: f64 = 54,
+    node_height: f64 = 36,
+    rank_gap: f64 = 36,
+    node_gap: f64 = 36,
+    margin: f64 = 16,
+    margin_y: f64 = 5.5,
+    label_char_width: f64 = 8,
+    label_line_height: f64 = 18,
+    node_padding_x: f64 = 14,
+    node_padding_y: f64 = 9,
+    crossing_passes: usize = 8,
+    coordinate_passes: usize = 4,
+    ranksep_equally: bool = false,
+};
+
+pub const ForceLayoutOptions = struct {
+    width: f64 = 640,
+    height: f64 = 420,
+    margin: f64 = 40,
+    iterations: usize = 120,
+    area_scale: f64 = 1.0,
+};
+
+pub const LayoutAlgorithm = enum {
+    auto,
+    sugiyama,
+    fruchterman_reingold,
+
+    pub fn fromString(value: []const u8) ?LayoutAlgorithm {
+        if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
+        if (std.ascii.eqlIgnoreCase(value, "dot") or
+            std.ascii.eqlIgnoreCase(value, "sugiyama") or
+            std.ascii.eqlIgnoreCase(value, "layered"))
+        {
+            return .sugiyama;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "fr") or
+            std.ascii.eqlIgnoreCase(value, "force") or
+            std.ascii.eqlIgnoreCase(value, "fdp") or
+            std.ascii.eqlIgnoreCase(value, "neato") or
+            std.ascii.eqlIgnoreCase(value, "sfdp") or
+            std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
+            std.ascii.eqlIgnoreCase(value, "fruchterman_reingold"))
+        {
+            return .fruchterman_reingold;
+        }
+        return null;
+    }
+};
+
+pub const LayoutConfig = struct {
+    algorithm: LayoutAlgorithm = .auto,
+    layered: LayoutOptions = .{},
+    force: ForceLayoutOptions = .{},
+};
+
+pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {
     var result = base;
     if (attrValue(graph_attrs, "ranksep")) |value| {
         result.rank_gap = spacing.graph(value, result.rank_gap);

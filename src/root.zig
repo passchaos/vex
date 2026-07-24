@@ -3652,62 +3652,10 @@ fn snapshotGraphForLayout(allocator: std.mem.Allocator, graph: *const Graph) !Gr
 
 const LayoutAxes = layout_mod.axes.Axes(RankDir, Point);
 
-pub const LayoutOptions = struct {
-    node_width: f64 = 54,
-    node_height: f64 = 36,
-    rank_gap: f64 = 36,
-    node_gap: f64 = 36,
-    margin: f64 = 16,
-    margin_y: f64 = 5.5,
-    label_char_width: f64 = 8,
-    label_line_height: f64 = 18,
-    node_padding_x: f64 = 14,
-    node_padding_y: f64 = 9,
-    crossing_passes: usize = 8,
-    coordinate_passes: usize = 4,
-    ranksep_equally: bool = false,
-};
-
-pub const ForceLayoutOptions = struct {
-    width: f64 = 640,
-    height: f64 = 420,
-    margin: f64 = 40,
-    iterations: usize = 120,
-    area_scale: f64 = 1.0,
-};
-
-pub const LayoutAlgorithm = enum {
-    auto,
-    sugiyama,
-    fruchterman_reingold,
-
-    pub fn fromString(value: []const u8) ?LayoutAlgorithm {
-        if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
-        if (std.ascii.eqlIgnoreCase(value, "dot") or
-            std.ascii.eqlIgnoreCase(value, "sugiyama") or
-            std.ascii.eqlIgnoreCase(value, "layered"))
-        {
-            return .sugiyama;
-        }
-        if (std.ascii.eqlIgnoreCase(value, "fr") or
-            std.ascii.eqlIgnoreCase(value, "force") or
-            std.ascii.eqlIgnoreCase(value, "fdp") or
-            std.ascii.eqlIgnoreCase(value, "neato") or
-            std.ascii.eqlIgnoreCase(value, "sfdp") or
-            std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
-            std.ascii.eqlIgnoreCase(value, "fruchterman_reingold"))
-        {
-            return .fruchterman_reingold;
-        }
-        return null;
-    }
-};
-
-pub const LayoutConfig = struct {
-    algorithm: LayoutAlgorithm = .auto,
-    layered: LayoutOptions = .{},
-    force: ForceLayoutOptions = .{},
-};
+pub const LayoutOptions = layout_mod.options.LayoutOptions;
+pub const ForceLayoutOptions = layout_mod.options.ForceLayoutOptions;
+pub const LayoutAlgorithm = layout_mod.options.LayoutAlgorithm;
+pub const LayoutConfig = layout_mod.options.LayoutConfig;
 
 const defaultInterClusterGap = layout_mod.options.defaultInterClusterGap;
 const defaultClusterAlongShift = layout_mod.options.defaultClusterAlongShift;
