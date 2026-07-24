@@ -78,7 +78,7 @@ annotates rendered graph, node, edge, and subgraph groups with
 direction and object counts, subgraph parent/member relationships, object layer and effective
 `href` / `tooltip` / `target` metadata when known, plus edge waypoint geometry
 for long routed edges, edge record/compass ports and compound subgraph
-endpoints, and node rank values, for direct tooling hooks.
+endpoints, edge bounding boxes, and node rank values, for direct tooling hooks.
 The metadata index also includes a generic `<vex:attributes>` section so
 custom and future graph, node, edge, and subgraph attributes remain available
 to downstream tooling without waiting for dedicated schema fields, plus an
@@ -258,7 +258,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
 - Vex SVG output can optionally embed a native minimap overview via `--interactive-minimap`, `vex_interactive_minimap=true`, or `SvgOptions.interactive_minimap`.
 - Vex SVG output can optionally embed a native graph statistics panel via `--interactive-stats`, `vex_interactive_stats=true`, or `SvgOptions.interactive_stats`.
-- Vex SVG output can optionally embed a machine-readable SVG metadata object index with graph structure, rank constraints, layout/canvas facts, rendered graph/node/edge/subgraph object attributes including subgraph parent/member relationships, edge record/compass ports, compound subgraph endpoints and effective edge layout values, a generic custom/future attribute index, object layers, effective `href` / `tooltip` / `target` metadata, object geometry, node ranks, edge waypoints, and layer metadata via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
+- Vex SVG output can optionally embed a machine-readable SVG metadata object index with graph structure, rank constraints, layout/canvas facts, rendered graph/node/edge/subgraph object attributes including subgraph parent/member relationships, edge record/compass ports, compound subgraph endpoints and effective edge layout values, a generic custom/future attribute index, object layers, effective `href` / `tooltip` / `target` metadata, graph/node/edge/subgraph object geometry, node ranks, edge waypoints, and layer metadata via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, angle-bracket IDs/labels retained as plain text, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes including `true` / `false`, `yes` / `no`, `on` / `off`, and `1` / `0`. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; Graphviz object escapes include `\G`, `\N`, `\E`, `\T`, `\H`, and `\L`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.

@@ -8006,6 +8006,7 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         });
     }
     for (graph.edges.items) |edge_item| {
+        const edge_rect = edgeObjectRect(graph, layout, edge_item);
         try writer.print("<vex:edge id=\"{d}\" from=\"{d}\" to=\"{d}\"", .{ edge_item.id, edge_item.from, edge_item.to });
         if (edge_item.from < graph.nodes.items.len) {
             try writer.writeAll(" from-label=\"");
@@ -8049,6 +8050,14 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             if (edge_item.constraint) "true" else "false",
             edge_item.min_len,
         });
+        if (edge_rect) |rect| {
+            try writer.print(" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"", .{
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+            });
+        }
         if (edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) {
             try writer.writeAll(">\n");
             for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
@@ -9306,6 +9315,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .object_weight = if (metadata) edge_item.weight else null,
         .object_constraint = if (metadata) edge_item.constraint else null,
         .object_min_len = if (metadata) edge_item.min_len else null,
+        .object_rect = if (metadata) edgeObjectRect(graph, layout, edge_item) else null,
         .object_waypoints = object_waypoints,
         .collapse_member = collapse_member,
     });
@@ -9685,11 +9695,119 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
     return bounds.rect();
 }
 
+fn edgeObjectRect(graph: *const Graph, layout: *const Layout, edge_item: Edge) ?RectF {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return null;
+    const visual = resolveEdgeVisual(graph, edge_item);
+    const offset = if (edge_item.from == edge_item.to) 0 else parallelEdgeOffset(graph, edge_item.id);
+    const route = if (edge_item.from == edge_item.to)
+        selfLoopRoute(layout.nodes[edge_item.from])
+    else
+        edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
+    var bounds = BoundsBuilder{};
+    bounds.includePoint(route.start);
+    bounds.includePoint(route.control1);
+    bounds.includePoint(route.control2);
+    bounds.includePoint(route.end);
+
+    if (edge_item.from != edge_item.to) {
+        const routing = svgEdgeRoutingForEdge(graph, edge_item, svgEdgeRoutingMode(graph));
+        if (isBackEdge(layout, edge_item)) {
+            includeBackEdgeObjectBounds(&bounds, layout, edge_item, layout.rankdir, offset, route);
+        } else {
+            const waypoint_count = longEdgeWaypointCount(layout, edge_item);
+            var current = route.start;
+            var index: usize = 0;
+            while (index < waypoint_count) : (index += 1) {
+                const next = longEdgeWaypoint(layout, edge_item, layout.rankdir, offset, index, waypoint_count);
+                bounds.includePoint(next);
+                if (routing == .curved) {
+                    const controls = smoothSegmentControls(current, next, layout.rankdir);
+                    bounds.includePoint(controls.c1);
+                    bounds.includePoint(controls.c2);
+                }
+                current = next;
+            }
+            if (waypoint_count > 0 and routing == .curved) {
+                const controls = smoothSegmentControls(current, route.end, layout.rankdir);
+                bounds.includePoint(controls.c1);
+                bounds.includePoint(controls.c2);
+            }
+        }
+    }
+
+    includeEdgeLabelObjectBounds(&bounds, graph, layout, edge_item, route, visual);
+    const marker_padding = visual.marker_scale * 6.0;
+    const padding = @max(4.0, @max(visual.width / 2.0 + 2.0, marker_padding));
+    return bounds.rectExpanded(padding);
+}
+
+fn includeBackEdgeObjectBounds(bounds: *BoundsBuilder, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, route: EdgeRoute) void {
+    const from = layout.nodes[edge_item.from];
+    const to = layout.nodes[edge_item.to];
+    const side_gap = @max(5.0, layout.margin * 0.3) + @abs(offset);
+    if (rankdir == .TB or rankdir == .BT) {
+        const prefer_left = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
+        const side_x = if (prefer_left)
+            @max(layout.margin_x, @min(from.center.x - from.width / 2.0, to.center.x - to.width / 2.0) - side_gap)
+        else
+            @min(layout.width - layout.margin_x, @max(from.center.x + from.width / 2.0, to.center.x + to.width / 2.0) + side_gap);
+        const start_side_dx = side_x - route.start.x;
+        const side_bulge = if (prefer_left) -@abs(start_side_dx) * 0.72 else @abs(start_side_dx) * 0.72;
+        bounds.includePoint(.{ .x = side_x, .y = route.start.y });
+        bounds.includePoint(.{ .x = side_x, .y = route.end.y });
+        bounds.includePoint(.{ .x = side_x + side_bulge, .y = (route.start.y + route.end.y) / 2.0 });
+        return;
+    }
+    const prefer_top = backEdgeUsesNegativeSide(layout, edge_item, rankdir);
+    const side_y = if (prefer_top)
+        @max(layout.margin_y, @min(from.center.y - from.height / 2.0, to.center.y - to.height / 2.0) - side_gap)
+    else
+        @min(layout.height - layout.margin_y, @max(from.center.y + from.height / 2.0, to.center.y + to.height / 2.0) + side_gap);
+    const start_side_dy = side_y - route.start.y;
+    const side_bulge = if (prefer_top) -@abs(start_side_dy) * 0.62 else @abs(start_side_dy) * 0.62;
+    bounds.includePoint(.{ .x = route.start.x, .y = side_y });
+    bounds.includePoint(.{ .x = route.end.x, .y = side_y });
+    bounds.includePoint(.{ .x = (route.start.x + route.end.x) / 2.0, .y = side_y + side_bulge });
+}
+
+fn includeEdgeLabelObjectBounds(bounds: *BoundsBuilder, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual) void {
+    if (edge_item.label) |label| {
+        const center = if (edge_item.from == edge_item.to)
+            route.label
+        else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
+            route.label
+        else if (edgeLabelFloatEnabled(edge_item.attrs.items))
+            Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+        else
+            edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
+        bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
+    }
+    const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
+    const label_distance = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0);
+    const label_angle = parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0);
+    if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
+        bounds.includeRect(edgeLabelRect(label, endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false), label_font_size));
+    }
+    if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
+        bounds.includeRect(edgeLabelRect(label, endpointLabelPosition(route.end, route.label, label_distance, label_angle, true), label_font_size));
+    }
+    if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
+        bounds.includeRect(edgeLabelRect(label, edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size), label_font_size));
+    }
+}
+
 const BoundsBuilder = struct {
     min_x: f64 = std.math.floatMax(f64),
     min_y: f64 = std.math.floatMax(f64),
     max_x: f64 = -std.math.floatMax(f64),
     max_y: f64 = -std.math.floatMax(f64),
+
+    fn includePoint(self: *BoundsBuilder, point: Point) void {
+        self.min_x = @min(self.min_x, point.x);
+        self.min_y = @min(self.min_y, point.y);
+        self.max_x = @max(self.max_x, point.x);
+        self.max_y = @max(self.max_y, point.y);
+    }
 
     fn includeRect(self: *BoundsBuilder, item_rect: RectF) void {
         if (item_rect.width <= 0 or item_rect.height <= 0) return;
@@ -9706,6 +9824,17 @@ const BoundsBuilder = struct {
             .y = self.min_y,
             .width = self.max_x - self.min_x,
             .height = self.max_y - self.min_y,
+        };
+    }
+
+    fn rectExpanded(self: BoundsBuilder, padding: f64) ?RectF {
+        if (self.min_x == std.math.floatMax(f64)) return null;
+        const safe_padding = @max(0.5, padding);
+        return .{
+            .x = self.min_x - safe_padding,
+            .y = self.min_y - safe_padding,
+            .width = @max(1.0, self.max_x - self.min_x) + safe_padding * 2.0,
+            .height = @max(1.0, self.max_y - self.min_y) + safe_padding * 2.0,
         };
     }
 };
@@ -16148,7 +16277,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\" weight=\"1\" constraint=\"true\" minlen=\"1\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\" weight=\"1\" constraint=\"true\" minlen=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-kind=\"node\" data-vex-object-id=\"0\" data-vex-object-label=\"api\" data-vex-object-shape=\"ellipse\"") != null);
@@ -16363,10 +16492,53 @@ test "SVG metadata records effective edge layout attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"a\" to-label=\"b\" weight=\"1\" constraint=\"true\" minlen=\"1\"/>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"1\" from=\"1\" to=\"2\" from-label=\"b\" to-label=\"c\" weight=\"2.5\" constraint=\"false\" minlen=\"3\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"a\" to-label=\"b\" weight=\"1\" constraint=\"true\" minlen=\"1\" x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"1\" from=\"1\" to=\"2\" from-label=\"b\" to-label=\"c\" weight=\"2.5\" constraint=\"false\" minlen=\"3\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from-label=\"a\" data-vex-object-to-label=\"b\" data-vex-object-weight=\"1\" data-vex-object-constraint=\"true\" data-vex-object-minlen=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-from-label=\"b\" data-vex-object-to-label=\"c\" data-vex-object-weight=\"2.5\" data-vex-object-constraint=\"false\" data-vex-object-minlen=\"3\"") != null);
+}
+
+test "SVG metadata edge geometry covers curved and self-loop routes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph EdgeGeometry {
+        \\  a -> b [label=curve];
+        \\  b -> b [label=loop];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const curve = graph.edges.items[0];
+    const loop = graph.edges.items[1];
+    const curve_rect = edgeObjectRect(&graph, &layout, curve) orelse return error.MissingCurveGeometry;
+    const loop_rect = edgeObjectRect(&graph, &layout, loop) orelse return error.MissingLoopGeometry;
+    const curve_route = edgeRouteForEdge(&graph, &layout, curve, layout.rankdir, parallelEdgeOffset(&graph, curve.id));
+    const loop_route = selfLoopRoute(layout.nodes[loop.from]);
+    try std.testing.expect(pointInsideRect(curve_rect, curve_route.start));
+    try std.testing.expect(pointInsideRect(curve_rect, curve_route.control1));
+    try std.testing.expect(pointInsideRect(curve_rect, curve_route.control2));
+    try std.testing.expect(pointInsideRect(curve_rect, curve_route.end));
+    try std.testing.expect(pointInsideRect(loop_rect, loop_route.start));
+    try std.testing.expect(pointInsideRect(loop_rect, loop_route.control1));
+    try std.testing.expect(pointInsideRect(loop_rect, loop_route.control2));
+    try std.testing.expect(pointInsideRect(loop_rect, loop_route.end));
+    try std.testing.expect(curve_rect.width > 0 and curve_rect.height > 0);
+    try std.testing.expect(loop_rect.width > 0 and loop_rect.height > 0);
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-object-x=") == null);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    const curve_fragment = svgGroupFragmentById(svg, "edge1") orelse return error.MissingCurveGroup;
+    const loop_fragment = svgGroupFragmentById(svg, "edge2") orelse return error.MissingLoopGroup;
+    try std.testing.expect(std.mem.indexOf(u8, curve_fragment, "data-vex-object-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, curve_fragment, "data-vex-object-height=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, loop_fragment, "data-vex-object-x=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, loop_fragment, "data-vex-object-height=\"") != null);
 }
 
 test "DOT and typed API can enable SVG metadata index" {
