@@ -21314,6 +21314,18 @@ test "cluster colors inherit parent subgraph colorscheme" {
         \\      pencolor=7;
         \\      a;
         \\    }
+        \\    subgraph cluster_gradient {
+        \\      label="Gradient";
+        \\      style=filled;
+        \\      fillcolor="2:7";
+        \\      c;
+        \\    }
+        \\    subgraph cluster_striped {
+        \\      label="Striped";
+        \\      style=striped;
+        \\      fillcolor="1;0.5:5";
+        \\      d;
+        \\    }
         \\    subgraph cluster_explicit {
         \\      label="Explicit";
         \\      colorscheme=X11;
@@ -21337,6 +21349,16 @@ test "cluster colors inherit parent subgraph colorscheme" {
     const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
     try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#e5f5f9\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "stroke=\"#238b45\"") != null);
+
+    const gradient_fragment = svgGroupFragmentByTitle(svg, "Gradient") orelse return error.MissingGradientCluster;
+    try std.testing.expect(std.mem.indexOf(u8, gradient_fragment, "fill=\"url(#vex-cluster-fill-3)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"#e5f5f9\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stop-color=\"#238b45\"") != null);
+
+    const striped_fragment = svgGroupFragmentByTitle(svg, "Striped") orelse return error.MissingClusterRect;
+    try std.testing.expect(std.mem.indexOf(u8, striped_fragment, "id=\"vex-cluster-stripes-4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, striped_fragment, "fill=\"#f7fcfd\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, striped_fragment, "fill=\"#66c2a4\" stroke=\"none\"") != null);
 
     const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "fill=\"red\" stroke=\"blue\"") != null);
