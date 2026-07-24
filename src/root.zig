@@ -177,6 +177,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_layers: bool,
     vex_interactive_collapse: bool,
     vex_interactive_filter: bool,
+    vex_interactive_focus: bool,
     vex_interactive_inspector: bool,
     vex_interactive_search: bool,
     vex_interactive_viewport: bool,
@@ -887,6 +888,7 @@ pub const Graph = struct {
             .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
             .vex_interactive_collapse => |value| try self.setGraphAttrRaw("vex_interactive_collapse", boolAttrValue(value)),
             .vex_interactive_filter => |value| try self.setGraphAttrRaw("vex_interactive_filter", boolAttrValue(value)),
+            .vex_interactive_focus => |value| try self.setGraphAttrRaw("vex_interactive_focus", boolAttrValue(value)),
             .vex_interactive_inspector => |value| try self.setGraphAttrRaw("vex_interactive_inspector", boolAttrValue(value)),
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
             .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
@@ -7635,6 +7637,7 @@ pub const SvgOptions = struct {
     interactive_layers: bool = false,
     interactive_collapse: bool = false,
     interactive_filter: bool = false,
+    interactive_focus: bool = false,
     interactive_inspector: bool = false,
     interactive_search: bool = false,
     interactive_viewport: bool = false,
@@ -7796,6 +7799,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     const write_interactive_layers = if (maybe_layers) |_| svgInteractiveLayersEnabled(graph, options) else false;
     const write_interactive_collapse = svgInteractiveCollapseEnabled(graph, options);
     const write_interactive_filter = svgInteractiveFilterEnabled(graph, options);
+    const write_interactive_focus = svgInteractiveFocusEnabled(graph, options);
     const write_interactive_inspector = svgInteractiveInspectorEnabled(graph, options);
     const write_interactive_search = svgInteractiveSearchEnabled(graph, options);
 
@@ -7806,19 +7810,19 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
                 const context = SvgLayerContext{ .layers = layers, .index = index };
                 try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
                 try renderSvgClusters(writer, graph, layout, context, write_interactive_search, write_interactive_collapse, write_interactive_inspector);
-                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_inspector);
+                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector);
                 try writer.writeAll("</g>\n");
             }
         } else for (layers.names, 0..) |layer_name, index| {
             const context = SvgLayerContext{ .layers = layers, .index = index };
             try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
             try renderSvgClusters(writer, graph, layout, context, write_interactive_search, write_interactive_collapse, write_interactive_inspector);
-            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_inspector);
+            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector);
             try writer.writeAll("</g>\n");
         }
     } else {
         try renderSvgClusters(writer, graph, layout, null, write_interactive_search, write_interactive_collapse, write_interactive_inspector);
-        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null, write_interactive_search, write_interactive_collapse, write_interactive_inspector);
+        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector);
     }
     try writer.writeAll("</g>\n");
     if (write_interactive_viewport) try writer.writeAll("</g>\n");
@@ -7832,6 +7836,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     if (write_interactive_filter) {
         try writeSvgFilterControls(writer, controls_x, controls_y);
         controls_y += svgFilterControlsHeight() + 8.0;
+    }
+    if (write_interactive_focus) {
+        try writeSvgFocusControls(writer, controls_x, controls_y);
+        controls_y += svgFocusControlsHeight() + 8.0;
     }
     if (write_interactive_inspector) {
         try writeSvgInspectorControls(writer, controls_x, controls_y);
@@ -7873,6 +7881,12 @@ fn svgInteractiveCollapseEnabled(graph: *const Graph, options: SvgOptions) bool 
 fn svgInteractiveFilterEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_filter) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_filter") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn svgInteractiveFocusEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_focus) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_focus") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -8162,6 +8176,96 @@ fn svgInspectorControlsHeight() f64 {
     return 64.0;
 }
 
+fn writeSvgFocusControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
+    try writer.writeAll(
+        \\<style>
+        \\.vex-focus-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-focus-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-focus-control { cursor: pointer; }
+        \\.vex-focus-control rect { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
+        \\.vex-focus-control text { fill: #0f172a; pointer-events: none; }
+        \\.vex-focus-dim { opacity: 0.16; }
+        \\.vex-focus-match { opacity: 1; }
+        \\.vex-focus-match > ellipse,
+        \\.vex-focus-match > polygon,
+        \\.vex-focus-match > rect,
+        \\.vex-focus-match > path { stroke: #22c55e !important; stroke-width: 3 !important; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-focus-controls\" class=\"vex-focus-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
+    try writer.writeAll("<rect class=\"vex-focus-panel-bg\" x=\"0\" y=\"0\" width=\"132\" height=\"34\" rx=\"4\"/>\n");
+    try writer.writeAll("<g class=\"vex-focus-control\" data-vex-focus-action=\"clear\" role=\"button\" tabindex=\"0\" transform=\"translate(4 4)\">\n<title>Clear focus</title>\n<rect x=\"0\" y=\"0\" width=\"92\" height=\"20\" rx=\"3\"/>\n<text x=\"14\" y=\"14\">Clear focus</text>\n</g>\n</g>\n");
+    try writer.writeAll(
+        \\<script type="application/ecmascript"><![CDATA[
+        \\(function () {
+        \\  var script = document.currentScript;
+        \\  var root = script && script.ownerSVGElement ? script.ownerSVGElement : document.documentElement;
+        \\  function setClass(item, name, enabled) {
+        \\    if (item.classList) {
+        \\      item.classList.toggle(name, enabled);
+        \\      return;
+        \\    }
+        \\    var classes = item.getAttribute('class') || '';
+        \\    var has = classes.indexOf(name) !== -1;
+        \\    if (enabled && !has) item.setAttribute('class', classes + ' ' + name);
+        \\    if (!enabled && has) item.setAttribute('class', classes.replace(name, ''));
+        \\  }
+        \\  function clearFocus() {
+        \\    var items = root.querySelectorAll('[data-vex-focus-id]');
+        \\    for (var i = 0; i < items.length; i += 1) {
+        \\      setClass(items[i], 'vex-focus-match', false);
+        \\      setClass(items[i], 'vex-focus-dim', false);
+        \\    }
+        \\  }
+        \\  function relatedSet(item) {
+        \\    var result = {};
+        \\    var ids = ((item.getAttribute('data-vex-focus-related') || '') + ' ' + (item.getAttribute('data-vex-focus-id') || '')).split(/\s+/);
+        \\    for (var i = 0; i < ids.length; i += 1) if (ids[i]) result[ids[i]] = true;
+        \\    return result;
+        \\  }
+        \\  function applyFocus(item) {
+        \\    var related = relatedSet(item);
+        \\    var items = root.querySelectorAll('[data-vex-focus-id]');
+        \\    for (var i = 0; i < items.length; i += 1) {
+        \\      var id = items[i].getAttribute('data-vex-focus-id');
+        \\      var match = !!related[id];
+        \\      setClass(items[i], 'vex-focus-match', match);
+        \\      setClass(items[i], 'vex-focus-dim', !match);
+        \\    }
+        \\  }
+        \\  var focusItems = root.querySelectorAll('[data-vex-focus-id]');
+        \\  for (var i = 0; i < focusItems.length; i += 1) {
+        \\    focusItems[i].style.cursor = 'pointer';
+        \\    focusItems[i].addEventListener('click', function (event) {
+        \\      event.stopPropagation();
+        \\      applyFocus(this);
+        \\    });
+        \\  }
+        \\  var clears = root.querySelectorAll('[data-vex-focus-action="clear"]');
+        \\  for (var j = 0; j < clears.length; j += 1) {
+        \\    clears[j].addEventListener('click', function (event) {
+        \\      event.preventDefault();
+        \\      clearFocus();
+        \\    });
+        \\    clears[j].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        clearFocus();
+        \\      }
+        \\    });
+        \\  }
+        \\}());
+        \\]]></script>
+        \\
+    );
+}
+
+fn svgFocusControlsHeight() f64 {
+    return 34.0;
+}
+
 fn writeSvgSearchControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
     try writer.writeAll(
         \\<style>
@@ -8445,23 +8549,23 @@ fn clusterLayerMembership(graph: *const Graph, cluster: Subgraph, layer: SvgLaye
     return .inherit;
 }
 
-fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, inspector: bool) Io.Writer.Error!void {
+fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool) Io.Writer.Error!void {
     switch (svgOutputOrder(graph)) {
         .edgesfirst => {
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, inspector);
-            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, inspector);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector);
             return;
         },
         .nodesfirst => {
-            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, inspector);
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, inspector);
+            for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector);
             return;
         },
         .breadthfirst => {},
     }
     if (graph.nodes.items.len > 512 or graph.edges.items.len > 1024) {
-        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, inspector);
-        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, inspector);
+        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector);
+        for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector);
         return;
     }
 
@@ -8474,7 +8578,7 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
 
     for (graph.nodes.items) |node_item| {
         if (!node_written[node_item.id]) {
-            try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, inspector);
+            try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector);
             node_written[node_item.id] = true;
         }
         var outgoing: [1024]EdgeId = undefined;
@@ -8488,21 +8592,21 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
         for (outgoing[0..outgoing_len]) |edge_id| {
             const edge_item = graph.edges.items[edge_id];
             if (edge_item.to < node_written.len and !node_written[edge_item.to]) {
-                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to], layer, search, collapse, inspector);
+                try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to], layer, search, collapse, focus, inspector);
                 node_written[edge_item.to] = true;
             }
-            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, inspector);
+            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector);
             edge_written[edge_item.id] = true;
         }
     }
 
     for (graph.edges.items) |edge_item| {
         if (edge_item.id < edge_written.len and edge_written[edge_item.id]) continue;
-        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, inspector);
+        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector);
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id < node_written.len and node_written[node_item.id]) continue;
-        try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, inspector);
+        try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector);
     }
 }
 
@@ -8521,7 +8625,7 @@ fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
     return a.to < b.to;
 }
 
-fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, inspector: bool) Io.Writer.Error!void {
+fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool) Io.Writer.Error!void {
     const edge_concentrate = svgConcentrateForEdge(graph, edge_item, concentrate);
     if (edge_concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
     if (layer) |context| {
@@ -8540,6 +8644,10 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const collapse_member = if (collapse) svgEdgeCollapseMembership(&collapse_member_buf, graph, edge_item) else null;
     var inspector_text_buf: [1024]u8 = undefined;
     const inspector_text = if (inspector) svgEdgeInspectorText(&inspector_text_buf, edge_item, edge_context.edge_name) else null;
+    var focus_id_buf: [32]u8 = undefined;
+    const focus_id = if (focus) svgFocusEdgeId(&focus_id_buf, edge_item.id) else null;
+    var focus_related_buf: [1024]u8 = undefined;
+    const focus_related = if (focus) svgEdgeFocusRelated(&focus_related_buf, edge_item) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = edge_item.attrs.items,
@@ -8548,6 +8656,8 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .context = edge_context,
         .search_text = search_text,
         .inspector_text = inspector_text,
+        .focus_id = focus_id,
+        .focus_related = focus_related,
         .collapse_member = collapse_member,
     });
     const edge_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -8719,7 +8829,7 @@ fn rectsOverlap(a: RectF, b: RectF) bool {
         @max(a.y, b.y) < @min(a.y + a.height, b.y + b.height);
 }
 
-fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node, layer: ?SvgLayerContext, search: bool, collapse: bool, inspector: bool) Io.Writer.Error!void {
+fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, node_item: Node, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool) Io.Writer.Error!void {
     if (layer) |context| {
         if (!svgNodeInLayer(graph, node_item, context)) return;
     }
@@ -8738,6 +8848,10 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const collapse_member = if (collapse) svgNodeCollapseMembership(&collapse_member_buf, graph, node_item.id) else null;
     var inspector_text_buf: [1024]u8 = undefined;
     const inspector_text = if (inspector) svgNodeInspectorText(&inspector_text_buf, node_item, node_name, node_fallback_title) else null;
+    var focus_id_buf: [32]u8 = undefined;
+    const focus_id = if (focus) svgFocusNodeId(&focus_id_buf, node_item.id) else null;
+    var focus_related_buf: [1024]u8 = undefined;
+    const focus_related = if (focus) svgNodeFocusRelated(&focus_related_buf, graph, node_item.id) else null;
     try writeSvgGroupOpen(writer, .{
         .graph = graph,
         .attrs = node_item.attrs.items,
@@ -8746,6 +8860,8 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .context = node_context,
         .search_text = search_text,
         .inspector_text = inspector_text,
+        .focus_id = focus_id,
+        .focus_related = focus_related,
         .collapse_member = collapse_member,
     });
     const node_anchor_id = SvgAnchorIdOptions{ .group = .{
@@ -9017,6 +9133,36 @@ fn svgClusterInspectorText(buffer: []u8, cluster: Subgraph) []const u8 {
     return builder.slice();
 }
 
+fn svgFocusNodeId(buffer: []u8, node_id: NodeId) []const u8 {
+    return std.fmt.bufPrint(buffer, "node-{d}", .{node_id + 1}) catch "";
+}
+
+fn svgFocusEdgeId(buffer: []u8, edge_id: EdgeId) []const u8 {
+    return std.fmt.bufPrint(buffer, "edge-{d}", .{edge_id + 1}) catch "";
+}
+
+fn svgNodeFocusRelated(buffer: []u8, graph: *const Graph, node_id: NodeId) []const u8 {
+    var builder = SvgSearchTextBuilder.init(buffer);
+    var id_buf: [32]u8 = undefined;
+    builder.append(svgFocusNodeId(&id_buf, node_id));
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from != node_id and edge_item.to != node_id) continue;
+        builder.append(svgFocusEdgeId(&id_buf, edge_item.id));
+        if (edge_item.from < graph.nodes.items.len) builder.append(svgFocusNodeId(&id_buf, edge_item.from));
+        if (edge_item.to < graph.nodes.items.len) builder.append(svgFocusNodeId(&id_buf, edge_item.to));
+    }
+    return builder.slice();
+}
+
+fn svgEdgeFocusRelated(buffer: []u8, edge_item: Edge) []const u8 {
+    var builder = SvgSearchTextBuilder.init(buffer);
+    var id_buf: [32]u8 = undefined;
+    builder.append(svgFocusEdgeId(&id_buf, edge_item.id));
+    builder.append(svgFocusNodeId(&id_buf, edge_item.from));
+    builder.append(svgFocusNodeId(&id_buf, edge_item.to));
+    return builder.slice();
+}
+
 fn svgCollapseId(buffer: []u8, id: SubgraphId) []const u8 {
     return std.fmt.bufPrint(buffer, "subgraph-{d}", .{id + 1}) catch "";
 }
@@ -9098,6 +9244,8 @@ const SvgGroupOpenOptions = struct {
     is_root_graph: bool = false,
     search_text: ?[]const u8 = null,
     inspector_text: ?[]const u8 = null,
+    focus_id: ?[]const u8 = null,
+    focus_related: ?[]const u8 = null,
     collapse_member: ?[]const u8 = null,
     collapse_target: ?[]const u8 = null,
 };
@@ -9132,6 +9280,16 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
     if (options.inspector_text) |inspector_text| {
         try writer.writeAll(" data-vex-inspect=\"");
         try writeXmlEscaped(writer, inspector_text);
+        try writer.writeByte('"');
+    }
+    if (options.focus_id) |focus_id| {
+        try writer.writeAll(" data-vex-focus-id=\"");
+        try writeXmlEscaped(writer, focus_id);
+        try writer.writeByte('"');
+    }
+    if (options.focus_related) |focus_related| {
+        try writer.writeAll(" data-vex-focus-related=\"");
+        try writeXmlEscaped(writer, focus_related);
         try writer.writeByte('"');
     }
     if (options.collapse_member) |collapse_member| {
@@ -18163,6 +18321,67 @@ test "DOT and typed API can enable Vex filter controls" {
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-filter-controls\"") != null);
 }
 
+test "SVG renderer emits opt-in Vex focus controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  api -> worker;
+        \\  api -> db;
+        \\  ui -> api;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-focus-controls") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-focus-id=") == null);
+
+    const focus_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_focus = true });
+    defer allocator.free(focus_svg);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "id=\"vex-focus-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"node-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"edge-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-related=\"node-1 edge-1 node-1 node-2 edge-2 node-1 node-3 edge-3 node-4 node-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "vex-focus-match") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "applyFocus(this)") != null);
+}
+
+test "DOT and typed API can enable Vex focus controls" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_focus=true];
+        \\  a -> b;
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_focus").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-focus-controls\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_focus = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{});
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_focus").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-focus-controls\"") != null);
+}
+
 test "SVG renderer emits opt-in Vex inspector controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -18427,6 +18646,7 @@ test "SVG interactive controls include filter in panel stack" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{
         .interactive_layers = true,
         .interactive_filter = true,
+        .interactive_focus = true,
         .interactive_inspector = true,
         .interactive_search = true,
         .interactive_viewport = true,
@@ -18435,11 +18655,13 @@ test "SVG interactive controls include filter in panel stack" {
 
     const layer_pos = std.mem.indexOf(u8, svg, "id=\"vex-layer-controls\"") orelse return error.MissingLayerControls;
     const filter_pos = std.mem.indexOf(u8, svg, "id=\"vex-filter-controls\"") orelse return error.MissingFilterControls;
+    const focus_pos = std.mem.indexOf(u8, svg, "id=\"vex-focus-controls\"") orelse return error.MissingFocusControls;
     const inspector_pos = std.mem.indexOf(u8, svg, "id=\"vex-inspector-controls\"") orelse return error.MissingInspectorControls;
     const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
     const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
     try std.testing.expect(layer_pos < filter_pos);
-    try std.testing.expect(filter_pos < inspector_pos);
+    try std.testing.expect(filter_pos < focus_pos);
+    try std.testing.expect(focus_pos < inspector_pos);
     try std.testing.expect(inspector_pos < search_pos);
     try std.testing.expect(search_pos < viewport_pos);
 }
