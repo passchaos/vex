@@ -11882,7 +11882,7 @@ fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
 }
 
 fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
-    const style = attrValue(cluster.attrs.items, "style");
+    const style = inheritedClusterVisualAttr(graph, cluster, "style");
     const filled = styleHas(style, "filled");
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
@@ -16086,6 +16086,47 @@ test "SVG renderer accepts semicolon separated style lists" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-dasharray=\"8,5\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke-width=\"3\"") != null);
+}
+
+test "cluster style inherits from parent subgraphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    style="filled;rounded;dashed";
+        \\    fillcolor="#dcfce7";
+        \\    color="#16a34a";
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      style=solid;
+        \\      color="#1d4ed8";
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "style") == null);
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "<rect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "rx=\"10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#dcfce7\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "stroke=\"#16a34a\"") != null);
+    try std.testing.expect(svgFragmentHasDash(inner_fragment));
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(!svgFragmentHasDash(explicit_fragment));
 }
 
 test "SVG renderer treats solid as ordered line style" {
