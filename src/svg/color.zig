@@ -6,6 +6,17 @@
 
 const std = @import("std");
 
+pub const Segment = struct {
+    color: []const u8,
+    fraction: f64,
+    has_fraction: bool,
+};
+
+pub const List = struct {
+    segments: [8]Segment = undefined,
+    len: usize = 0,
+};
+
 pub fn resolve(attrs: anytype, graph_attrs: anytype, color: []const u8) []const u8 {
     if (std.ascii.eqlIgnoreCase(color, "transparent")) return "none";
     if (std.mem.eql(u8, color, "black") or std.mem.eql(u8, color, "white") or std.mem.eql(u8, color, "lightgrey")) return color;
@@ -26,6 +37,57 @@ pub fn resolve(attrs: anytype, graph_attrs: anytype, color: []const u8) []const 
     const scheme = attrValue(attrs, "colorscheme") orelse attrValue(graph_attrs, "colorscheme") orelse return color;
     if (std.ascii.eqlIgnoreCase(scheme, "X11") or std.ascii.eqlIgnoreCase(scheme, "Xlib")) return color;
     return fromScheme(scheme, color) orelse color;
+}
+
+pub fn parseList(value: []const u8) ?List {
+    if (std.mem.indexOfScalar(u8, value, ':') == null) return null;
+    var result = List{};
+    var left: f64 = 1.0;
+    var splitter = std.mem.splitScalar(u8, value, ':');
+    while (splitter.next()) |raw_part| {
+        if (result.len >= result.segments.len) break;
+        const part = std.mem.trim(u8, raw_part, " \t\r\n");
+        if (part.len == 0) continue;
+        var color = part;
+        var fraction: f64 = 0.0;
+        var has_fraction = false;
+        if (std.mem.indexOfScalar(u8, part, ';')) |semicolon| {
+            color = std.mem.trim(u8, part[0..semicolon], " \t\r\n");
+            const fraction_text = std.mem.trim(u8, part[semicolon + 1 ..], " \t\r\n");
+            if (fraction_text.len == 0) return null;
+            const parsed = std.fmt.parseFloat(f64, fraction_text) catch return null;
+            if (parsed < 0) return null;
+            fraction = @min(parsed, left);
+            left -= fraction;
+            has_fraction = true;
+        }
+        if (color.len == 0) continue;
+        result.segments[result.len] = .{ .color = color, .fraction = fraction, .has_fraction = has_fraction };
+        result.len += 1;
+        if (left <= 0.00001) {
+            left = 0;
+            break;
+        }
+    }
+    if (result.len < 2) return null;
+
+    if (left > 0) {
+        var unspecified: usize = 0;
+        for (result.segments[0..result.len]) |segment| {
+            if (!segment.has_fraction) unspecified += 1;
+        }
+        if (unspecified > 0) {
+            const delta = left / @as(f64, @floatFromInt(unspecified));
+            for (result.segments[0..result.len]) |*segment| {
+                if (!segment.has_fraction) segment.fraction = delta;
+            }
+        } else if (result.segments[result.len - 1].fraction > 0) {
+            result.segments[result.len - 1].fraction += left;
+        }
+    }
+
+    while (result.len > 0 and result.segments[result.len - 1].fraction <= 0 and !result.segments[result.len - 1].has_fraction) result.len -= 1;
+    return if (result.len >= 2) result else null;
 }
 
 fn fromScheme(scheme: []const u8, name: []const u8) ?[]const u8 {
