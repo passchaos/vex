@@ -13037,7 +13037,7 @@ fn edgeHeadCompoundEnabled(graph: *const Graph, edge_item: Edge) bool {
 
 fn subgraphCompoundEnabled(graph: *const Graph, id: SubgraphId) bool {
     if (id >= graph.subgraphs.items.len) return false;
-    return layout_mod.subgraph.compoundEnabled(graph.subgraphs.items[id].attrs.items);
+    return layout_mod.subgraph.compoundEnabledInChain(graph.subgraphs.items, id);
 }
 
 fn edgeClipEnabled(attrs: []const Attr, name: []const u8) bool {
@@ -22105,6 +22105,39 @@ test "subgraph compound clips edges touching that subgraph" {
     try std.testing.expect(!graphCompoundEnabled(&graph));
     try std.testing.expect(subgraphCompoundEnabled(&graph, edge_item.ltail.?));
     try std.testing.expect(subgraphCompoundEnabled(&graph, edge_item.lhead.?));
+}
+
+test "subgraph compound inherits through parent chain" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const left_parent = try graph.addSubgraph("left_parent", null, &.{ a, b }, .{ .compound = true });
+    const left_child = try graph.addSubgraph("left_child", left_parent, &.{ a, b }, .{});
+    const right_parent = try graph.addSubgraph("right_parent", null, &.{ c, d }, .{ .compound = true });
+    const right_child = try graph.addSubgraph("right_child", right_parent, &.{ c, d }, .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(c, d, .{});
+    const edge_id = try graph.addEdge(b, c, .{ .ltail = left_child, .lhead = right_child });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const edge_item = graph.edges.items[edge_id];
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    const left = subgraphRect(&graph, &layout, left_child).?;
+    const right = subgraphRect(&graph, &layout, right_child).?;
+    try std.testing.expect(pointOnRectBoundary(left, route.start));
+    try std.testing.expect(pointOnRectBoundary(right, route.end));
+    try std.testing.expect(!graphCompoundEnabled(&graph));
+    try std.testing.expect(!layout_mod.subgraph.compoundEnabled(graph.subgraphs.items[left_child].attrs.items));
+    try std.testing.expect(!layout_mod.subgraph.compoundEnabled(graph.subgraphs.items[right_child].attrs.items));
+    try std.testing.expect(subgraphCompoundEnabled(&graph, left_child));
+    try std.testing.expect(subgraphCompoundEnabled(&graph, right_child));
 }
 
 test "code API exposes typed compound edge ltail and lhead" {

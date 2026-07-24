@@ -9,6 +9,16 @@ pub fn compoundEnabled(attrs: anytype) bool {
     return parseBool(value) orelse false;
 }
 
+pub fn compoundEnabledInChain(subgraphs: anytype, id: usize) bool {
+    var current: ?usize = id;
+    while (current) |index| {
+        if (index >= subgraphs.len) return false;
+        if (compoundEnabled(subgraphs[index].attrs.items)) return true;
+        current = subgraphs[index].parent;
+    }
+    return false;
+}
+
 pub fn nodePairGap(subgraphs: anytype, left: usize, right: usize, fallback: f64) f64 {
     var best_gap: ?f64 = null;
     var best_depth: usize = 0;
