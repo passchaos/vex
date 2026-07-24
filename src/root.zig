@@ -8897,7 +8897,7 @@ fn writeSvgEllipseWedge(writer: *Io.Writer, center: Point, rx: f64, ry: f64, sta
 }
 
 fn writeSvgLinearGradientDef(writer: *Io.Writer, graph: *const Graph, attrs: []const Attr, id_prefix: []const u8, id: usize, rect: RectF, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
-    const line = gradientLine(rect, angle_degrees);
+    const line = svg_mod.gradient.line(rect, angle_degrees);
     try writer.print("<defs><linearGradient id=\"{s}-{d}\" gradientUnits=\"userSpaceOnUse\" x1=\"{d:.1}\" y1=\"{d:.1}\" x2=\"{d:.1}\" y2=\"{d:.1}\">\n", .{
         id_prefix,
         id,
@@ -8906,13 +8906,13 @@ fn writeSvgLinearGradientDef(writer: *Io.Writer, graph: *const Graph, attrs: []c
         line.end.x,
         line.end.y,
     });
-    try writeSvgGradientStop(writer, gradientStopStartOffset(start, stop), resolveSvgColor(graph, attrs, start.color));
-    try writeSvgGradientStop(writer, gradientStopEndOffset(start, stop), resolveSvgColor(graph, attrs, stop.color));
+    try writeSvgGradientStop(writer, svg_mod.gradient.stopStartOffset(start, stop), resolveSvgColor(graph, attrs, start.color));
+    try writeSvgGradientStop(writer, svg_mod.gradient.stopEndOffset(start, stop), resolveSvgColor(graph, attrs, stop.color));
     try writer.writeAll("</linearGradient></defs>\n");
 }
 
 fn writeSvgRadialGradientDef(writer: *Io.Writer, graph: *const Graph, attrs: []const Attr, id_prefix: []const u8, id: usize, start: ColorSegment, stop: ColorSegment, angle_degrees: f64) Io.Writer.Error!void {
-    const focus = radialGradientFocus(angle_degrees);
+    const focus = svg_mod.gradient.focus(angle_degrees);
     try writer.print("<defs><radialGradient id=\"{s}-{d}\" cx=\"50%\" cy=\"50%\" r=\"75%\" fx=\"{d:.0}%\" fy=\"{d:.0}%\">\n", .{
         id_prefix,
         id,
@@ -8948,44 +8948,6 @@ fn wedgedNodeFillEligible(shape: Shape) bool {
 
 fn parseColorList(value: []const u8) ?ColorList {
     return svg_mod.color.parseList(value);
-}
-
-const GradientLine = struct {
-    start: Point,
-    end: Point,
-};
-
-fn gradientLine(rect: RectF, angle_degrees: f64) GradientLine {
-    const cx = rect.x + rect.width / 2.0;
-    const cy = rect.y + rect.height / 2.0;
-    const angle = degreesToRadians(angle_degrees);
-    const dx = std.math.cos(angle);
-    const dy = -std.math.sin(angle);
-    const half = @max(rect.width, rect.height);
-    return .{
-        .start = .{ .x = cx - dx * half, .y = cy - dy * half },
-        .end = .{ .x = cx + dx * half, .y = cy + dy * half },
-    };
-}
-
-fn radialGradientFocus(angle_degrees: f64) Point {
-    if (@abs(angle_degrees) <= 0.0001) return .{ .x = 50, .y = 50 };
-    const angle = degreesToRadians(angle_degrees);
-    return .{
-        .x = @round(50.0 * (1.0 + std.math.cos(angle))),
-        .y = @round(50.0 * (1.0 - std.math.sin(angle))),
-    };
-}
-
-fn gradientStopStartOffset(start: ColorSegment, stop: ColorSegment) f64 {
-    _ = stop;
-    return if (start.has_fraction) @max(0.0, start.fraction - 0.001) else 0.0;
-}
-
-fn gradientStopEndOffset(start: ColorSegment, stop: ColorSegment) f64 {
-    if (start.has_fraction) return start.fraction;
-    if (stop.has_fraction) return 1.0 - stop.fraction;
-    return 1.0;
 }
 
 fn writeSvgInteractiveOpen(writer: *Io.Writer, allocator: std.mem.Allocator, attrs: []const Attr, context: LabelEscapeContext, fallback_title: ?[]const u8, anchor_id: ?SvgAnchorIdOptions) Io.Writer.Error!SvgInteractiveWrap {
