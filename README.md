@@ -10,6 +10,7 @@ rendering architecture.
 See [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) for the local project guide.
 See [`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md) for the auditable
 completion criteria, current gaps, and explicitly excluded features.
+See [`docs/C_API_V1.md`](docs/C_API_V1.md) for the stable C ABI contract.
 
 ## Current MVP
 
@@ -209,6 +210,13 @@ defer next_layout.deinit();
 ```
 
 Default node and edge label attributes set through the API apply to subsequently added items, with per-item options taking precedence. Typed graph attributes include spline routing modes such as `curved`, `polyline`, `line`, `ortho`, and `none`.
+
+## C API
+
+`zig build` installs `zig-out/include/vex.h` and
+`zig-out/lib/libvex_c.a`. The C ABI supports graph construction, DOT-to-SVG,
+all five layout engines, layout work budgets, and SVG metadata v1. Run
+`zig build test-c-api` for a real C compiler/linker smoke.
 
 ## API Examples
 

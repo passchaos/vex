@@ -89,6 +89,38 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    const c_api_mod = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const c_api = b.addLibrary(.{
+        .name = "vex_c",
+        .linkage = .static,
+        .root_module = c_api_mod,
+    });
+    c_api.installHeader(b.path("include/vex.h"), "vex.h");
+    b.installArtifact(c_api);
+
+    const c_api_smoke = b.addExecutable(.{
+        .name = "vex-c-api-smoke",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    c_api_smoke.root_module.addCSourceFile(.{
+        .file = b.path("tools/c_api_smoke.c"),
+        .flags = &.{"-std=c11"},
+    });
+    c_api_smoke.root_module.addIncludePath(b.path("include"));
+    c_api_smoke.root_module.linkLibrary(c_api);
+    const run_c_api_smoke = b.addRunArtifact(c_api_smoke);
+    const c_api_smoke_step = b.step("test-c-api", "Build and run the C ABI smoke test");
+    c_api_smoke_step.dependOn(&run_c_api_smoke.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -220,12 +252,19 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    const c_api_tests = b.addTest(.{
+        .root_module = c_api_mod,
+    });
+    const run_c_api_tests = b.addRunArtifact(c_api_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_c_api_tests.step);
+    test_step.dependOn(&run_c_api_smoke.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
