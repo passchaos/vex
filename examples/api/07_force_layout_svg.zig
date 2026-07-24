@@ -1,5 +1,7 @@
 //! Build a cyclic graph with the API and render it with layered SVG layout.
 //!
+//! The build step name is historical; this example intentionally uses Sugiyama.
+//!
 //! Run with: zig build run-api-force-layout-svg
 
 const std = @import("std");

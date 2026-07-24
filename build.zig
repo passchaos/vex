@@ -161,7 +161,7 @@ pub fn build(b: *std.Build) void {
             .step_name = "run-api-force-layout-svg",
             .exe_name = "api-force-layout-svg",
             .source = "examples/api/07_force_layout_svg.zig",
-            .desc = "Run API example: force-directed SVG layout",
+            .desc = "Run API example: layered cyclic SVG layout",
         },
     };
 
