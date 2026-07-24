@@ -36,6 +36,36 @@ pub const IncrementalLayoutOptions = struct {
     stability: f64 = 0.9,
 };
 
+pub const LayoutControl = struct {
+    context: ?*anyopaque = null,
+    should_cancel: ?*const fn (context: ?*anyopaque, work: usize) bool = null,
+
+    pub fn checkpoint(self: LayoutControl, work: usize) error{LayoutCanceled}!void {
+        const callback = self.should_cancel orelse return;
+        if (callback(self.context, work)) return error.LayoutCanceled;
+    }
+};
+
+pub const LayoutWorkBudget = struct {
+    limit: usize,
+    checkpoints: usize = 0,
+    last_work: usize = 0,
+
+    pub fn control(self: *LayoutWorkBudget) LayoutControl {
+        return .{
+            .context = self,
+            .should_cancel = shouldCancel,
+        };
+    }
+
+    fn shouldCancel(context: ?*anyopaque, work: usize) bool {
+        const self: *LayoutWorkBudget = @ptrCast(@alignCast(context.?));
+        self.checkpoints += 1;
+        self.last_work = work;
+        return work > self.limit;
+    }
+};
+
 pub const LayoutAlgorithm = enum {
     auto,
     sugiyama,
@@ -97,6 +127,7 @@ pub const LayoutConfig = struct {
     algorithm: LayoutAlgorithm = .auto,
     layered: LayoutOptions = .{},
     force: ForceLayoutOptions = .{},
+    control: LayoutControl = .{},
 };
 
 pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {

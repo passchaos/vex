@@ -32,6 +32,7 @@ zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --max-input-bytes 1048576 --output simple.svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
 zig build run -- --input examples/simple.dot --layout neato --layout-iterations 20 --output force-fast.svg
+zig build run -- --input examples/simple.dot --layout-work-budget 50000 --output budgeted.svg
 zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-passes 1 --output layered-fast.svg
 zig build run -- --input examples/layers.dot --output interactive.svg --interactive-all
 zig build run -- --input examples/layers.dot --output layers.svg --interactive-layers
@@ -66,6 +67,10 @@ for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
 `graph [layout_iterations=20]`, and the Zig API can pass
 `.{ .force = .{ .iterations = 20 } }`.
+`--layout-work-budget` provides a deterministic cross-engine cancellation
+budget for CI and bounded previews. The Zig API can use a custom
+`LayoutControl` callback or the built-in `LayoutWorkBudget`; cancellation
+returns `error.LayoutCanceled` without returning a partial `Layout`.
 For layered/Sugiyama layout, `--crossing-passes` and `--coordinate-passes`
 control crossing-reduction and coordinate-refinement budgets. DOT can set the
 same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter

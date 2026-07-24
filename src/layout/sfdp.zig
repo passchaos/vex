@@ -1,6 +1,7 @@
 //! Deterministic multilevel spring-electrical layout.
 
 const std = @import("std");
+const LayoutControl = @import("options.zig").LayoutControl;
 const Point = @import("result.zig").Point;
 
 pub const Edge = struct {
@@ -19,6 +20,8 @@ pub const Options = struct {
     stability: f64 = 0,
     theta: f64 = 0.75,
     exact_repulsion_threshold: usize = 48,
+    control: LayoutControl = .{},
+    work_start: usize = 0,
 };
 
 pub const Result = struct {
@@ -26,6 +29,7 @@ pub const Result = struct {
     positions: []Point,
     levels: usize,
     repulsion_evaluations: usize,
+    work: usize,
 
     pub fn deinit(self: *Result) void {
         self.allocator.free(self.positions);
@@ -65,13 +69,15 @@ pub fn layout(
 ) !Result {
     var levels: usize = 1;
     var repulsion_evaluations: usize = 0;
-    const positions = try layoutLevel(allocator, node_count, edges, options, initial, 0, &levels, &repulsion_evaluations);
+    var work = options.work_start;
+    const positions = try layoutLevel(allocator, node_count, edges, options, initial, 0, &levels, &repulsion_evaluations, &work);
     fitToCanvas(positions, options);
     return .{
         .allocator = allocator,
         .positions = positions,
         .levels = levels,
         .repulsion_evaluations = repulsion_evaluations,
+        .work = work,
     };
 }
 
@@ -84,12 +90,15 @@ fn layoutLevel(
     level: usize,
     levels: *usize,
     repulsion_evaluations: *usize,
+    work: *usize,
 ) ![]Point {
     if (node_count == 0) return allocator.alloc(Point, 0);
+    work.* +|= node_count +| edges.len +| 1;
+    try options.control.checkpoint(work.*);
     const max_levels = @max(options.max_levels, 1);
     if (node_count <= 12 or level + 1 >= max_levels) {
         const positions = try initialPositions(allocator, node_count, options, initial);
-        const stats = try relax(allocator, positions, edges, options, @max(options.iterations, 1), if (level == 0) initial else null);
+        const stats = try relax(allocator, positions, edges, options, @max(options.iterations, 1), if (level == 0) initial else null, work);
         repulsion_evaluations.* += stats.evaluations;
         return positions;
     }
@@ -98,7 +107,7 @@ fn layoutLevel(
     defer coarse.deinit();
     if (coarse.node_count >= node_count or coarse.node_count * 4 > node_count * 3) {
         const positions = try initialPositions(allocator, node_count, options, initial);
-        const stats = try relax(allocator, positions, edges, options, @max(options.iterations, 1), if (level == 0) initial else null);
+        const stats = try relax(allocator, positions, edges, options, @max(options.iterations, 1), if (level == 0) initial else null, work);
         repulsion_evaluations.* += stats.evaluations;
         return positions;
     }
@@ -115,12 +124,13 @@ fn layoutLevel(
         level + 1,
         levels,
         repulsion_evaluations,
+        work,
     );
     defer allocator.free(coarse_positions);
 
     const positions = try prolongate(allocator, node_count, coarse.mapping, coarse_positions, options.spring_length);
     const level_iterations = @max(8, options.iterations / @max(level + 2, 2));
-    const stats = try relax(allocator, positions, edges, options, level_iterations, if (level == 0) initial else null);
+    const stats = try relax(allocator, positions, edges, options, level_iterations, if (level == 0) initial else null, work);
     repulsion_evaluations.* += stats.evaluations;
     return positions;
 }
@@ -264,6 +274,7 @@ fn relax(
     options: Options,
     iterations: usize,
     anchors: ?[]const Point,
+    work: *usize,
 ) !RepulsionStats {
     if (positions.len == 0) return .{};
     const displacement = try allocator.alloc(Point, positions.len);
@@ -274,6 +285,8 @@ fn relax(
     var total_stats = RepulsionStats{};
 
     for (0..@max(iterations, 1)) |iteration| {
+        work.* +|= positions.len +| edges.len +| 1;
+        try options.control.checkpoint(work.*);
         @memset(displacement, .{ .x = 0, .y = 0 });
         const stats = try repulsionForces(
             allocator,

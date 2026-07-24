@@ -13,6 +13,7 @@ const usage =
     \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
+    \\        [--layout-work-budget count]
     \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-all]
@@ -35,6 +36,7 @@ const usage =
     \\--max-input-bytes caps DOT/Mermaid input reads.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps neato stress or force-layout iterations.
+    \\--layout-work-budget cancels layout after deterministic work checkpoints.
     \\--interactive-all enables all SVG-native controls and metadata.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
@@ -66,6 +68,7 @@ pub fn main(init: std.process.Init) !void {
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var max_input_bytes: usize = default_max_input_bytes;
     var layout_iterations: ?usize = null;
+    var layout_work_budget: ?usize = null;
     var crossing_passes: ?usize = null;
     var coordinate_passes: ?usize = null;
     var input_format: vex.InputFormat = .auto;
@@ -149,6 +152,11 @@ pub fn main(init: std.process.Init) !void {
             if (i >= args.len) return error.MissingLayoutIterations;
             layout_iterations = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidLayoutIterations;
             if (layout_iterations.? == 0) return error.InvalidLayoutIterations;
+        } else if (std.mem.eql(u8, arg, "--layout-work-budget")) {
+            i += 1;
+            if (i >= args.len) return error.MissingLayoutWorkBudget;
+            layout_work_budget = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidLayoutWorkBudget;
+            if (layout_work_budget.? == 0) return error.InvalidLayoutWorkBudget;
         } else if (std.mem.eql(u8, arg, "--crossing-passes")) {
             i += 1;
             if (i >= args.len) return error.MissingCrossingPasses;
@@ -205,12 +213,20 @@ pub fn main(init: std.process.Init) !void {
     var layered_options = vex.LayoutOptions{};
     if (crossing_passes) |value| layered_options.crossing_passes = value;
     if (coordinate_passes) |value| layered_options.coordinate_passes = value;
+    var work_budget = vex.LayoutWorkBudget{ .limit = layout_work_budget orelse std.math.maxInt(usize) };
     const layout_config = vex.LayoutConfig{
         .algorithm = layout_arg,
         .layered = layered_options,
         .force = if (layout_iterations) |iterations| .{ .iterations = iterations } else .{},
+        .control = if (layout_work_budget != null) work_budget.control() else .{},
     };
-    var layout = try vex.layoutGraph(allocator, &graph, layout_config);
+    var layout = vex.layoutGraph(allocator, &graph, layout_config) catch |err| {
+        if (err == error.LayoutCanceled) {
+            try writeLayoutCanceled(io, &work_budget);
+            std.process.exit(2);
+        }
+        return err;
+    };
     defer layout.deinit();
     const render_options = vex.RenderOptions{ .svg = .{ .interactive_all = interactive_all, .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
     if (output_path) |path| {
@@ -267,6 +283,16 @@ fn writeCheckSummary(io: Io, graph: *const vex.Graph) !void {
     var stderr_buffer: [512]u8 = undefined;
     var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
     try writeCheckSummaryWriter(&stderr_file_writer.interface, graph);
+    try stderr_file_writer.interface.flush();
+}
+
+fn writeLayoutCanceled(io: Io, budget: *const vex.LayoutWorkBudget) !void {
+    var stderr_buffer: [512]u8 = undefined;
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    try stderr_file_writer.interface.print(
+        "layout canceled: work budget exceeded (limit={d}, observed={d}, checkpoints={d})\n",
+        .{ budget.limit, budget.last_work, budget.checkpoints },
+    );
     try stderr_file_writer.interface.flush();
 }
 

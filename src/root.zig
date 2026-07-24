@@ -3581,6 +3581,8 @@ const LayoutAxes = layout_mod.axes.Axes(RankDir, Point);
 pub const LayoutOptions = layout_mod.options.LayoutOptions;
 pub const ForceLayoutOptions = layout_mod.options.ForceLayoutOptions;
 pub const IncrementalLayoutOptions = layout_mod.options.IncrementalLayoutOptions;
+pub const LayoutControl = layout_mod.options.LayoutControl;
+pub const LayoutWorkBudget = layout_mod.options.LayoutWorkBudget;
 pub const LayoutAlgorithm = layout_mod.options.LayoutAlgorithm;
 pub const LayoutConfig = layout_mod.options.LayoutConfig;
 
@@ -3588,26 +3590,38 @@ const defaultInterClusterGap = layout_mod.options.defaultInterClusterGap;
 const defaultClusterAlongShift = layout_mod.options.defaultClusterAlongShift;
 
 pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: LayoutConfig) !Layout {
+    var work = LayoutWorkTracker{ .control = config.control };
     return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
         .auto => unreachable,
-        .sugiyama => layoutLayered(allocator, graph, config.layered),
-        .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
-        .stress_majorization => layoutStressMajorization(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
-        .spring_electrical => layoutSpringElectrical(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
-        .multilevel_spring_electrical => layoutMultilevelSpringElectrical(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
+        .sugiyama => layoutLayeredWithControl(allocator, graph, config.layered, &work),
+        .fruchterman_reingold => layoutFruchtermanReingoldWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
+        .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
+        .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
+        .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
     };
 }
 
 pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, config: LayoutConfig, options: IncrementalLayoutOptions) !Layout {
+    var work = LayoutWorkTracker{ .control = config.control };
     return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
         .auto => unreachable,
-        .sugiyama => layoutLayeredIncremental(allocator, graph, previous, config.layered, options),
-        .fruchterman_reingold => layoutFruchtermanReingoldIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
-        .stress_majorization => layoutStressMajorizationIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
-        .spring_electrical => layoutSpringElectricalIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
-        .multilevel_spring_electrical => layoutMultilevelSpringElectricalIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
+        .sugiyama => layoutLayeredIncrementalWithControl(allocator, graph, previous, config.layered, options, &work),
+        .fruchterman_reingold => layoutFruchtermanReingoldWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
+        .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
+        .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
+        .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
     };
 }
+
+const LayoutWorkTracker = struct {
+    control: LayoutControl,
+    work: usize = 0,
+
+    fn checkpoint(self: *LayoutWorkTracker, amount: usize) error{LayoutCanceled}!void {
+        self.work +|= amount;
+        try self.control.checkpoint(self.work);
+    }
+};
 
 fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) LayoutAlgorithm {
     if (requested != .auto) return requested;
@@ -3636,11 +3650,17 @@ fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoin
 }
 
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutLayeredWithControl(allocator, graph, options, &work);
+}
+
+fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions, work: *LayoutWorkTracker) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     const effective_options = layoutOptionsWithGraphAttrs(options, graph);
     const axes = LayoutAxes.init(graph.rankdir);
     const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.edges.items.len +| 1);
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
     const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
@@ -3715,6 +3735,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     applyRankConstraints(graph, ranks);
     tightenRanksTowardSinks(graph, ranks, acyclic_edge);
     improveRanksByLocalSearch(graph, ranks, acyclic_edge, 2);
+    try work.checkpoint((n +| graph.edges.items.len +| 1) *| 4);
     _ = try improveRanksByNetworkSimplex(allocator, graph, ranks, acyclic_edge, n * 2);
     applyRankConstraints(graph, ranks);
 
@@ -3729,6 +3750,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
     var virtual_levels = try buildVirtualLevels(allocator, graph, ranks);
     defer virtual_levels.deinit();
+    try work.checkpoint((n +| graph.edges.items.len +| 1) *| (effective_options.crossing_passes +| 1));
     try reduceVirtualLevelCrossings(allocator, graph, &virtual_levels, ranks, effective_options.crossing_passes);
     replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
     refineAdjacentExchanges(graph, levels, ranks, 2);
@@ -3752,6 +3774,7 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     defer initial_virtual_positions.deinit();
     applyVirtualRealPositions(&virtual_levels, &initial_virtual_positions, centers);
 
+    try work.checkpoint((n +| graph.edges.items.len +| 1) *| (effective_options.coordinate_passes +| 1));
     refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, effective_options);
     refineLongEdgeDummyCoordinates(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 2);
@@ -3854,23 +3877,31 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 }
 
 pub fn layoutLayeredIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: LayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
-    var result = try layoutLayered(allocator, graph, options);
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutLayeredIncrementalWithControl(allocator, graph, previous, options, incremental, &work);
+}
+
+fn layoutLayeredIncrementalWithControl(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: LayoutOptions, incremental: IncrementalLayoutOptions, work: *LayoutWorkTracker) !Layout {
+    var result = try layoutLayeredWithControl(allocator, graph, options, work);
     errdefer result.deinit();
     if (previous.rankdir != result.rankdir) return result;
     const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    try work.checkpoint(result.nodes.len +| result.edge_waypoints.len +| 1);
     try stabilizeLayeredLayout(graph, previous, &result, effective_options.node_gap, incremental);
     return result;
 }
 
 pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
-    return layoutFruchtermanReingoldWithPrevious(allocator, graph, null, options, .{});
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutFruchtermanReingoldWithPrevious(allocator, graph, null, options, .{}, &work);
 }
 
 pub fn layoutFruchtermanReingoldIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
-    return layoutFruchtermanReingoldWithPrevious(allocator, graph, previous, options, incremental);
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutFruchtermanReingoldWithPrevious(allocator, graph, previous, options, incremental, &work);
 }
 
-fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions, work: *LayoutWorkTracker) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     const n = graph.nodes.items.len;
@@ -3950,6 +3981,7 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
     var temperature = @min(options.width, options.height) / 8.0;
     var iter: usize = 0;
     while (iter < options.iterations) : (iter += 1) {
+        try work.checkpoint(n *| n +| graph.edges.items.len +| 1);
         @memset(disp, .{ .x = 0, .y = 0 });
         for (0..n) |v| {
             var u = v + 1;
@@ -4018,14 +4050,16 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
 }
 
 pub fn layoutStressMajorization(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
-    return layoutStressMajorizationWithPrevious(allocator, graph, null, options, .{});
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutStressMajorizationWithPrevious(allocator, graph, null, options, .{}, &work);
 }
 
 pub fn layoutStressMajorizationIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
-    return layoutStressMajorizationWithPrevious(allocator, graph, previous, options, incremental);
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutStressMajorizationWithPrevious(allocator, graph, previous, options, incremental, &work);
 }
 
-fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions, work: *LayoutWorkTracker) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     const n = graph.nodes.items.len;
@@ -4084,7 +4118,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
-    try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability);
+    try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, work);
     fitStressPositionsToCanvas(positions, sizes, options);
 
     for (nodes, 0..) |*node, id| {
@@ -4179,10 +4213,11 @@ fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankd
     }
 }
 
-fn majorizeStressPositions(positions: []Point, scratch: []Point, distances: StressGraphDistances, iterations: usize, anchors: []const Point, stability: f64) !void {
+fn majorizeStressPositions(positions: []Point, scratch: []Point, distances: StressGraphDistances, iterations: usize, anchors: []const Point, stability: f64, work: ?*LayoutWorkTracker) !void {
     if (positions.len != scratch.len or positions.len != distances.node_count) return error.InvalidStressLayoutState;
     const ideal_length: f64 = 72.0;
     for (0..iterations) |_| {
+        if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| 1);
         for (positions, 0..) |position, from| {
             var sum_x: f64 = 0;
             var sum_y: f64 = 0;
@@ -4269,14 +4304,16 @@ fn stressLayoutEnergy(positions: []const Point, distances: StressGraphDistances)
 }
 
 pub fn layoutSpringElectrical(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
-    return layoutSpringElectricalWithPrevious(allocator, graph, null, options, .{});
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutSpringElectricalWithPrevious(allocator, graph, null, options, .{}, &work);
 }
 
 pub fn layoutSpringElectricalIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
-    return layoutSpringElectricalWithPrevious(allocator, graph, previous, options, incremental);
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutSpringElectricalWithPrevious(allocator, graph, previous, options, incremental, &work);
 }
 
-fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions, work: *LayoutWorkTracker) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     const n = graph.nodes.items.len;
@@ -4332,7 +4369,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
-    springElectricalRelax(graph, positions, displacements, options, anchors, stability);
+    try springElectricalRelax(graph, positions, displacements, options, anchors, stability, work);
     fitStressPositionsToCanvas(positions, sizes, options);
 
     for (nodes, 0..) |*node, id| {
@@ -4357,7 +4394,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     };
 }
 
-fn springElectricalRelax(graph: *const Graph, positions: []Point, displacements: []Point, options: ForceLayoutOptions, anchors: []const Point, stability: f64) void {
+fn springElectricalRelax(graph: *const Graph, positions: []Point, displacements: []Point, options: ForceLayoutOptions, anchors: []const Point, stability: f64, work: ?*LayoutWorkTracker) !void {
     if (positions.len == 0 or positions.len != displacements.len) return;
     const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 0.3) * 240.0);
     const default_temperature = spring_length * std.math.sqrt(@as(f64, @floatFromInt(positions.len))) / 5.0;
@@ -4365,6 +4402,7 @@ fn springElectricalRelax(graph: *const Graph, positions: []Point, displacements:
     const iterations = @max(options.iterations, 1);
 
     for (0..iterations) |iteration| {
+        if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| graph.edges.items.len +| 1);
         @memset(displacements, .{ .x = 0, .y = 0 });
         for (positions, 0..) |position, left| {
             for (positions[left + 1 ..], left + 1..) |other, right| {
@@ -4467,14 +4505,16 @@ fn springElectricalEnergy(graph: *const Graph, positions: []const Point) f64 {
 }
 
 pub fn layoutMultilevelSpringElectrical(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
-    return layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, options, .{});
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, options, .{}, &work);
 }
 
 pub fn layoutMultilevelSpringElectricalIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
-    return layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, options, incremental);
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, options, incremental, &work);
 }
 
-fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions, work: *LayoutWorkTracker) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     const n = graph.nodes.items.len;
@@ -4540,8 +4580,11 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
         .repulsive_power = repulsive_power,
         .spring_length = spring_length,
         .stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0,
+        .control = work.control,
+        .work_start = work.work,
     }, initial);
     defer result.deinit();
+    work.work = result.work;
 
     for (nodes, 0..) |*node, id| {
         var center = result.positions[id];
@@ -16595,7 +16638,7 @@ test "neato stress majorization lowers graph stress" {
     };
     var scratch: [positions.len]Point = undefined;
     const before = stressLayoutEnergy(&positions, distances);
-    try majorizeStressPositions(&positions, &scratch, distances, 60, &.{}, 0);
+    try majorizeStressPositions(&positions, &scratch, distances, 60, &.{}, 0, null);
     const after = stressLayoutEnergy(&positions, distances);
     try std.testing.expect(after < before * 0.25);
 }
@@ -16649,7 +16692,7 @@ test "fdp spring electrical relaxation lowers physical energy" {
     };
     var displacements: [positions.len]Point = undefined;
     const before = springElectricalEnergy(&graph, &positions);
-    springElectricalRelax(&graph, &positions, &displacements, .{ .width = 420, .height = 300, .margin = 30, .iterations = 80 }, &.{}, 0);
+    try springElectricalRelax(&graph, &positions, &displacements, .{ .width = 420, .height = 300, .margin = 30, .iterations = 80 }, &.{}, 0, null);
     const after = springElectricalEnergy(&graph, &positions);
     try std.testing.expect(after < before * 0.55);
 }
@@ -16879,6 +16922,73 @@ test "force layout config iterations override graph fallback" {
     var forty = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = .{ .iterations = 40 } });
     defer forty.deinit();
     try std.testing.expect(distanceBetween(one.nodes[0].center, forty.nodes[0].center) > 0.1);
+}
+
+test "layout work budget cancels every layout engine" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  a -- b -- c -- d -- e -- f -- g -- h -- a;
+        \\  a -- e;
+        \\  c -- g;
+        \\}
+    );
+    defer graph.deinit();
+
+    const algorithms = [_]LayoutAlgorithm{
+        .sugiyama,
+        .fruchterman_reingold,
+        .stress_majorization,
+        .spring_electrical,
+        .multilevel_spring_electrical,
+    };
+    for (algorithms) |algorithm| {
+        var budget = LayoutWorkBudget{ .limit = 1 };
+        const result = layoutGraph(allocator, &graph, .{
+            .algorithm = algorithm,
+            .force = .{ .iterations = 200 },
+            .control = budget.control(),
+        });
+        try std.testing.expectError(error.LayoutCanceled, result);
+        try std.testing.expect(budget.checkpoints > 0);
+        try std.testing.expect(budget.last_work > budget.limit);
+    }
+}
+
+test "large layout work budget preserves normal layout output" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "digraph G { a -> b -> c; a -> c; }");
+    defer graph.deinit();
+
+    var expected = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer expected.deinit();
+    var budget = LayoutWorkBudget{ .limit = std.math.maxInt(usize) };
+    var actual = try layoutGraph(allocator, &graph, .{
+        .algorithm = .sugiyama,
+        .control = budget.control(),
+    });
+    defer actual.deinit();
+
+    try expectNodeCentersEqual(&expected, &actual);
+    try std.testing.expect(budget.checkpoints >= 3);
+}
+
+test "layout work budget cancels incremental layout" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "digraph G { a -> b -> c; }");
+    defer graph.deinit();
+    var previous = try layoutGraph(allocator, &graph, .{});
+    defer previous.deinit();
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(nodeIdByLabel(&graph, "c"), d, .{});
+
+    var budget = LayoutWorkBudget{ .limit = 1 };
+    const result = layoutGraphIncremental(allocator, &graph, &previous, .{
+        .algorithm = .sugiyama,
+        .control = budget.control(),
+    }, .{});
+    try std.testing.expectError(error.LayoutCanceled, result);
+    try std.testing.expect(budget.checkpoints > 0);
 }
 
 test "layered layout honors pass budgets from DOT and typed API" {
