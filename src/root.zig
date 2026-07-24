@@ -7904,7 +7904,19 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             try writeXmlEscaped(writer, label);
             try writer.writeByte('"');
         }
-        try writer.writeAll("/>\n");
+        if (edge_item.id < layout.edge_waypoints.len and layout.edge_waypoints[edge_item.id].points.len > 0) {
+            try writer.writeAll(">\n");
+            for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
+                try writer.print("<vex:waypoint rank=\"{d}\" x=\"{d:.2}\" y=\"{d:.2}\"/>\n", .{
+                    waypoint.rank,
+                    waypoint.point.x,
+                    waypoint.point.y,
+                });
+            }
+            try writer.writeAll("</vex:edge>\n");
+        } else {
+            try writer.writeAll("/>\n");
+        }
     }
     for (graph.subgraphs.items) |subgraph| {
         const subgraph_layout = if (subgraph.id < layout.subgraphs.len) layout.subgraphs[subgraph.id] else SubgraphLayout{ .id = subgraph.id, .x = 0, .y = 0, .width = 0, .height = 0 };
@@ -15261,6 +15273,7 @@ test "SVG renderer emits opt-in metadata index" {
         \\digraph Meta {
         \\  subgraph service { api; worker; }
         \\  api -> worker [label=job];
+        \\  api -> sink [minlen=2];
         \\}
     );
     defer graph.deinit();
@@ -15274,10 +15287,11 @@ test "SVG renderer emits opt-in metadata index" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"Meta\" directed=\"true\" nodes=\"2\" edges=\"1\" subgraphs=\"1\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" name=\"Meta\" directed=\"true\" nodes=\"3\" edges=\"2\" subgraphs=\"1\">") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" label=\"job\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\" x=\"") != null);
 }
 

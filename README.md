@@ -57,8 +57,8 @@ same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
 DOT parse failures report a line, column, source excerpt, caret, and repair hint
 so input mistakes can be fixed without rerunning through another tool.
 
-`--svg-metadata` embeds a machine-readable object index with node and subgraph
-layout geometry in the SVG `<metadata>` element. DOT can enable the same index with
+`--svg-metadata` embeds a machine-readable object index with node, edge
+waypoint, and subgraph layout geometry in the SVG `<metadata>` element. DOT can enable the same index with
 `graph [vex_svg_metadata=true]`, and the Zig API can pass
 `.{ .svg = .{ .metadata = true } }`.
 
