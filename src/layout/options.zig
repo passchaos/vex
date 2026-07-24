@@ -32,6 +32,10 @@ pub const ForceLayoutOptions = struct {
     area_scale: f64 = 1.0,
 };
 
+pub const IncrementalLayoutOptions = struct {
+    stability: f64 = 0.9,
+};
+
 pub const LayoutAlgorithm = enum {
     auto,
     sugiyama,

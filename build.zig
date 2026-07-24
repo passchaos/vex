@@ -163,6 +163,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/07_force_layout_svg.zig",
             .desc = "Run API example: layered cyclic SVG layout",
         },
+        .{
+            .step_name = "run-api-incremental-layout-svg",
+            .exe_name = "api-incremental-layout-svg",
+            .source = "examples/api/08_incremental_layout_svg.zig",
+            .desc = "Run API example: incremental stable SVG layout",
+        },
     };
 
     for (api_examples) |example| {

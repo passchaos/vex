@@ -7,6 +7,10 @@ pub fn writeSvg(gpa: std.mem.Allocator, io: std.Io, graph: *const vex.Graph, fil
     var layout = try vex.layoutGraph(gpa, graph, layout_config);
     defer layout.deinit();
 
+    try writeLayoutSvg(gpa, io, &layout, file_name);
+}
+
+pub fn writeLayoutSvg(gpa: std.mem.Allocator, io: std.Io, layout: *const vex.Layout, file_name: []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(io, output_dir);
 
     const path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ output_dir, file_name });
@@ -17,7 +21,7 @@ pub fn writeSvg(gpa: std.mem.Allocator, io: std.Io, graph: *const vex.Graph, fil
 
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(io, &file_buffer);
-    try vex.render(&file_writer.interface, &layout, .svg, .{});
+    try vex.render(&file_writer.interface, layout, .svg, .{});
     try file_writer.interface.flush();
 
     var stdout_buffer: [8192]u8 = undefined;

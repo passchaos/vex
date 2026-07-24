@@ -43,7 +43,7 @@
 | 机器可读 SVG 对象索引 | 已验证 | graph/node/edge/subgraph 结构、attrs、rank constraints、ports、waypoints、geometry 测试 | schema 版本与兼容策略明确；CLI/API smoke 持续通过 |
 | 精确解析诊断 | 部分完成 | line/column/source/caret/hint 测试 | 扩展到目标 grammar 的语义错误和批量诊断 |
 | 可配置布局/输入预算 | 部分完成 | parse-only、max input、force iterations、layered pass budgets | 增加时间/内存观测和大图基准门槛 |
-| 增量布局与心理地图稳定性 | 未实现 | 无公开 previous-layout API | 添加 NodeId 驱动的增量 API；新增节点时共享节点位移显著低于完整重排 |
+| 增量布局与心理地图稳定性 | 已验证 | `layoutGraphIncremental`；layered/force 共享节点位移门槛、无重叠/边界和 `stability=0` 等价测试 | 保持 NodeId 驱动；共享节点位移显著低于完整重排 |
 | 多语言/运行时绑定 | 未实现 | 只有 Zig API | 按产品需求提供稳定 C ABI、WASM 或 JS/Python 绑定 |
 | 流式/并行大图管线 | 未实现 | 当前 parser/layout 为内存内串行流程 | 建立代表性规模、吞吐、峰值内存和取消门槛 |
 | 清晰模块边界 | 部分完成 | 已拆出 `src/layout/*`、`src/svg/*` | `src/root.zig` 仍承载 parser/model/layout/render 大量实现；继续按稳定边界拆分 |
@@ -61,8 +61,7 @@
 
 ## 当前优先级
 
-1. 增量布局与心理地图稳定性。
-2. 目标 DOT grammar/corpus 与完整 cluster 语义。
-3. 独立的 `neato` / `fdp` / `sfdp` 能力，而不是兼容别名。
-4. 大图性能、内存和取消门槛。
-5. 继续收敛 parser/model/layout/SVG 模块边界。
+1. 目标 DOT grammar/corpus 与完整 cluster 语义。
+2. 独立的 `neato` / `fdp` / `sfdp` 能力，而不是兼容别名。
+3. 大图性能、内存和取消门槛。
+4. 继续收敛 parser/model/layout/SVG 模块边界。

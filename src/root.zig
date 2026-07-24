@@ -3531,6 +3531,7 @@ const LayoutAxes = layout_mod.axes.Axes(RankDir, Point);
 
 pub const LayoutOptions = layout_mod.options.LayoutOptions;
 pub const ForceLayoutOptions = layout_mod.options.ForceLayoutOptions;
+pub const IncrementalLayoutOptions = layout_mod.options.IncrementalLayoutOptions;
 pub const LayoutAlgorithm = layout_mod.options.LayoutAlgorithm;
 pub const LayoutConfig = layout_mod.options.LayoutConfig;
 
@@ -3542,6 +3543,14 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .auto => unreachable,
         .sugiyama => layoutLayered(allocator, graph, config.layered),
         .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
+    };
+}
+
+pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, config: LayoutConfig, options: IncrementalLayoutOptions) !Layout {
+    return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
+        .auto => unreachable,
+        .sugiyama => layoutLayeredIncremental(allocator, graph, previous, config.layered, options),
+        .fruchterman_reingold => layoutFruchtermanReingoldIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
     };
 }
 
@@ -3789,7 +3798,24 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
     };
 }
 
+pub fn layoutLayeredIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: LayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    var result = try layoutLayered(allocator, graph, options);
+    errdefer result.deinit();
+    if (previous.rankdir != result.rankdir) return result;
+    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    try stabilizeLayeredLayout(graph, previous, &result, effective_options.node_gap, incremental);
+    return result;
+}
+
 pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    return layoutFruchtermanReingoldWithPrevious(allocator, graph, null, options, .{});
+}
+
+pub fn layoutFruchtermanReingoldIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    return layoutFruchtermanReingoldWithPrevious(allocator, graph, previous, options, incremental);
+}
+
+fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     const n = graph.nodes.items.len;
@@ -3845,12 +3871,23 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
     const cx = options.width / 2.0;
     const cy = options.height / 2.0;
     const radius = @max(1.0, @min(options.width, options.height) * 0.35);
+    const stability = std.math.clamp(incremental.stability, 0.0, 1.0);
     for (positions, 0..) |*pos, id| {
         const angle = 2.0 * std.math.pi * @as(f64, @floatFromInt(id)) / @as(f64, @floatFromInt(@max(n, 1)));
-        pos.* = .{
+        const fallback = Point{
             .x = cx + std.math.cos(angle) * radius,
             .y = cy + std.math.sin(angle) * radius,
         };
+        if (previous) |prior| {
+            if (prior.rankdir == graph.rankdir and id < prior.nodes.len) {
+                pos.* = .{
+                    .x = std.math.clamp(prior.nodes[id].center.x * stability + fallback.x * (1.0 - stability), options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0),
+                    .y = std.math.clamp(prior.nodes[id].center.y * stability + fallback.y * (1.0 - stability), options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0),
+                };
+                continue;
+            }
+        }
+        pos.* = fallback;
     }
 
     const area = @max(1.0, (options.width - options.margin * 2.0) * (options.height - options.margin * 2.0) * options.area_scale);
@@ -3889,6 +3926,14 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
             const d = @max(0.01, std.math.hypot(disp[id].x, disp[id].y));
             pos.x += (disp[id].x / d) * @min(d, temperature);
             pos.y += (disp[id].y / d) * @min(d, temperature);
+            if (previous) |prior| {
+                if (prior.rankdir == graph.rankdir and id < prior.nodes.len) {
+                    const anchor_x = std.math.clamp(prior.nodes[id].center.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
+                    const anchor_y = std.math.clamp(prior.nodes[id].center.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
+                    pos.x = pos.x * (1.0 - stability) + anchor_x * stability;
+                    pos.y = pos.y * (1.0 - stability) + anchor_y * stability;
+                }
+            }
             pos.x = std.math.clamp(pos.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
             pos.y = std.math.clamp(pos.y, options.margin + sizes[id].height / 2.0, options.height - options.margin - sizes[id].height / 2.0);
         }
@@ -3915,6 +3960,137 @@ pub fn layoutFruchtermanReingold(allocator: std.mem.Allocator, graph: *const Gra
         .width = options.width,
         .height = options.height,
     };
+}
+
+fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: *Layout, node_gap: f64, options: IncrementalLayoutOptions) !void {
+    if (result.nodes.len == 0 or previous.nodes.len == 0) return;
+    const stability = std.math.clamp(options.stability, 0.0, 1.0);
+    if (stability <= 0) return;
+    const shared = @min(previous.nodes.len, result.nodes.len);
+    const axes = LayoutAxes.init(result.rankdir);
+    const original_along = try result.allocator.alloc(f64, result.nodes.len);
+    defer result.allocator.free(original_along);
+    for (result.nodes, 0..) |node, node_id| original_along[node_id] = axes.pointAlong(node.center);
+
+    for (0..shared) |node_id| {
+        if (node_id >= previous.ranks.len or node_id >= result.ranks.len) continue;
+        if (previous.ranks[node_id] != result.ranks[node_id]) continue;
+        const previous_along = axes.pointAlong(previous.nodes[node_id].center);
+        const current_along = axes.pointAlong(result.nodes[node_id].center);
+        const target = previous_along * stability + current_along * (1.0 - stability);
+        switch (result.rankdir) {
+            .TB, .BT => result.nodes[node_id].center.x = target,
+            .LR, .RL => result.nodes[node_id].center.y = target,
+        }
+    }
+
+    try stabilizeLayeredRankSpacing(graph, result, original_along, node_gap);
+    stabilizeEdgeWaypoints(result, original_along);
+    recomputeIncrementalSubgraphs(graph, result);
+    expandIncrementalLayoutBounds(result);
+}
+
+fn stabilizeLayeredRankSpacing(graph: *const Graph, result: *Layout, original_along: []const f64, node_gap: f64) !void {
+    if (result.nodes.len == 0 or result.ranks.len != result.nodes.len) return;
+    var max_rank: usize = 0;
+    for (result.ranks) |rank| max_rank = @max(max_rank, rank);
+    const level_storage = try result.allocator.alloc(NodeId, result.nodes.len);
+    defer result.allocator.free(level_storage);
+    const level_centers = try result.allocator.alloc(f64, result.nodes.len);
+    defer result.allocator.free(level_centers);
+    const level_sizes = try result.allocator.alloc(NodeSize, result.nodes.len);
+    defer result.allocator.free(level_sizes);
+    for (result.nodes, 0..) |node, node_id| {
+        level_sizes[node_id] = switch (result.rankdir) {
+            .TB, .BT => .{ .width = node.width, .height = node.height },
+            .LR, .RL => .{ .width = node.height, .height = node.width },
+        };
+    }
+
+    for (0..max_rank + 1) |rank| {
+        var count: usize = 0;
+        for (result.nodes, 0..) |node, node_id| {
+            if (result.ranks[node_id] != rank) continue;
+            level_storage[count] = node_id;
+            level_centers[count] = switch (result.rankdir) {
+                .TB, .BT => node.center.x,
+                .LR, .RL => node.center.y,
+            };
+            count += 1;
+        }
+        if (count <= 1) continue;
+        const level = level_storage[0..count];
+        std.mem.sort(NodeId, level, IncrementalOrderContext{ .positions = original_along }, lessThanIncrementalOrder);
+        for (level, 0..) |node_id, index| level_centers[index] = switch (result.rankdir) {
+            .TB, .BT => result.nodes[node_id].center.x,
+            .LR, .RL => result.nodes[node_id].center.y,
+        };
+        compactCenterSliceForwardForGraph(graph, level, level_sizes[0..result.nodes.len], node_gap, level_centers[0..count]);
+        for (level, 0..) |node_id, index| {
+            switch (result.rankdir) {
+                .TB, .BT => result.nodes[node_id].center.x = level_centers[index],
+                .LR, .RL => result.nodes[node_id].center.y = level_centers[index],
+            }
+        }
+    }
+}
+
+const IncrementalOrderContext = struct {
+    positions: []const f64,
+};
+
+fn lessThanIncrementalOrder(context: IncrementalOrderContext, a: NodeId, b: NodeId) bool {
+    const a_along = context.positions[a];
+    const b_along = context.positions[b];
+    if (a_along == b_along) return a < b;
+    return a_along < b_along;
+}
+
+fn recomputeIncrementalSubgraphs(graph: *const Graph, result: *Layout) void {
+    computeSubgraphLayouts(graph, LayoutAxes.init(result.rankdir), result.nodes, result.subgraphs);
+}
+
+fn stabilizeEdgeWaypoints(result: *Layout, original_along: []const f64) void {
+    const axes = LayoutAxes.init(result.rankdir);
+    for (result.graph.edges.items) |edge_item| {
+        if (edge_item.id >= result.edge_waypoints.len) continue;
+        if (edge_item.from >= result.nodes.len or edge_item.to >= result.nodes.len) continue;
+        if (edge_item.from >= original_along.len or edge_item.to >= original_along.len) continue;
+        if (edge_item.from >= result.ranks.len or edge_item.to >= result.ranks.len) continue;
+        const from_rank = result.ranks[edge_item.from];
+        const to_rank = result.ranks[edge_item.to];
+        if (from_rank == to_rank) continue;
+        const from_delta = axes.pointAlong(result.nodes[edge_item.from].center) - original_along[edge_item.from];
+        const to_delta = axes.pointAlong(result.nodes[edge_item.to].center) - original_along[edge_item.to];
+        const rank_span = @as(f64, @floatFromInt(if (from_rank > to_rank) from_rank - to_rank else to_rank - from_rank));
+        for (result.edge_waypoints[edge_item.id].points) |*waypoint| {
+            const offset = if (from_rank < to_rank)
+                waypoint.rank -| from_rank
+            else
+                from_rank -| waypoint.rank;
+            const t = std.math.clamp(@as(f64, @floatFromInt(offset)) / rank_span, 0.0, 1.0);
+            const delta = from_delta + (to_delta - from_delta) * t;
+            switch (result.rankdir) {
+                .TB, .BT => waypoint.point.x += delta,
+                .LR, .RL => waypoint.point.y += delta,
+            }
+        }
+    }
+}
+
+fn expandIncrementalLayoutBounds(result: *Layout) void {
+    var max_x = result.width;
+    var max_y = result.height;
+    for (result.nodes) |node| {
+        max_x = @max(max_x, node.center.x + node.width / 2.0 + result.margin_x);
+        max_y = @max(max_y, node.center.y + node.height / 2.0 + result.margin_y);
+    }
+    for (result.subgraphs) |subgraph| {
+        max_x = @max(max_x, subgraph.x + subgraph.width + result.margin_x);
+        max_y = @max(max_y, subgraph.y + subgraph.height + result.margin_y);
+    }
+    result.width = max_x;
+    result.height = max_y;
 }
 
 const NodeSize = struct {
@@ -15826,6 +16002,166 @@ test "layered layout accepts compatibility pass budget aliases" {
     const options = layoutOptionsWithGraphAttrs(.{}, &graph);
     try std.testing.expectEqual(@as(usize, 2), options.crossing_passes);
     try std.testing.expectEqual(@as(usize, 1), options.coordinate_passes);
+}
+
+test "incremental layered layout preserves shared node mental map" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "IncrementalLayered" });
+    defer graph.deinit();
+
+    const source = try graph.addNode("source", .{});
+    const left = try graph.addNode("left", .{});
+    const right = try graph.addNode("right", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addEdge(source, left, .{});
+    _ = try graph.addEdge(source, right, .{});
+    _ = try graph.addEdge(left, sink, .{});
+    _ = try graph.addEdge(right, sink, .{});
+
+    var previous = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer previous.deinit();
+    const shared_count = graph.nodes.items.len;
+
+    const added = try graph.addNode("added", .{});
+    _ = try graph.addEdge(source, added, .{});
+    _ = try graph.addEdge(added, sink, .{});
+
+    var full = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer full.deinit();
+    var incremental = try layoutGraphIncremental(allocator, &graph, &previous, .{ .algorithm = .sugiyama }, .{ .stability = 0.95 });
+    defer incremental.deinit();
+    var zero_stability = try layoutGraphIncremental(allocator, &graph, &previous, .{ .algorithm = .sugiyama }, .{ .stability = 0 });
+    defer zero_stability.deinit();
+
+    const full_displacement = sharedNodeDisplacement(&previous, &full, shared_count);
+    const incremental_displacement = sharedNodeDisplacement(&previous, &incremental, shared_count);
+    try std.testing.expect(full_displacement > 1.0);
+    try std.testing.expect(incremental_displacement < full_displacement * 0.35);
+    try expectNodeCentersEqual(&full, &zero_stability);
+    try std.testing.expectEqual(previous.ranks[source], incremental.ranks[source]);
+    try std.testing.expectEqual(previous.ranks[left], incremental.ranks[left]);
+    try std.testing.expectEqual(previous.ranks[right], incremental.ranks[right]);
+    try std.testing.expectEqual(previous.ranks[sink], incremental.ranks[sink]);
+    try std.testing.expect(incremental.nodes[added].center.x > incremental.nodes[right].center.x);
+    try expectNoSameRankNodeOverlap(&graph, &incremental);
+}
+
+test "incremental force layout anchors shared node positions" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false, .name = "IncrementalForce" });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(b, c, .{});
+    _ = try graph.addEdge(c, d, .{});
+    _ = try graph.addEdge(d, a, .{});
+
+    const config = LayoutConfig{
+        .algorithm = .fruchterman_reingold,
+        .force = .{ .width = 420, .height = 300, .margin = 30, .iterations = 50 },
+    };
+    var previous = try layoutGraph(allocator, &graph, config);
+    defer previous.deinit();
+    const shared_count = graph.nodes.items.len;
+
+    const added = try graph.addNode("added", .{});
+    _ = try graph.addEdge(b, added, .{});
+    _ = try graph.addEdge(added, d, .{});
+
+    var full = try layoutGraph(allocator, &graph, config);
+    defer full.deinit();
+    var incremental = try layoutGraphIncremental(allocator, &graph, &previous, config, .{ .stability = 0.92 });
+    defer incremental.deinit();
+    var zero_stability = try layoutGraphIncremental(allocator, &graph, &previous, config, .{ .stability = 0 });
+    defer zero_stability.deinit();
+
+    const full_displacement = sharedNodeDisplacement(&previous, &full, shared_count);
+    const incremental_displacement = sharedNodeDisplacement(&previous, &incremental, shared_count);
+    try std.testing.expect(full_displacement > 1.0);
+    try std.testing.expect(incremental_displacement < full_displacement * 0.35);
+    try expectNodeCentersEqual(&full, &zero_stability);
+    for (incremental.nodes) |node| {
+        try std.testing.expect(node.center.x - node.width / 2.0 >= config.force.margin - 0.001);
+        try std.testing.expect(node.center.x + node.width / 2.0 <= config.force.width - config.force.margin + 0.001);
+        try std.testing.expect(node.center.y - node.height / 2.0 >= config.force.margin - 0.001);
+        try std.testing.expect(node.center.y + node.height / 2.0 <= config.force.height - config.force.margin + 0.001);
+    }
+}
+
+test "incremental layered layout preserves mental map for LR rankdir" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "IncrementalLR", .rankdir = .LR });
+    defer graph.deinit();
+
+    const source = try graph.addNode("source", .{});
+    const upper = try graph.addNode("upper", .{});
+    const lower = try graph.addNode("lower", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addEdge(source, upper, .{});
+    _ = try graph.addEdge(source, lower, .{});
+    _ = try graph.addEdge(upper, sink, .{});
+    _ = try graph.addEdge(lower, sink, .{});
+
+    var previous = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer previous.deinit();
+    const shared_count = graph.nodes.items.len;
+
+    const added = try graph.addNode("added", .{});
+    _ = try graph.addEdge(source, added, .{});
+    _ = try graph.addEdge(added, sink, .{});
+
+    var full = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer full.deinit();
+    var incremental = try layoutGraphIncremental(allocator, &graph, &previous, .{ .algorithm = .sugiyama }, .{ .stability = 0.95 });
+    defer incremental.deinit();
+
+    const full_displacement = sharedNodeDisplacement(&previous, &full, shared_count);
+    const incremental_displacement = sharedNodeDisplacement(&previous, &incremental, shared_count);
+    try std.testing.expect(incremental_displacement < full_displacement * 0.35);
+    try std.testing.expect(incremental.nodes[added].center.y > incremental.nodes[lower].center.y);
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        try std.testing.expect(incremental.nodes[edge_item.from].center.x < incremental.nodes[edge_item.to].center.x);
+    }
+}
+
+fn sharedNodeDisplacement(previous: *const Layout, next: *const Layout, count: usize) f64 {
+    const shared = @min(count, @min(previous.nodes.len, next.nodes.len));
+    var total: f64 = 0;
+    for (0..shared) |node_id| {
+        total += std.math.hypot(
+            previous.nodes[node_id].center.x - next.nodes[node_id].center.x,
+            previous.nodes[node_id].center.y - next.nodes[node_id].center.y,
+        );
+    }
+    return total;
+}
+
+fn expectNodeCentersEqual(expected: *const Layout, actual: *const Layout) !void {
+    try std.testing.expectEqual(expected.nodes.len, actual.nodes.len);
+    for (expected.nodes, actual.nodes) |expected_node, actual_node| {
+        try std.testing.expectApproxEqAbs(expected_node.center.x, actual_node.center.x, 0.0001);
+        try std.testing.expectApproxEqAbs(expected_node.center.y, actual_node.center.y, 0.0001);
+    }
+}
+
+fn expectNoSameRankNodeOverlap(graph: *const Graph, layout: *const Layout) !void {
+    for (layout.nodes, 0..) |left_node, left_id| {
+        for (layout.nodes[left_id + 1 ..], left_id + 1..) |right_node, right_id| {
+            if (left_id >= layout.ranks.len or right_id >= layout.ranks.len) continue;
+            if (layout.ranks[left_id] != layout.ranks[right_id]) continue;
+            const gap = layout_mod.subgraph.nodePairGap(graph.subgraphs.items, left_id, right_id, 36.0);
+            const left_right = left_node.center.x + left_node.width / 2.0;
+            const right_left = right_node.center.x - right_node.width / 2.0;
+            const right_right = right_node.center.x + right_node.width / 2.0;
+            const left_left = left_node.center.x - left_node.width / 2.0;
+            try std.testing.expect(right_left - left_right >= gap - 0.001 or left_left - right_right >= gap - 0.001);
+        }
+    }
 }
 
 test "layoutGraph default keeps Sugiyama rankdir as layout input" {

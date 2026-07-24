@@ -62,6 +62,13 @@ same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
 `crossing_passes` / `coordinate_passes` aliases, and the Zig API can pass
 `LayoutConfig.layered`.
 
+The Zig API also exposes `layoutGraphIncremental`. It accepts a previous
+`Layout` and preserves the mental map of nodes that retain the same `NodeId`
+while still laying out new nodes and rebuilding subgraph/edge geometry.
+`IncrementalLayoutOptions.stability` ranges from `0` (identical to a full
+layout) to `1` (strongest previous-position anchoring), and works with both
+layered and Fruchterman-Reingold layouts.
+
 DOT parse failures report a line, column, source excerpt, caret, and repair hint
 so input mistakes can be fixed without rerunning through another tool.
 
@@ -170,6 +177,19 @@ defer layout.deinit();
 try vex.render(writer, &layout, .svg, .{});
 ```
 
+After editing a graph while keeping existing `NodeId` values stable:
+
+```zig
+var next_layout = try vex.layoutGraphIncremental(
+    allocator,
+    &graph,
+    &layout,
+    .{ .algorithm = .sugiyama },
+    .{ .stability = 0.95 },
+);
+defer next_layout.deinit();
+```
+
 Default node and edge label attributes set through the API apply to subsequently added items, with per-item options taking precedence. Typed graph attributes include spline routing modes such as `curved`, `polyline`, `line`, `ortho`, and `none`.
 
 ## API Examples
@@ -185,6 +205,7 @@ zig build run-api-svg-output
 zig build run-api-records-ports-svg
 zig build run-api-shapes-styles-svg
 zig build run-api-force-layout-svg
+zig build run-api-incremental-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -196,6 +217,7 @@ They progress from small SVG output to broader feature coverage:
 - `05_records_ports_svg.zig`: record labels, record ports, and SVG output.
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, and SVG output.
 - `07_force_layout_svg.zig`: cyclic undirected graph rendered with layered Sugiyama layout to exercise edge-label avoidance.
+- `08_incremental_layout_svg.zig`: add a node after the first layout, preserve shared-node positions with `layoutGraphIncremental`, and write the final SVG.
 
 ## Graphviz compatibility target
 
