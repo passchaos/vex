@@ -11886,10 +11886,10 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
     const filled = styleHas(style, "filled");
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
-    const color_attr = attrValue(cluster.attrs.items, "color");
-    const bgcolor = attrValue(cluster.attrs.items, "bgcolor");
-    const inherited_fillcolor = attrValue(cluster.attrs.items, "fillcolor") orelse attrValue(graph.attrs.items, "fillcolor");
-    const inherited_pencolor = attrValue(cluster.attrs.items, "pencolor") orelse attrValue(graph.attrs.items, "pencolor");
+    const color_attr = inheritedClusterVisualAttr(graph, cluster, "color");
+    const bgcolor = inheritedClusterVisualAttr(graph, cluster, "bgcolor");
+    const inherited_fillcolor = inheritedClusterVisualAttr(graph, cluster, "fillcolor") orelse attrValue(graph.attrs.items, "fillcolor");
+    const inherited_pencolor = inheritedClusterVisualAttr(graph, cluster, "pencolor") orelse attrValue(graph.attrs.items, "pencolor");
     const color = resolveSvgColor(graph, cluster.attrs.items, color_attr orelse "#94a3b8");
     const stroke = if (inherited_pencolor) |value|
         resolveSvgColor(graph, cluster.attrs.items, value)
@@ -11918,6 +11918,10 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
         .peripheries = parseAttrUsize(cluster.attrs.items, "peripheries", 1),
         .hidden = styleHas(style, "invis"),
     };
+}
+
+fn inheritedClusterVisualAttr(graph: *const Graph, cluster: Subgraph, name: []const u8) ?[]const u8 {
+    return layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, name);
 }
 
 fn attrValue(attrs: []const Attr, name: []const u8) ?[]const u8 {
@@ -20905,6 +20909,72 @@ test "cluster colors inherit root graph fillcolor and pencolor" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fee2e2\" stroke=\"#7c3aed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#dcfce7\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f1f5f9\"") == null);
+}
+
+test "cluster colors inherit parent subgraph color attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [fillcolor="#fee2e2", pencolor="#7c3aed"];
+        \\  subgraph cluster_outer {
+        \\    fillcolor="#dcfce7";
+        \\    pencolor="#16a34a";
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      style=filled;
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      style=filled;
+        \\      fillcolor="#dbeafe";
+        \\      pencolor="#1d4ed8";
+        \\      c;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "fillcolor") == null);
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "pencolor") == null);
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#dcfce7\" stroke=\"#16a34a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#fee2e2\" stroke=\"#7c3aed\"") == null);
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "fill=\"#dbeafe\" stroke=\"#1d4ed8\"") != null);
+
+    var bg_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_bg {
+        \\    color="#92400e";
+        \\    bgcolor="#fef3c7";
+        \\    subgraph cluster_bg_inner {
+        \\      label="BgInner";
+        \\      d;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer bg_graph.deinit();
+
+    var bg_layout = try layoutLayered(allocator, &bg_graph, .{});
+    defer bg_layout.deinit();
+    const bg_svg = try renderSvgAlloc(allocator, &bg_graph, &bg_layout, .{});
+    defer allocator.free(bg_svg);
+
+    const bg_inner_index = subgraphIndexByLabel(&bg_graph, "BgInner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(bg_graph.subgraphs.items[bg_inner_index].attrs.items, "bgcolor") == null);
+    try std.testing.expect(attrValue(bg_graph.subgraphs.items[bg_inner_index].attrs.items, "color") == null);
+    const bg_inner_fragment = svgGroupFragmentByTitle(bg_svg, "BgInner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, bg_inner_fragment, "fill=\"#fef3c7\" stroke=\"#92400e\"") != null);
 }
 
 test "cluster pencolor overrides stroke without changing fill" {
