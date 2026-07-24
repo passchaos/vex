@@ -259,32 +259,8 @@ pub const NodeAttr = union(enum) {
 
 pub const EdgeStyle = svg_mod.style.EdgeStyle;
 
-pub const ArrowShape = enum {
-    normal,
-    none,
-    open,
-    inv,
-    oinv,
-    curve,
-    icurve,
-    vee,
-    dot,
-    odot,
-    box,
-    obox,
-    diamond,
-    odiamond,
-    tee,
-    crow,
-    empty,
-};
-
-pub const EdgeDir = enum {
-    forward,
-    back,
-    both,
-    none,
-};
+pub const ArrowShape = svg_mod.edge.ArrowShape;
+pub const EdgeDir = svg_mod.edge.Dir;
 
 pub const EdgePort = struct {
     record: ?[]const u8 = null,
@@ -1043,10 +1019,10 @@ pub const Graph = struct {
             .tail_href => |value| try self.setDefaultEdgeAttrRaw("tailhref", value),
             .tail_tooltip => |value| try self.setDefaultEdgeAttrRaw("tailtooltip", value),
             .tail_target => |value| try self.setDefaultEdgeAttrRaw("tailtarget", value),
-            .arrowhead => |value| try self.setDefaultEdgeAttrRaw("arrowhead", arrowShapeName(value)),
-            .arrowtail => |value| try self.setDefaultEdgeAttrRaw("arrowtail", arrowShapeName(value)),
+            .arrowhead => |value| try self.setDefaultEdgeAttrRaw("arrowhead", value.name()),
+            .arrowtail => |value| try self.setDefaultEdgeAttrRaw("arrowtail", value.name()),
             .arrowsize => |value| try self.setDefaultEdgeAttrFloat("arrowsize", value),
-            .dir => |value| try self.setDefaultEdgeAttrRaw("dir", edgeDirName(value)),
+            .dir => |value| try self.setDefaultEdgeAttrRaw("dir", value.name()),
             .taillabel => |value| try self.setDefaultEdgeAttrRaw("taillabel", value),
             .headlabel => |value| try self.setDefaultEdgeAttrRaw("headlabel", value),
             .xlabel => |value| try self.setDefaultEdgeAttrRaw("xlabel", value),
@@ -1328,10 +1304,10 @@ pub const Graph = struct {
             .tail_href => |value| try self.setEdgeAttrRaw(id, "tailhref", value),
             .tail_tooltip => |value| try self.setEdgeAttrRaw(id, "tailtooltip", value),
             .tail_target => |value| try self.setEdgeAttrRaw(id, "tailtarget", value),
-            .arrowhead => |value| try self.setEdgeAttrRaw(id, "arrowhead", arrowShapeName(value)),
-            .arrowtail => |value| try self.setEdgeAttrRaw(id, "arrowtail", arrowShapeName(value)),
+            .arrowhead => |value| try self.setEdgeAttrRaw(id, "arrowhead", value.name()),
+            .arrowtail => |value| try self.setEdgeAttrRaw(id, "arrowtail", value.name()),
             .arrowsize => |value| try self.setEdgeAttrFloat(id, "arrowsize", value),
-            .dir => |value| try self.setEdgeAttrRaw(id, "dir", edgeDirName(value)),
+            .dir => |value| try self.setEdgeAttrRaw(id, "dir", value.name()),
             .taillabel => |value| try self.setEdgeAttrRaw(id, "taillabel", value),
             .headlabel => |value| try self.setEdgeAttrRaw(id, "headlabel", value),
             .xlabel => |value| try self.setEdgeAttrRaw(id, "xlabel", value),
@@ -1791,37 +1767,6 @@ fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
         .none => "false",
         .fit_label => "true",
         .shape => "shape",
-    };
-}
-
-fn arrowShapeName(shape: ArrowShape) []const u8 {
-    return switch (shape) {
-        .normal => "normal",
-        .none => "none",
-        .open => "open",
-        .inv => "inv",
-        .oinv => "oinv",
-        .curve => "curve",
-        .icurve => "icurve",
-        .vee => "vee",
-        .dot => "dot",
-        .odot => "odot",
-        .box => "box",
-        .obox => "obox",
-        .diamond => "diamond",
-        .odiamond => "odiamond",
-        .tee => "tee",
-        .crow => "crow",
-        .empty => "empty",
-    };
-}
-
-fn edgeDirName(dir: EdgeDir) []const u8 {
-    return switch (dir) {
-        .forward => "forward",
-        .back => "back",
-        .both => "both",
-        .none => "none",
     };
 }
 

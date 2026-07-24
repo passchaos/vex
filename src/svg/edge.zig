@@ -3,6 +3,64 @@
 const std = @import("std");
 const color = @import("color.zig");
 
+pub const ArrowShape = enum {
+    normal,
+    none,
+    open,
+    inv,
+    oinv,
+    curve,
+    icurve,
+    vee,
+    dot,
+    odot,
+    box,
+    obox,
+    diamond,
+    odiamond,
+    tee,
+    crow,
+    empty,
+
+    pub fn name(self: ArrowShape) []const u8 {
+        return switch (self) {
+            .normal => "normal",
+            .none => "none",
+            .open => "open",
+            .inv => "inv",
+            .oinv => "oinv",
+            .curve => "curve",
+            .icurve => "icurve",
+            .vee => "vee",
+            .dot => "dot",
+            .odot => "odot",
+            .box => "box",
+            .obox => "obox",
+            .diamond => "diamond",
+            .odiamond => "odiamond",
+            .tee => "tee",
+            .crow => "crow",
+            .empty => "empty",
+        };
+    }
+};
+
+pub const Dir = enum {
+    forward,
+    back,
+    both,
+    none,
+
+    pub fn name(self: Dir) []const u8 {
+        return switch (self) {
+            .forward => "forward",
+            .back => "back",
+            .both => "both",
+            .none => "none",
+        };
+    }
+};
+
 pub const Routing = enum {
     curved,
     line,
