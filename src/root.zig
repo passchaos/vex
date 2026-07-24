@@ -178,6 +178,8 @@ pub const GraphAttr = union(enum) {
     fillcolor: []const u8,
     pencolor: []const u8,
     area: f64,
+    pack: f64,
+    packmode: []const u8,
     size: []const u8,
     ratio: GraphRatio,
     dpi: f64,
@@ -256,6 +258,7 @@ pub const NodeAttr = union(enum) {
     width: f64,
     height: f64,
     area: f64,
+    sortv: usize,
     fixedsize: NodeFixedSize,
     margin: []const u8,
     image: []const u8,
@@ -313,6 +316,7 @@ pub const NodeOptions = struct {
     width: ?f64 = null,
     height: ?f64 = null,
     area: ?f64 = null,
+    sortv: ?usize = null,
     fixedsize: ?NodeFixedSize = null,
     margin: ?[]const u8 = null,
     image: ?[]const u8 = null,
@@ -494,6 +498,9 @@ pub const SubgraphAttr = union(enum) {
     penwidth: f64,
     peripheries: usize,
     area: f64,
+    pack: f64,
+    packmode: []const u8,
+    sortv: usize,
     margin: []const u8,
     labelloc: LabelLoc,
     labeljust: LabelJust,
@@ -532,6 +539,9 @@ pub const SubgraphOptions = struct {
     penwidth: ?f64 = null,
     peripheries: ?usize = null,
     area: ?f64 = null,
+    pack: ?f64 = null,
+    packmode: ?[]const u8 = null,
+    sortv: ?usize = null,
     margin: ?[]const u8 = null,
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
@@ -916,6 +926,8 @@ pub const Graph = struct {
             .fillcolor => |value| try self.setGraphAttrRaw("fillcolor", value),
             .pencolor => |value| try self.setGraphAttrRaw("pencolor", value),
             .area => |value| try self.setGraphAttrFloat("area", value),
+            .pack => |value| try self.setGraphAttrFloat("pack", value),
+            .packmode => |value| try self.setGraphAttrRaw("packmode", value),
             .size => |value| try self.setGraphAttrRaw("size", value),
             .ratio => |value| switch (value) {
                 .value => |ratio| try self.setGraphAttrFloat("ratio", ratio),
@@ -1024,6 +1036,11 @@ pub const Graph = struct {
             .width => |value| try self.setDefaultNodeAttrFloat("width", value),
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
             .area => |value| try self.setDefaultNodeAttrFloat("area", value),
+            .sortv => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setDefaultNodeAttrRaw("sortv", text);
+            },
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
             .image => |value| try self.setDefaultNodeAttrRaw("image", value),
@@ -1178,6 +1195,7 @@ pub const Graph = struct {
         if (options.width) |value| try self.setNodeAttr(id, .{ .width = value });
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
         if (options.area) |value| try self.setNodeAttr(id, .{ .area = value });
+        if (options.sortv) |value| try self.setNodeAttr(id, .{ .sortv = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
         if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
         if (options.image) |value| try self.setNodeAttr(id, .{ .image = value });
@@ -1234,6 +1252,11 @@ pub const Graph = struct {
             .width => |value| try self.setNodeAttrFloat(id, "width", value),
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
             .area => |value| try self.setNodeAttrFloat(id, "area", value),
+            .sortv => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setNodeAttrRaw(id, "sortv", text);
+            },
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
             .image => |value| try self.setNodeAttrRaw(id, "image", value),
@@ -1514,6 +1537,9 @@ pub const Graph = struct {
         if (options.penwidth) |value| try self.setSubgraphAttr(id, .{ .penwidth = value });
         if (options.peripheries) |value| try self.setSubgraphAttr(id, .{ .peripheries = value });
         if (options.area) |value| try self.setSubgraphAttr(id, .{ .area = value });
+        if (options.pack) |value| try self.setSubgraphAttr(id, .{ .pack = value });
+        if (options.packmode) |value| try self.setSubgraphAttr(id, .{ .packmode = value });
+        if (options.sortv) |value| try self.setSubgraphAttr(id, .{ .sortv = value });
         if (options.margin) |value| try self.setSubgraphAttr(id, .{ .margin = value });
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setSubgraphAttr(id, .{ .labeljust = value });
@@ -1573,6 +1599,13 @@ pub const Graph = struct {
                 try self.setSubgraphAttrRaw(id, "peripheries", text);
             },
             .area => |value| try self.setSubgraphAttrFloat(id, "area", value),
+            .pack => |value| try self.setSubgraphAttrFloat(id, "pack", value),
+            .packmode => |value| try self.setSubgraphAttrRaw(id, "packmode", value),
+            .sortv => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setSubgraphAttrRaw(id, "sortv", text);
+            },
             .margin => |value| try self.setSubgraphAttrRaw(id, "margin", value),
             .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", value.name()),
             .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", value.name()),
@@ -3788,6 +3821,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
+        .array_packing => layoutOsageWithControl(allocator, graph, config.layered, &work),
     };
 }
 
@@ -3803,6 +3837,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
+        .array_packing => layoutOsageWithControl(allocator, graph, config.layered, &work),
     };
 }
 
@@ -5107,6 +5142,145 @@ fn layoutTreemapWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         .width = options.width,
         .height = options.height,
     };
+}
+
+pub fn layoutOsage(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutOsageWithControl(allocator, graph, options, &work);
+}
+
+fn layoutOsageWithControl(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions, work: *LayoutWorkTracker) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.subgraphs.items.len +| 1);
+
+    const node_layouts = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(node_layouts);
+    const subgraph_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(subgraph_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    const osage_nodes = try allocator.alloc(layout_mod.osage.Node, n);
+    defer allocator.free(osage_nodes);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        const size = measureNode(node_item, effective_options);
+        osage_nodes[id] = .{
+            .width = size.width,
+            .height = size.height,
+            .parent = deepestSubgraphContainingNode(graph, id),
+            .sort_value = osageSortValue(node_item.attrs.items),
+        };
+    }
+    const osage_subgraphs = try allocator.alloc(layout_mod.osage.Subgraph, graph.subgraphs.items.len);
+    defer allocator.free(osage_subgraphs);
+    for (graph.subgraphs.items, 0..) |subgraph, id| {
+        osage_subgraphs[id] = .{
+            .parent = subgraph.parent,
+            .sort_value = osageSortValue(subgraph.attrs.items),
+            .options = osageSubgraphOptions(graph, subgraph),
+        };
+    }
+    var osage_layout = try layout_mod.osage.layout(
+        allocator,
+        osage_nodes,
+        osage_subgraphs,
+        .{
+            .pack_mode = layout_mod.osage.parsePackMode(attrValue(graph.attrs.items, "packmode")),
+            .pack_margin = osagePackMargin(graph.attrs.items, 4.0),
+            .padding = 0,
+        },
+    );
+    defer osage_layout.deinit();
+    try work.checkpoint((n +| graph.subgraphs.items.len +| 1) *| 4);
+
+    for (osage_layout.node_rects, 0..) |rect, id| {
+        node_layouts[id] = .{
+            .center = .{
+                .x = effective_options.margin + rect.x + rect.width / 2.0,
+                .y = effective_options.margin_y + rect.y + rect.height / 2.0,
+            },
+            .width = rect.width,
+            .height = rect.height,
+        };
+    }
+    for (osage_layout.subgraph_rects, 0..) |rect, id| {
+        subgraph_layouts[id] = .{
+            .id = id,
+            .x = effective_options.margin + rect.x,
+            .y = effective_options.margin_y + rect.y,
+            .width = rect.width,
+            .height = rect.height,
+        };
+    }
+
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = node_layouts,
+        .subgraphs = subgraph_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = effective_options.margin,
+        .margin_x = effective_options.margin,
+        .margin_y = effective_options.margin_y,
+        .width = osage_layout.width + effective_options.margin * 2.0,
+        .height = osage_layout.height + effective_options.margin_y * 2.0,
+    };
+}
+
+fn osageSubgraphOptions(graph: *const Graph, subgraph: Subgraph) layout_mod.osage.ScopeOptions {
+    const pack_margin = osagePackMarginFromValue(
+        layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, subgraph.id, "pack") orelse
+            attrValue(graph.attrs.items, "pack"),
+        4.0,
+    );
+    const label_font_size = inheritedClusterFontSize(graph, subgraph);
+    return .{
+        .pack_mode = layout_mod.osage.parsePackMode(
+            layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, subgraph.id, "packmode") orelse
+                attrValue(graph.attrs.items, "packmode"),
+        ),
+        .pack_margin = pack_margin,
+        .padding = pack_margin / 2.0,
+        .label_height = subgraphLabelBand(graph, subgraph),
+        .minimum_width = displayLabelEstimatedWidth(subgraph.label, label_font_size) + 12.0,
+    };
+}
+
+fn osagePackMargin(attrs: []const Attr, fallback: f64) f64 {
+    return osagePackMarginFromValue(attrValue(attrs, "pack"), fallback);
+}
+
+fn osagePackMarginFromValue(value: ?[]const u8, fallback: f64) f64 {
+    const text = value orelse return fallback;
+    if (std.fmt.parseFloat(f64, text)) |parsed| {
+        return if (std.math.isFinite(parsed) and parsed >= 0) parsed else fallback;
+    } else |_| {}
+    return fallback;
+}
+
+fn osageSortValue(attrs: []const Attr) ?usize {
+    const value = attrValue(attrs, "sortv") orelse return null;
+    return std.fmt.parseInt(usize, value, 10) catch null;
 }
 
 fn deepestSubgraphContainingNode(graph: *const Graph, node_id: NodeId) ?SubgraphId {
@@ -17219,6 +17393,8 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.circular, LayoutAlgorithm.fromString("circular").?);
     try std.testing.expectEqual(LayoutAlgorithm.treemap, LayoutAlgorithm.fromString("patchwork").?);
     try std.testing.expectEqual(LayoutAlgorithm.treemap, LayoutAlgorithm.fromString("treemap").?);
+    try std.testing.expectEqual(LayoutAlgorithm.array_packing, LayoutAlgorithm.fromString("osage").?);
+    try std.testing.expectEqual(LayoutAlgorithm.array_packing, LayoutAlgorithm.fromString("array-packing").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
@@ -17836,6 +18012,96 @@ test "patchwork ignores graph edges and differs from circo" {
     try std.testing.expect(sharedNodeDisplacement(&second, &circo, edged.nodes.items.len) > 10);
 }
 
+test "osage column-major packmode controls array traversal" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=osage, packmode=array_ci2, pack=6];
+        \\  a [fixedsize=true, width=0.75, height=0.5];
+        \\  b [fixedsize=true, width=0.75, height=0.5];
+        \\  c [fixedsize=true, width=0.75, height=0.5];
+        \\  d [fixedsize=true, width=0.75, height=0.5];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+
+    const a = layout.nodes[nodeIdByLabel(&graph, "a")].center;
+    const b = layout.nodes[nodeIdByLabel(&graph, "b")].center;
+    const c = layout.nodes[nodeIdByLabel(&graph, "c")].center;
+    try std.testing.expectApproxEqAbs(a.x, b.x, 0.001);
+    try std.testing.expect(a.y < b.y);
+    try std.testing.expect(c.x > a.x);
+    try std.testing.expectApproxEqAbs(a.y, c.y, 0.001);
+}
+
+test "osage typed sortv controls user-value order" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false, .name = "OsageSort" });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .layout = .array_packing });
+    try graph.setGraphAttr(.{ .packmode = "array_u3" });
+    try graph.setGraphAttr(.{ .pack = 4 });
+    const middle = try graph.addNode("middle", .{ .sortv = 20 });
+    const first = try graph.addNode("first", .{ .sortv = 10 });
+    const last = try graph.addNode("last", .{ .sortv = 30 });
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    try std.testing.expect(layout.nodes[first].center.x < layout.nodes[middle].center.x);
+    try std.testing.expect(layout.nodes[middle].center.x < layout.nodes[last].center.x);
+}
+
+test "osage nested subgraphs contain direct and nested nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=osage, packmode=array_i2, pack=8];
+        \\  subgraph outer {
+        \\    graph [label="Outer", packmode=array_i2, pack=6];
+        \\    subgraph inner {
+        \\      graph [label="Inner", packmode=array_i2];
+        \\      a; b;
+        \\    }
+        \\    c;
+        \\  }
+        \\  root;
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .array_packing });
+    defer layout.deinit();
+
+    const outer = subgraphRect(&graph, &layout, 0).?;
+    const inner = subgraphRect(&graph, &layout, 1).?;
+    try std.testing.expect(rectContainsRect(outer, inner));
+    try std.testing.expect(rectContainsRect(inner, nodeRect(layout.nodes[nodeIdByLabel(&graph, "a")])));
+    try std.testing.expect(rectContainsRect(inner, nodeRect(layout.nodes[nodeIdByLabel(&graph, "b")])));
+    try std.testing.expect(rectContainsRect(outer, nodeRect(layout.nodes[nodeIdByLabel(&graph, "c")])));
+}
+
+test "osage ignores edges and differs from patchwork" {
+    const allocator = std.testing.allocator;
+    var plain = try parseDot(allocator, "graph G { graph [packmode=array_i3]; a; b; c; }");
+    defer plain.deinit();
+    var edged = try parseDot(allocator, "graph G { graph [packmode=array_i3]; a -- b -- c -- a; }");
+    defer edged.deinit();
+    const config = LayoutConfig{ .algorithm = .array_packing };
+    var first = try layoutGraph(allocator, &plain, config);
+    defer first.deinit();
+    var second = try layoutGraph(allocator, &edged, config);
+    defer second.deinit();
+    try expectNodeCentersEqual(&first, &second);
+
+    var patchwork = try layoutGraph(allocator, &edged, .{
+        .algorithm = .treemap,
+        .force = .{ .width = 500, .height = 320, .margin = 20 },
+    });
+    defer patchwork.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&second, &patchwork, edged.nodes.items.len) > 10);
+}
+
 fn rectContainsRect(outer: RectF, inner: RectF) bool {
     return inner.x >= outer.x - 0.001 and
         inner.y >= outer.y - 0.001 and
@@ -17877,6 +18143,10 @@ test "layout work budget cancels every layout engine" {
         .stress_majorization,
         .spring_electrical,
         .multilevel_spring_electrical,
+        .radial,
+        .circular,
+        .treemap,
+        .array_packing,
     };
     for (algorithms) |algorithm| {
         var budget = LayoutWorkBudget{ .limit = 1 };

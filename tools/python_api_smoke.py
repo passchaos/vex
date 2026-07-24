@@ -46,6 +46,11 @@ def main() -> None:
         vex.RenderConfig(layout="patchwork"),
     )
     assert "<title>P</title>" in patchwork_svg
+    osage_svg = vex.render_dot(
+        "graph O { graph [packmode=array_i2]; a; b; c; }",
+        vex.RenderConfig(layout="osage"),
+    )
+    assert "<title>O</title>" in osage_svg
 
     try:
         vex.render_dot("digraph G { a ->")

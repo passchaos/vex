@@ -11,7 +11,7 @@ const usage =
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
     \\        [--check|--validate|--validate-all]
     \\        [--max-diagnostics count]
-    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo|patchwork]
+    \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo|patchwork|osage]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
     \\        [--layout-work-budget count]

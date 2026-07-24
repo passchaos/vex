@@ -39,5 +39,5 @@ zig build test-c-api
 - `vex_dot_render_svg`
 - `vex_buffer_free`
 
-`vex_render_options` 支持 dot/neato/fdp/sfdp/fr/twopi/circo/patchwork、迭代预算、work budget 取消和
+`vex_render_options` 支持 dot/neato/fdp/sfdp/fr/twopi/circo/patchwork/osage、迭代预算、work budget 取消和
 SVG metadata v1。

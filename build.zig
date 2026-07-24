@@ -244,6 +244,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/13_patchwork_layout_svg.zig",
             .desc = "Run API example: hierarchical patchwork SVG layout",
         },
+        .{
+            .step_name = "run-api-osage-layout-svg",
+            .exe_name = "api-osage-layout-svg",
+            .source = "examples/api/14_osage_layout_svg.zig",
+            .desc = "Run API example: nested osage array packing",
+        },
     };
 
     for (api_examples) |example| {

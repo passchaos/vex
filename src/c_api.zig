@@ -35,6 +35,7 @@ pub const Layout = enum(c_int) {
     twopi = 5,
     circo = 6,
     patchwork = 7,
+    osage = 8,
     _,
 };
 
@@ -179,6 +180,7 @@ fn layoutAlgorithm(layout: Layout) ?vex.LayoutAlgorithm {
         .twopi => .radial,
         .circo => .circular,
         .patchwork => .treemap,
+        .osage => .array_packing,
         else => null,
     };
 }

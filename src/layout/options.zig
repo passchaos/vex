@@ -76,6 +76,7 @@ pub const LayoutAlgorithm = enum {
     radial,
     circular,
     treemap,
+    array_packing,
 
     pub fn fromString(value: []const u8) ?LayoutAlgorithm {
         if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
@@ -119,6 +120,12 @@ pub const LayoutAlgorithm = enum {
         {
             return .treemap;
         }
+        if (std.ascii.eqlIgnoreCase(value, "osage") or
+            std.ascii.eqlIgnoreCase(value, "array-packing") or
+            std.ascii.eqlIgnoreCase(value, "array_packing"))
+        {
+            return .array_packing;
+        }
         if (std.ascii.eqlIgnoreCase(value, "fr") or
             std.ascii.eqlIgnoreCase(value, "force") or
             std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
@@ -140,6 +147,7 @@ pub const LayoutAlgorithm = enum {
             .radial => "twopi",
             .circular => "circo",
             .treemap => "patchwork",
+            .array_packing => "osage",
         };
     }
 };

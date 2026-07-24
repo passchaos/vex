@@ -38,6 +38,11 @@ svg = render_dot(
     "graph G { a [area=1]; b [area=4] }",
     RenderConfig(layout="patchwork"),
 )
+
+svg = render_dot(
+    "graph G { graph [packmode=array_i2]; a; b; c }",
+    RenderConfig(layout="osage"),
+)
 ```
 
 Library lookup order:

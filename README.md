@@ -76,6 +76,11 @@ disconnected components, and honors `root`, `mindist`, and `oneblock`.
 independent hierarchical squarified treemap engine. Node/subgraph `area`
 controls allocation, nested subgraphs form containing rectangles, and edges do
 not affect the treemap.
+`--layout osage`, `graph [layout=osage]`, and `-Kosage` select the independent
+hierarchical array-packing engine. It recursively packs direct nodes and child
+subgraphs using their intrinsic rectangle sizes, ignores edges, and supports
+graph/subgraph `pack`, Graphviz-style `packmode=array_[ciutblr]N`, plus
+node/subgraph `sortv` ordering.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
@@ -233,7 +238,7 @@ Default node and edge label attributes set through the API apply to subsequently
 
 `zig build` installs `zig-out/include/vex.h` and
 `zig-out/lib/libvex_c.a` plus the platform shared library. The C ABI supports
-graph construction, DOT-to-SVG, all six layout engines, layout work budgets,
+graph construction, DOT-to-SVG, all supported layout engines, layout work budgets,
 and SVG metadata v1. Run `zig build test-c-api` for a real C compiler/linker
 smoke.
 
@@ -261,6 +266,7 @@ zig build run-api-sfdp-layout-svg
 zig build run-api-twopi-layout-svg
 zig build run-api-circo-layout-svg
 zig build run-api-patchwork-layout-svg
+zig build run-api-osage-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -278,6 +284,7 @@ They progress from small SVG output to broader feature coverage:
 - `11_twopi_layout_svg.zig`: explicitly rooted graph rendered on BFS rings with subtree-weighted angular spans.
 - `12_circo_layout_svg.zig`: biconnected blocks rendered as recursively connected circles.
 - `13_patchwork_layout_svg.zig`: hierarchical node/subgraph areas rendered as a squarified treemap.
+- `14_osage_layout_svg.zig`: nested subgraphs and intrinsic node rectangles rendered with deterministic array packing.
 
 ## Graphviz compatibility target
 
