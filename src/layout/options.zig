@@ -4,6 +4,10 @@ const std = @import("std");
 
 const spacing = @import("spacing.zig");
 
+pub const defaultInterClusterGap: f64 = 35.0;
+pub const defaultClusterAlongExtentBudget: f64 = 224.0;
+pub const defaultClusterAlongShift: f64 = 4.0;
+
 pub fn withGraphAttrs(base: anytype, graph_attrs: anytype) @TypeOf(base) {
     var result = base;
     if (attrValue(graph_attrs, "ranksep")) |value| {
@@ -23,6 +27,10 @@ pub fn withGraphAttrs(base: anytype, graph_attrs: anytype) @TypeOf(base) {
         result.margin_y = @max(result.margin_y, font_size + 12.0);
     }
     return result;
+}
+
+pub fn clusterAlongBudget(along_margin: f64) f64 {
+    return @max(0.0, defaultClusterAlongExtentBudget - along_margin * 2.0);
 }
 
 pub const BoxMargin = struct {

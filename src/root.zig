@@ -3789,9 +3789,8 @@ pub const LayoutConfig = struct {
     force: ForceLayoutOptions = .{},
 };
 
-const defaultInterClusterGap: f64 = 35.0;
-const defaultClusterAlongExtentBudget: f64 = 224.0;
-const defaultClusterAlongShift: f64 = 4.0;
+const defaultInterClusterGap = layout_mod.options.defaultInterClusterGap;
+const defaultClusterAlongShift = layout_mod.options.defaultClusterAlongShift;
 
 pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: LayoutConfig) !Layout {
     return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
@@ -3816,7 +3815,7 @@ fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) Layo
 }
 
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
-    return @max(0.0, defaultClusterAlongExtentBudget - axes.alongMargin(options) * 2.0);
+    return layout_mod.options.clusterAlongBudget(axes.alongMargin(options));
 }
 
 fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoints) void {
@@ -14394,7 +14393,7 @@ test "layered layout separates clusters along rankdir-aware same-rank axis" {
     try std.testing.expect(@abs(layout.nodes[top].center.x - layout.nodes[bottom].center.x) <= 0.01);
     try std.testing.expect(layout.nodes[sink].center.x > layout.nodes[top].center.x);
     try std.testing.expect(@abs(layout.nodes[bottom].center.y - layout.nodes[top].center.y) >= 80.0);
-    try std.testing.expect(layout.height <= defaultClusterAlongExtentBudget);
+    try std.testing.expect(layout.height <= layout_mod.options.defaultClusterAlongExtentBudget);
 }
 
 fn expectRankDirection(graph: *const Graph, layout: *const Layout, rankdir: RankDir) !void {
