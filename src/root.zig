@@ -10057,37 +10057,27 @@ fn svgGraphvizTranslate(svg: []const u8) SvgTranslate {
 }
 
 fn svgClusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgPolygonBBoxWidth(fragment)) |width| return width;
-    return svgNumberAfter(fragment, " width=\"");
+    return svg_mod.test_helpers.clusterRectWidth(svg, title);
 }
 
 fn svgClusterRectHeight(svg: []const u8, title: []const u8) ?f64 {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgPolygonBBoxHeight(fragment)) |height| return height;
-    return svgNumberAfter(fragment, " height=\"");
+    return svg_mod.test_helpers.clusterRectHeight(svg, title);
 }
 
 fn svgClusterRectX(svg: []const u8, title: []const u8) ?f64 {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgPolygonBBoxX(fragment)) |x| return x;
-    return svgNumberAfter(fragment, " x=\"");
+    return svg_mod.test_helpers.clusterRectX(svg, title);
 }
 
 fn svgClusterRectY(svg: []const u8, title: []const u8) ?f64 {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgPolygonBBoxY(fragment)) |y| return y;
-    return svgNumberAfter(fragment, " y=\"");
+    return svg_mod.test_helpers.clusterRectY(svg, title);
 }
 
 fn svgClusterScreenX(svg: []const u8, title: []const u8) ?f64 {
-    const x = svgClusterRectX(svg, title) orelse return null;
-    return x + svgGraphvizTranslate(svg).x;
+    return svg_mod.test_helpers.clusterScreenX(svg, title);
 }
 
 fn svgClusterScreenY(svg: []const u8, title: []const u8) ?f64 {
-    const y = svgClusterRectY(svg, title) orelse return null;
-    return y + svgGraphvizTranslate(svg).y;
+    return svg_mod.test_helpers.clusterScreenY(svg, title);
 }
 
 fn svgPolygonBBoxX(fragment: []const u8) ?f64 {
@@ -10132,55 +10122,19 @@ fn expectSvgPolygonPointsNearTitles(svg: []const u8, oracle: []const u8, title: 
 }
 
 fn svgNodeCenterX(svg: []const u8, title: []const u8) ?f64 {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgNumberAfter(fragment, " cx=\"")) |cx| return cx;
-    if (svgNumberAfter(fragment, " x=\"")) |x| {
-        if (svgNumberAfter(fragment, " width=\"")) |width| return x + width / 2.0;
-    }
-    var point_numbers: [64]f64 = undefined;
-    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
-    if (count < 2) return null;
-    var min_x = std.math.floatMax(f64);
-    var max_x: f64 = -std.math.floatMax(f64);
-    var index: usize = 0;
-    while (index + 1 < count) : (index += 2) {
-        const x = point_numbers[index];
-        min_x = @min(min_x, x);
-        max_x = @max(max_x, x);
-    }
-    if (min_x == std.math.floatMax(f64)) return null;
-    return (min_x + max_x) / 2.0;
+    return svg_mod.test_helpers.nodeCenterX(svg, title);
 }
 
 fn svgNodeCenterY(svg: []const u8, title: []const u8) ?f64 {
-    const fragment = svgGroupFragmentByTitle(svg, title) orelse return null;
-    if (svgNumberAfter(fragment, " cy=\"")) |cy| return cy;
-    if (svgNumberAfter(fragment, " y=\"")) |y| {
-        if (svgNumberAfter(fragment, " height=\"")) |height| return y + height / 2.0;
-    }
-    var point_numbers: [64]f64 = undefined;
-    const count = svgNumbersInAttribute(fragment, "points", point_numbers[0..]);
-    if (count < 2) return null;
-    var min_y = std.math.floatMax(f64);
-    var max_y: f64 = -std.math.floatMax(f64);
-    var index: usize = 1;
-    while (index < count) : (index += 2) {
-        const y = point_numbers[index];
-        min_y = @min(min_y, y);
-        max_y = @max(max_y, y);
-    }
-    if (min_y == std.math.floatMax(f64)) return null;
-    return (min_y + max_y) / 2.0;
+    return svg_mod.test_helpers.nodeCenterY(svg, title);
 }
 
 fn svgNodeScreenCenterX(svg: []const u8, title: []const u8) ?f64 {
-    const x = svgNodeCenterX(svg, title) orelse return null;
-    return x + svgGraphvizTranslate(svg).x;
+    return svg_mod.test_helpers.nodeScreenCenterX(svg, title);
 }
 
 fn svgNodeScreenCenterY(svg: []const u8, title: []const u8) ?f64 {
-    const y = svgNodeCenterY(svg, title) orelse return null;
-    return y + svgGraphvizTranslate(svg).y;
+    return svg_mod.test_helpers.nodeScreenCenterY(svg, title);
 }
 
 fn expectSvgNodeClusterPaddingNear(svg: []const u8, oracle: []const u8, cluster_title: []const u8, node_title: []const u8, tolerance: f64) !void {

@@ -176,6 +176,92 @@ pub fn polygonPointCount(fragment: []const u8) ?usize {
     return count / 2;
 }
 
+pub fn clusterRectWidth(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    if (polygonBBoxWidth(fragment)) |width| return width;
+    return numberAfter(fragment, " width=\"");
+}
+
+pub fn clusterRectHeight(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    if (polygonBBoxHeight(fragment)) |height| return height;
+    return numberAfter(fragment, " height=\"");
+}
+
+pub fn clusterRectX(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    if (polygonBBoxX(fragment)) |x| return x;
+    return numberAfter(fragment, " x=\"");
+}
+
+pub fn clusterRectY(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    if (polygonBBoxY(fragment)) |y| return y;
+    return numberAfter(fragment, " y=\"");
+}
+
+pub fn clusterScreenX(svg: []const u8, title: []const u8) ?f64 {
+    const x = clusterRectX(svg, title) orelse return null;
+    return x + graphvizTranslate(svg).x;
+}
+
+pub fn clusterScreenY(svg: []const u8, title: []const u8) ?f64 {
+    const y = clusterRectY(svg, title) orelse return null;
+    return y + graphvizTranslate(svg).y;
+}
+
+pub fn nodeCenterX(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    if (numberAfter(fragment, " cx=\"")) |cx| return cx;
+    if (numberAfter(fragment, " x=\"")) |x| {
+        if (numberAfter(fragment, " width=\"")) |width| return x + width / 2.0;
+    }
+    var point_numbers: [64]f64 = undefined;
+    const count = numbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_x = std.math.floatMax(f64);
+    var max_x: f64 = -std.math.floatMax(f64);
+    var index_i: usize = 0;
+    while (index_i + 1 < count) : (index_i += 2) {
+        const x = point_numbers[index_i];
+        min_x = @min(min_x, x);
+        max_x = @max(max_x, x);
+    }
+    if (min_x == std.math.floatMax(f64)) return null;
+    return (min_x + max_x) / 2.0;
+}
+
+pub fn nodeCenterY(svg: []const u8, title: []const u8) ?f64 {
+    const fragment = groupFragmentByTitle(svg, title) orelse return null;
+    if (numberAfter(fragment, " cy=\"")) |cy| return cy;
+    if (numberAfter(fragment, " y=\"")) |y| {
+        if (numberAfter(fragment, " height=\"")) |height| return y + height / 2.0;
+    }
+    var point_numbers: [64]f64 = undefined;
+    const count = numbersInAttribute(fragment, "points", point_numbers[0..]);
+    if (count < 2) return null;
+    var min_y = std.math.floatMax(f64);
+    var max_y: f64 = -std.math.floatMax(f64);
+    var index_i: usize = 1;
+    while (index_i < count) : (index_i += 2) {
+        const y = point_numbers[index_i];
+        min_y = @min(min_y, y);
+        max_y = @max(max_y, y);
+    }
+    if (min_y == std.math.floatMax(f64)) return null;
+    return (min_y + max_y) / 2.0;
+}
+
+pub fn nodeScreenCenterX(svg: []const u8, title: []const u8) ?f64 {
+    const x = nodeCenterX(svg, title) orelse return null;
+    return x + graphvizTranslate(svg).x;
+}
+
+pub fn nodeScreenCenterY(svg: []const u8, title: []const u8) ?f64 {
+    const y = nodeCenterY(svg, title) orelse return null;
+    return y + graphvizTranslate(svg).y;
+}
+
 pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
     var marker_buf: [64]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return 0;
