@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const svg_canvas_mod = @import("svg_canvas.zig");
+const svg_layers_mod = @import("svg_layers.zig");
 
 pub const NodeId = usize;
 pub const EdgeId = usize;
@@ -8068,54 +8069,11 @@ fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, la
     return first_baseline_y + block_height / 2.0 - line_height * 0.72;
 }
 
-const SvgLayers = struct {
-    names: []const []const u8,
-    delims: []const u8,
-    list_delims: []const u8,
-    selected: ?[]const usize,
-};
-
-const SvgLayerContext = struct {
-    layers: SvgLayers,
-    index: usize,
-};
+const SvgLayers = svg_layers_mod.Layers;
+const SvgLayerContext = svg_layers_mod.Context;
 
 fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
-    const raw = attrValue(graph.attrs.items, "layers") orelse return null;
-    const delims = attrValue(graph.attrs.items, "layersep") orelse ":\t ";
-    const raw_list_delims = attrValue(graph.attrs.items, "layerlistsep") orelse ",";
-    const list_delims = if (std.mem.indexOfAny(u8, delims, raw_list_delims) == null) raw_list_delims else "";
-    var count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, raw, delims);
-    while (iter.next()) |_| count += 1;
-    if (count == 0) return null;
-    var names = graph.allocator.alloc([]const u8, count) catch return null;
-    var fill_iter = std.mem.tokenizeAny(u8, raw, delims);
-    var index: usize = 0;
-    while (fill_iter.next()) |name| : (index += 1) names[index] = name;
-    const base = SvgLayers{ .names = names, .delims = delims, .list_delims = list_delims, .selected = null };
-    return .{ .names = names, .delims = delims, .list_delims = list_delims, .selected = svgLayerSelection(graph, base) };
-}
-
-fn svgLayerSelection(graph: *const Graph, layers: SvgLayers) ?[]const usize {
-    const spec = attrValue(graph.attrs.items, "layerselect") orelse return null;
-    if (std.mem.trim(u8, spec, " \t\r\n").len == 0) return null;
-    var count: usize = 0;
-    for (layers.names, 0..) |_, index| {
-        const context = SvgLayerContext{ .layers = layers, .index = index };
-        if (svgLayerSpecMatches(context, spec)) count += 1;
-    }
-    if (count == 0) return null;
-    var selected = graph.allocator.alloc(usize, count) catch return null;
-    var out: usize = 0;
-    for (layers.names, 0..) |_, index| {
-        const context = SvgLayerContext{ .layers = layers, .index = index };
-        if (svgLayerSpecMatches(context, spec)) {
-            selected[out] = index;
-            out += 1;
-        }
-    }
-    return selected;
+    return svg_layers_mod.parse(graph.allocator, graph.attrs.items);
 }
 
 fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void {
@@ -8126,7 +8084,7 @@ fn writeSvgLayerOpen(writer: *Io.Writer, name: []const u8) Io.Writer.Error!void 
 
 fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) bool {
     if (attrValue(node_item.attrs.items, "layer")) |spec| {
-        if (svgLayerSpecMatches(layer, spec)) return true;
+        if (svg_layers_mod.matches(layer, spec)) return true;
         if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
     }
     var has_incident = false;
@@ -8134,7 +8092,7 @@ fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) 
         if (edge_item.from != node_item.id and edge_item.to != node_item.id) continue;
         has_incident = true;
         if (attrValue(edge_item.attrs.items, "layer")) |edge_spec| {
-            if (std.mem.trim(u8, edge_spec, " \t\r\n").len == 0 or svgLayerSpecMatches(layer, edge_spec)) return true;
+            if (std.mem.trim(u8, edge_spec, " \t\r\n").len == 0 or svg_layers_mod.matches(layer, edge_spec)) return true;
         } else {
             return true;
         }
@@ -8144,19 +8102,19 @@ fn svgNodeInLayer(graph: *const Graph, node_item: Node, layer: SvgLayerContext) 
 
 fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) bool {
     if (attrValue(edge_item.attrs.items, "layer")) |spec| {
-        if (svgLayerSpecMatches(layer, spec)) return true;
+        if (svg_layers_mod.matches(layer, spec)) return true;
         if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
     }
     if (edge_item.from < graph.nodes.items.len) {
         if (attrValue(graph.nodes.items[edge_item.from].attrs.items, "layer")) |spec| {
-            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svgLayerSpecMatches(layer, spec)) return true;
+            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_layers_mod.matches(layer, spec)) return true;
         } else {
             return true;
         }
     }
     if (edge_item.to < graph.nodes.items.len) {
         if (attrValue(graph.nodes.items[edge_item.to].attrs.items, "layer")) |spec| {
-            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svgLayerSpecMatches(layer, spec)) return true;
+            if (std.mem.trim(u8, spec, " \t\r\n").len == 0 or svg_layers_mod.matches(layer, spec)) return true;
         } else {
             return true;
         }
@@ -8166,48 +8124,13 @@ fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) 
 
 fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerContext) bool {
     if (attrValue(cluster.attrs.items, "layer")) |spec| {
-        if (svgLayerSpecMatches(layer, spec)) return true;
+        if (svg_layers_mod.matches(layer, spec)) return true;
         if (std.mem.trim(u8, spec, " \t\r\n").len > 0) return false;
     }
     for (cluster.nodes) |node_id| {
         if (node_id < graph.nodes.items.len and svgNodeInLayer(graph, graph.nodes.items[node_id], layer)) return true;
     }
     return false;
-}
-
-fn svgLayerSpecMatches(layer: SvgLayerContext, spec: []const u8) bool {
-    const current = layer.index + 1;
-    if (layer.layers.list_delims.len == 0) return svgLayerSpecPartMatches(layer, spec, current);
-    var parts = std.mem.tokenizeAny(u8, spec, layer.layers.list_delims);
-    while (parts.next()) |part| {
-        if (svgLayerSpecPartMatches(layer, part, current)) return true;
-    }
-    return false;
-}
-
-fn svgLayerSpecPartMatches(layer: SvgLayerContext, part: []const u8, current: usize) bool {
-    const trimmed = std.mem.trim(u8, part, " \t\r\n");
-    if (trimmed.len == 0) return false;
-    var range = std.mem.tokenizeAny(u8, trimmed, layer.layers.delims);
-    const first = range.next() orelse return false;
-    if (range.next()) |second| {
-        const start = svgLayerIndex(layer.layers, first, 0) orelse return false;
-        const end = svgLayerIndex(layer.layers, second, layer.layers.names.len) orelse return false;
-        const lo = @min(start, end);
-        const hi = @max(start, end);
-        return current >= lo and current <= hi;
-    }
-    return if (svgLayerIndex(layer.layers, first, current)) |index| index == current else false;
-}
-
-fn svgLayerIndex(layers: SvgLayers, raw: []const u8, all_value: usize) ?usize {
-    const text = std.mem.trim(u8, raw, " \t\r\n");
-    if (std.ascii.eqlIgnoreCase(text, "all")) return all_value;
-    if (std.fmt.parseInt(usize, text, 10)) |value| return value else |_| {}
-    for (layers.names, 0..) |name, index| {
-        if (std.mem.eql(u8, text, name)) return index + 1;
-    }
-    return null;
 }
 
 fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext) Io.Writer.Error!void {
