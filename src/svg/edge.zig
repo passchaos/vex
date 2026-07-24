@@ -12,6 +12,10 @@ pub const Routing = enum {
 
 pub fn routingMode(attrs: anytype) Routing {
     const value = attrValue(attrs, "splines") orelse return .curved;
+    return routingValue(value);
+}
+
+pub fn routingValue(value: []const u8) Routing {
     if (parseBool(value)) |enabled| return if (enabled) .curved else .line;
     if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "line")) return .line;
     if (std.ascii.eqlIgnoreCase(value, "polyline")) return .polyline;
@@ -21,6 +25,10 @@ pub fn routingMode(attrs: anytype) Routing {
 
 pub fn concentrateEnabled(attrs: anytype) bool {
     const value = attrValue(attrs, "concentrate") orelse return false;
+    return concentrateValueEnabled(value);
+}
+
+pub fn concentrateValueEnabled(value: []const u8) bool {
     return parseBool(value) orelse false;
 }
 

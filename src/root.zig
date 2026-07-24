@@ -10292,8 +10292,8 @@ fn svgConcentrateForEdge(graph: *const Graph, edge_item: Edge, fallback: bool) b
     const from_cluster = clusterIndexContainingNode(graph, edge_item.from) orelse return fallback;
     const to_cluster = clusterIndexContainingNode(graph, edge_item.to) orelse return fallback;
     if (from_cluster != to_cluster) return fallback;
-    if (attrValue(graph.subgraphs.items[from_cluster].attrs.items, "concentrate") == null) return fallback;
-    return svg_mod.edge.concentrateEnabled(graph.subgraphs.items[from_cluster].attrs.items);
+    const value = layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, from_cluster, "concentrate") orelse return fallback;
+    return svg_mod.edge.concentrateValueEnabled(value);
 }
 
 fn graphFontNamesMode(graph: *const Graph) FontNames {
@@ -12095,8 +12095,8 @@ fn svgEdgeRoutingForEdge(graph: *const Graph, edge_item: Edge, fallback: SvgEdge
     const from_cluster = clusterIndexContainingNode(graph, edge_item.from) orelse return fallback;
     const to_cluster = clusterIndexContainingNode(graph, edge_item.to) orelse return fallback;
     if (from_cluster != to_cluster) return fallback;
-    if (attrValue(graph.subgraphs.items[from_cluster].attrs.items, "splines") == null) return fallback;
-    return svg_mod.edge.routingMode(graph.subgraphs.items[from_cluster].attrs.items);
+    const value = layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, from_cluster, "splines") orelse return fallback;
+    return svg_mod.edge.routingValue(value);
 }
 
 fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip, hints: EdgePathHints) Io.Writer.Error!void {
@@ -18503,6 +18503,32 @@ test "SVG renderer honors subgraph concentrate for internal duplicate edges" {
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "outside2") != null);
 }
 
+test "SVG renderer inherits subgraph concentrate from parents" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    concentrate=true;
+        \\    subgraph cluster_inner {
+        \\      a -> b [label="first"];
+        \\      a -> b [label="second"];
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner = subgraphIndexByLabel(&graph, "cluster_inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner].attrs.items, "concentrate") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "second") == null);
+}
+
 test "DOT subgraphs scope default node and edge attributes" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -20393,6 +20419,35 @@ test "SVG renderer honors subgraph splines for internal edges" {
     const typed_external = svgGroupFragmentById(typed_svg, "edge2") orelse return error.MissingExternalEdge;
     try std.testing.expect(svgPathCommandCount(typed_internal, 'C') == 0);
     try std.testing.expect(svgPathCommandCount(typed_external, 'C') != 0);
+}
+
+test "SVG renderer inherits subgraph splines from parents" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    splines=line;
+        \\    subgraph cluster_inner {
+        \\      a -> b [label="internal"];
+        \\    }
+        \\  }
+        \\  b -> c [label="external"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_id = subgraphIndexByLabel(&graph, "cluster_inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_id].attrs.items, "splines") == null);
+    const internal = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingInternalEdge;
+    const external = svgGroupFragmentByTitle(svg, "b-&gt;c") orelse return error.MissingExternalEdge;
+    try std.testing.expect(svgPathCommandCount(internal, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(internal, 'L') >= 1);
+    try std.testing.expect(svgPathCommandCount(external, 'C') != 0);
 }
 
 test "spline controls stay monotonic for short adjacent edges" {
