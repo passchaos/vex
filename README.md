@@ -51,10 +51,13 @@ cat examples/simple.dot | zig build run -- --format svg > simple.svg
 Layout selection defaults to `dot`/Sugiyama, which honors
 `rankdir=TB|BT|LR|RL` during layout. `--layout neato`, `graph
 [layout=neato]`, and Graphviz-style `-Kneato` select the deterministic
-stress-majorization engine. `--layout fr`, `--layout fdp`, and `--layout sfdp`
-currently select the deterministic Fruchterman-Reingold engine; `fdp` and
-`sfdp` remain compatibility aliases until their independent engines are
-implemented. `--layout-iterations` caps the selected iterative layout budget
+stress-majorization engine. `--layout fdp`, `graph [layout=fdp]`, and `-Kfdp`
+select the independent spring-electrical engine with all-pairs repulsion,
+edge-only springs, cluster boxes, graph `K` / `T0`, and edge `len` / `weight`
+semantics. `--layout fr` selects the deterministic Fruchterman-Reingold
+engine. `--layout sfdp` currently remains a compatibility alias for
+Fruchterman-Reingold until its independent multilevel engine is implemented.
+`--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
 `graph [layout_iterations=20]`, and the Zig API can pass
@@ -209,6 +212,7 @@ zig build run-api-records-ports-svg
 zig build run-api-shapes-styles-svg
 zig build run-api-force-layout-svg
 zig build run-api-incremental-layout-svg
+zig build run-api-fdp-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -221,6 +225,7 @@ They progress from small SVG output to broader feature coverage:
 - `06_shapes_styles_svg.zig`: common Graphviz-style shapes, node/edge attrs, and SVG output.
 - `07_force_layout_svg.zig`: cyclic undirected graph rendered with the independent neato stress-majorization engine.
 - `08_incremental_layout_svg.zig`: add a node after the first layout, preserve shared-node positions with `layoutGraphIncremental`, and write the final SVG.
+- `09_fdp_layout_svg.zig`: clustered undirected graph rendered with the independent spring-electrical fdp engine.
 
 ## Graphviz compatibility target
 

@@ -41,6 +41,7 @@ pub const LayoutAlgorithm = enum {
     sugiyama,
     fruchterman_reingold,
     stress_majorization,
+    spring_electrical,
 
     pub fn fromString(value: []const u8) ?LayoutAlgorithm {
         if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
@@ -57,9 +58,14 @@ pub const LayoutAlgorithm = enum {
         {
             return .stress_majorization;
         }
+        if (std.ascii.eqlIgnoreCase(value, "fdp") or
+            std.ascii.eqlIgnoreCase(value, "spring-electrical") or
+            std.ascii.eqlIgnoreCase(value, "spring_electrical"))
+        {
+            return .spring_electrical;
+        }
         if (std.ascii.eqlIgnoreCase(value, "fr") or
             std.ascii.eqlIgnoreCase(value, "force") or
-            std.ascii.eqlIgnoreCase(value, "fdp") or
             std.ascii.eqlIgnoreCase(value, "sfdp") or
             std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
             std.ascii.eqlIgnoreCase(value, "fruchterman_reingold"))
@@ -73,8 +79,9 @@ pub const LayoutAlgorithm = enum {
         return switch (self) {
             .auto => "auto",
             .sugiyama => "dot",
-            .fruchterman_reingold => "fdp",
+            .fruchterman_reingold => "fr",
             .stress_majorization => "neato",
+            .spring_electrical => "fdp",
         };
     }
 };

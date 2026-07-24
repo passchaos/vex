@@ -3593,6 +3593,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .sugiyama => layoutLayered(allocator, graph, config.layered),
         .fruchterman_reingold => layoutFruchtermanReingold(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
         .stress_majorization => layoutStressMajorization(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
+        .spring_electrical => layoutSpringElectrical(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph)),
     };
 }
 
@@ -3602,6 +3603,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .sugiyama => layoutLayeredIncremental(allocator, graph, previous, config.layered, options),
         .fruchterman_reingold => layoutFruchtermanReingoldIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
         .stress_majorization => layoutStressMajorizationIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
+        .spring_electrical => layoutSpringElectricalIncremental(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options),
     };
 }
 
@@ -4260,6 +4262,204 @@ fn stressLayoutEnergy(positions: []const Point, distances: StressGraphDistances)
             const delta = std.math.hypot(position.x - other.x, position.y - other.y) - desired;
             energy += weight * delta * delta;
         }
+    }
+    return energy;
+}
+
+pub fn layoutSpringElectrical(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    return layoutSpringElectricalWithPrevious(allocator, graph, null, options, .{});
+}
+
+pub fn layoutSpringElectricalIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    return layoutSpringElectricalWithPrevious(allocator, graph, previous, options, incremental);
+}
+
+fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *const Graph, previous: ?*const Layout, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const n = graph.nodes.items.len;
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    if (n == 0) {
+        return .{
+            .allocator = allocator,
+            .graph = graph_snapshot,
+            .rankdir = graph.rankdir,
+            .nodes = nodes,
+            .subgraphs = cluster_layouts,
+            .edge_waypoints = edge_waypoints,
+            .ranks = ranks,
+            .rank_depths = rank_depths,
+            .rank_heights = rank_heights,
+            .margin = options.margin,
+            .margin_x = options.margin,
+            .margin_y = options.margin,
+            .width = options.width,
+            .height = options.height,
+        };
+    }
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    const default_layout_options = LayoutOptions{};
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+
+    const positions = try allocator.alloc(Point, n);
+    defer allocator.free(positions);
+    initializeStressPositions(positions, previous, graph.rankdir, options, incremental);
+    const displacements = try allocator.alloc(Point, n);
+    defer allocator.free(displacements);
+    const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
+    defer if (previous != null) allocator.free(anchors);
+    const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
+    springElectricalRelax(graph, positions, displacements, options, anchors, stability);
+    fitStressPositionsToCanvas(positions, sizes, options);
+
+    for (nodes, 0..) |*node, id| {
+        node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
+    }
+    computeSubgraphLayouts(graph, LayoutAxes.init(graph.rankdir), nodes, cluster_layouts);
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = nodes,
+        .subgraphs = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
+        .width = options.width,
+        .height = options.height,
+    };
+}
+
+fn springElectricalRelax(graph: *const Graph, positions: []Point, displacements: []Point, options: ForceLayoutOptions, anchors: []const Point, stability: f64) void {
+    if (positions.len == 0 or positions.len != displacements.len) return;
+    const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 0.3) * 240.0);
+    const default_temperature = spring_length * std.math.sqrt(@as(f64, @floatFromInt(positions.len))) / 5.0;
+    const initial_temperature = parsePositiveAttrFloat(graph.attrs.items, "T0", default_temperature);
+    const iterations = @max(options.iterations, 1);
+
+    for (0..iterations) |iteration| {
+        @memset(displacements, .{ .x = 0, .y = 0 });
+        for (positions, 0..) |position, left| {
+            for (positions[left + 1 ..], left + 1..) |other, right| {
+                var dx = other.x - position.x;
+                var dy = other.y - position.y;
+                var distance = std.math.hypot(dx, dy);
+                if (distance < 0.001) {
+                    const angle = @as(f64, @floatFromInt(left + right + 1)) * 2.399963229728653;
+                    dx = std.math.cos(angle) * 0.001;
+                    dy = std.math.sin(angle) * 0.001;
+                    distance = 0.001;
+                }
+                const force = (spring_length * spring_length) / (distance * distance);
+                displacements[left].x -= dx * force;
+                displacements[left].y -= dy * force;
+                displacements[right].x += dx * force;
+                displacements[right].y += dy * force;
+            }
+        }
+
+        for (graph.edges.items) |edge_item| {
+            if (edge_item.from >= positions.len or edge_item.to >= positions.len or edge_item.from == edge_item.to) continue;
+            const dx = positions[edge_item.to].x - positions[edge_item.from].x;
+            const dy = positions[edge_item.to].y - positions[edge_item.from].y;
+            const distance = @max(0.001, std.math.hypot(dx, dy));
+            const edge_length = @max(12.0, parsePositiveAttrFloat(edge_item.attrs.items, "len", spring_length / 72.0) * 72.0);
+            const force = @max(edge_item.weight, 0.1) * (distance - edge_length) / distance;
+            displacements[edge_item.from].x += dx * force;
+            displacements[edge_item.from].y += dy * force;
+            displacements[edge_item.to].x -= dx * force;
+            displacements[edge_item.to].y -= dy * force;
+        }
+
+        applySpringClusterAttraction(graph, positions, displacements, spring_length);
+        const remaining = @as(f64, @floatFromInt(iterations - iteration));
+        const temperature = initial_temperature * remaining / @as(f64, @floatFromInt(iterations));
+        for (positions, 0..) |*position, id| {
+            var dx = displacements[id].x;
+            var dy = displacements[id].y;
+            const magnitude = std.math.hypot(dx, dy);
+            if (magnitude > temperature and magnitude > 0.001) {
+                const scale = temperature / magnitude;
+                dx *= scale;
+                dy *= scale;
+            }
+            position.x += dx;
+            position.y += dy;
+            if (id < anchors.len and stability > 0) {
+                position.x = position.x * (1.0 - stability) + anchors[id].x * stability;
+                position.y = position.y * (1.0 - stability) + anchors[id].y * stability;
+            }
+        }
+    }
+}
+
+fn applySpringClusterAttraction(graph: *const Graph, positions: []const Point, displacements: []Point, spring_length: f64) void {
+    for (graph.subgraphs.items) |subgraph| {
+        if (subgraph.nodes.len <= 1) continue;
+        var centroid = Point{ .x = 0, .y = 0 };
+        var count: usize = 0;
+        for (subgraph.nodes) |node_id| {
+            if (node_id >= positions.len) continue;
+            centroid.x += positions[node_id].x;
+            centroid.y += positions[node_id].y;
+            count += 1;
+        }
+        if (count == 0) continue;
+        centroid.x /= @as(f64, @floatFromInt(count));
+        centroid.y /= @as(f64, @floatFromInt(count));
+        const strength = 0.04 / @max(spring_length, 1.0);
+        for (subgraph.nodes) |node_id| {
+            if (node_id >= positions.len or node_id >= displacements.len) continue;
+            displacements[node_id].x += (centroid.x - positions[node_id].x) * strength;
+            displacements[node_id].y += (centroid.y - positions[node_id].y) * strength;
+        }
+    }
+}
+
+fn springElectricalEnergy(graph: *const Graph, positions: []const Point) f64 {
+    if (positions.len == 0) return 0;
+    const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 0.3) * 240.0);
+    var energy: f64 = 0;
+    for (positions, 0..) |position, left| {
+        for (positions[left + 1 ..]) |other| {
+            const distance = @max(0.001, std.math.hypot(position.x - other.x, position.y - other.y));
+            energy += (spring_length * spring_length) / distance;
+        }
+    }
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= positions.len or edge_item.to >= positions.len or edge_item.from == edge_item.to) continue;
+        const distance = std.math.hypot(
+            positions[edge_item.from].x - positions[edge_item.to].x,
+            positions[edge_item.from].y - positions[edge_item.to].y,
+        );
+        const edge_length = @max(12.0, parsePositiveAttrFloat(edge_item.attrs.items, "len", spring_length / 72.0) * 72.0);
+        const delta = distance - edge_length;
+        energy += @max(edge_item.weight, 0.1) * delta * delta / @max(edge_length, 1.0);
     }
     return energy;
 }
@@ -16208,7 +16408,8 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.sugiyama, LayoutAlgorithm.fromString("sugiyama").?);
     try std.testing.expectEqual(LayoutAlgorithm.stress_majorization, LayoutAlgorithm.fromString("neato").?);
     try std.testing.expectEqual(LayoutAlgorithm.stress_majorization, LayoutAlgorithm.fromString("stress-majorization").?);
-    try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fdp").?);
+    try std.testing.expectEqual(LayoutAlgorithm.spring_electrical, LayoutAlgorithm.fromString("fdp").?);
+    try std.testing.expectEqual(LayoutAlgorithm.spring_electrical, LayoutAlgorithm.fromString("spring-electrical").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("sfdp").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
@@ -16319,6 +16520,83 @@ test "neato is distinct from Fruchterman-Reingold" {
         try std.testing.expect(node.center.x + node.width / 2.0 <= options.width - options.margin + 0.001);
         try std.testing.expect(node.center.y - node.height / 2.0 >= options.margin - 0.001);
         try std.testing.expect(node.center.y + node.height / 2.0 <= options.height - options.margin + 0.001);
+    }
+}
+
+test "fdp spring electrical relaxation lowers physical energy" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [K=0.4];
+        \\  a -- b [len=1.2, weight=3];
+        \\  b -- c;
+        \\  c -- d;
+        \\  d -- a;
+        \\}
+    );
+    defer graph.deinit();
+
+    var positions = [_]Point{
+        .{ .x = 20, .y = 20 },
+        .{ .x = 380, .y = 20 },
+        .{ .x = 30, .y = 260 },
+        .{ .x = 370, .y = 250 },
+    };
+    var displacements: [positions.len]Point = undefined;
+    const before = springElectricalEnergy(&graph, &positions);
+    springElectricalRelax(&graph, &positions, &displacements, .{ .width = 420, .height = 300, .margin = 30, .iterations = 80 }, &.{}, 0);
+    const after = springElectricalEnergy(&graph, &positions);
+    try std.testing.expect(after < before * 0.55);
+}
+
+test "fdp honors edge length and weight semantics" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [K=0.3];
+        \\  hub -- near [len=0.5, weight=5];
+        \\  hub -- far [len=2.5, weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .spring_electrical,
+        .force = .{ .width = 500, .height = 340, .margin = 30, .iterations = 120 },
+    });
+    defer layout.deinit();
+    const hub = nodeIdByLabel(&graph, "hub");
+    const near = nodeIdByLabel(&graph, "near");
+    const far = nodeIdByLabel(&graph, "far");
+    try std.testing.expect(distanceBetween(layout.nodes[hub].center, layout.nodes[near].center) <
+        distanceBetween(layout.nodes[hub].center, layout.nodes[far].center));
+}
+
+test "fdp is distinct and supports cluster boxes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  subgraph left { a; b; a -- b; }
+        \\  subgraph right { c; d; c -- d; }
+        \\  b -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = ForceLayoutOptions{ .width = 520, .height = 360, .margin = 30, .iterations = 90 };
+    var fdp = try layoutGraph(allocator, &graph, .{ .algorithm = .spring_electrical, .force = options });
+    defer fdp.deinit();
+    var neato = try layoutGraph(allocator, &graph, .{ .algorithm = .stress_majorization, .force = options });
+    defer neato.deinit();
+    var fr = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = options });
+    defer fr.deinit();
+
+    try std.testing.expect(sharedNodeDisplacement(&fdp, &neato, graph.nodes.items.len) > 10.0);
+    try std.testing.expect(sharedNodeDisplacement(&fdp, &fr, graph.nodes.items.len) > 10.0);
+    try std.testing.expectEqual(@as(usize, 2), fdp.subgraphs.len);
+    for (fdp.subgraphs) |subgraph| {
+        try std.testing.expect(subgraph.width > 0);
+        try std.testing.expect(subgraph.height > 0);
     }
 }
 
