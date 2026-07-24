@@ -71,12 +71,13 @@ validation.
 so preview workflows can fail early on unexpectedly large graph inputs.
 
 `--svg-metadata` embeds a machine-readable object index in the SVG `<metadata>`
-element. It includes graph layout/canvas facts, node geometry, edge waypoints,
-subgraph geometry, and layer metadata when present. It also annotates rendered
-graph, node, edge, and subgraph groups with `data-vex-object-*` attributes,
-including object layer and effective `href` / `tooltip` / `target` metadata
-when known, plus edge waypoint geometry for long routed edges and node rank
-values, for direct tooling hooks.
+element. It includes graph structure and layout/canvas facts, node geometry,
+edge waypoints, subgraph geometry, and layer metadata when present. It also
+annotates rendered graph, node, edge, and subgraph groups with
+`data-vex-object-*` attributes, including graph direction, strictness, rank
+direction and object counts, object layer and effective
+`href` / `tooltip` / `target` metadata when known, plus edge waypoint geometry
+for long routed edges and node rank values, for direct tooling hooks.
 DOT can enable the same index with
 `graph [vex_svg_metadata=true]`, and the Zig API can pass
 `.{ .svg = .{ .metadata = true } }`.
@@ -266,3 +267,5 @@ The public render API keeps an `OutputFormat` dispatch layer so output backends 
 
 Future work should expand remaining non-MVP DOT details—full cluster layout semantics and Graphviz edge cases—toward the full grammar in Graphviz's local source at
 `~/Work/graphviz/lib/cgraph/grammar.y` and `~/Work/graphviz/doc/infosrc/grammar`.
+Graphviz HTML-like label rendering is intentionally out of scope; angle-string
+IDs and labels remain plain text in Vex.
