@@ -151,6 +151,7 @@ pub const GraphAttr = union(enum) {
     layerselect: []const u8,
     vex_interactive_layers: bool,
     vex_interactive_collapse: bool,
+    vex_interactive_filter: bool,
     vex_interactive_search: bool,
     vex_interactive_viewport: bool,
     pad: []const u8,
@@ -844,6 +845,7 @@ pub const Graph = struct {
             .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
             .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
             .vex_interactive_collapse => |value| try self.setGraphAttrRaw("vex_interactive_collapse", boolAttrValue(value)),
+            .vex_interactive_filter => |value| try self.setGraphAttrRaw("vex_interactive_filter", boolAttrValue(value)),
             .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
             .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
@@ -7472,6 +7474,7 @@ pub const SvgOptions = struct {
     show_title: bool = true,
     interactive_layers: bool = false,
     interactive_collapse: bool = false,
+    interactive_filter: bool = false,
     interactive_search: bool = false,
     interactive_viewport: bool = false,
 };
@@ -7631,6 +7634,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     };
     const write_interactive_layers = if (maybe_layers) |_| svgInteractiveLayersEnabled(graph, options) else false;
     const write_interactive_collapse = svgInteractiveCollapseEnabled(graph, options);
+    const write_interactive_filter = svgInteractiveFilterEnabled(graph, options);
     const write_interactive_search = svgInteractiveSearchEnabled(graph, options);
 
     if (maybe_layers) |layers| {
@@ -7663,6 +7667,10 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         try writeSvgLayerControls(writer, layers, controls_x, controls_y);
         controls_y += svgLayerControlsHeight(layers) + 8.0;
     }
+    if (write_interactive_filter) {
+        try writeSvgFilterControls(writer, controls_x, controls_y);
+        controls_y += svgFilterControlsHeight() + 8.0;
+    }
     if (write_interactive_search) {
         try writeSvgSearchControls(writer, controls_x, controls_y);
         controls_y += svgSearchControlsHeight() + 8.0;
@@ -7693,6 +7701,12 @@ fn svgInteractiveLayersEnabled(graph: *const Graph, options: SvgOptions) bool {
 fn svgInteractiveCollapseEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_collapse) return true;
     const value = attrValue(graph.attrs.items, "vex_interactive_collapse") orelse return false;
+    return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
+}
+
+fn svgInteractiveFilterEnabled(graph: *const Graph, options: SvgOptions) bool {
+    if (options.interactive_filter) return true;
+    const value = attrValue(graph.attrs.items, "vex_interactive_filter") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -7819,6 +7833,97 @@ fn svgLayerControlsWidth(layers: SvgLayers) f64 {
         max_len = @max(max_len, svgLayerControlName(layers, control_index).len);
     }
     return @max(@as(f64, 96.0), @as(f64, @floatFromInt(max_len)) * 7.0 + 34.0);
+}
+
+fn writeSvgFilterControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
+    try writer.writeAll(
+        \\<style>
+        \\.vex-filter-panel { font-family: Arial,sans-serif; font-size: 11px; }
+        \\.vex-filter-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
+        \\.vex-filter-control { cursor: pointer; }
+        \\.vex-filter-control rect.vex-filter-button { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
+        \\.vex-filter-control text { fill: #0f172a; pointer-events: none; }
+        \\.vex-filter-control .vex-filter-check { fill: #2563eb; stroke: none; }
+        \\.vex-filter-control[data-vex-filter-state="off"] rect.vex-filter-button { fill: #f1f5f9; stroke: #94a3b8; }
+        \\.vex-filter-control[data-vex-filter-state="off"] text { fill: #64748b; }
+        \\.vex-filter-control[data-vex-filter-state="off"] .vex-filter-check { fill: none; stroke: #94a3b8; stroke-width: 1; }
+        \\.vex-filter-hide-nodes .node { display: none; }
+        \\.vex-filter-hide-edges .edge { display: none; }
+        \\.vex-filter-hide-subgraphs .cluster { display: none; }
+        \\
+        \\</style>
+        \\
+    );
+    try writer.print("<g id=\"vex-filter-controls\" class=\"vex-filter-panel\" transform=\"translate({d:.1} {d:.1})\">\n", .{ x, y });
+    try writer.writeAll("<rect class=\"vex-filter-panel-bg\" x=\"0\" y=\"0\" width=\"118\" height=\"74\" rx=\"4\"/>\n");
+    try writeSvgFilterButton(writer, "Nodes", "nodes", 4);
+    try writeSvgFilterButton(writer, "Edges", "edges", 26);
+    try writeSvgFilterButton(writer, "Subgraphs", "subgraphs", 48);
+    try writer.writeAll("</g>\n");
+    try writer.writeAll(
+        \\<script type="application/ecmascript"><![CDATA[
+        \\(function () {
+        \\  var script = document.currentScript;
+        \\  var root = script && script.ownerSVGElement ? script.ownerSVGElement : document.documentElement;
+        \\  var state = { nodes: true, edges: true, subgraphs: true };
+        \\  function setRootClass(name, enabled) {
+        \\    if (root.classList) {
+        \\      root.classList.toggle(name, enabled);
+        \\      return;
+        \\    }
+        \\    var classes = root.getAttribute('class') || '';
+        \\    var has = classes.indexOf(name) !== -1;
+        \\    if (enabled && !has) root.setAttribute('class', classes + ' ' + name);
+        \\    if (!enabled && has) root.setAttribute('class', classes.replace(name, ''));
+        \\  }
+        \\  function setControl(control, visible) {
+        \\    control.setAttribute('data-vex-filter-state', visible ? 'on' : 'off');
+        \\    control.setAttribute('aria-pressed', visible ? 'true' : 'false');
+        \\  }
+        \\  function applyFilters() {
+        \\    setRootClass('vex-filter-hide-nodes', !state.nodes);
+        \\    setRootClass('vex-filter-hide-edges', !state.edges);
+        \\    setRootClass('vex-filter-hide-subgraphs', !state.subgraphs);
+        \\    var controls = root.querySelectorAll('[data-vex-filter-kind]');
+        \\    for (var i = 0; i < controls.length; i += 1) {
+        \\      var kind = controls[i].getAttribute('data-vex-filter-kind');
+        \\      setControl(controls[i], !!state[kind]);
+        \\    }
+        \\  }
+        \\  function toggle(control) {
+        \\    var kind = control.getAttribute('data-vex-filter-kind');
+        \\    state[kind] = !state[kind];
+        \\    applyFilters();
+        \\  }
+        \\  var controls = root.querySelectorAll('[data-vex-filter-kind]');
+        \\  for (var i = 0; i < controls.length; i += 1) {
+        \\    setControl(controls[i], true);
+        \\    controls[i].addEventListener('click', function (event) {
+        \\      event.preventDefault();
+        \\      toggle(this);
+        \\    });
+        \\    controls[i].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        toggle(this);
+        \\      }
+        \\    });
+        \\  }
+        \\}());
+        \\]]></script>
+        \\
+    );
+}
+
+fn writeSvgFilterButton(writer: *Io.Writer, label: []const u8, kind: []const u8, y: f64) Io.Writer.Error!void {
+    try writer.print("<g class=\"vex-filter-control\" data-vex-filter-kind=\"{s}\" data-vex-filter-state=\"on\" role=\"button\" tabindex=\"0\" aria-pressed=\"true\" transform=\"translate(4 {d:.1})\">\n<title>Toggle {s}</title>\n", .{ kind, y, label });
+    try writer.writeAll("<rect class=\"vex-filter-button\" x=\"0\" y=\"0\" width=\"110\" height=\"18\" rx=\"3\"/>\n<rect class=\"vex-filter-check\" x=\"5\" y=\"5\" width=\"8\" height=\"8\" rx=\"1\"/>\n<text x=\"18\" y=\"13\">");
+    try writeXmlEscaped(writer, label);
+    try writer.writeAll("</text>\n</g>\n");
+}
+
+fn svgFilterControlsHeight() f64 {
+    return 74.0;
 }
 
 fn writeSvgSearchControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!void {
@@ -17520,6 +17625,68 @@ test "DOT and typed API can enable Vex collapse controls" {
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-collapse-member=\"subgraph-1\"") != null);
 }
 
+test "SVG renderer emits opt-in Vex filter controls" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service {
+        \\    label="Service";
+        \\    api -> worker;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "vex-filter-controls") == null);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "data-vex-filter-kind=") == null);
+
+    const filter_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .interactive_filter = true });
+    defer allocator.free(filter_svg);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "id=\"vex-filter-controls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "data-vex-filter-kind=\"nodes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "data-vex-filter-kind=\"edges\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "data-vex-filter-kind=\"subgraphs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "vex-filter-hide-nodes .node { display: none; }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filter_svg, "state[kind] = !state[kind]") != null);
+}
+
+test "DOT and typed API can enable Vex filter controls" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [vex_interactive_filter=true];
+        \\  a -> b;
+        \\}
+    );
+    defer parsed.deinit();
+
+    var parsed_layout = try layoutLayered(allocator, &parsed, .{});
+    defer parsed_layout.deinit();
+    const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
+    defer allocator.free(parsed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_filter").?);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-filter-controls\"") != null);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setGraphAttr(.{ .vex_interactive_filter = true });
+    const a = try typed.addNode("A", .{});
+    const b = try typed.addNode("B", .{});
+    _ = try typed.addEdge(a, b, .{});
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_filter").?);
+    try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-filter-controls\"") != null);
+}
+
 test "SVG renderer emits opt-in Vex interactive search controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -17702,6 +17869,37 @@ test "SVG interactive controls stack outside viewport content" {
     const viewport_fragment = svgGroupFragmentById(svg, "vex-viewport-controls") orelse return error.MissingViewportControlsFragment;
     try std.testing.expect(std.mem.indexOf(u8, search_fragment, "class=\"vex-search-panel\" transform=\"translate(") != null);
     try std.testing.expect(std.mem.indexOf(u8, viewport_fragment, "class=\"vex-viewport-panel\" transform=\"translate(") != null);
+}
+
+test "SVG interactive controls include filter in panel stack" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail"];
+        \\  a [layer=base];
+        \\  b [layer=detail];
+        \\  a -> b [layer=detail];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{
+        .interactive_layers = true,
+        .interactive_filter = true,
+        .interactive_search = true,
+        .interactive_viewport = true,
+    });
+    defer allocator.free(svg);
+
+    const layer_pos = std.mem.indexOf(u8, svg, "id=\"vex-layer-controls\"") orelse return error.MissingLayerControls;
+    const filter_pos = std.mem.indexOf(u8, svg, "id=\"vex-filter-controls\"") orelse return error.MissingFilterControls;
+    const search_pos = std.mem.indexOf(u8, svg, "id=\"vex-search-controls\"") orelse return error.MissingSearchControls;
+    const viewport_pos = std.mem.indexOf(u8, svg, "id=\"vex-viewport-controls\"") orelse return error.MissingViewportControls;
+    try std.testing.expect(layer_pos < filter_pos);
+    try std.testing.expect(filter_pos < search_pos);
+    try std.testing.expect(search_pos < viewport_pos);
 }
 
 test "SVG renderer honors Graphviz graph layerlistsep" {
