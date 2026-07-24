@@ -27,6 +27,7 @@ See [`docs/C_API_V1.md`](docs/C_API_V1.md) for the stable C ABI contract.
 
 ```sh
 zig build run -- --input examples/simple.dot --check
+zig build run -- --input examples/simple.dot --validate-all --max-diagnostics 32
 zig build run -- --input examples/simple.dot --output simple.svg
 zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
@@ -99,6 +100,11 @@ so input mistakes can be fixed without rerunning through another tool.
 `--check` / `--validate` parses DOT or Mermaid input and reports graph counts
 without running layout or rendering, which is useful for CI and fast input
 validation.
+`--validate-all` uses statement-boundary recovery to report multiple
+recoverable DOT errors in one run; `--max-diagnostics` bounds the result.
+Unrecoverable lexical errors such as unterminated strings stop recovery after
+their precise line/source diagnostic. The Zig API exposes
+`parseDotDiagnostics`.
 
 `--max-input-bytes` caps input reads for DOT and Mermaid sources, including stdin,
 so preview workflows can fail early on unexpectedly large graph inputs.

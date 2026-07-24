@@ -104,6 +104,17 @@ pub const ParseResult = union(enum) {
     diagnostic: ParseDiagnostic,
 };
 
+pub const ParseDiagnostics = struct {
+    allocator: std.mem.Allocator,
+    items: []ParseDiagnostic,
+
+    pub fn deinit(self: *ParseDiagnostics) void {
+        for (self.items) |*diagnostic| diagnostic.deinit(self.allocator);
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
 pub const RankConstraint = struct {
     kind: RankKind,
     node_ids: []NodeId,
@@ -2102,16 +2113,20 @@ const Parser = struct {
         };
     }
 
+    fn deinit(self: *Parser) void {
+        freeStringList(self.allocator, &self.subgraph_text_ids);
+        freeStringList(self.allocator, &self.edge_key_index_keys);
+        freeStringList(self.allocator, &self.node_index_keys);
+        self.node_index.deinit();
+        self.edge_key_index.deinit();
+        self.collectors.deinit(self.allocator);
+        self.rank_scopes.deinit(self.allocator);
+        self.subgraph_scopes.deinit(self.allocator);
+        self.subgraph_stack.deinit(self.allocator);
+    }
+
     fn parse(self: *Parser) !Graph {
-        defer freeStringList(self.allocator, &self.subgraph_text_ids);
-        defer freeStringList(self.allocator, &self.edge_key_index_keys);
-        defer freeStringList(self.allocator, &self.node_index_keys);
-        defer self.node_index.deinit();
-        defer self.edge_key_index.deinit();
-        defer self.collectors.deinit(self.allocator);
-        defer self.rank_scopes.deinit(self.allocator);
-        defer self.subgraph_scopes.deinit(self.allocator);
-        defer self.subgraph_stack.deinit(self.allocator);
+        defer self.deinit();
         var strict = false;
         if (self.matchKeyword("strict")) strict = true;
 
@@ -2133,6 +2148,30 @@ const Parser = struct {
             if (self.node_index.get(root_name)) |root_id| graph.radial_root = root_id;
         }
         return graph;
+    }
+
+    fn recoverStatement(self: *Parser) !void {
+        var brace_depth: usize = 0;
+        var bracket_depth: usize = 0;
+        while (self.current.tag != .eof) {
+            switch (self.current.tag) {
+                .semicolon => {
+                    if (brace_depth == 0 and bracket_depth == 0) {
+                        try self.advance();
+                        return;
+                    }
+                },
+                .lbrace => brace_depth += 1,
+                .rbrace => {
+                    if (brace_depth == 0 and bracket_depth == 0) return;
+                    brace_depth -|= 1;
+                },
+                .lbracket => bracket_depth += 1,
+                .rbracket => bracket_depth -|= 1,
+                else => {},
+            }
+            try self.advance();
+        }
     }
 
     fn parseStmtList(self: *Parser, graph: *Graph) anyerror!void {
@@ -2859,6 +2898,84 @@ pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !Par
         return .{ .diagnostic = try parseDiagnosticFromParser(allocator, source, &parser, err) };
     };
     return .{ .graph = graph };
+}
+
+pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max_diagnostics: usize) !ParseDiagnostics {
+    if (max_diagnostics == 0) {
+        return .{ .allocator = allocator, .items = try allocator.alloc(ParseDiagnostic, 0) };
+    }
+    var diagnostics = std.ArrayList(ParseDiagnostic).empty;
+    errdefer {
+        for (diagnostics.items) |*diagnostic| diagnostic.deinit(allocator);
+        diagnostics.deinit(allocator);
+    }
+
+    var parser = Parser.init(allocator, source) catch |err| {
+        try diagnostics.append(allocator, try parseDiagnosticFromLexerError(allocator, source, err));
+        return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+    };
+    defer parser.deinit();
+
+    var strict = false;
+    if (parser.matchKeyword("strict")) strict = true;
+    const directed = if (parser.matchKeyword("digraph"))
+        true
+    else if (parser.matchKeyword("graph"))
+        false
+    else {
+        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, error.ExpectedGraph));
+        return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+    };
+    const parsed_name = if (parser.current.tag == .id or parser.current.tag == .string or parser.current.tag == .angle_string)
+        parser.parseIdText() catch |err| {
+            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+            return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+        }
+    else
+        try allocator.dupe(u8, "G");
+    defer allocator.free(parsed_name);
+    var graph = try Graph.init(allocator, .{ .directed = directed, .strict = strict, .name = parsed_name });
+    defer graph.deinit();
+
+    parser.expect(.lbrace) catch |err| {
+        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+        return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+    };
+
+    while (parser.current.tag != .rbrace and parser.current.tag != .eof and diagnostics.items.len < max_diagnostics) {
+        if (parser.current.tag == .semicolon or parser.current.tag == .comma) {
+            parser.advance() catch |err| {
+                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+                break;
+            };
+            continue;
+        }
+        parser.parseStmt(&graph) catch |err| {
+            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+            if (parser.lex_error != null) break;
+            parser.recoverStatement() catch |recover_err| {
+                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, recover_err));
+                break;
+            };
+            continue;
+        };
+        _ = parser.match(.semicolon);
+    }
+
+    if (diagnostics.items.len < max_diagnostics and parser.lex_error == null) {
+        if (parser.current.tag == .rbrace) {
+            parser.advance() catch |err| {
+                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+            };
+        } else if (parser.current.tag == .eof) {
+            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, error.UnexpectedToken));
+        }
+    }
+    if (diagnostics.items.len < max_diagnostics and parser.lex_error == null and parser.current.tag != .eof) {
+        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, error.UnexpectedToken));
+    }
+
+    return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
 }
 
 fn parseDiagnosticFromLexerError(allocator: std.mem.Allocator, source: []const u8, err: anyerror) !ParseDiagnostic {
@@ -17969,6 +18086,66 @@ test "DOT parser diagnostic suggests matching edge operator" {
             try std.testing.expectEqual(@as(usize, 2), diagnostic.line);
         },
     }
+}
+
+test "DOT batch diagnostics recover across independent statements" {
+    const allocator = std.testing.allocator;
+    var diagnostics = try parseDotDiagnostics(allocator,
+        \\digraph G {
+        \\  a -- b;
+        \\  c + bare;
+        \\  d [label=];
+        \\  good -> ok;
+        \\}
+    , 16);
+    defer diagnostics.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), diagnostics.items.len);
+    try std.testing.expectEqualStrings("edge operator does not match graph direction", diagnostics.items[0].message);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.items[0].line);
+    try std.testing.expectEqualStrings("expected quoted string after `+` concatenation", diagnostics.items[1].message);
+    try std.testing.expectEqual(@as(usize, 3), diagnostics.items[1].line);
+    try std.testing.expectEqualStrings("expected DOT identifier, string, or angle-string", diagnostics.items[2].message);
+    try std.testing.expectEqual(@as(usize, 4), diagnostics.items[2].line);
+}
+
+test "DOT batch diagnostics honor maximum count" {
+    const allocator = std.testing.allocator;
+    var diagnostics = try parseDotDiagnostics(allocator,
+        \\digraph G {
+        \\  a -- b;
+        \\  c -- d;
+        \\  e -- f;
+        \\}
+    , 2);
+    defer diagnostics.deinit();
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.items.len);
+}
+
+test "DOT batch diagnostics retain UTF8 source and stop on lexical errors" {
+    const allocator = std.testing.allocator;
+    var diagnostics = try parseDotDiagnostics(allocator,
+        \\digraph 图 {
+        \\  节点 -- 目标;
+        \\  good -> ok;
+        \\  broken [label="未结束];
+        \\  ignored -- after;
+        \\}
+    , 16);
+    defer diagnostics.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.items.len);
+    try std.testing.expectEqualStrings("edge operator does not match graph direction", diagnostics.items[0].message);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.items[0].source_line, "节点") != null);
+    try std.testing.expectEqualStrings("unterminated quoted string", diagnostics.items[1].message);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.items[1].source_line, "未结束") != null);
+}
+
+test "DOT batch diagnostics return empty list for valid input" {
+    const allocator = std.testing.allocator;
+    var diagnostics = try parseDotDiagnostics(allocator, "digraph G { a -> b; }", 16);
+    defer diagnostics.deinit();
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.items.len);
 }
 
 test "input diagnostic keeps Mermaid success path" {

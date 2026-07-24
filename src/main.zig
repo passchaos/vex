@@ -9,7 +9,8 @@ const usage =
     \\
     \\Usage:
     \\  vex [--input file.dot|-i file.dot] [--output file|-o file]
-    \\        [--check|--validate]
+    \\        [--check|--validate|--validate-all]
+    \\        [--max-diagnostics count]
     \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo]
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
@@ -33,6 +34,7 @@ const usage =
     \\Default input format is auto. Default layout is DOT/Sugiyama and honors
     \\rankdir=TB|BT|LR|RL.
     \\--check parses input and reports graph counts without layout or rendering.
+    \\--validate-all reports multiple recoverable DOT errors in one run.
     \\--max-input-bytes caps DOT/Mermaid input reads.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps neato stress or force-layout iterations.
@@ -64,6 +66,8 @@ pub fn main(init: std.process.Init) !void {
     var input_path: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
     var check_only = false;
+    var validate_all = false;
+    var max_diagnostics: usize = 32;
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var max_input_bytes: usize = default_max_input_bytes;
@@ -104,6 +108,14 @@ pub fn main(init: std.process.Init) !void {
             output_path = args[i];
         } else if (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "--validate")) {
             check_only = true;
+        } else if (std.mem.eql(u8, arg, "--validate-all")) {
+            check_only = true;
+            validate_all = true;
+        } else if (std.mem.eql(u8, arg, "--max-diagnostics")) {
+            i += 1;
+            if (i >= args.len) return error.MissingMaxDiagnostics;
+            max_diagnostics = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidMaxDiagnostics;
+            if (max_diagnostics == 0) return error.InvalidMaxDiagnostics;
         } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
             i += 1;
             if (i >= args.len) return error.MissingFormat;
@@ -193,6 +205,15 @@ pub fn main(init: std.process.Init) !void {
     };
     defer allocator.free(dot);
 
+    if (validate_all and (if (input_format == .auto) vex.detectInputFormat(dot) else input_format) == .dot) {
+        var diagnostics = try vex.parseDotDiagnostics(allocator, dot, max_diagnostics);
+        defer diagnostics.deinit();
+        if (diagnostics.items.len > 0) {
+            try writeParseDiagnostics(io, diagnostics.items);
+            std.process.exit(1);
+        }
+    }
+
     const parse_result = try vex.parseInputDiagnostic(allocator, dot, input_format);
     var graph = switch (parse_result) {
         .graph => |graph| graph,
@@ -279,6 +300,33 @@ fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {
     try writer.flush();
 }
 
+fn writeParseDiagnostics(io: Io, diagnostics: []const vex.ParseDiagnostic) !void {
+    var stderr_buffer: [8192]u8 = undefined;
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    try writeParseDiagnosticsWriter(&stderr_file_writer.interface, diagnostics);
+    try stderr_file_writer.interface.flush();
+}
+
+fn writeParseDiagnosticsWriter(writer: *Io.Writer, diagnostics: []const vex.ParseDiagnostic) Io.Writer.Error!void {
+    try writer.print("DOT validation found {d} error(s)\n", .{diagnostics.len});
+    for (diagnostics, 0..) |diagnostic, index| {
+        try writer.print("[{d}] {s} at line {d}, column {d}\n", .{
+            index + 1,
+            diagnostic.message,
+            diagnostic.line,
+            diagnostic.column,
+        });
+        if (diagnostic.source_line.len > 0) {
+            try writer.print("{d} | {s}\n", .{ diagnostic.line, diagnostic.source_line });
+            try writer.writeAll("  | ");
+            var caret_col: usize = 1;
+            while (caret_col < diagnostic.column) : (caret_col += 1) try writer.writeByte(' ');
+            try writer.writeAll("^\n");
+        }
+        if (diagnostic.hint.len > 0) try writer.print("    hint: {s}\n", .{diagnostic.hint});
+    }
+}
+
 fn writeCheckSummary(io: Io, graph: *const vex.Graph) !void {
     var stderr_buffer: [512]u8 = undefined;
     var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
@@ -330,4 +378,25 @@ test "check summary reports graph counts" {
         "input ok: graph=Vex directed=true nodes=3 edges=3 subgraphs=0\n",
         summary,
     );
+}
+
+test "batch diagnostic writer reports every error" {
+    const allocator = std.testing.allocator;
+    var diagnostics = try vex.parseDotDiagnostics(allocator,
+        \\digraph G {
+        \\  a -- b;
+        \\  c [label=];
+        \\}
+    , 8);
+    defer diagnostics.deinit();
+
+    var aw = Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try writeParseDiagnosticsWriter(&aw.writer, diagnostics.items);
+    const output = try aw.toOwnedSlice();
+    defer allocator.free(output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "DOT validation found 2 error(s)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[1] edge operator does not match graph direction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[2] expected DOT identifier") != null);
 }
