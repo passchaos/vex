@@ -13675,6 +13675,7 @@ test "code API sets typed subgraph attrs" {
         .ordering = .out,
         .color = "#2563eb",
         .pencolor = "#1d4ed8",
+        .colorscheme = "bugn9",
         .fillcolor = "#dbeafe",
         .gradientangle = 45,
         .styles = &.{ .filled, .rounded, .bold },
@@ -13686,11 +13687,15 @@ test "code API sets typed subgraph attrs" {
         .margin = "0.25",
         .labelloc = .bottom,
         .labeljust = .left,
+        .nojustify = true,
         .url = "https://example.com/subgraph",
         .href = "https://example.com/subgraph-href",
         .tooltip = "subgraph tip",
         .title = "subgraph title",
         .target = "_parent",
+        .id = "cluster-\\G-\\N",
+        .class = "api-cluster important",
+        .layer = "L1:L2",
     });
 
     const item = graph.subgraphs.items[subgraph];
@@ -13706,6 +13711,7 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("out", attrValue(item.attrs.items, "ordering").?);
     try std.testing.expectEqualStrings("#2563eb", attrValue(item.attrs.items, "color").?);
     try std.testing.expectEqualStrings("#1d4ed8", attrValue(item.attrs.items, "pencolor").?);
+    try std.testing.expectEqualStrings("bugn9", attrValue(item.attrs.items, "colorscheme").?);
     try std.testing.expectEqualStrings("#dbeafe", attrValue(item.attrs.items, "fillcolor").?);
     try std.testing.expectEqualStrings("45", attrValue(item.attrs.items, "gradientangle").?);
     try std.testing.expectEqualStrings("filled,rounded,bold", attrValue(item.attrs.items, "style").?);
@@ -13717,11 +13723,15 @@ test "code API sets typed subgraph attrs" {
     try std.testing.expectEqualStrings("0.25", attrValue(item.attrs.items, "margin").?);
     try std.testing.expectEqualStrings("b", attrValue(item.attrs.items, "labelloc").?);
     try std.testing.expectEqualStrings("l", attrValue(item.attrs.items, "labeljust").?);
+    try std.testing.expectEqualStrings("true", attrValue(item.attrs.items, "nojustify").?);
     try std.testing.expectEqualStrings("https://example.com/subgraph", attrValue(item.attrs.items, "URL").?);
     try std.testing.expectEqualStrings("https://example.com/subgraph-href", attrValue(item.attrs.items, "href").?);
     try std.testing.expectEqualStrings("subgraph tip", attrValue(item.attrs.items, "tooltip").?);
     try std.testing.expectEqualStrings("subgraph title", attrValue(item.attrs.items, "title").?);
     try std.testing.expectEqualStrings("_parent", attrValue(item.attrs.items, "target").?);
+    try std.testing.expectEqualStrings("cluster-\\G-\\N", attrValue(item.attrs.items, "id").?);
+    try std.testing.expectEqualStrings("api-cluster important", attrValue(item.attrs.items, "class").?);
+    try std.testing.expectEqualStrings("L1:L2", attrValue(item.attrs.items, "layer").?);
 }
 
 test "code API sets typed graph polyline splines" {
