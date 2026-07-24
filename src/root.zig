@@ -8209,7 +8209,8 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     };
     const aligned_label = edge_item.label != null and edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(edge_item.label.?);
     const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
-    try renderSvgEdgePaths(writer, graph, graph.directed, layout, edge_item, layout.rankdir, offset, route, edge_routing, visual, hints, edge_path_id);
+    const effective_routing = svgEdgeRoutingForEdge(graph, edge_item, edge_routing);
+    try renderSvgEdgePaths(writer, graph, graph.directed, layout, edge_item, layout.rankdir, offset, route, effective_routing, visual, hints, edge_path_id);
     var main_label_center: ?Point = null;
     if (edge_item.label) |label| {
         if (aligned_label) {
@@ -12025,6 +12026,14 @@ const SvgEdgeRouting = svg_mod.edge.Routing;
 
 fn svgEdgeRoutingMode(graph: *const Graph) SvgEdgeRouting {
     return svg_mod.edge.routingMode(graph.attrs.items);
+}
+
+fn svgEdgeRoutingForEdge(graph: *const Graph, edge_item: Edge, fallback: SvgEdgeRouting) SvgEdgeRouting {
+    const from_cluster = clusterIndexContainingNode(graph, edge_item.from) orelse return fallback;
+    const to_cluster = clusterIndexContainingNode(graph, edge_item.to) orelse return fallback;
+    if (from_cluster != to_cluster) return fallback;
+    if (attrValue(graph.subgraphs.items[from_cluster].attrs.items, "splines") == null) return fallback;
+    return svg_mod.edge.routingMode(graph.subgraphs.items[from_cluster].attrs.items);
 }
 
 fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, rankdir: RankDir, offset: f64, direct_route: EdgeRoute, routing: SvgEdgeRouting, path_clip: EdgePathClip, hints: EdgePathHints) Io.Writer.Error!void {
@@ -20216,6 +20225,50 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer allocator.free(none_svg);
     try std.testing.expect(svgPathCommandCount(none_svg, 'C') == 0);
     try std.testing.expect(svgPathCommandCount(none_svg, 'L') >= 1);
+}
+
+test "SVG renderer honors subgraph splines for internal edges" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_line {
+        \\    splines=line;
+        \\    a -> b [label="internal"];
+        \\  }
+        \\  b -> c [label="external"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const internal = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingInternalEdge;
+    const external = svgGroupFragmentByTitle(svg, "b-&gt;c") orelse return error.MissingExternalEdge;
+    try std.testing.expect(svgPathCommandCount(internal, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(internal, 'L') >= 1);
+    try std.testing.expect(svgPathCommandCount(external, 'C') != 0);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    const ta = try typed.addNode("a", .{});
+    const tb = try typed.addNode("b", .{});
+    const tc = try typed.addNode("c", .{});
+    _ = try typed.addEdge(ta, tb, .{ .label = "internal" });
+    _ = try typed.addEdge(tb, tc, .{ .label = "external" });
+    const subgraph = try typed.addSubgraph("line", null, &.{ ta, tb }, .{ .splines = .line });
+    try std.testing.expectEqualStrings("line", attrValue(typed.subgraphs.items[subgraph].attrs.items, "splines").?);
+
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
+    defer allocator.free(typed_svg);
+    const typed_internal = svgGroupFragmentById(typed_svg, "edge1") orelse return error.MissingInternalEdge;
+    const typed_external = svgGroupFragmentById(typed_svg, "edge2") orelse return error.MissingExternalEdge;
+    try std.testing.expect(svgPathCommandCount(typed_internal, 'C') == 0);
+    try std.testing.expect(svgPathCommandCount(typed_external, 'C') != 0);
 }
 
 test "spline controls stay monotonic for short adjacent edges" {
