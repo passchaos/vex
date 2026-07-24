@@ -8119,7 +8119,7 @@ fn svgEdgeInLayer(graph: *const Graph, edge_item: Edge, layer: SvgLayerContext) 
 }
 
 fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerContext) bool {
-    switch (svg_mod.layers.membership(layer, cluster.attrs.items)) {
+    switch (clusterLayerMembership(graph, cluster, layer)) {
         .include => return true,
         .exclude => return false,
         .inherit => {},
@@ -8128,6 +8128,13 @@ fn svgClusterInLayer(graph: *const Graph, cluster: Subgraph, layer: SvgLayerCont
         if (node_id < graph.nodes.items.len and svgNodeInLayer(graph, graph.nodes.items[node_id], layer)) return true;
     }
     return false;
+}
+
+fn clusterLayerMembership(graph: *const Graph, cluster: Subgraph, layer: SvgLayerContext) svg_mod.layers.Membership {
+    const inherited = layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "layer") orelse return .inherit;
+    if (svg_mod.layers.matches(layer, inherited)) return .include;
+    if (std.mem.trim(u8, inherited, " \t\r\n").len > 0) return .exclude;
+    return .inherit;
 }
 
 fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext) Io.Writer.Error!void {
@@ -17104,6 +17111,41 @@ test "SVG renderer honors Graphviz graph layers" {
     try std.testing.expectEqualStrings("L2", attrValue(typed.nodes.items[n2].attrs.items, "layer").?);
     try std.testing.expectEqualStrings("L1:L2", attrValue(typed.edges.items[edge].attrs.items, "layer").?);
     try std.testing.expectEqualStrings("L1", attrValue(typed.subgraphs.items[subgraph].attrs.items, "layer").?);
+}
+
+test "SVG renderer inherits cluster layers from parent subgraphs" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [layers="base:detail"];
+        \\  subgraph cluster_outer {
+        \\    label="Outer";
+        \\    layer=detail;
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      layer=base;
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const base_layer = svgGroupFragmentById(svg, "base") orelse return error.MissingBaseLayer;
+    const detail_layer = svgGroupFragmentById(svg, "detail") orelse return error.MissingDetailLayer;
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>Inner</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, base_layer, "<title>Inner</title>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, base_layer, "<title>Explicit</title>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail_layer, "<title>Explicit</title>") == null);
 }
 
 test "SVG renderer honors Graphviz graph layerselect" {
