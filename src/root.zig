@@ -8794,10 +8794,12 @@ fn resolveSvgClusterGradientFill(writer: *Io.Writer, graph: *const Graph, id_pre
     else
         0.0;
     const url = std.fmt.bufPrint(buffer, "url(#{s}-{d})", .{ id_prefix, id }) catch unreachable;
+    var color_attrs_buf: [1]Attr = undefined;
+    const color_attrs = effectiveClusterColorAttrs(graph, cluster, &color_attrs_buf);
     if (styleHas(style, "radial")) {
-        try writeSvgRadialGradientDef(writer, graph, cluster.attrs.items, id_prefix, id, colors.segments[0], colors.segments[1], angle);
+        try writeSvgRadialGradientDef(writer, graph, color_attrs, id_prefix, id, colors.segments[0], colors.segments[1], angle);
     } else {
-        try writeSvgLinearGradientDef(writer, graph, cluster.attrs.items, id_prefix, id, rect, colors.segments[0], colors.segments[1], angle);
+        try writeSvgLinearGradientDef(writer, graph, color_attrs, id_prefix, id, rect, colors.segments[0], colors.segments[1], angle);
     }
     fill.* = url;
 }
@@ -8832,6 +8834,8 @@ fn renderSvgClusterStripedRectFill(writer: *Io.Writer, graph: *const Graph, clus
     const colors = parseColorList(fillcolor) orelse return false;
     if (colors.len < 2) return false;
 
+    var color_attrs_buf: [1]Attr = undefined;
+    const color_attrs = effectiveClusterColorAttrs(graph, cluster, &color_attrs_buf);
     try writer.print("<g id=\"vex-cluster-stripes-{d}\" class=\"striped-fill\">\n", .{id});
     var cursor = rect.x;
     for (colors.segments[0..colors.len], 0..) |segment, index| {
@@ -8842,7 +8846,7 @@ fn renderSvgClusterStripedRectFill(writer: *Io.Writer, graph: *const Graph, clus
             rect.width * segment.fraction;
         if (stripe_width <= 0) continue;
         try writeSvgRectOpen(writer, .{ .x = cursor, .y = rect.y, .width = stripe_width, .height = rect.height }, radius);
-        try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{resolveSvgColor(graph, cluster.attrs.items, segment.color)});
+        try writer.print(" fill=\"{s}\" stroke=\"none\"/>\n", .{resolveSvgColor(graph, color_attrs, segment.color)});
         cursor += stripe_width;
         if (cursor >= rect.x + rect.width) break;
     }
@@ -11982,23 +11986,25 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
     const filled = styleHas(style, "filled");
     const rounded = styleHas(style, "rounded");
     const bold = styleHas(style, "bold");
+    var color_attrs_buf: [1]Attr = undefined;
+    const color_attrs = effectiveClusterColorAttrs(graph, cluster, &color_attrs_buf);
     const color_attr = inheritedClusterVisualAttr(graph, cluster, "color");
     const bgcolor = inheritedClusterVisualAttr(graph, cluster, "bgcolor");
     const inherited_fillcolor = inheritedClusterVisualAttr(graph, cluster, "fillcolor") orelse attrValue(graph.attrs.items, "fillcolor");
     const inherited_pencolor = inheritedClusterVisualAttr(graph, cluster, "pencolor") orelse attrValue(graph.attrs.items, "pencolor");
-    const color = resolveSvgColor(graph, cluster.attrs.items, color_attr orelse "#94a3b8");
+    const color = resolveSvgColor(graph, color_attrs, color_attr orelse "#94a3b8");
     const stroke = if (inherited_pencolor) |value|
-        resolveSvgColor(graph, cluster.attrs.items, value)
+        resolveSvgColor(graph, color_attrs, value)
     else if (color_attr) |_|
         color
     else if (bgcolor) |value|
-        resolveSvgColor(graph, cluster.attrs.items, value)
+        resolveSvgColor(graph, color_attrs, value)
     else
         color;
     const fill = if (bgcolor) |value|
-        if (!filled or (inherited_fillcolor == null and color_attr == null)) resolveSvgColor(graph, cluster.attrs.items, value) else if (inherited_fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
+        if (!filled or (inherited_fillcolor == null and color_attr == null)) resolveSvgColor(graph, color_attrs, value) else if (inherited_fillcolor) |fc| resolveSvgColor(graph, color_attrs, fc) else color
     else if (filled)
-        if (inherited_fillcolor) |fc| resolveSvgColor(graph, cluster.attrs.items, fc) else color
+        if (inherited_fillcolor) |fc| resolveSvgColor(graph, color_attrs, fc) else color
     else
         "none";
     return .{
@@ -12018,6 +12024,13 @@ fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
 
 fn inheritedClusterVisualAttr(graph: *const Graph, cluster: Subgraph, name: []const u8) ?[]const u8 {
     return layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, name);
+}
+
+fn effectiveClusterColorAttrs(graph: *const Graph, cluster: Subgraph, buffer: *[1]Attr) []const Attr {
+    if (attrValue(cluster.attrs.items, "colorscheme") != null) return cluster.attrs.items;
+    const scheme = inheritedClusterVisualAttr(graph, cluster, "colorscheme") orelse return cluster.attrs.items;
+    buffer[0] = .{ .name = "colorscheme", .value = scheme };
+    return buffer[0..1];
 }
 
 fn inheritedSubgraphMargin(graph: *const Graph, cluster: Subgraph, fallback: f64) BoxMargin {
@@ -21286,6 +21299,47 @@ test "cluster colors inherit parent subgraph color attributes" {
     try std.testing.expect(attrValue(bg_graph.subgraphs.items[bg_inner_index].attrs.items, "color") == null);
     const bg_inner_fragment = svgGroupFragmentByTitle(bg_svg, "BgInner") orelse return error.MissingInnerCluster;
     try std.testing.expect(std.mem.indexOf(u8, bg_inner_fragment, "fill=\"#fef3c7\" stroke=\"#92400e\"") != null);
+}
+
+test "cluster colors inherit parent subgraph colorscheme" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    colorscheme=bugn9;
+        \\    subgraph cluster_inner {
+        \\      label="Inner";
+        \\      style=filled;
+        \\      fillcolor=2;
+        \\      pencolor=7;
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="Explicit";
+        \\      colorscheme=X11;
+        \\      style=filled;
+        \\      fillcolor=red;
+        \\      pencolor=blue;
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_index = subgraphIndexByLabel(&graph, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "colorscheme") == null);
+    const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "fill=\"#e5f5f9\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "stroke=\"#238b45\"") != null);
+
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
+    try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "fill=\"red\" stroke=\"blue\"") != null);
 }
 
 test "cluster pencolor overrides stroke without changing fill" {
