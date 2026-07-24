@@ -1,0 +1,16 @@
+digraph Scoped {
+  compound=true
+
+  subgraph left {
+    graph [label=Left, color=blue]
+    subgraph service { a; }
+    subgraph service { b; }
+    b -> a [ltail=service]
+  }
+
+  subgraph right {
+    graph [label=Right, color=green]
+    subgraph service { c; d; }
+    c -> d [lhead=service]
+  }
+}

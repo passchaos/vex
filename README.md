@@ -243,6 +243,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
 - Comma node lists in node statements and edge operands: `a, b -- c, d`.
 - Subgraph blocks and subgraph edge operands: `{ a b } -> subgraph group { c d }`.
+- Named subgraphs use parent-relative identity: reopening the same name under
+  one parent merges members and attributes, while identical names under
+  different parents remain distinct.
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.

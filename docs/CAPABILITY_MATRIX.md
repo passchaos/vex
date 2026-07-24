@@ -25,13 +25,14 @@
 
 | 能力 | 状态 | 当前证据 | 尚缺内容 / 完成门槛 |
 | --- | --- | --- | --- |
-| DOT 实用语法 | 部分完成 | strict、subgraph、ports、edge chains、rank groups、字符串与注释测试 | 对非 HTML-like label 的目标 DOT grammar 建立 corpus；所有支持/拒绝项有诊断测试 |
+| DOT 实用语法 | 部分完成 | strict、subgraph、ports、edge chains、rank groups、字符串与注释测试；`src/testdata/dot_non_html_*.dot` corpus | 扩展非 HTML-like label 的目标 DOT grammar corpus；所有支持/拒绝项有诊断测试 |
 | 核心图模型与 Zig API | 已验证 | `Graph`、`NodeId`、typed attrs、API 示例与测试 | 保持 `NodeId` 身份、`label` 显示语义和 parser 局部 textual-id 映射 |
 | strict graph 合并语义 | 已验证 | strict DOT/API duplicate-edge 测试 | 有向与无向路径持续通过 |
 | layered/Sugiyama 布局 | 部分完成 | rank、crossing、coordinate、long-edge、compound 与 cluster 测试 | 完整目标 cluster 语义 corpus；大图质量与性能门槛 |
 | force-directed 布局 | 部分完成 | deterministic Fruchterman-Reingold 与预算测试 | `neato`、`fdp`、`sfdp` 不应只作为同一引擎别名；建立各自语义/质量门槛 |
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |
-| records、ports、compound edges | 已验证 | record field、compass port、ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
+| records、ports、compound edges | 已验证 | record field、compass port、scoped ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
+| parent-scoped subgraph identity | 已验证 | Graphviz `agsubg` source oracle；same-parent reopen merge、different-parent isolation 和 file corpus 测试 | 保持成员/属性合并和最近作用域引用语义 |
 | Graphviz 常用 shapes/styles/colors/fonts/images | 部分完成 | shapes、SBOLv、markers、gradients、layers、fonts、images 测试 | 用支持清单和 oracle corpus 明确剩余非 HTML 渲染差异 |
 | SVG canvas 与对象分组 | 已验证 | size/ratio/dpi/rotate/center/outputorder/id/class 测试 | XML 安全与 Graphviz-style group 结构持续通过 |
 

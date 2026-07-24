@@ -828,6 +828,35 @@ pub const Graph = struct {
         subgraph.attrs = owned_attrs;
     }
 
+    fn mergeSubgraphContentRaw(self: *Graph, id: SubgraphId, node_ids: []const NodeId, attrs: []const Attr) !void {
+        if (id >= self.subgraphs.items.len) return error.InvalidSubgraphId;
+        var subgraph = &self.subgraphs.items[id];
+
+        var merged_nodes = std.ArrayList(NodeId).empty;
+        defer merged_nodes.deinit(self.allocator);
+        try merged_nodes.appendSlice(self.allocator, subgraph.nodes);
+        for (node_ids) |node_id| {
+            if (!containsNode(merged_nodes.items, node_id)) try merged_nodes.append(self.allocator, node_id);
+        }
+        const owned_nodes = try merged_nodes.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_nodes);
+
+        var merged_attrs = try copyAttrList(self.allocator, subgraph.attrs.items);
+        errdefer freeAttrList(self.allocator, &merged_attrs);
+        for (attrs) |attr| try setAttrInList(self.allocator, &merged_attrs, attr.name, attr.value);
+
+        const label_value = attrValue(merged_attrs.items, "label") orelse subgraph.label;
+        const owned_label = try self.allocator.dupe(u8, label_value);
+        errdefer self.allocator.free(owned_label);
+
+        self.allocator.free(subgraph.label);
+        self.allocator.free(subgraph.nodes);
+        freeAttrList(self.allocator, &subgraph.attrs);
+        subgraph.label = owned_label;
+        subgraph.nodes = owned_nodes;
+        subgraph.attrs = merged_attrs;
+    }
+
     pub fn setGraphAttr(self: *Graph, attr: GraphAttr) !void {
         switch (attr) {
             .label => |value| try self.setGraphAttrRaw("label", value),
@@ -2046,9 +2075,8 @@ const Parser = struct {
     subgraph_scopes: std.ArrayList(?*AttrList) = .empty,
     subgraph_stack: std.ArrayList(SubgraphId) = .empty,
     node_index: std.StringHashMap(NodeId),
-    subgraph_index: std.StringHashMap(SubgraphId),
     node_index_keys: std.ArrayList([]const u8) = .empty,
-    subgraph_index_keys: std.ArrayList([]const u8) = .empty,
+    subgraph_text_ids: std.ArrayList([]const u8) = .empty,
     lex_error: ?anyerror = null,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
@@ -2059,15 +2087,13 @@ const Parser = struct {
             .lexer = lexer,
             .current = first,
             .node_index = std.StringHashMap(NodeId).init(allocator),
-            .subgraph_index = std.StringHashMap(SubgraphId).init(allocator),
         };
     }
 
     fn parse(self: *Parser) !Graph {
-        defer freeStringList(self.allocator, &self.subgraph_index_keys);
+        defer freeStringList(self.allocator, &self.subgraph_text_ids);
         defer freeStringList(self.allocator, &self.node_index_keys);
         defer self.node_index.deinit();
-        defer self.subgraph_index.deinit();
         defer self.collectors.deinit(self.allocator);
         defer self.rank_scopes.deinit(self.allocator);
         defer self.subgraph_scopes.deinit(self.allocator);
@@ -2358,7 +2384,7 @@ const Parser = struct {
         if (rank_kind) |kind| try graph.addRankConstraint(kind, nodes.items);
         if (is_subgraph) {
             graph.subgraphs.items[subgraph_id.?].parent = parent_subgraph;
-            try graph.setSubgraphContentRaw(subgraph_id.?, nodes.items, subgraph_attrs.items);
+            try graph.mergeSubgraphContentRaw(subgraph_id.?, nodes.items, subgraph_attrs.items);
         }
         defaults.restore(self.allocator, graph);
         return nodes;
@@ -2410,15 +2436,41 @@ const Parser = struct {
     }
 
     fn subgraphByTextId(self: *Parser, graph: *Graph, text_id: []const u8) !SubgraphId {
-        if (self.subgraph_index.get(text_id)) |id| return id;
         const parent = if (self.subgraph_stack.items.len > 0) self.subgraph_stack.items[self.subgraph_stack.items.len - 1] else null;
+        if (self.findSubgraphInParent(graph, parent, text_id)) |id| return id;
         const id = try graph.addSubgraphRaw(text_id, parent, &.{}, &.{});
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
-        try self.subgraph_index.put(owned_text_id, id);
-        errdefer _ = self.subgraph_index.remove(owned_text_id);
-        try self.subgraph_index_keys.append(self.allocator, owned_text_id);
+        try self.subgraph_text_ids.append(self.allocator, owned_text_id);
         return id;
+    }
+
+    fn findSubgraphInParent(self: *const Parser, graph: *const Graph, parent: ?SubgraphId, text_id: []const u8) ?SubgraphId {
+        for (graph.subgraphs.items) |subgraph| {
+            if (subgraph.parent != parent or subgraph.id >= self.subgraph_text_ids.items.len) continue;
+            if (std.mem.eql(u8, self.subgraph_text_ids.items[subgraph.id], text_id)) return subgraph.id;
+        }
+        return null;
+    }
+
+    fn resolveSubgraphTextId(self: *const Parser, graph: *const Graph, text_id: []const u8) ?SubgraphId {
+        var parent: ?SubgraphId = if (self.subgraph_stack.items.len > 0) self.subgraph_stack.items[self.subgraph_stack.items.len - 1] else null;
+        while (true) {
+            if (self.findSubgraphInParent(graph, parent, text_id)) |id| return id;
+            if (parent) |id| {
+                if (id >= graph.subgraphs.items.len) break;
+                parent = graph.subgraphs.items[id].parent;
+            } else break;
+        }
+
+        var resolved: ?SubgraphId = null;
+        for (graph.subgraphs.items) |subgraph| {
+            if (subgraph.id >= self.subgraph_text_ids.items.len) continue;
+            if (!std.mem.eql(u8, self.subgraph_text_ids.items[subgraph.id], text_id)) continue;
+            if (resolved != null) return null;
+            resolved = subgraph.id;
+        }
+        return resolved;
     }
 
     fn nodeTextId(self: *Parser, graph: *const Graph, id: NodeId) []const u8 {
@@ -2430,10 +2482,7 @@ const Parser = struct {
     }
 
     fn subgraphTextId(self: *Parser, graph: *const Graph, id: SubgraphId) []const u8 {
-        var it = self.subgraph_index.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == id) return entry.key_ptr.*;
-        }
+        if (id < self.subgraph_text_ids.items.len) return self.subgraph_text_ids.items[id];
         return graph.subgraphs.items[id].label;
     }
 
@@ -2508,9 +2557,9 @@ const Parser = struct {
             return;
         }
         if (std.ascii.eqlIgnoreCase(name, "ltail")) {
-            if (self.subgraph_index.get(value)) |subgraph_id| graph.edges.items[id].ltail = subgraph_id;
+            if (self.resolveSubgraphTextId(graph, value)) |subgraph_id| graph.edges.items[id].ltail = subgraph_id;
         } else if (std.ascii.eqlIgnoreCase(name, "lhead")) {
-            if (self.subgraph_index.get(value)) |subgraph_id| graph.edges.items[id].lhead = subgraph_id;
+            if (self.resolveSubgraphTextId(graph, value)) |subgraph_id| graph.edges.items[id].lhead = subgraph_id;
         }
         try graph.setEdgeAttrRaw(id, name, value);
     }
@@ -24424,6 +24473,115 @@ test "DOT parser records named subgraphs with graph attributes" {
     try std.testing.expectEqual(@as(usize, 2), cluster.nodes.len);
     try std.testing.expectEqualStrings("#2563eb", attrValue(cluster.attrs.items, "color").?);
     try std.testing.expectEqualStrings("#dbeafe", attrValue(cluster.attrs.items, "fillcolor").?);
+}
+
+test "DOT parser reopens named subgraphs by parent scope" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph team {
+        \\    graph [color=red, label=First];
+        \\    a;
+        \\  }
+        \\  subgraph team {
+        \\    graph [penwidth=3, label=Second];
+        \\    b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs.items.len);
+    const team = graph.subgraphs.items[0];
+    try std.testing.expect(team.parent == null);
+    try std.testing.expectEqualStrings("Second", team.label);
+    try std.testing.expectEqualStrings("red", attrValue(team.attrs.items, "color").?);
+    try std.testing.expectEqualStrings("3", attrValue(team.attrs.items, "penwidth").?);
+    try std.testing.expectEqualStrings("Second", attrValue(team.attrs.items, "label").?);
+    try std.testing.expectEqual(@as(usize, 2), team.nodes.len);
+    try std.testing.expect(containsNode(team.nodes, nodeIdByLabel(&graph, "a")));
+    try std.testing.expect(containsNode(team.nodes, nodeIdByLabel(&graph, "b")));
+}
+
+test "DOT parser isolates same subgraph names under different parents" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph left {
+        \\    subgraph service { a; }
+        \\    subgraph service { b; }
+        \\  }
+        \\  subgraph right {
+        \\    subgraph service { c; }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), graph.subgraphs.items.len);
+    const left = graph.subgraphs.items[0];
+    const left_service = graph.subgraphs.items[1];
+    const right = graph.subgraphs.items[2];
+    const right_service = graph.subgraphs.items[3];
+    try std.testing.expectEqual(left.id, left_service.parent.?);
+    try std.testing.expectEqual(right.id, right_service.parent.?);
+    try std.testing.expectEqual(@as(usize, 2), left_service.nodes.len);
+    try std.testing.expect(containsNode(left_service.nodes, nodeIdByLabel(&graph, "a")));
+    try std.testing.expect(containsNode(left_service.nodes, nodeIdByLabel(&graph, "b")));
+    try std.testing.expectEqual(@as(usize, 1), right_service.nodes.len);
+    try std.testing.expect(containsNode(right_service.nodes, nodeIdByLabel(&graph, "c")));
+}
+
+test "DOT parser resolves compound subgraph ids from nearest scope" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  compound=true;
+        \\  subgraph left {
+        \\    subgraph service { a; b; }
+        \\    b -> a [ltail=service];
+        \\  }
+        \\  subgraph right {
+        \\    subgraph service { c; d; }
+        \\    c -> d [lhead=service];
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), graph.subgraphs.items.len);
+    try std.testing.expectEqual(@as(SubgraphId, 1), graph.edges.items[0].ltail.?);
+    try std.testing.expectEqual(@as(SubgraphId, 3), graph.edges.items[1].lhead.?);
+}
+
+test "non HTML DOT core corpus parses with expected semantics" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_core.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expect(graph.strict);
+    try std.testing.expect(graph.directed);
+    try std.testing.expectEqual(RankDir.LR, graph.rankdir);
+    try std.testing.expectEqualStrings("core", attrValue(graph.attrs.items, "mode").?);
+    try std.testing.expectEqual(@as(usize, 5), graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 6), graph.edges.items.len);
+    try std.testing.expectEqual(CompassPort.east, graph.edges.items[0].tail_port);
+    try std.testing.expectEqualStrings("out", graph.edges.items[0].tail_record_port.?);
+    try std.testing.expectEqual(CompassPort.west, graph.edges.items[0].head_port);
+}
+
+test "non HTML DOT subgraph scope corpus parses with expected semantics" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_subgraph_scope.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), graph.subgraphs.items.len);
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items[1].nodes.len);
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items[3].nodes.len);
+    try std.testing.expectEqual(@as(SubgraphId, 1), graph.edges.items[0].ltail.?);
+    try std.testing.expectEqual(@as(SubgraphId, 3), graph.edges.items[1].lhead.?);
 }
 
 test "cluster layout boxes contain member nodes and render to SVG" {

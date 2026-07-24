@@ -1,0 +1,9 @@
+strict digraph Core {
+  graph [rankdir=LR][compound=true]
+  node [shape=box][color="#334155"]
+  edge [weight=2][constraint=true]
+
+  mode=core
+  a:out:e -> b:w -> c [label="flow"]
+  a, b -> d, e
+}
