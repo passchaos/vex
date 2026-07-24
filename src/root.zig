@@ -8377,6 +8377,7 @@ fn writeSvgInspectorControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error
         \\.vex-inspector-panel-bg { fill: #ffffff; fill-opacity: 0.92; stroke: #334155; stroke-width: 1; }
         \\.vex-inspector-title { fill: #0f172a; font-weight: bold; }
         \\.vex-inspector-text { fill: #334155; }
+        \\[data-vex-inspect] { cursor: pointer; }
         \\.vex-inspect-selected > ellipse,
         \\.vex-inspect-selected > polygon,
         \\.vex-inspect-selected > rect,
@@ -8418,10 +8419,15 @@ fn writeSvgInspectorControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error
         \\  }
         \\  var items = root.querySelectorAll('[data-vex-inspect]');
         \\  for (var i = 0; i < items.length; i += 1) {
-        \\    items[i].style.cursor = 'pointer';
         \\    items[i].addEventListener('click', function (event) {
         \\      event.stopPropagation();
         \\      inspect(this);
+        \\    });
+        \\    items[i].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        inspect(this);
+        \\      }
         \\    });
         \\  }
         \\}());
@@ -8442,6 +8448,7 @@ fn writeSvgFocusControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!voi
         \\.vex-focus-control { cursor: pointer; }
         \\.vex-focus-control rect { fill: #f8fafc; stroke: #475569; stroke-width: 1; }
         \\.vex-focus-control text { fill: #0f172a; pointer-events: none; }
+        \\[data-vex-focus-id] { cursor: pointer; }
         \\.vex-focus-dim { opacity: 0.16; }
         \\.vex-focus-match { opacity: 1; }
         \\.vex-focus-match > ellipse,
@@ -8495,10 +8502,15 @@ fn writeSvgFocusControls(writer: *Io.Writer, x: f64, y: f64) Io.Writer.Error!voi
         \\  }
         \\  var focusItems = root.querySelectorAll('[data-vex-focus-id]');
         \\  for (var i = 0; i < focusItems.length; i += 1) {
-        \\    focusItems[i].style.cursor = 'pointer';
         \\    focusItems[i].addEventListener('click', function (event) {
         \\      event.stopPropagation();
         \\      applyFocus(this);
+        \\    });
+        \\    focusItems[i].addEventListener('keydown', function (event) {
+        \\      if (event.key === 'Enter' || event.key === ' ') {
+        \\        event.preventDefault();
+        \\        applyFocus(this);
+        \\      }
         \\    });
         \\  }
         \\  var clears = root.querySelectorAll('[data-vex-focus-action="clear"]');
@@ -9730,6 +9742,9 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         try writer.writeAll(" data-vex-focus-related=\"");
         try writeXmlEscaped(writer, focus_related);
         try writer.writeByte('"');
+    }
+    if (options.inspector_text != null or options.focus_id != null) {
+        try writer.writeAll(" role=\"button\" tabindex=\"0\"");
     }
     if (options.collapse_member) |collapse_member| {
         try writer.writeAll(" data-vex-collapse-member=\"");
@@ -18946,8 +18961,11 @@ test "SVG renderer emits opt-in Vex focus controls" {
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"node-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"edge-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-related=\"node-1 edge-1 node-1 node-2 edge-2 node-1 node-3 edge-3 node-4 node-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "data-vex-focus-id=\"node-1\" data-vex-focus-related=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "role=\"button\" tabindex=\"0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "vex-focus-match") != null);
     try std.testing.expect(std.mem.indexOf(u8, focus_svg, "applyFocus(this)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, focus_svg, "event.key === 'Enter' || event.key === ' '") != null);
 }
 
 test "DOT and typed API can enable Vex focus controls" {
@@ -19010,7 +19028,10 @@ test "SVG renderer emits opt-in Vex inspector controls" {
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=node id=api label=API box\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=edge id=api-&gt;worker label=job") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=subgraph label=Service") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "data-vex-inspect=\"type=node id=api label=API box\" role=\"button\" tabindex=\"0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "vex-inspect-selected") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "inspect(this)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inspector_svg, "event.key === 'Enter' || event.key === ' '") != null);
 }
 
 test "DOT and typed API can enable Vex inspector controls" {
