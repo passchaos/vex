@@ -271,6 +271,7 @@ pub const NodeAttr = union(enum) {
     fixedsize: NodeFixedSize,
     margin: []const u8,
     image: []const u8,
+    shapefile: []const u8,
     imagescale: ImageScale,
     imagepos: ImagePosition,
     toplabel: []const u8,
@@ -355,6 +356,7 @@ pub const NodeOptions = struct {
     fixedsize: ?NodeFixedSize = null,
     margin: ?[]const u8 = null,
     image: ?[]const u8 = null,
+    shapefile: ?[]const u8 = null,
     imagescale: ?ImageScale = null,
     imagepos: ?ImagePosition = null,
     toplabel: ?[]const u8 = null,
@@ -976,6 +978,7 @@ pub const Graph = struct {
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
             .image => |value| try self.setDefaultNodeAttrRaw("image", value),
+            .shapefile => |value| try self.setDefaultNodeAttrRaw("shapefile", value),
             .imagescale => |value| try self.setDefaultNodeAttrRaw("imagescale", imageScaleName(value)),
             .imagepos => |value| try self.setDefaultNodeAttrRaw("imagepos", imagePositionName(value)),
             .toplabel => |value| try self.setDefaultNodeAttrRaw("toplabel", value),
@@ -1126,6 +1129,7 @@ pub const Graph = struct {
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
         if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
         if (options.image) |value| try self.setNodeAttr(id, .{ .image = value });
+        if (options.shapefile) |value| try self.setNodeAttr(id, .{ .shapefile = value });
         if (options.imagescale) |value| try self.setNodeAttr(id, .{ .imagescale = value });
         if (options.imagepos) |value| try self.setNodeAttr(id, .{ .imagepos = value });
         if (options.toplabel) |value| try self.setNodeAttr(id, .{ .toplabel = value });
@@ -1179,6 +1183,7 @@ pub const Graph = struct {
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
             .image => |value| try self.setNodeAttrRaw(id, "image", value),
+            .shapefile => |value| try self.setNodeAttrRaw(id, "shapefile", value),
             .imagescale => |value| try self.setNodeAttrRaw(id, "imagescale", imageScaleName(value)),
             .imagepos => |value| try self.setNodeAttrRaw(id, "imagepos", imagePositionName(value)),
             .toplabel => |value| try self.setNodeAttrRaw(id, "toplabel", value),
@@ -9500,7 +9505,7 @@ fn renderSvgNodeAuxLabels(writer: *Io.Writer, node_item: Node, layout: NodeLayou
 }
 
 fn renderSvgNodeImage(writer: *Io.Writer, node_item: Node, layout: NodeLayout) Io.Writer.Error!void {
-    const image = attrValue(node_item.attrs.items, "image") orelse return;
+    const image = nodeImageSource(node_item.attrs.items) orelse return;
     if (image.len == 0 or node_item.shape == .point) return;
     const image_rect = nodeImageRect(node_item, layout);
     if (image_rect.width <= 0 or image_rect.height <= 0) return;
@@ -9520,6 +9525,16 @@ fn renderSvgNodeImage(writer: *Io.Writer, node_item: Node, layout: NodeLayout) I
     try writer.writeAll("\" xlink:href=\"");
     try writeXmlEscaped(writer, image);
     try writer.writeAll("\"/>\n");
+}
+
+fn nodeImageSource(attrs: []const Attr) ?[]const u8 {
+    if (attrValue(attrs, "image")) |image| {
+        if (image.len > 0) return image;
+    }
+    if (attrValue(attrs, "shapefile")) |shapefile| {
+        if (shapefile.len > 0) return shapefile;
+    }
+    return null;
 }
 
 fn nodeImageRect(node_item: Node, layout: NodeLayout) RectF {
@@ -14081,6 +14096,7 @@ test "code API sets typed node and edge options at creation" {
         .fixedsize = .fit_label,
         .margin = "0.12,0.08",
         .image = "icons/api&node.svg",
+        .shapefile = "icons/fallback.svg",
         .imagescale = .both,
         .imagepos = .bottom_right,
         .xlabel = "extra",
@@ -14151,6 +14167,7 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("true", attrValue(node_item.attrs.items, "fixedsize").?);
     try std.testing.expectEqualStrings("0.12,0.08", attrValue(node_item.attrs.items, "margin").?);
     try std.testing.expectEqualStrings("icons/api&node.svg", attrValue(node_item.attrs.items, "image").?);
+    try std.testing.expectEqualStrings("icons/fallback.svg", attrValue(node_item.attrs.items, "shapefile").?);
     try std.testing.expectEqualStrings("both", attrValue(node_item.attrs.items, "imagescale").?);
     try std.testing.expectEqualStrings("br", attrValue(node_item.attrs.items, "imagepos").?);
     try std.testing.expectEqualStrings("extra", attrValue(node_item.attrs.items, "xlabel").?);
@@ -17952,6 +17969,8 @@ test "SVG renderer emits node images" {
         \\  node [shape=box, width=1.0, height=0.75, fixedsize=true, margin=0, image="default.svg", imagescale=width, imagepos=tl];
         \\  a;
         \\  b [image="explicit.svg", imagescale=height, imagepos=br];
+        \\  c [image="", shapefile="fallback&shape.svg", imagescale=true, imagepos=tc];
+        \\  d [image="primary.svg", shapefile="ignored.svg"];
         \\}
     );
     defer parsed.deinit();
@@ -17964,9 +17983,13 @@ test "SVG renderer emits node images" {
     try std.testing.expectEqualStrings("width", attrValue(parsed.nodes.items[0].attrs.items, "imagescale").?);
     try std.testing.expectEqualStrings("tl", attrValue(parsed.nodes.items[0].attrs.items, "imagepos").?);
     try std.testing.expectEqualStrings("explicit.svg", attrValue(parsed.nodes.items[1].attrs.items, "image").?);
+    try std.testing.expectEqualStrings("fallback&shape.svg", attrValue(parsed.nodes.items[2].attrs.items, "shapefile").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "href=\"default.svg\" xlink:href=\"default.svg\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "preserveAspectRatio=\"xMinYMin meet\" href=\"default.svg\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "preserveAspectRatio=\"xMaxYMax meet\" href=\"explicit.svg\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "preserveAspectRatio=\"xMidYMin meet\" href=\"fallback&amp;shape.svg\" xlink:href=\"fallback&amp;shape.svg\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "href=\"primary.svg\" xlink:href=\"primary.svg\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "ignored.svg") == null);
 }
 
 test "SVG renderer uses Graphviz default text color" {
