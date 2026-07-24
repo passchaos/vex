@@ -218,6 +218,8 @@ pub const GraphAttr = union(enum) {
     pencolor: []const u8,
     size: []const u8,
     ratio: GraphRatio,
+    dpi: f64,
+    resolution: f64,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -953,6 +955,8 @@ pub const Graph = struct {
                 .expand => try self.setGraphAttrRaw("ratio", "expand"),
                 .auto => try self.setGraphAttrRaw("ratio", "auto"),
             },
+            .dpi => |value| try self.setGraphAttrFloat("dpi", value),
+            .resolution => |value| try self.setGraphAttrFloat("resolution", value),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -7896,7 +7900,12 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     }
     try writer.print(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d:.0}pt\" height=\"{d:.0}pt\" viewBox=\"0.00 0.00 {d:.2} {d:.2}\"",
-        .{ svg_canvas.output.x, svg_canvas.output.y, svg_canvas.view_box.x, svg_canvas.view_box.y },
+        .{
+            svg_canvas.output.x * svg_canvas.scale,
+            svg_canvas.output.y * svg_canvas.scale,
+            svg_canvas.view_box.x * svg_canvas.scale,
+            svg_canvas.view_box.y * svg_canvas.scale,
+        },
     );
     try writer.writeAll(">\n");
     try writeSvgGroupOpenStart(writer, .{
@@ -7907,7 +7916,11 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         .context = .{ .graph_name = graph.name, .label_name = graphFallbackTitle(graph) },
         .is_root_graph = true,
     });
-    try writer.writeAll(" transform=\"scale(1 1) ");
+    try writer.writeAll(" transform=\"scale(");
+    try writeSvgNumber(writer, svg_canvas.scale);
+    try writer.writeByte(' ');
+    try writeSvgNumber(writer, svg_canvas.scale);
+    try writer.writeAll(") ");
     if (landscape) {
         try writer.writeAll("matrix(0 1 -1 0 ");
         try writeSvgNumber(writer, render_canvas_height);
@@ -8384,6 +8397,7 @@ const GraphSvgSize = struct {
 const GraphSvgCanvas = struct {
     view_box: Point,
     output: Point,
+    scale: f64,
 };
 
 fn graphSvgCanvas(graph: *const Graph, natural: Point) GraphSvgCanvas {
@@ -8409,7 +8423,11 @@ fn graphSvgCanvas(graph: *const Graph, natural: Point) GraphSvgCanvas {
         Point{ .x = requested.?.width, .y = requested.?.height }
     else
         graphSvgOutputSize(requested, view_box);
-    return .{ .view_box = view_box, .output = output };
+    return .{
+        .view_box = view_box,
+        .output = output,
+        .scale = graphSvgDpiScale(graph.attrs.items),
+    };
 }
 
 fn graphSvgViewBoxWithRatio(current: Point, desired: f64) Point {
@@ -8446,6 +8464,13 @@ fn graphSvgRatioAttr(attrs: []const Attr) ?GraphRatio {
     if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
     const ratio = std.fmt.parseFloat(f64, value) catch return null;
     return if (ratio > 0) .{ .value = ratio } else null;
+}
+
+fn graphSvgDpiScale(attrs: []const Attr) f64 {
+    const raw = attrValue(attrs, "dpi") orelse attrValue(attrs, "resolution") orelse return 1.0;
+    const value = std.mem.trim(u8, raw, " \t\r\n");
+    const dpi = std.fmt.parseFloat(f64, value) catch return 1.0;
+    return if (dpi > 0) dpi / 72.0 else 1.0;
 }
 
 fn graphSvgSizeAttr(attrs: []const Attr) ?GraphSvgSize {
@@ -18006,6 +18031,40 @@ test "SVG renderer honors Graphviz graph ratio output attributes" {
     try std.testing.expectApproxEqAbs(@as(f64, 144), expand_canvas.view_box.y, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 288), expand_canvas.output.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 144), expand_canvas.output.y, 0.001);
+}
+
+test "SVG renderer honors Graphviz graph dpi output attributes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .dpi = 144 });
+    const a = try graph.addNode("A", .{});
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{});
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    const natural_canvas = graphSvgCanvas(&graph, .{
+        .x = @ceil(layout.width),
+        .y = @ceil(layout.height),
+    });
+    try std.testing.expectEqualStrings("144", attrValue(graph.attrs.items, "dpi").?);
+    try std.testing.expectApproxEqAbs(@as(f64, 2), natural_canvas.scale, 0.001);
+    try std.testing.expectApproxEqAbs(natural_canvas.view_box.x * 2.0, view_box.width, 0.001);
+    try std.testing.expectApproxEqAbs(natural_canvas.view_box.y * 2.0, view_box.height, 0.001);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "scale(2 2)") != null);
+
+    var resolution = try Graph.init(allocator, .{ .directed = true });
+    defer resolution.deinit();
+    try resolution.setGraphAttr(.{ .resolution = 36 });
+    try std.testing.expectEqualStrings("36", attrValue(resolution.attrs.items, "resolution").?);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), graphSvgCanvas(&resolution, .{ .x = 100, .y = 80 }).scale, 0.001);
+
+    try resolution.setGraphAttr(.{ .dpi = 72 });
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), graphSvgCanvas(&resolution, .{ .x = 100, .y = 80 }).scale, 0.001);
 }
 
 test "SVG renderer honors Graphviz landscape orientation attributes" {

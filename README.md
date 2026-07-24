@@ -128,6 +128,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
 - SVG output honors Graphviz `size` for physical output dimensions while preserving layout coordinates in the `viewBox`.
 - SVG output honors Graphviz `ratio` for numeric aspect ratios, `ratio=fill` with `size`, and `ratio=expand` with `size` at the SVG canvas level.
+- SVG output honors Graphviz `dpi` and `resolution` when converting graph points to SVG device units.
 - SVG output honors Graphviz `rotate=90`, `landscape=true`, and `orientation=landscape`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Common arrow marker shapes including `normal`, `open`, `inv`, `curve`, `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, their open variants where available, and common Graphviz compatibility aliases.
