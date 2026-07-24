@@ -9820,6 +9820,11 @@ fn noJustifyLineAnchorInherited(graph: *const Graph, attrs: []const Attr, anchor
     return if (parseBool(value) orelse false) anchor else null;
 }
 
+fn noJustifyLineAnchorForCluster(graph: *const Graph, cluster: Subgraph, anchor: []const u8) ?[]const u8 {
+    const value = layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster.id, "nojustify") orelse attrValue(graph.attrs.items, "nojustify") orelse return null;
+    return if (parseBool(value) orelse false) anchor else null;
+}
+
 fn distanceBetween(a: Point, b: Point) f64 {
     return std.math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -10507,7 +10512,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         try writer.writeAll("</text>\n");
     } else {
         const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
-        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorInherited(graph, cluster.attrs.items, text_anchor));
+        try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
     }
     try writeSvgInteractiveClose(writer, cluster_wrap);
     try writer.writeAll("</g>\n");
@@ -21493,6 +21498,46 @@ test "cluster labels honor DOT left and right line breaks" {
     const box = layout.subgraphs[0];
     const a = nodeIdByLabel(&graph, "a");
     try std.testing.expect(layout.nodes[a].center.y - layout.nodes[a].height / 2.0 >= box.y + band - 0.01);
+}
+
+test "cluster labels inherit parent subgraph nojustify" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_outer {
+        \\    nojustify=true;
+        \\    subgraph cluster_inner {
+        \\      label="left\lright\r";
+        \\      labeljust=r;
+        \\      a;
+        \\    }
+        \\    subgraph cluster_explicit {
+        \\      label="explicit left\lexplicit right\r";
+        \\      labeljust=r;
+        \\      nojustify=false;
+        \\      b;
+        \\    }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const inner_label = [_]u8{ 'l', 'e', 'f', 't', label_left_break, 'r', 'i', 'g', 'h', 't', label_right_break };
+    const inner_index = subgraphIndexByLabel(&graph, inner_label[0..]) orelse return error.MissingInnerCluster;
+    try std.testing.expect(attrValue(graph.subgraphs.items[inner_index].attrs.items, "nojustify") == null);
+    const inner_fragment = svgGroupFragmentByTitle(svg, "left\nright\n") orelse return error.MissingInnerCluster;
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "text-anchor=\"end\">left</tspan>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "text-anchor=\"end\">right</tspan>") != null);
+
+    const explicit_label = [_]u8{ 'e', 'x', 'p', 'l', 'i', 'c', 'i', 't', ' ', 'l', 'e', 'f', 't', label_left_break, 'e', 'x', 'p', 'l', 'i', 'c', 'i', 't', ' ', 'r', 'i', 'g', 'h', 't', label_right_break };
+    const explicit_index = subgraphIndexByLabel(&graph, explicit_label[0..]) orelse return error.MissingExplicitCluster;
+    const explicit = graph.subgraphs.items[explicit_index];
+    try std.testing.expectEqualStrings("false", attrValue(explicit.attrs.items, "nojustify").?);
 }
 
 test "nested cluster layout expands parent around child cluster" {
