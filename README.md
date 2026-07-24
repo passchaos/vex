@@ -112,7 +112,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Order-sensitive SVG line styles for `solid`, `dashed`, and `dotted`.
 - Graphviz `shape=plain` keeps a compact unboxed text node distinct from `shape=plaintext` / `shape=none`.
 - SVG rendering for Graphviz-style node `diagonals` on polygonal and ellipse-like shapes.
-- SVG rendering for Graphviz SBOLv node shapes `promoter`, `cds`, `terminator`, `utr`, `primersite`, `restrictionsite`, `noverhang`, `rpromoter`, `lpromoter`, `larrow`, and `rarrow`.
+- SVG rendering for Graphviz SBOLv node shapes `promoter`, `cds`, `terminator`, `utr`, `primersite`, `restrictionsite`, `fivepoverhang`, `threepoverhang`, `noverhang`, `rpromoter`, `lpromoter`, `larrow`, and `rarrow`.
 - SVG rendering for node `image`, deprecated `shapefile`, `imagescale`, and `imagepos` attributes inside the node box.
 - SVG rendering for Graphviz-style multicolor fills including box/node/subgraph `striped` fills and ellipse/circle `wedged` fills.
 - SVG edge labels honor `decorate=true` with a label underline connected to the edge path.

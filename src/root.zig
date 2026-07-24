@@ -52,6 +52,8 @@ pub const Shape = enum {
     utr,
     primersite,
     restrictionsite,
+    fivepoverhang,
+    threepoverhang,
     noverhang,
     rpromoter,
     lpromoter,
@@ -1632,6 +1634,8 @@ fn parseShape(value: []const u8) Shape {
     if (std.ascii.eqlIgnoreCase(value, "utr")) return .utr;
     if (std.ascii.eqlIgnoreCase(value, "primersite")) return .primersite;
     if (std.ascii.eqlIgnoreCase(value, "restrictionsite")) return .restrictionsite;
+    if (std.ascii.eqlIgnoreCase(value, "fivepoverhang")) return .fivepoverhang;
+    if (std.ascii.eqlIgnoreCase(value, "threepoverhang")) return .threepoverhang;
     if (std.ascii.eqlIgnoreCase(value, "noverhang")) return .noverhang;
     if (std.ascii.eqlIgnoreCase(value, "rpromoter")) return .rpromoter;
     if (std.ascii.eqlIgnoreCase(value, "lpromoter")) return .lpromoter;
@@ -1685,6 +1689,8 @@ fn shapeName(shape: Shape) []const u8 {
         .utr => "utr",
         .primersite => "primersite",
         .restrictionsite => "restrictionsite",
+        .fivepoverhang => "fivepoverhang",
+        .threepoverhang => "threepoverhang",
         .noverhang => "noverhang",
         .rpromoter => "rpromoter",
         .lpromoter => "lpromoter",
@@ -4848,7 +4854,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
                 height = side;
             }
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .noverhang, .rpromoter, .lpromoter, .larrow, .rarrow => {
+        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .fivepoverhang, .threepoverhang, .noverhang, .rpromoter, .lpromoter, .larrow, .rarrow => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .egg => {
@@ -11240,6 +11246,8 @@ fn renderSvgNodeShape(writer: *Io.Writer, node_item: Node, layout: NodeLayout, v
         .utr => try renderSvgPolygonRings(6, writer, shape_layout, visual, utrPoints, diagonals),
         .primersite => try renderSvgPolygonRings(6, writer, shape_layout, visual, primerSitePoints, diagonals),
         .restrictionsite => try renderSvgPolygonRings(8, writer, shape_layout, visual, restrictionSitePoints, diagonals),
+        .fivepoverhang => try renderSvgPolygonRings(8, writer, shape_layout, visual, fivePrimeOverhangPoints, diagonals),
+        .threepoverhang => try renderSvgPolygonRings(8, writer, shape_layout, visual, threePrimeOverhangPoints, diagonals),
         .noverhang => try renderSvgPolygonRings(8, writer, shape_layout, visual, noverhangPoints, diagonals),
         .rpromoter => try renderSvgPolygonRings(10, writer, shape_layout, visual, rpromoterPoints, diagonals),
         .lpromoter => try renderSvgPolygonRings(10, writer, shape_layout, visual, lpromoterPoints, diagonals),
@@ -11652,6 +11660,56 @@ fn restrictionSitePoints(layout: NodeLayout) [8]Point {
         .{ .x = mid + notch * 0.35, .y = bottom - layout.height * 0.25 },
         .{ .x = mid + notch * 0.35, .y = bottom },
         .{ .x = left, .y = bottom },
+    };
+}
+
+fn fivePrimeOverhangPoints(layout: NodeLayout) [8]Point {
+    const left = layout.center.x - layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const block_w = @min(layout.width * 0.32, layout.height * 0.85);
+    const block_h = layout.height * 0.28;
+    const gap = layout.height * 0.14;
+    const x0 = left;
+    const x1 = left + block_w;
+    const upper_top = top + gap;
+    const upper_bottom = upper_top + block_h;
+    const lower_bottom = bottom - gap;
+    const lower_top = lower_bottom - block_h;
+    return .{
+        .{ .x = x0, .y = upper_top },
+        .{ .x = x1, .y = upper_top },
+        .{ .x = x1, .y = upper_bottom },
+        .{ .x = x0 + block_w * 0.55, .y = upper_bottom },
+        .{ .x = x0 + block_w * 0.55, .y = lower_top },
+        .{ .x = x1, .y = lower_top },
+        .{ .x = x1, .y = lower_bottom },
+        .{ .x = x0, .y = lower_bottom },
+    };
+}
+
+fn threePrimeOverhangPoints(layout: NodeLayout) [8]Point {
+    const right = layout.center.x + layout.width / 2.0;
+    const top = layout.center.y - layout.height / 2.0;
+    const bottom = layout.center.y + layout.height / 2.0;
+    const block_w = @min(layout.width * 0.32, layout.height * 0.85);
+    const block_h = layout.height * 0.28;
+    const gap = layout.height * 0.14;
+    const x1 = right;
+    const x0 = right - block_w;
+    const upper_top = top + gap;
+    const upper_bottom = upper_top + block_h;
+    const lower_bottom = bottom - gap;
+    const lower_top = lower_bottom - block_h;
+    return .{
+        .{ .x = x1, .y = upper_top },
+        .{ .x = x0, .y = upper_top },
+        .{ .x = x0, .y = upper_bottom },
+        .{ .x = x1 - block_w * 0.55, .y = upper_bottom },
+        .{ .x = x1 - block_w * 0.55, .y = lower_top },
+        .{ .x = x0, .y = lower_top },
+        .{ .x = x0, .y = lower_bottom },
+        .{ .x = x1, .y = lower_bottom },
     };
 }
 
@@ -14386,6 +14444,8 @@ test "code API sets typed node and edge options at creation" {
     const utr = try graph.addNode("utr", .{ .shape = .utr });
     const primersite = try graph.addNode("primersite", .{ .shape = .primersite });
     const restrictionsite = try graph.addNode("restrictionsite", .{ .shape = .restrictionsite });
+    const fivepoverhang = try graph.addNode("fivepoverhang", .{ .shape = .fivepoverhang });
+    const threepoverhang = try graph.addNode("threepoverhang", .{ .shape = .threepoverhang });
     const noverhang = try graph.addNode("noverhang", .{ .shape = .noverhang });
     const rpromoter = try graph.addNode("rpromoter", .{ .shape = .rpromoter });
     const lpromoter = try graph.addNode("lpromoter", .{ .shape = .lpromoter });
@@ -14472,6 +14532,10 @@ test "code API sets typed node and edge options at creation" {
     try std.testing.expectEqualStrings("primersite", attrValue(graph.nodes.items[primersite].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.restrictionsite, graph.nodes.items[restrictionsite].shape);
     try std.testing.expectEqualStrings("restrictionsite", attrValue(graph.nodes.items[restrictionsite].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.fivepoverhang, graph.nodes.items[fivepoverhang].shape);
+    try std.testing.expectEqualStrings("fivepoverhang", attrValue(graph.nodes.items[fivepoverhang].attrs.items, "shape").?);
+    try std.testing.expectEqual(Shape.threepoverhang, graph.nodes.items[threepoverhang].shape);
+    try std.testing.expectEqualStrings("threepoverhang", attrValue(graph.nodes.items[threepoverhang].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.noverhang, graph.nodes.items[noverhang].shape);
     try std.testing.expectEqualStrings("noverhang", attrValue(graph.nodes.items[noverhang].attrs.items, "shape").?);
     try std.testing.expectEqual(Shape.rpromoter, graph.nodes.items[rpromoter].shape);
@@ -21887,12 +21951,14 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
         \\  untranslated [label="UTR", shape=utr];
         \\  primer [label="Primer", shape=primersite];
         \\  restriction [label="Restriction", shape=restrictionsite];
+        \\  five_overhang [label="FiveOverhang", shape=fivepoverhang];
+        \\  three_overhang [label="ThreeOverhang", shape=threepoverhang];
         \\  no_overhang [label="NOverhang", shape=noverhang];
         \\  reverse_promoter [label="RPromoter", shape=rpromoter];
         \\  left_promoter [label="LPromoter", shape=lpromoter];
         \\  left_arrow [label="LArrow", shape=larrow];
         \\  right_arrow [label="RArrow", shape=rarrow];
-        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> promoter -> coding -> stop_codon -> untranslated -> primer -> restriction -> no_overhang -> reverse_promoter -> left_promoter -> left_arrow -> right_arrow;
+        \\  note -> tab -> folder -> box3d -> component -> underline -> cylinder -> promoter -> coding -> stop_codon -> untranslated -> primer -> restriction -> five_overhang -> three_overhang -> no_overhang -> reverse_promoter -> left_promoter -> left_arrow -> right_arrow;
         \\}
     );
     defer graph.deinit();
@@ -21910,6 +21976,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expectEqual(Shape.utr, graph.nodes.items[nodeIdByLabel(&graph, "untranslated")].shape);
     try std.testing.expectEqual(Shape.primersite, graph.nodes.items[nodeIdByLabel(&graph, "primer")].shape);
     try std.testing.expectEqual(Shape.restrictionsite, graph.nodes.items[nodeIdByLabel(&graph, "restriction")].shape);
+    try std.testing.expectEqual(Shape.fivepoverhang, graph.nodes.items[nodeIdByLabel(&graph, "five_overhang")].shape);
+    try std.testing.expectEqual(Shape.threepoverhang, graph.nodes.items[nodeIdByLabel(&graph, "three_overhang")].shape);
     try std.testing.expectEqual(Shape.noverhang, graph.nodes.items[nodeIdByLabel(&graph, "no_overhang")].shape);
     try std.testing.expectEqual(Shape.rpromoter, graph.nodes.items[nodeIdByLabel(&graph, "reverse_promoter")].shape);
     try std.testing.expectEqual(Shape.lpromoter, graph.nodes.items[nodeIdByLabel(&graph, "left_promoter")].shape);
@@ -21933,6 +22001,8 @@ test "DOT parser and SVG renderer support special Graphviz node shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "UTR") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Primer") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "Restriction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "FiveOverhang") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "ThreeOverhang") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "NOverhang") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "RPromoter") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "LPromoter") != null);
