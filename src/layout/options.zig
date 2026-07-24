@@ -75,6 +75,7 @@ pub const LayoutAlgorithm = enum {
     multilevel_spring_electrical,
     radial,
     circular,
+    treemap,
 
     pub fn fromString(value: []const u8) ?LayoutAlgorithm {
         if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
@@ -113,6 +114,11 @@ pub const LayoutAlgorithm = enum {
         {
             return .circular;
         }
+        if (std.ascii.eqlIgnoreCase(value, "patchwork") or
+            std.ascii.eqlIgnoreCase(value, "treemap"))
+        {
+            return .treemap;
+        }
         if (std.ascii.eqlIgnoreCase(value, "fr") or
             std.ascii.eqlIgnoreCase(value, "force") or
             std.ascii.eqlIgnoreCase(value, "fruchterman-reingold") or
@@ -133,6 +139,7 @@ pub const LayoutAlgorithm = enum {
             .multilevel_spring_electrical => "sfdp",
             .radial => "twopi",
             .circular => "circo",
+            .treemap => "patchwork",
         };
     }
 };

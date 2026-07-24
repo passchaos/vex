@@ -3,6 +3,7 @@
 pub const axes = @import("axes.zig");
 pub const circo = @import("circo.zig");
 pub const options = @import("options.zig");
+pub const patchwork = @import("patchwork.zig");
 pub const rank = @import("rank.zig");
 pub const result = @import("result.zig");
 pub const sfdp = @import("sfdp.zig");

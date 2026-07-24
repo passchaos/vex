@@ -177,6 +177,7 @@ pub const GraphAttr = union(enum) {
     colorscheme: []const u8,
     fillcolor: []const u8,
     pencolor: []const u8,
+    area: f64,
     size: []const u8,
     ratio: GraphRatio,
     dpi: f64,
@@ -254,6 +255,7 @@ pub const NodeAttr = union(enum) {
     distortion: f64,
     width: f64,
     height: f64,
+    area: f64,
     fixedsize: NodeFixedSize,
     margin: []const u8,
     image: []const u8,
@@ -310,6 +312,7 @@ pub const NodeOptions = struct {
     distortion: ?f64 = null,
     width: ?f64 = null,
     height: ?f64 = null,
+    area: ?f64 = null,
     fixedsize: ?NodeFixedSize = null,
     margin: ?[]const u8 = null,
     image: ?[]const u8 = null,
@@ -490,6 +493,7 @@ pub const SubgraphAttr = union(enum) {
     styles: []const SubgraphStyle,
     penwidth: f64,
     peripheries: usize,
+    area: f64,
     margin: []const u8,
     labelloc: LabelLoc,
     labeljust: LabelJust,
@@ -527,6 +531,7 @@ pub const SubgraphOptions = struct {
     styles: []const SubgraphStyle = &.{},
     penwidth: ?f64 = null,
     peripheries: ?usize = null,
+    area: ?f64 = null,
     margin: ?[]const u8 = null,
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
@@ -910,6 +915,7 @@ pub const Graph = struct {
             .colorscheme => |value| try self.setGraphAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setGraphAttrRaw("fillcolor", value),
             .pencolor => |value| try self.setGraphAttrRaw("pencolor", value),
+            .area => |value| try self.setGraphAttrFloat("area", value),
             .size => |value| try self.setGraphAttrRaw("size", value),
             .ratio => |value| switch (value) {
                 .value => |ratio| try self.setGraphAttrFloat("ratio", ratio),
@@ -1017,6 +1023,7 @@ pub const Graph = struct {
             .distortion => |value| try self.setDefaultNodeAttrFloat("distortion", value),
             .width => |value| try self.setDefaultNodeAttrFloat("width", value),
             .height => |value| try self.setDefaultNodeAttrFloat("height", value),
+            .area => |value| try self.setDefaultNodeAttrFloat("area", value),
             .fixedsize => |value| try self.setDefaultNodeAttrRaw("fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setDefaultNodeAttrRaw("margin", value),
             .image => |value| try self.setDefaultNodeAttrRaw("image", value),
@@ -1170,6 +1177,7 @@ pub const Graph = struct {
         if (options.distortion) |value| try self.setNodeAttr(id, .{ .distortion = value });
         if (options.width) |value| try self.setNodeAttr(id, .{ .width = value });
         if (options.height) |value| try self.setNodeAttr(id, .{ .height = value });
+        if (options.area) |value| try self.setNodeAttr(id, .{ .area = value });
         if (options.fixedsize) |value| try self.setNodeAttr(id, .{ .fixedsize = value });
         if (options.margin) |value| try self.setNodeAttr(id, .{ .margin = value });
         if (options.image) |value| try self.setNodeAttr(id, .{ .image = value });
@@ -1225,6 +1233,7 @@ pub const Graph = struct {
             .distortion => |value| try self.setNodeAttrFloat(id, "distortion", value),
             .width => |value| try self.setNodeAttrFloat(id, "width", value),
             .height => |value| try self.setNodeAttrFloat(id, "height", value),
+            .area => |value| try self.setNodeAttrFloat(id, "area", value),
             .fixedsize => |value| try self.setNodeAttrRaw(id, "fixedsize", nodeFixedSizeName(value)),
             .margin => |value| try self.setNodeAttrRaw(id, "margin", value),
             .image => |value| try self.setNodeAttrRaw(id, "image", value),
@@ -1504,6 +1513,7 @@ pub const Graph = struct {
         if (options.styles.len > 0) try self.setSubgraphAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setSubgraphAttr(id, .{ .penwidth = value });
         if (options.peripheries) |value| try self.setSubgraphAttr(id, .{ .peripheries = value });
+        if (options.area) |value| try self.setSubgraphAttr(id, .{ .area = value });
         if (options.margin) |value| try self.setSubgraphAttr(id, .{ .margin = value });
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setSubgraphAttr(id, .{ .labeljust = value });
@@ -1562,6 +1572,7 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setSubgraphAttrRaw(id, "peripheries", text);
             },
+            .area => |value| try self.setSubgraphAttrFloat(id, "area", value),
             .margin => |value| try self.setSubgraphAttrRaw(id, "margin", value),
             .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", value.name()),
             .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", value.name()),
@@ -3776,6 +3787,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
+        .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
     };
 }
 
@@ -3790,6 +3802,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
+        .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
     };
 }
 
@@ -4995,6 +5008,125 @@ fn layoutCircularWithControl(allocator: std.mem.Allocator, graph: *const Graph, 
         .width = options.width,
         .height = options.height,
     };
+}
+
+pub fn layoutTreemap(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions) !Layout {
+    var work = LayoutWorkTracker{ .control = .{} };
+    return layoutTreemapWithControl(allocator, graph, options, &work);
+}
+
+fn layoutTreemapWithControl(allocator: std.mem.Allocator, graph: *const Graph, options: ForceLayoutOptions, work: *LayoutWorkTracker) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.subgraphs.items.len +| 1);
+
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    errdefer allocator.free(cluster_layouts);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+    const rank_depths = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, if (n == 0) 0 else 1);
+    errdefer allocator.free(rank_heights);
+    if (n > 0) {
+        rank_depths[0] = 0;
+        rank_heights[0] = 0;
+    }
+
+    const treemap_nodes = try allocator.alloc(layout_mod.patchwork.Node, n);
+    defer allocator.free(treemap_nodes);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        treemap_nodes[id] = .{
+            .area = parsePositiveAttrFloat(node_item.attrs.items, "area", 1.0),
+            .parent = deepestSubgraphContainingNode(graph, id),
+        };
+    }
+    const treemap_subgraphs = try allocator.alloc(layout_mod.patchwork.Subgraph, graph.subgraphs.items.len);
+    defer allocator.free(treemap_subgraphs);
+    for (graph.subgraphs.items, 0..) |subgraph, id| {
+        treemap_subgraphs[id] = .{
+            .parent = subgraph.parent,
+            .area_override = if (attrValue(subgraph.attrs.items, "area")) |value|
+                std.fmt.parseFloat(f64, value) catch null
+            else
+                null,
+        };
+    }
+    const padding = @max(0.0, parseAttrFloat(graph.attrs.items, "margin", 8.0));
+    var treemap = try layout_mod.patchwork.layout(
+        allocator,
+        treemap_nodes,
+        treemap_subgraphs,
+        @max(options.width - options.margin * 2.0, 1.0),
+        @max(options.height - options.margin * 2.0, 1.0),
+        padding,
+    );
+    defer treemap.deinit();
+    try work.checkpoint((n +| graph.subgraphs.items.len +| 1) *| 4);
+
+    for (treemap.node_rects, 0..) |rect, id| {
+        nodes[id] = .{
+            .center = .{
+                .x = options.margin + rect.x + rect.width / 2.0,
+                .y = options.margin + rect.y + rect.height / 2.0,
+            },
+            .width = @max(rect.width, 1.0),
+            .height = @max(rect.height, 1.0),
+        };
+    }
+    for (treemap.subgraph_rects, 0..) |rect, id| {
+        cluster_layouts[id] = .{
+            .id = id,
+            .x = options.margin + rect.x,
+            .y = options.margin + rect.y,
+            .width = rect.width,
+            .height = rect.height,
+        };
+    }
+    return .{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = graph.rankdir,
+        .nodes = nodes,
+        .subgraphs = cluster_layouts,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = options.margin,
+        .margin_x = options.margin,
+        .margin_y = options.margin,
+        .width = options.width,
+        .height = options.height,
+    };
+}
+
+fn deepestSubgraphContainingNode(graph: *const Graph, node_id: NodeId) ?SubgraphId {
+    var best: ?SubgraphId = null;
+    var best_depth: usize = 0;
+    for (graph.subgraphs.items) |subgraph| {
+        if (!containsNode(subgraph.nodes, node_id)) continue;
+        var depth: usize = 1;
+        var parent = subgraph.parent;
+        while (parent) |id| {
+            depth += 1;
+            if (id >= graph.subgraphs.items.len) break;
+            parent = graph.subgraphs.items[id].parent;
+        }
+        if (best == null or depth > best_depth) {
+            best = subgraph.id;
+            best_depth = depth;
+        }
+    }
+    return best;
 }
 
 fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: *Layout, node_gap: f64, options: IncrementalLayoutOptions) !void {
@@ -17085,6 +17217,8 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.radial, LayoutAlgorithm.fromString("radial").?);
     try std.testing.expectEqual(LayoutAlgorithm.circular, LayoutAlgorithm.fromString("circo").?);
     try std.testing.expectEqual(LayoutAlgorithm.circular, LayoutAlgorithm.fromString("circular").?);
+    try std.testing.expectEqual(LayoutAlgorithm.treemap, LayoutAlgorithm.fromString("patchwork").?);
+    try std.testing.expectEqual(LayoutAlgorithm.treemap, LayoutAlgorithm.fromString("treemap").?);
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
@@ -17603,6 +17737,110 @@ test "circo is distinct from twopi" {
     var twopi = try layoutGraph(allocator, &graph, .{ .algorithm = .radial, .force = config });
     defer twopi.deinit();
     try std.testing.expect(sharedNodeDisplacement(&circo, &twopi, graph.nodes.items.len) > 10);
+}
+
+test "patchwork node area controls rectangle area" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=patchwork];
+        \\  small [area=1];
+        \\  large [area=4];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 500, .height = 320, .margin = 20 },
+    });
+    defer layout.deinit();
+    const small = nodeIdByLabel(&graph, "small");
+    const large = nodeIdByLabel(&graph, "large");
+    const small_area = layout.nodes[small].width * layout.nodes[small].height;
+    const large_area = layout.nodes[large].width * layout.nodes[large].height;
+    try std.testing.expectApproxEqAbs(@as(f64, 4), large_area / small_area, 0.05);
+}
+
+test "patchwork nested subgraphs contain child rectangles" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=patchwork, margin=8];
+        \\  subgraph outer {
+        \\    subgraph inner {
+        \\      a [area=2];
+        \\      b [area=1];
+        \\    }
+        \\    c [area=1];
+        \\  }
+        \\  root [area=1];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .treemap,
+        .force = .{ .width = 600, .height = 400, .margin = 20 },
+    });
+    defer layout.deinit();
+    try std.testing.expectEqual(@as(usize, 2), layout.subgraphs.len);
+    const outer = subgraphRect(&graph, &layout, 0).?;
+    const inner = subgraphRect(&graph, &layout, 1).?;
+    try std.testing.expect(rectContainsRect(outer, inner));
+    for (graph.subgraphs.items[1].nodes) |node_id| {
+        try std.testing.expect(rectContainsRect(inner, nodeRect(layout.nodes[node_id])));
+    }
+}
+
+test "patchwork subgraph area override changes parent allocation" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  subgraph left { graph [area=9]; a; }
+        \\  subgraph right { graph [area=1]; b; }
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .treemap,
+        .force = .{ .width = 500, .height = 320, .margin = 20 },
+    });
+    defer layout.deinit();
+    const left = layout.subgraphs[0].width * layout.subgraphs[0].height;
+    const right = layout.subgraphs[1].width * layout.subgraphs[1].height;
+    try std.testing.expectApproxEqAbs(@as(f64, 9), left / right, 0.15);
+}
+
+test "patchwork ignores graph edges and differs from circo" {
+    const allocator = std.testing.allocator;
+    var plain = try parseDot(allocator, "graph G { a [area=1]; b [area=2]; c [area=3]; }");
+    defer plain.deinit();
+    var edged = try parseDot(allocator, "graph G { a [area=1]; b [area=2]; c [area=3]; a -- b -- c -- a; }");
+    defer edged.deinit();
+    const config = LayoutConfig{
+        .algorithm = .treemap,
+        .force = .{ .width = 500, .height = 320, .margin = 20 },
+    };
+    var first = try layoutGraph(allocator, &plain, config);
+    defer first.deinit();
+    var second = try layoutGraph(allocator, &edged, config);
+    defer second.deinit();
+    try expectNodeCentersEqual(&first, &second);
+
+    var circo = try layoutGraph(allocator, &edged, .{
+        .algorithm = .circular,
+        .force = config.force,
+    });
+    defer circo.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&second, &circo, edged.nodes.items.len) > 10);
+}
+
+fn rectContainsRect(outer: RectF, inner: RectF) bool {
+    return inner.x >= outer.x - 0.001 and
+        inner.y >= outer.y - 0.001 and
+        inner.x + inner.width <= outer.x + outer.width + 0.001 and
+        inner.y + inner.height <= outer.y + outer.height + 0.001;
 }
 
 test "force layout config iterations override graph fallback" {

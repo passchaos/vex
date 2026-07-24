@@ -34,6 +34,7 @@ pub const Layout = enum(c_int) {
     fr = 4,
     twopi = 5,
     circo = 6,
+    patchwork = 7,
     _,
 };
 
@@ -177,6 +178,7 @@ fn layoutAlgorithm(layout: Layout) ?vex.LayoutAlgorithm {
         .fr => .fruchterman_reingold,
         .twopi => .radial,
         .circo => .circular,
+        .patchwork => .treemap,
         else => null,
     };
 }

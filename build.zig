@@ -238,6 +238,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/12_circo_layout_svg.zig",
             .desc = "Run API example: block-tree circo SVG layout",
         },
+        .{
+            .step_name = "run-api-patchwork-layout-svg",
+            .exe_name = "api-patchwork-layout-svg",
+            .source = "examples/api/13_patchwork_layout_svg.zig",
+            .desc = "Run API example: hierarchical patchwork SVG layout",
+        },
     };
 
     for (api_examples) |example| {

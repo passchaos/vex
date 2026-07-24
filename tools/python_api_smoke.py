@@ -41,6 +41,11 @@ def main() -> None:
         vex.RenderConfig(layout="circo"),
     )
     assert "<title>C</title>" in circular_svg
+    patchwork_svg = vex.render_dot(
+        "graph P { a [area=1]; b [area=4] }",
+        vex.RenderConfig(layout="patchwork"),
+    )
+    assert "<title>P</title>" in patchwork_svg
 
     try:
         vex.render_dot("digraph G { a ->")

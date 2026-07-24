@@ -33,6 +33,11 @@ svg = render_dot(
     "graph G { a -- b -- c -- a; c -- d -- e -- c }",
     RenderConfig(layout="circo"),
 )
+
+svg = render_dot(
+    "graph G { a [area=1]; b [area=4] }",
+    RenderConfig(layout="patchwork"),
+)
 ```
 
 Library lookup order:

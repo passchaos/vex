@@ -94,6 +94,15 @@ int main(void) {
     }
     const int circo_ok = svg.len > 0;
     vex_buffer_free(svg);
+    options.layout = VEX_LAYOUT_PATCHWORK;
+    svg.data = NULL;
+    svg.len = 0;
+    if (!check(vex_graph_render_svg(graph, options, &svg, &error), &error)) {
+        vex_graph_destroy(graph);
+        return 8;
+    }
+    const int patchwork_ok = svg.len > 0;
+    vex_buffer_free(svg);
     vex_graph_destroy(graph);
-    return ok && twopi_ok && circo_ok ? 0 : 5;
+    return ok && twopi_ok && circo_ok && patchwork_ok ? 0 : 5;
 }

@@ -72,6 +72,10 @@ component packing.
 circular engine. It uses Tarjan biconnected blocks, places each block on a
 circle, recursively joins the block-cut tree at articulation nodes, packs
 disconnected components, and honors `root`, `mindist`, and `oneblock`.
+`--layout patchwork`, `graph [layout=patchwork]`, and `-Kpatchwork` select the
+independent hierarchical squarified treemap engine. Node/subgraph `area`
+controls allocation, nested subgraphs form containing rectangles, and edges do
+not affect the treemap.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
@@ -256,6 +260,7 @@ zig build run-api-fdp-layout-svg
 zig build run-api-sfdp-layout-svg
 zig build run-api-twopi-layout-svg
 zig build run-api-circo-layout-svg
+zig build run-api-patchwork-layout-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -272,6 +277,7 @@ They progress from small SVG output to broader feature coverage:
 - `10_sfdp_layout_svg.zig`: larger graph rendered with deterministic coarsen/prolongate/refine sfdp layout.
 - `11_twopi_layout_svg.zig`: explicitly rooted graph rendered on BFS rings with subtree-weighted angular spans.
 - `12_circo_layout_svg.zig`: biconnected blocks rendered as recursively connected circles.
+- `13_patchwork_layout_svg.zig`: hierarchical node/subgraph areas rendered as a squarified treemap.
 
 ## Graphviz compatibility target
 

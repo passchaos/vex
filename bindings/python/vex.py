@@ -50,6 +50,7 @@ _LAYOUTS: Final = {
     "fr": 4,
     "twopi": 5,
     "circo": 6,
+    "patchwork": 7,
 }
 
 
