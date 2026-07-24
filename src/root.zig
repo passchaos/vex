@@ -10463,62 +10463,15 @@ fn renderedEdgePathCount(svg: []const u8) usize {
 }
 
 fn expectSvgTitleSequenceEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_start = std.mem.indexOf(u8, svg[svg_index..], "<title>");
-        const oracle_start = std.mem.indexOf(u8, oracle[oracle_index..], "<title>");
-        if (svg_start == null or oracle_start == null) {
-            try std.testing.expect(svg_start == null and oracle_start == null);
-            return;
-        }
-        const svg_title_start = svg_index + svg_start.? + "<title>".len;
-        const oracle_title_start = oracle_index + oracle_start.? + "<title>".len;
-        const svg_title_end_rel = std.mem.indexOf(u8, svg[svg_title_start..], "</title>") orelse return error.MissingTitle;
-        const oracle_title_end_rel = std.mem.indexOf(u8, oracle[oracle_title_start..], "</title>") orelse return error.MissingTitle;
-        const svg_title = svg[svg_title_start .. svg_title_start + svg_title_end_rel];
-        const oracle_title = oracle[oracle_title_start .. oracle_title_start + oracle_title_end_rel];
-        try std.testing.expectEqualStrings(oracle_title, svg_title);
-        svg_index = svg_title_start + svg_title_end_rel + "</title>".len;
-        oracle_index = oracle_title_start + oracle_title_end_rel + "</title>".len;
-    }
+    try svg_mod.test_helpers.expectTitleSequenceEqual(svg, oracle);
 }
 
 fn expectSvgCommentSequenceEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_start = std.mem.indexOf(u8, svg[svg_index..], "<!-- ");
-        const oracle_start = std.mem.indexOf(u8, oracle[oracle_index..], "<!-- ");
-        if (svg_start == null or oracle_start == null) {
-            try std.testing.expect(svg_start == null and oracle_start == null);
-            return;
-        }
-        const svg_comment_start = svg_index + svg_start.? + "<!-- ".len;
-        const oracle_comment_start = oracle_index + oracle_start.? + "<!-- ".len;
-        const svg_comment_end_rel = std.mem.indexOf(u8, svg[svg_comment_start..], " -->") orelse return error.MissingComment;
-        const oracle_comment_end_rel = std.mem.indexOf(u8, oracle[oracle_comment_start..], " -->") orelse return error.MissingComment;
-        const svg_comment = svg[svg_comment_start .. svg_comment_start + svg_comment_end_rel];
-        const oracle_comment = oracle[oracle_comment_start .. oracle_comment_start + oracle_comment_end_rel];
-        try std.testing.expectEqualStrings(oracle_comment, svg_comment);
-        svg_index = svg_comment_start + svg_comment_end_rel + " -->".len;
-        oracle_index = oracle_comment_start + oracle_comment_end_rel + " -->".len;
-    }
+    try svg_mod.test_helpers.expectCommentSequenceEqual(svg, oracle);
 }
 
 fn expectSvgGroupSequenceEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_group = nextSvgGroupIdClass(svg, &svg_index);
-        const oracle_group = nextSvgGroupIdClass(oracle, &oracle_index);
-        if (svg_group == null or oracle_group == null) {
-            try std.testing.expect(svg_group == null and oracle_group == null);
-            return;
-        }
-        try std.testing.expectEqualStrings(oracle_group.?.id, svg_group.?.id);
-        try std.testing.expectEqualStrings(oracle_group.?.class, svg_group.?.class);
-    }
+    try svg_mod.test_helpers.expectGroupSequenceEqual(svg, oracle);
 }
 
 const SvgGroupIdClass = svg_mod.test_helpers.GroupIdClass;
@@ -10547,19 +10500,7 @@ fn expectSvgEdgePathCommandSequencesEqual(svg: []const u8, oracle: []const u8) !
 }
 
 fn expectSvgPathCommandSequenceEqual(svg_fragment: []const u8, oracle_fragment: []const u8) !void {
-    const svg_d = svgAttributeSlice(svg_fragment, "d") orelse return error.MissingEdge;
-    const oracle_d = svgAttributeSlice(oracle_fragment, "d") orelse return error.MissingEdge;
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_command = nextSvgPathCommand(svg_d, &svg_index);
-        const oracle_command = nextSvgPathCommand(oracle_d, &oracle_index);
-        if (svg_command == null or oracle_command == null) {
-            try std.testing.expect(svg_command == null and oracle_command == null);
-            return;
-        }
-        try std.testing.expectEqual(oracle_command.?, svg_command.?);
-    }
+    try svg_mod.test_helpers.expectPathCommandSequenceEqual(svg_fragment, oracle_fragment);
 }
 
 fn svgAttributeSlice(fragment: []const u8, attr_name: []const u8) ?[]const u8 {
@@ -10571,17 +10512,7 @@ fn nextSvgPathCommand(d: []const u8, index: *usize) ?u8 {
 }
 
 fn expectSvgTextSequenceEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_text = nextSvgTextContent(svg, &svg_index);
-        const oracle_text = nextSvgTextContent(oracle, &oracle_index);
-        if (svg_text == null or oracle_text == null) {
-            try std.testing.expect(svg_text == null and oracle_text == null);
-            return;
-        }
-        try std.testing.expectEqualStrings(oracle_text.?, svg_text.?);
-    }
+    try svg_mod.test_helpers.expectTextSequenceEqual(svg, oracle);
 }
 
 fn expectSvgTextPositionsNear(svg: []const u8, oracle: []const u8, tolerance: f64) !void {
@@ -10620,84 +10551,15 @@ fn svgTextVisibleContent(content: []const u8) ?[]const u8 {
 }
 
 fn expectSvgElementSequenceEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_element = nextSvgElementName(svg, &svg_index);
-        const oracle_element = nextSvgElementName(oracle, &oracle_index);
-        if (svg_element == null or oracle_element == null) {
-            try std.testing.expect(svg_element == null and oracle_element == null);
-            return;
-        }
-        try std.testing.expectEqual(svg_element.?.closing, oracle_element.?.closing);
-        try std.testing.expectEqualStrings(oracle_element.?.name, svg_element.?.name);
-    }
+    try svg_mod.test_helpers.expectElementSequenceEqual(svg, oracle);
 }
 
 fn expectSvgOpeningTagsNormalizedEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_index: usize = 0;
-    var oracle_index: usize = 0;
-    while (true) {
-        const svg_tag = nextSvgOpeningTag(svg, &svg_index);
-        const oracle_tag = nextSvgOpeningTag(oracle, &oracle_index);
-        if (svg_tag == null or oracle_tag == null) {
-            try std.testing.expect(svg_tag == null and oracle_tag == null);
-            return;
-        }
-        try expectNumericNormalizedEqual(svg_tag.?, oracle_tag.?);
-    }
+    try svg_mod.test_helpers.expectOpeningTagsNormalizedEqual(svg, oracle);
 }
 
 fn expectSvgLinesNumericNormalizedEqual(svg: []const u8, oracle: []const u8) !void {
-    var svg_lines = std.mem.splitScalar(u8, svg, '\n');
-    var oracle_lines = std.mem.splitScalar(u8, oracle, '\n');
-    while (true) {
-        const svg_line = svg_lines.next();
-        const oracle_line = oracle_lines.next();
-        if (svg_line == null or oracle_line == null) {
-            try std.testing.expect(svg_line == null and oracle_line == null);
-            return;
-        }
-        try expectNumericNormalizedEqual(svg_line.?, oracle_line.?);
-    }
-}
-
-fn nextSvgOpeningTag(svg: []const u8, index: *usize) ?[]const u8 {
-    return svg_mod.test_helpers.nextOpeningTag(svg, index);
-}
-
-fn expectNumericNormalizedEqual(a: []const u8, b: []const u8) !void {
-    var ai: usize = 0;
-    var bi: usize = 0;
-    while (ai < a.len or bi < b.len) {
-        if (ai < a.len and isSvgNumberStart(a, ai) and bi < b.len and isSvgNumberStart(b, bi)) {
-            ai = skipSvgNumber(a, ai);
-            bi = skipSvgNumber(b, bi);
-            continue;
-        }
-        try std.testing.expect(ai < a.len and bi < b.len);
-        try std.testing.expectEqual(a[ai], b[bi]);
-        ai += 1;
-        bi += 1;
-    }
-}
-
-fn isSvgNumberStart(text: []const u8, index: usize) bool {
-    const c = text[index];
-    if (std.ascii.isDigit(c)) return true;
-    if ((c == '-' or c == '+') and index + 1 < text.len and std.ascii.isDigit(text[index + 1])) return true;
-    return false;
-}
-
-fn skipSvgNumber(text: []const u8, index: usize) usize {
-    var i = index;
-    if (i < text.len and (text[i] == '-' or text[i] == '+')) i += 1;
-    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
-    if (i < text.len and text[i] == '.') {
-        i += 1;
-        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
-    }
-    return i;
+    try svg_mod.test_helpers.expectLinesNumericNormalizedEqual(svg, oracle);
 }
 
 const SvgElementName = svg_mod.test_helpers.ElementName;

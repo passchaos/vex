@@ -452,6 +452,138 @@ pub fn nextElementName(svg: []const u8, index: *usize) ?ElementName {
     return null;
 }
 
+pub fn expectTitleSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_start = std.mem.indexOf(u8, svg[svg_index..], "<title>");
+        const oracle_start = std.mem.indexOf(u8, oracle[oracle_index..], "<title>");
+        if (svg_start == null or oracle_start == null) {
+            try std.testing.expect(svg_start == null and oracle_start == null);
+            return;
+        }
+        const svg_title_start = svg_index + svg_start.? + "<title>".len;
+        const oracle_title_start = oracle_index + oracle_start.? + "<title>".len;
+        const svg_title_end_rel = std.mem.indexOf(u8, svg[svg_title_start..], "</title>") orelse return error.MissingTitle;
+        const oracle_title_end_rel = std.mem.indexOf(u8, oracle[oracle_title_start..], "</title>") orelse return error.MissingTitle;
+        const svg_title = svg[svg_title_start .. svg_title_start + svg_title_end_rel];
+        const oracle_title = oracle[oracle_title_start .. oracle_title_start + oracle_title_end_rel];
+        try std.testing.expectEqualStrings(oracle_title, svg_title);
+        svg_index = svg_title_start + svg_title_end_rel + "</title>".len;
+        oracle_index = oracle_title_start + oracle_title_end_rel + "</title>".len;
+    }
+}
+
+pub fn expectCommentSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_start = std.mem.indexOf(u8, svg[svg_index..], "<!-- ");
+        const oracle_start = std.mem.indexOf(u8, oracle[oracle_index..], "<!-- ");
+        if (svg_start == null or oracle_start == null) {
+            try std.testing.expect(svg_start == null and oracle_start == null);
+            return;
+        }
+        const svg_comment_start = svg_index + svg_start.? + "<!-- ".len;
+        const oracle_comment_start = oracle_index + oracle_start.? + "<!-- ".len;
+        const svg_comment_end_rel = std.mem.indexOf(u8, svg[svg_comment_start..], " -->") orelse return error.MissingComment;
+        const oracle_comment_end_rel = std.mem.indexOf(u8, oracle[oracle_comment_start..], " -->") orelse return error.MissingComment;
+        const svg_comment = svg[svg_comment_start .. svg_comment_start + svg_comment_end_rel];
+        const oracle_comment = oracle[oracle_comment_start .. oracle_comment_start + oracle_comment_end_rel];
+        try std.testing.expectEqualStrings(oracle_comment, svg_comment);
+        svg_index = svg_comment_start + svg_comment_end_rel + " -->".len;
+        oracle_index = oracle_comment_start + oracle_comment_end_rel + " -->".len;
+    }
+}
+
+pub fn expectGroupSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_group = nextGroupIdClass(svg, &svg_index);
+        const oracle_group = nextGroupIdClass(oracle, &oracle_index);
+        if (svg_group == null or oracle_group == null) {
+            try std.testing.expect(svg_group == null and oracle_group == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_group.?.id, svg_group.?.id);
+        try std.testing.expectEqualStrings(oracle_group.?.class, svg_group.?.class);
+    }
+}
+
+pub fn expectPathCommandSequenceEqual(svg_fragment: []const u8, oracle_fragment: []const u8) !void {
+    const svg_d = attributeSlice(svg_fragment, "d") orelse return error.MissingEdge;
+    const oracle_d = attributeSlice(oracle_fragment, "d") orelse return error.MissingEdge;
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_command = nextPathCommand(svg_d, &svg_index);
+        const oracle_command = nextPathCommand(oracle_d, &oracle_index);
+        if (svg_command == null or oracle_command == null) {
+            try std.testing.expect(svg_command == null and oracle_command == null);
+            return;
+        }
+        try std.testing.expectEqual(oracle_command.?, svg_command.?);
+    }
+}
+
+pub fn expectTextSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_text = nextTextContent(svg, &svg_index);
+        const oracle_text = nextTextContent(oracle, &oracle_index);
+        if (svg_text == null or oracle_text == null) {
+            try std.testing.expect(svg_text == null and oracle_text == null);
+            return;
+        }
+        try std.testing.expectEqualStrings(oracle_text.?, svg_text.?);
+    }
+}
+
+pub fn expectElementSequenceEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_element = nextElementName(svg, &svg_index);
+        const oracle_element = nextElementName(oracle, &oracle_index);
+        if (svg_element == null or oracle_element == null) {
+            try std.testing.expect(svg_element == null and oracle_element == null);
+            return;
+        }
+        try std.testing.expectEqual(svg_element.?.closing, oracle_element.?.closing);
+        try std.testing.expectEqualStrings(oracle_element.?.name, svg_element.?.name);
+    }
+}
+
+pub fn expectOpeningTagsNormalizedEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_index: usize = 0;
+    var oracle_index: usize = 0;
+    while (true) {
+        const svg_tag = nextOpeningTag(svg, &svg_index);
+        const oracle_tag = nextOpeningTag(oracle, &oracle_index);
+        if (svg_tag == null or oracle_tag == null) {
+            try std.testing.expect(svg_tag == null and oracle_tag == null);
+            return;
+        }
+        try expectNumericNormalizedEqual(svg_tag.?, oracle_tag.?);
+    }
+}
+
+pub fn expectLinesNumericNormalizedEqual(svg: []const u8, oracle: []const u8) !void {
+    var svg_lines = std.mem.splitScalar(u8, svg, '\n');
+    var oracle_lines = std.mem.splitScalar(u8, oracle, '\n');
+    while (true) {
+        const svg_line = svg_lines.next();
+        const oracle_line = oracle_lines.next();
+        if (svg_line == null or oracle_line == null) {
+            try std.testing.expect(svg_line == null and oracle_line == null);
+            return;
+        }
+        try expectNumericNormalizedEqual(svg_line.?, oracle_line.?);
+    }
+}
+
 pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f64) usize {
     var marker_buf: [64]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, " {s}=\"", .{attr_name}) catch return 0;
@@ -466,6 +598,40 @@ pub fn numbersInAttribute(fragment: []const u8, attr_name: []const u8, out: []f6
         count += 1;
     }
     return count;
+}
+
+fn expectNumericNormalizedEqual(a: []const u8, b: []const u8) !void {
+    var ai: usize = 0;
+    var bi: usize = 0;
+    while (ai < a.len or bi < b.len) {
+        if (ai < a.len and isNumberStart(a, ai) and bi < b.len and isNumberStart(b, bi)) {
+            ai = skipNumber(a, ai);
+            bi = skipNumber(b, bi);
+            continue;
+        }
+        try std.testing.expect(ai < a.len and bi < b.len);
+        try std.testing.expectEqual(a[ai], b[bi]);
+        ai += 1;
+        bi += 1;
+    }
+}
+
+fn isNumberStart(text: []const u8, index: usize) bool {
+    const c = text[index];
+    if (std.ascii.isDigit(c)) return true;
+    if ((c == '-' or c == '+') and index + 1 < text.len and std.ascii.isDigit(text[index + 1])) return true;
+    return false;
+}
+
+fn skipNumber(text: []const u8, index: usize) usize {
+    var i = index;
+    if (i < text.len and (text[i] == '-' or text[i] == '+')) i += 1;
+    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+    if (i < text.len and text[i] == '.') {
+        i += 1;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+    }
+    return i;
 }
 
 fn isNameChar(c: u8) bool {
