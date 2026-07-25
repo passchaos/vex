@@ -91,6 +91,14 @@ pub fn canvas(attrs: anytype, natural: Size) Canvas {
     };
 }
 
+pub fn unscaled(attrs: anytype, size: Size) Canvas {
+    return .{
+        .view_box = size,
+        .output = size,
+        .scale = dpiScale(attrs),
+    };
+}
+
 pub fn pad(attrs: anytype, fallback: f64) Padding {
     const value = attrValue(attrs, "pad") orelse return .{ .x = fallback, .y = fallback };
     var parts = std.mem.tokenizeAny(u8, value, ", \t");

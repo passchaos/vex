@@ -9,7 +9,11 @@ pub const Requested = struct {
 };
 
 pub fn attr(attrs: anytype) ?Requested {
-    var raw = attrValue(attrs, "size") orelse return null;
+    return namedAttr(attrs, "size");
+}
+
+pub fn namedAttr(attrs: anytype, name: []const u8) ?Requested {
+    var raw = attrValue(attrs, name) orelse return null;
     raw = std.mem.trim(u8, raw, " \t\r\n");
     var exact = false;
     if (std.mem.endsWith(u8, raw, "!")) {
