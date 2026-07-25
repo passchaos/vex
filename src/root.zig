@@ -4420,6 +4420,36 @@ pub const LayoutWorkBudget = layout_mod.options.LayoutWorkBudget;
 pub const LayoutAlgorithm = layout_mod.options.LayoutAlgorithm;
 pub const LayoutConfig = layout_mod.options.LayoutConfig;
 
+pub const ParallelLayoutTask = struct {
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    config: LayoutConfig = .{},
+};
+
+pub const ParallelLayoutOptions = struct {
+    max_workers: usize = 0,
+    cancel: ?*const std.atomic.Value(bool) = null,
+};
+
+pub const ParallelLayoutResult = union(enum) {
+    layout: Layout,
+    failure: anyerror,
+};
+
+pub const ParallelLayouts = struct {
+    allocator: std.mem.Allocator,
+    items: []ParallelLayoutResult,
+
+    pub fn deinit(self: *ParallelLayouts) void {
+        for (self.items) |*item| switch (item.*) {
+            .layout => |*layout| layout.deinit(),
+            .failure => {},
+        };
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
 const defaultInterClusterGap = layout_mod.options.defaultInterClusterGap;
 const defaultClusterAlongShift = layout_mod.options.defaultClusterAlongShift;
 
@@ -4439,6 +4469,58 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .positioned => layoutPositionedWithControl(allocator, graph, config.layered, false, &work),
         .positioned_with_edges => layoutPositionedWithControl(allocator, graph, config.layered, true, &work),
     };
+}
+
+pub fn layoutGraphsParallel(allocator: std.mem.Allocator, tasks: []const ParallelLayoutTask, options: ParallelLayoutOptions) !ParallelLayouts {
+    const items = try allocator.alloc(ParallelLayoutResult, tasks.len);
+    errdefer allocator.free(items);
+    if (tasks.len == 0) return .{ .allocator = allocator, .items = items };
+
+    const Context = struct {
+        tasks: []const ParallelLayoutTask,
+        items: []ParallelLayoutResult,
+        cancel: ?*const std.atomic.Value(bool),
+
+        const CombinedControl = struct {
+            base: LayoutControl,
+            cancel: ?*const std.atomic.Value(bool),
+
+            fn control(self: *@This()) LayoutControl {
+                return .{ .context = self, .should_cancel = shouldCancel };
+            }
+
+            fn shouldCancel(context: ?*anyopaque, work: usize) bool {
+                const self: *@This() = @ptrCast(@alignCast(context.?));
+                if (self.cancel) |cancel| {
+                    if (cancel.load(.acquire)) return true;
+                }
+                const callback = self.base.should_cancel orelse return false;
+                return callback(self.base.context, work);
+            }
+        };
+
+        fn execute(self: *@This(), index: usize) void {
+            const task = self.tasks[index];
+            if (self.cancel) |cancel| {
+                if (cancel.load(.acquire)) {
+                    self.items[index] = .{ .failure = error.LayoutCanceled };
+                    return;
+                }
+            }
+            var config = task.config;
+            var control = CombinedControl{ .base = config.control, .cancel = self.cancel };
+            config.control = control.control();
+            const layout = layoutGraph(task.allocator, task.graph, config) catch |err| {
+                self.items[index] = .{ .failure = err };
+                return;
+            };
+            self.items[index] = .{ .layout = layout };
+        }
+    };
+
+    var context = Context{ .tasks = tasks, .items = items, .cancel = options.cancel };
+    try layout_mod.parallel.runIndices(allocator, tasks.len, options.max_workers, &context, Context.execute);
+    return .{ .allocator = allocator, .items = items };
 }
 
 pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, config: LayoutConfig, options: IncrementalLayoutOptions) !Layout {
@@ -20702,6 +20784,92 @@ test "force layout config iterations override graph fallback" {
     var forty = try layoutGraph(allocator, &graph, .{ .algorithm = .fruchterman_reingold, .force = .{ .iterations = 40 } });
     defer forty.deinit();
     try std.testing.expect(distanceBetween(one.nodes[0].center, forty.nodes[0].center) > 0.1);
+}
+
+test "parallel layout batch preserves order and per-task failures" {
+    const allocator = std.testing.allocator;
+    const task_allocator = if (builtin.single_threaded) allocator else std.heap.smp_allocator;
+    var layered = try parseDot(allocator, "digraph Layered { a -> b -> c; }");
+    defer layered.deinit();
+    var radial = try parseDot(allocator, "graph Radial { root -- a; root -- b; }");
+    defer radial.deinit();
+    var invalid_positioned = try parseDot(allocator, "graph Invalid { missing; }");
+    defer invalid_positioned.deinit();
+
+    const tasks = [_]ParallelLayoutTask{
+        .{ .allocator = task_allocator, .graph = &layered, .config = .{ .algorithm = .sugiyama } },
+        .{ .allocator = task_allocator, .graph = &invalid_positioned, .config = .{ .algorithm = .positioned } },
+        .{ .allocator = task_allocator, .graph = &radial, .config = .{ .algorithm = .radial } },
+    };
+    var layouts = try layoutGraphsParallel(allocator, &tasks, .{ .max_workers = 3 });
+    defer layouts.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), layouts.items.len);
+    switch (layouts.items[0]) {
+        .layout => |layout| {
+            try std.testing.expectEqualStrings("Layered", layout.graph.name);
+            try std.testing.expectEqual(@as(usize, 3), layout.nodes.len);
+        },
+        .failure => |err| return err,
+    }
+    switch (layouts.items[1]) {
+        .layout => return error.ExpectedParallelLayoutFailure,
+        .failure => |err| try std.testing.expectEqual(error.MissingNodePosition, err),
+    }
+    switch (layouts.items[2]) {
+        .layout => |layout| {
+            try std.testing.expectEqualStrings("Radial", layout.graph.name);
+            try std.testing.expectEqual(@as(usize, 3), layout.nodes.len);
+        },
+        .failure => |err| return err,
+    }
+}
+
+test "parallel layout batch propagates cancellation to every task" {
+    const allocator = std.testing.allocator;
+    const task_allocator = if (builtin.single_threaded) allocator else std.heap.smp_allocator;
+    var first = try parseDot(allocator, "digraph First { a -> b; }");
+    defer first.deinit();
+    var second = try parseDot(allocator, "graph Second { a -- b; }");
+    defer second.deinit();
+    var cancel = std.atomic.Value(bool).init(true);
+    const tasks = [_]ParallelLayoutTask{
+        .{ .allocator = task_allocator, .graph = &first, .config = .{ .algorithm = .sugiyama } },
+        .{ .allocator = task_allocator, .graph = &second, .config = .{ .algorithm = .spring_electrical } },
+    };
+    var layouts = try layoutGraphsParallel(allocator, &tasks, .{ .max_workers = 2, .cancel = &cancel });
+    defer layouts.deinit();
+
+    for (layouts.items) |item| switch (item) {
+        .layout => return error.ExpectedParallelLayoutCancellation,
+        .failure => |err| try std.testing.expectEqual(error.LayoutCanceled, err),
+    };
+}
+
+test "parallel layout batch composes per-task work budgets" {
+    const allocator = std.testing.allocator;
+    const task_allocator = if (builtin.single_threaded) allocator else std.heap.smp_allocator;
+    var graph = try parseDot(allocator, "graph Budget { a -- b -- c -- d; }");
+    defer graph.deinit();
+    var budget = LayoutWorkBudget{ .limit = 1 };
+    const tasks = [_]ParallelLayoutTask{.{
+        .allocator = task_allocator,
+        .graph = &graph,
+        .config = .{
+            .algorithm = .spring_electrical,
+            .force = .{ .iterations = 40 },
+            .control = budget.control(),
+        },
+    }};
+    var layouts = try layoutGraphsParallel(allocator, &tasks, .{ .max_workers = 2 });
+    defer layouts.deinit();
+
+    switch (layouts.items[0]) {
+        .layout => return error.ExpectedParallelTaskBudgetCancellation,
+        .failure => |err| try std.testing.expectEqual(error.LayoutCanceled, err),
+    }
+    try std.testing.expect(budget.checkpoints > 0);
+    try std.testing.expect(budget.last_work > budget.limit);
 }
 
 test "layout work budget cancels every layout engine" {

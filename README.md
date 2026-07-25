@@ -228,6 +228,27 @@ defer layout.deinit();
 try vex.render(writer, &layout, .svg, .{});
 ```
 
+Independent graphs can be laid out concurrently while preserving task order:
+
+```zig
+const tasks = [_]vex.ParallelLayoutTask{
+    .{ .allocator = first_layout_allocator, .graph = &first, .config = .{ .algorithm = .sugiyama } },
+    .{ .allocator = second_layout_allocator, .graph = &second, .config = .{ .algorithm = .multilevel_spring_electrical } },
+};
+var layouts = try vex.layoutGraphsParallel(scheduler_allocator, &tasks, .{
+    .max_workers = 4,
+    .cancel = &cancel_flag,
+});
+defer layouts.deinit();
+```
+
+Each result is `.layout` or `.failure` at the matching task index. Task
+allocators own their successful layouts and must remain valid until
+`ParallelLayouts.deinit`; use one allocator per task or an allocator designed
+for concurrent access. The scheduler allocator only owns the result array and
+worker handles. `cancel_flag` is an optional `std.atomic.Value(bool)` checked
+before and during every layout.
+
 After editing a graph while keeping existing `NodeId` values stable:
 
 ```zig

@@ -119,6 +119,21 @@ pub fn build(b: *std.Build) void {
     const layout_render_scale_step = b.step("test-layout-render-scale", "Run all native layout/SVG scale gates");
     layout_render_scale_step.dependOn(&run_layout_render_scale.step);
 
+    const parallel_layout_scale = b.addExecutable(.{
+        .name = "vex-parallel-layout-scale",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/parallel_layout_scale.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "vex", .module = mod },
+            },
+        }),
+    });
+    const run_parallel_layout_scale = b.addRunArtifact(parallel_layout_scale);
+    const parallel_layout_scale_step = b.step("test-parallel-layout-scale", "Run parallel multi-graph layout scale gate");
+    parallel_layout_scale_step.dependOn(&run_parallel_layout_scale.step);
+
     const corpus_audit_vex = b.addExecutable(.{
         .name = "vex-corpus-audit",
         .root_module = b.createModule(.{
@@ -310,6 +325,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_parse_scale.step);
     test_step.dependOn(&run_layout_render_scale.step);
+    test_step.dependOn(&run_parallel_layout_scale.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
