@@ -341,6 +341,10 @@ The parser currently supports a practical, mainstream DOT subset:
   plus explicit rank constraints remain hard. The Zig API exposes this through
   `SubgraphOptions.compact` and `SubgraphAttr.compact`; it works for every Vex
   subgraph identity rather than only names beginning with `cluster_`.
+- Layered graphs with subgraphs run cluster-aware crossing minimization a
+  second time by default, matching Graphviz `remincross=true`. Set graph
+  `remincross=false` to retain the stable first-pass cluster block order; the
+  typed Zig API exposes the switch as `GraphAttr.remincross`.
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.

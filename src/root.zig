@@ -209,6 +209,7 @@ pub const GraphAttr = union(enum) {
     overlap: OverlapMode,
     separation: Separation,
     clusterrank: ClusterRankMode,
+    remincross: bool,
     compound: bool,
     concentrate: bool,
     nodesep: f64,
@@ -974,6 +975,7 @@ pub const Graph = struct {
                 try self.setGraphAttrRaw("sep", try separationAttrText(&buffer, value));
             },
             .clusterrank => |value| try self.setGraphAttrRaw("clusterrank", value.name()),
+            .remincross => |value| try self.setGraphAttrRaw("remincross", boolAttrValue(value)),
             .compound => |value| try self.setGraphAttrRaw("compound", boolAttrValue(value)),
             .concentrate => |value| try self.setGraphAttrRaw("concentrate", boolAttrValue(value)),
             .nodesep => |value| try self.setGraphAttrFloat("nodesep", value),
@@ -4149,6 +4151,11 @@ fn clusterRankMode(graph: *const Graph) ClusterRankMode {
     return .local;
 }
 
+fn remincrossEnabled(graph: *const Graph) bool {
+    const value = attrValue(graph.attrs.items, "remincross") orelse return true;
+    return parseBool(value) orelse true;
+}
+
 const strongClusterWeight: f64 = 1000.0;
 const backwardRankPenalty: f64 = 1000.0;
 
@@ -4370,9 +4377,16 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var virtual_levels = try buildVirtualLevels(allocator, layout_graph, ranks);
     defer virtual_levels.deinit();
     try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| (effective_options.crossing_passes +| 1));
-    try reduceVirtualLevelCrossings(allocator, layout_graph, &virtual_levels, ranks, effective_options.crossing_passes);
+    const repeat_crossing_minimization = layout_graph.subgraphs.items.len > 0 and remincrossEnabled(layout_graph);
+    if (layout_graph.subgraphs.items.len > 0 and !repeat_crossing_minimization) {
+        try reduceVirtualClusterBlockCrossings(allocator, layout_graph, &virtual_levels, ranks, effective_options.crossing_passes);
+    } else {
+        try reduceVirtualLevelCrossings(allocator, layout_graph, &virtual_levels, ranks, effective_options.crossing_passes);
+    }
     replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch try reduceLayerCrossings(allocator, layout_graph, levels, ranks, effective_options.crossing_passes);
-    refineAdjacentExchanges(layout_graph, levels, ranks, 2);
+    if (repeat_crossing_minimization or layout_graph.subgraphs.items.len == 0) {
+        refineAdjacentExchanges(layout_graph, levels, ranks, 2);
+    }
     applyOrderingHints(layout_graph, levels, ranks);
     enforceClusterContiguity(layout_graph, levels);
     alignGroupedNodes(layout_graph, levels);
@@ -6123,6 +6137,55 @@ fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph
         }
         refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
     }
+}
+
+fn reduceVirtualClusterBlockCrossings(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    virtual_levels: *VirtualLevels,
+    ranks: []const usize,
+    passes: usize,
+) !void {
+    _ = allocator;
+    if (virtual_levels.levels.len <= 1 or passes == 0) return;
+    for (virtual_levels.levels, 0..) |*level, rank| {
+        stableGroupVirtualLevelByBlock(graph, ranks, rank, level);
+    }
+    for (0..passes) |_| refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
+}
+
+fn stableGroupVirtualLevelByBlock(
+    graph: *const Graph,
+    ranks: []const usize,
+    rank: usize,
+    level: *std.ArrayList(VirtualNode),
+) void {
+    if (level.items.len <= 1 or level.items.len > 128) return;
+    var keys: [128]usize = undefined;
+    var key_count: usize = 0;
+    for (level.items) |node| {
+        const key = virtualBlockKeyAtRank(graph, ranks, node, rank);
+        if (virtualBlockKeySeen(keys[0..key_count], key)) continue;
+        keys[key_count] = key;
+        key_count += 1;
+    }
+    var grouped: [128]VirtualNode = undefined;
+    var out: usize = 0;
+    for (keys[0..key_count]) |key| {
+        for (level.items) |node| {
+            if (virtualBlockKeyAtRank(graph, ranks, node, rank) != key) continue;
+            grouped[out] = node;
+            out += 1;
+        }
+    }
+    @memcpy(level.items, grouped[0..level.items.len]);
+}
+
+fn virtualBlockKeySeen(keys: []const usize, needle: usize) bool {
+    for (keys) |key| {
+        if (key == needle) return true;
+    }
+    return false;
 }
 
 const VirtualMedianOrder = struct {
@@ -29554,6 +29617,92 @@ test "typed clusterrank serializes all Graphviz modes" {
     try std.testing.expectEqualStrings("global", attrValue(graph.attrs.items, "clusterrank").?);
     try graph.setGraphAttr(.{ .clusterrank = .none });
     try std.testing.expectEqualStrings("none", attrValue(graph.attrs.items, "clusterrank").?);
+}
+
+fn layoutEdgesCross(graph: *const Graph, layout: *const Layout, first: EdgeId, second: EdgeId) bool {
+    if (first >= graph.edges.items.len or second >= graph.edges.items.len) return false;
+    const a = graph.edges.items[first];
+    const b = graph.edges.items[second];
+    if (a.from >= layout.nodes.len or a.to >= layout.nodes.len or b.from >= layout.nodes.len or b.to >= layout.nodes.len) return false;
+    const axes = LayoutAxes.init(layout.rankdir);
+    const a_from = axes.pointAlong(layout.nodes[a.from].center);
+    const a_to = axes.pointAlong(layout.nodes[a.to].center);
+    const b_from = axes.pointAlong(layout.nodes[b.from].center);
+    const b_to = axes.pointAlong(layout.nodes[b.to].center);
+    return (a_from < b_from and a_to > b_to) or (a_from > b_from and a_to < b_to);
+}
+
+test "typed remincross serializes Graphviz crossing repeat control" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    try graph.setGraphAttr(.{ .remincross = false });
+    try std.testing.expectEqualStrings("false", attrValue(graph.attrs.items, "remincross").?);
+    try std.testing.expect(!remincrossEnabled(&graph));
+    try graph.setGraphAttr(.{ .remincross = true });
+    try std.testing.expectEqualStrings("true", attrValue(graph.attrs.items, "remincross").?);
+    try std.testing.expect(remincrossEnabled(&graph));
+}
+
+test "remincross repeats crossing minimization after cluster grouping" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  { rank=same; a; b; c; }
+        \\  { rank=same; x; y; z; }
+        \\  subgraph left { a; b; x; }
+        \\  subgraph right { c; y; z; }
+        \\  a -> y;
+        \\  b -> z;
+        \\  c -> y;
+        \\}
+    ;
+
+    var single_graph = try parseDot(allocator, source);
+    defer single_graph.deinit();
+    try single_graph.setGraphAttr(.{ .remincross = false });
+    var single = try layoutLayered(allocator, &single_graph, .{});
+    defer single.deinit();
+
+    var repeated_graph = try parseDot(allocator, source);
+    defer repeated_graph.deinit();
+    try repeated_graph.setGraphAttr(.{ .remincross = true });
+    var repeated = try layoutLayered(allocator, &repeated_graph, .{});
+    defer repeated.deinit();
+
+    var default_graph = try parseDot(allocator, source);
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+
+    try std.testing.expect(layoutEdgesCross(&single_graph, &single, 1, 2));
+    try std.testing.expect(!layoutEdgesCross(&repeated_graph, &repeated, 1, 2));
+    try expectNodeCentersEqual(&repeated, &default_layout);
+}
+
+test "remincross is inert without subgraphs" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  { rank=same; a; b; }
+        \\  { rank=same; x; y; }
+        \\  a -> y;
+        \\  b -> x;
+        \\}
+    ;
+    var disabled_graph = try parseDot(allocator, source);
+    defer disabled_graph.deinit();
+    try disabled_graph.setGraphAttr(.{ .remincross = false });
+    var disabled = try layoutLayered(allocator, &disabled_graph, .{});
+    defer disabled.deinit();
+
+    var enabled_graph = try parseDot(allocator, source);
+    defer enabled_graph.deinit();
+    try enabled_graph.setGraphAttr(.{ .remincross = true });
+    var enabled = try layoutLayered(allocator, &enabled_graph, .{});
+    defer enabled.deinit();
+    try expectNodeCentersEqual(&disabled, &enabled);
 }
 
 test "typed compact serializes strong subgraph rank mode" {
