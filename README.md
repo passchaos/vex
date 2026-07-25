@@ -360,6 +360,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - Layered ranking honors Graphviz `nslimit1` as
   `floor(nslimit1 * node_count)` network-simplex pivots. A zero or invalid value
   disables the rank simplex pass; the typed API exposes `GraphAttr.nslimit1`.
+- Layered ranking honors Graphviz `searchsize` as the maximum negative
+  cut-value tree-edge candidates examined for each ordinary rank-simplex pivot;
+  the default is 30. The typed API exposes `GraphAttr.searchsize`.
 - Layered coordinate refinement honors Graphviz `nslimit` as
   `floor(nslimit * node_count)` refinement passes. `vex_coordinate_passes`
   remains a direct override; the typed API exposes `GraphAttr.nslimit`.

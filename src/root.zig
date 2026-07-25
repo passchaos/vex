@@ -235,6 +235,7 @@ pub const GraphAttr = union(enum) {
     mclimit: f64,
     nslimit: f64,
     nslimit1: f64,
+    searchsize: usize,
     splines: SplineMode,
     samplepoints: usize,
     bgcolor: []const u8,
@@ -1037,6 +1038,11 @@ pub const Graph = struct {
             .mclimit => |value| try self.setGraphAttrFloat("mclimit", value),
             .nslimit => |value| try self.setGraphAttrFloat("nslimit", value),
             .nslimit1 => |value| try self.setGraphAttrFloat("nslimit1", value),
+            .searchsize => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("searchsize", text);
+            },
             .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
             .samplepoints => |value| {
                 var buffer: [32]u8 = undefined;
@@ -4392,6 +4398,13 @@ fn graphvizNodeScaledLimit(graph: *const Graph, name: []const u8, fallback: usiz
     return @as(usize, @intFromFloat(scaled));
 }
 
+fn rankSimplexSearchSize(graph: *const Graph) usize {
+    const value = attrValue(graph.attrs.items, "searchsize") orelse return 30;
+    const parsed = std.fmt.parseInt(isize, value, 10) catch 0;
+    if (parsed < 0) return 30;
+    return @max(@as(usize, @intCast(parsed)), 1);
+}
+
 const strongClusterWeight: f64 = 1000.0;
 const backwardRankPenalty: f64 = 1000.0;
 
@@ -4617,7 +4630,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     improveRanksByLocalSearch(layout_graph, ranks, acyclic_edge, 2);
     try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| 4);
     const rank_pivot_limit = rankSimplexPivotLimit(layout_graph, n * 2);
-    _ = try improveRanksByNetworkSimplex(allocator, layout_graph, ranks, acyclic_edge, rank_pivot_limit);
+    _ = try improveRanksByNetworkSimplex(
+        allocator,
+        layout_graph,
+        ranks,
+        acyclic_edge,
+        rank_pivot_limit,
+        rankSimplexSearchSize(layout_graph),
+    );
     if (graphHasStrongClusters(layout_graph)) {
         settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
         _ = try improveStrongClusterRanks(
@@ -7999,7 +8019,14 @@ fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: 
     }
 }
 
-fn improveRanksByNetworkSimplex(allocator: std.mem.Allocator, graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, max_pivots: usize) !usize {
+fn improveRanksByNetworkSimplex(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    max_pivots: usize,
+    search_size: usize,
+) !usize {
     if (max_pivots == 0 or ranks.len == 0) return 0;
     const rank_edges = try collectRankEdges(allocator, graph, acyclic_edge);
     defer allocator.free(rank_edges);
@@ -8025,8 +8052,9 @@ fn improveRanksByNetworkSimplex(allocator: std.mem.Allocator, graph: *const Grap
     var improving_pivots: usize = 0;
     var attempts: usize = 0;
     var stall_count: usize = 0;
+    var search_start: usize = 0;
     while (attempts < max_pivots) {
-        const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse break;
+        const leaving = selectLeavingRankTreeEdge(&tree, rank_edges, search_size, &search_start) orelse break;
         const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse break;
         const entering_slack = rankEdgeSlack(rank_edges[entering], ranks) orelse break;
 
@@ -8910,16 +8938,33 @@ fn rankTreeEdgeCutValue(tree: *const RankTightTree, edges: []const RankEdge, tre
     return value;
 }
 
-fn selectLeavingRankTreeEdge(tree: *const RankTightTree, edges: []const RankEdge) ?usize {
+fn selectLeavingRankTreeEdge(
+    tree: *const RankTightTree,
+    edges: []const RankEdge,
+    search_size: usize,
+    search_start: *usize,
+) ?usize {
+    if (edges.len == 0) return null;
     var best_index: ?usize = null;
     var best_value: f64 = 0;
-    for (edges, 0..) |_, edge_index| {
+    var negative_count: usize = 0;
+    var scanned: usize = 0;
+    while (scanned < edges.len) : (scanned += 1) {
+        const edge_index = (search_start.* + scanned) % edges.len;
         const value = rankTreeEdgeCutValue(tree, edges, edge_index) orelse continue;
         if (value < best_value) {
             best_value = value;
             best_index = edge_index;
         }
+        if (value < 0) {
+            negative_count += 1;
+            if (negative_count >= @max(search_size, 1)) {
+                search_start.* = (edge_index + 1) % edges.len;
+                return best_index;
+            }
+        }
     }
+    search_start.* = (search_start.* + scanned) % edges.len;
     return best_index;
 }
 
@@ -20523,6 +20568,60 @@ test "nslimit1 zero disables compact strong-cluster simplex" {
     try std.testing.expectEqualSlices(usize, before, ranks);
 }
 
+test "layered layout maps Graphviz searchsize to leaving-edge effort" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 30), rankSimplexSearchSize(&graph));
+    try graph.setGraphAttr(.{ .searchsize = 7 });
+    try std.testing.expectEqual(@as(usize, 7), rankSimplexSearchSize(&graph));
+    try std.testing.expectEqualStrings("7", attrValue(graph.attrs.items, "searchsize").?);
+    try graph.setGraphAttr(.{ .searchsize = 0 });
+    try std.testing.expectEqual(@as(usize, 1), rankSimplexSearchSize(&graph));
+    try graph.setGraphAttrRaw("searchsize", "invalid");
+    try std.testing.expectEqual(@as(usize, 1), rankSimplexSearchSize(&graph));
+    try graph.setGraphAttrRaw("searchsize", "-1");
+    try std.testing.expectEqual(@as(usize, 30), rankSimplexSearchSize(&graph));
+}
+
+test "searchsize trades rank span quality for leaving-edge effort" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  n0 -> n2 [weight=3,minlen=3];
+        \\  n0 -> n3 [weight=2,minlen=3];
+        \\  n0 -> n5 [weight=8,minlen=2];
+        \\  n0 -> n7 [weight=14,minlen=3];
+        \\  n1 -> n4 [weight=9,minlen=2];
+        \\  n1 -> n9 [weight=12,minlen=3];
+        \\  n2 -> n4 [weight=6,minlen=1];
+        \\  n2 -> n5 [weight=7,minlen=2];
+        \\  n2 -> n9 [weight=4,minlen=1];
+        \\  n3 -> n5 [weight=14,minlen=1];
+        \\  n4 -> n7 [weight=4,minlen=2];
+        \\  n6 -> n7 [weight=9,minlen=2];
+        \\  n6 -> n8 [weight=13,minlen=2];
+        \\  n6 -> n9 [weight=13,minlen=2];
+        \\  n7 -> n8 [weight=10,minlen=3];
+        \\}
+    ;
+
+    var limited_graph = try parseDot(allocator, source);
+    defer limited_graph.deinit();
+    try limited_graph.setGraphAttr(.{ .searchsize = 1 });
+    var limited = try layoutLayered(allocator, &limited_graph, .{});
+    defer limited.deinit();
+
+    var default_graph = try parseDot(allocator, source);
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+
+    try std.testing.expectEqual(@as(f64, 433), layoutRankSpanCost(&limited_graph, &limited));
+    try std.testing.expectEqual(@as(f64, 406), layoutRankSpanCost(&default_graph, &default_layout));
+}
+
 test "explicit crossing passes override mclimit maximum" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -27826,8 +27925,73 @@ test "rank tight tree cut values identify negative leaving edge" {
     defer tree.deinit();
 
     try std.testing.expect(rankTreeEdgeCutValue(&tree, rank_edges, 1).? < 0);
-    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    var search_start: usize = 0;
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges, 30, &search_start) orelse return error.MissingLeavingEdge;
     try std.testing.expectEqual(@as(EdgeId, 1), rank_edges[leaving].edge_id);
+}
+
+test "rank leaving-edge search honors searchsize and rotates" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [weight=1];
+        \\  a -> c [weight=1];
+        \\  b -> d [weight=1];
+        \\  c -> d [weight=5];
+        \\  d -> e [weight=1];
+        \\  d -> f [weight=1];
+        \\  e -> g [weight=1];
+        \\  f -> g [weight=5];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[nodeIdByLabel(&graph, "a")] = 0;
+    ranks[nodeIdByLabel(&graph, "b")] = 1;
+    ranks[nodeIdByLabel(&graph, "c")] = 1;
+    ranks[nodeIdByLabel(&graph, "d")] = 2;
+    ranks[nodeIdByLabel(&graph, "e")] = 3;
+    ranks[nodeIdByLabel(&graph, "f")] = 3;
+    ranks[nodeIdByLabel(&graph, "g")] = 4;
+    const rank_edges = try collectRankEdges(allocator, &graph, acyclic_edge);
+    defer allocator.free(rank_edges);
+    var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return error.MissingTightTree;
+    defer tree.deinit();
+
+    var negative_edges: [4]usize = undefined;
+    var negative_count: usize = 0;
+    for (rank_edges, 0..) |_, edge_index| {
+        const value = rankTreeEdgeCutValue(&tree, rank_edges, edge_index) orelse continue;
+        if (value < 0) {
+            negative_edges[negative_count] = edge_index;
+            negative_count += 1;
+        }
+    }
+    try std.testing.expect(negative_count >= 2);
+
+    var search_start: usize = 0;
+    const first = selectLeavingRankTreeEdge(&tree, rank_edges, 1, &search_start) orelse return error.MissingLeavingEdge;
+    try std.testing.expectEqual(negative_edges[0], first);
+    const second = selectLeavingRankTreeEdge(&tree, rank_edges, 1, &search_start) orelse return error.MissingLeavingEdge;
+    try std.testing.expectEqual(negative_edges[1], second);
+
+    search_start = 0;
+    const best = selectLeavingRankTreeEdge(&tree, rank_edges, 30, &search_start) orelse return error.MissingLeavingEdge;
+    var best_expected = negative_edges[0];
+    var best_value = rankTreeEdgeCutValue(&tree, rank_edges, best_expected).?;
+    for (negative_edges[1..negative_count]) |edge_index| {
+        const value = rankTreeEdgeCutValue(&tree, rank_edges, edge_index).?;
+        if (value < best_value) {
+            best_value = value;
+            best_expected = edge_index;
+        }
+    }
+    try std.testing.expectEqual(best_expected, best);
 }
 
 test "rank tight tree selects entering edge across leaving cut" {
@@ -27865,7 +28029,8 @@ test "rank tight tree selects entering edge across leaving cut" {
     var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return error.MissingTightTree;
     defer tree.deinit();
 
-    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    var search_start: usize = 0;
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges, 30, &search_start) orelse return error.MissingLeavingEdge;
     const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse return error.MissingEnteringEdge;
     try std.testing.expectEqual(@as(EdgeId, 1), rank_edges[leaving].edge_id);
     try std.testing.expectEqual(@as(EdgeId, 4), rank_edges[entering].edge_id);
@@ -27908,7 +28073,8 @@ test "rank tight tree pivot tightens entering edge and lowers cost" {
     defer tree.deinit();
 
     const before_cost = rankEdgesCost(rank_edges, ranks);
-    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    var search_start: usize = 0;
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges, 30, &search_start) orelse return error.MissingLeavingEdge;
     const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse return error.MissingEnteringEdge;
     try std.testing.expect(try pivotRankTightTree(&tree, rank_edges, ranks, leaving, entering));
 
@@ -27951,7 +28117,7 @@ test "bounded network simplex rank pass performs improving pivot" {
     ranks[d] = 3;
 
     const before = rankAssignmentCost(&graph, ranks, acyclic_edge);
-    try std.testing.expectEqual(@as(usize, 1), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4));
+    try std.testing.expectEqual(@as(usize, 1), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4, 30));
     const after = rankAssignmentCost(&graph, ranks, acyclic_edge);
     try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
     try std.testing.expect(after < before);
@@ -27984,7 +28150,7 @@ test "bounded network simplex rank pass leaves optimal tight tree unchanged" {
     const before = try allocator.dupe(usize, ranks);
     defer allocator.free(before);
 
-    try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4));
+    try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 4, 30));
     try std.testing.expectEqualSlices(usize, before, ranks);
 }
 
@@ -28021,11 +28187,12 @@ test "bounded network simplex rank pass bounds degenerate zero-slack pivots" {
     defer allocator.free(rank_edges);
     var tree = (try buildTightRankTree(allocator, rank_edges, ranks)) orelse return error.MissingTightTree;
     defer tree.deinit();
-    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges) orelse return error.MissingLeavingEdge;
+    var search_start: usize = 0;
+    const leaving = selectLeavingRankTreeEdge(&tree, rank_edges, 30, &search_start) orelse return error.MissingLeavingEdge;
     const entering = selectEnteringRankTreeEdge(&tree, rank_edges, ranks, leaving) orelse return error.MissingEnteringEdge;
     try std.testing.expectEqual(@as(usize, 0), rankEdgeSlack(rank_edges[entering], ranks).?);
 
-    try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 8));
+    try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 8, 30));
     try std.testing.expectEqualSlices(usize, before, ranks);
     try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
 }
