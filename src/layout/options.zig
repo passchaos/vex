@@ -239,6 +239,12 @@ pub fn attrMargin(attrs: anytype, fallback: f64) BoxMargin {
     return .{ .x = x, .y = y };
 }
 
+pub fn clusterMargin(attrs: anytype, fallback: f64) BoxMargin {
+    const value = attrValue(attrs, "margin") orelse return .{ .x = fallback, .y = fallback };
+    const margin = parseGraphvizIntMargin(value, fallback);
+    return .{ .x = margin, .y = margin };
+}
+
 fn positiveAttrFloat(attrs: anytype, name: []const u8, fallback: f64) f64 {
     const value = attrValue(attrs, name) orelse return fallback;
     return positiveAttrFloatValue(value) orelse fallback;
@@ -270,6 +276,22 @@ fn parseInchMargin(value: []const u8) ?f64 {
     const inches = std.fmt.parseFloat(f64, value) catch return null;
     if (inches < 0) return null;
     return inches * 72.0;
+}
+
+fn parseGraphvizIntMargin(value: []const u8, fallback: f64) f64 {
+    var start: usize = 0;
+    while (start < value.len and std.ascii.isWhitespace(value[start])) start += 1;
+    const trimmed = value[start..];
+    if (trimmed.len == 0) return fallback;
+    var end: usize = 0;
+    if (trimmed[0] == '+' or trimmed[0] == '-') end = 1;
+    const digit_start = end;
+    while (end < trimmed.len and std.ascii.isDigit(trimmed[end])) end += 1;
+    if (end == digit_start) return fallback;
+    if (trimmed[0] == '-') return 0;
+    const parsed = std.fmt.parseInt(i64, trimmed[0..end], 10) catch return fallback;
+    if (parsed > std.math.maxInt(i32)) return fallback;
+    return @floatFromInt(parsed);
 }
 
 fn attrValue(attrs: anytype, name: []const u8) ?[]const u8 {

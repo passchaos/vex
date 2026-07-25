@@ -1,0 +1,31 @@
+digraph G {
+  subgraph default_margin {
+    label="X";
+    a;
+  }
+  subgraph point_margin {
+    label="X";
+    margin=22;
+    b;
+  }
+  subgraph integer_prefix {
+    label="X";
+    margin="7,99";
+    c;
+  }
+  subgraph clamped_margin {
+    label="X";
+    margin=-4;
+    d;
+  }
+  subgraph decimal_prefix {
+    label="X";
+    margin=2.5;
+    e;
+  }
+  subgraph invalid_margin {
+    label="X";
+    margin=invalid;
+    f;
+  }
+}

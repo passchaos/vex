@@ -17508,7 +17508,7 @@ fn effectiveClusterColorAttrs(graph: *const Graph, cluster: Subgraph, buffer: *[
 fn inheritedSubgraphMargin(graph: *const Graph, cluster: Subgraph, fallback: f64) BoxMargin {
     const value = inheritedClusterVisualAttr(graph, cluster, "margin") orelse return .{ .x = fallback, .y = fallback };
     const attrs = [_]Attr{.{ .name = "margin", .value = value }};
-    return attrMargin(attrs[0..], fallback);
+    return layout_mod.options.clusterMargin(attrs[0..], fallback);
 }
 
 fn inheritedClusterPenWidth(graph: *const Graph, cluster: Subgraph, fallback: f64) f64 {
@@ -22009,6 +22009,32 @@ test "layered layout honors graph margin attribute" {
     const tiny = attrMargin(attrs[0..], 12);
     try std.testing.expectApproxEqAbs(@as(f64, 3.6), tiny.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 7.2), tiny.y, 0.001);
+}
+
+test "layered clusters interpret margin as Graphviz integer points" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, @embedFile("testdata/dot_non_html_cluster_margin.dot"));
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const expected_margins = [_]f64{ 12, 22, 7, 0, 2, 12 };
+    try std.testing.expectEqual(expected_margins.len, graph.subgraphs.items.len);
+    for (graph.subgraphs.items, expected_margins) |cluster, expected| {
+        try std.testing.expectEqual(@as(usize, 1), cluster.nodes.len);
+        const node = layout.nodes[cluster.nodes[0]];
+        const box = layout.subgraphs[cluster.id];
+        const label_band = subgraphLabelBand(&graph, cluster);
+        try std.testing.expectApproxEqAbs(expected, node.center.x - node.width / 2.0 - box.x, 0.001);
+        try std.testing.expectApproxEqAbs(expected, box.x + box.width - (node.center.x + node.width / 2.0), 0.001);
+        try std.testing.expectApproxEqAbs(expected, node.center.y - node.height / 2.0 - box.y - label_band, 0.001);
+        try std.testing.expectApproxEqAbs(expected, box.y + box.height - (node.center.y + node.height / 2.0), 0.001);
+    }
+
+    const point_box = layout.subgraphs[1];
+    try std.testing.expect(point_box.width < 100);
+    try std.testing.expect(point_box.height < 120);
 }
 
 test "DOT parser handles graphviz-like edge chain and attrs" {
@@ -31258,7 +31284,7 @@ test "cluster layout honors margin attribute for member padding" {
     var graph = try parseDot(allocator,
         \\digraph G {
         \\  subgraph cluster_roomy {
-        \\    margin=0.5;
+        \\    margin=36;
         \\    a;
         \\  }
         \\}
@@ -31273,9 +31299,9 @@ test "cluster layout honors margin attribute for member padding" {
     const node = layout.nodes[a];
     const left_padding = node.center.x - node.width / 2.0 - cluster_box.x;
     const right_padding = cluster_box.x + cluster_box.width - (node.center.x + node.width / 2.0);
-    try std.testing.expect(left_padding >= 35.0);
-    try std.testing.expect(right_padding >= 35.0);
-    try std.testing.expect(cluster_box.width >= node.width + 72.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), left_padding, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), right_padding, 0.001);
+    try std.testing.expectApproxEqAbs(node.width + 72.0, cluster_box.width, 0.001);
 }
 
 test "cluster layout inherits margin from parent subgraphs" {
@@ -31283,14 +31309,14 @@ test "cluster layout inherits margin from parent subgraphs" {
     var graph = try parseDot(allocator,
         \\digraph G {
         \\  subgraph cluster_outer {
-        \\    margin=0.5;
+        \\    margin=36;
         \\    subgraph cluster_inner {
         \\      label="Inner";
         \\      a;
         \\    }
         \\    subgraph cluster_explicit {
         \\      label="Explicit";
-        \\      margin=0.1;
+        \\      margin=7;
         \\      b;
         \\    }
         \\  }
@@ -31308,16 +31334,16 @@ test "cluster layout inherits margin from parent subgraphs" {
     const inner_box = layout.subgraphs[inner_index];
     const inherited_left = layout.nodes[a].center.x - layout.nodes[a].width / 2.0 - inner_box.x;
     const inherited_right = inner_box.x + inner_box.width - (layout.nodes[a].center.x + layout.nodes[a].width / 2.0);
-    try std.testing.expect(inherited_left >= 35.0);
-    try std.testing.expect(inherited_right >= 35.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), inherited_left, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), inherited_right, 0.001);
 
     const explicit_index = subgraphIndexByLabel(&graph, "Explicit") orelse return error.MissingExplicitCluster;
     const explicit = graph.subgraphs.items[explicit_index];
-    try std.testing.expectEqualStrings("0.1", attrValue(explicit.attrs.items, "margin").?);
+    try std.testing.expectEqualStrings("7", attrValue(explicit.attrs.items, "margin").?);
     const b = nodeIdByLabel(&graph, "b");
     const explicit_box = layout.subgraphs[explicit_index];
     const explicit_left = layout.nodes[b].center.x - layout.nodes[b].width / 2.0 - explicit_box.x;
-    try std.testing.expect(explicit_left < inherited_left);
+    try std.testing.expectApproxEqAbs(@as(f64, 7), explicit_left, 0.001);
 
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);

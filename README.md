@@ -401,7 +401,11 @@ The parser currently supports a practical, mainstream DOT subset:
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
-- Graph `pad` plus graph, node, and subgraph margin attributes with zero and sub-inch values.
+- Graph `pad` plus graph/node margin attributes in inches, including zero and
+  sub-inch values. Layered cluster `margin` follows Graphviz `dot`'s integer
+  point-space semantics (`CL_OFFSET=8` in Graphviz; Vex's existing default
+  cluster padding remains 12pt), so `margin=22` means 22 points rather than
+  22 inches.
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
 - Order-sensitive SVG line styles for `solid`, `dashed`, and `dotted`.
 - Graphviz `shape=plain` keeps a compact unboxed text node distinct from `shape=plaintext` / `shape=none`.
