@@ -19,7 +19,8 @@ pub const LayoutOptions = struct {
     label_line_height: f64 = 18,
     node_padding_x: f64 = 14,
     node_padding_y: f64 = 9,
-    crossing_passes: usize = 8,
+    crossing_passes: usize = 24,
+    crossing_min_quit: usize = 8,
     coordinate_passes: usize = 4,
     ranksep_equally: bool = false,
 };
@@ -184,6 +185,12 @@ pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {
     if (attrValue(graph_attrs, "nodesep")) |value| {
         result.node_gap = spacing.graph(value, result.node_gap);
     }
+    if (attrValue(graph_attrs, "mclimit")) |value| {
+        if (positiveAttrFloatValue(value)) |scale| {
+            result.crossing_passes = scaledPositiveUsize(24, scale);
+            result.crossing_min_quit = scaledPositiveUsize(8, scale);
+        }
+    }
     if (attrValue(graph_attrs, "vex_crossing_passes") orelse attrValue(graph_attrs, "crossing_passes")) |value| {
         result.crossing_passes = attrUsize(value, result.crossing_passes);
     }
@@ -230,8 +237,20 @@ pub fn attrMargin(attrs: anytype, fallback: f64) BoxMargin {
 
 fn positiveAttrFloat(attrs: anytype, name: []const u8, fallback: f64) f64 {
     const value = attrValue(attrs, name) orelse return fallback;
-    const parsed = std.fmt.parseFloat(f64, value) catch return fallback;
-    return if (parsed > 0) parsed else fallback;
+    return positiveAttrFloatValue(value) orelse fallback;
+}
+
+fn positiveAttrFloatValue(value: []const u8) ?f64 {
+    const parsed = std.fmt.parseFloat(f64, value) catch return null;
+    return if (std.math.isFinite(parsed) and parsed > 0) parsed else null;
+}
+
+fn scaledPositiveUsize(value: usize, scale: f64) usize {
+    const scaled = @as(f64, @floatFromInt(value)) * scale;
+    if (!std.math.isFinite(scaled) or scaled >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) {
+        return std.math.maxInt(usize);
+    }
+    return @max(1, @as(usize, @intFromFloat(scaled)));
 }
 
 fn positiveAttrUsize(value: []const u8, fallback: usize) usize {

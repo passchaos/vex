@@ -232,6 +232,7 @@ pub const GraphAttr = union(enum) {
     concentrate: bool,
     nodesep: f64,
     ranksep: RankSep,
+    mclimit: f64,
     splines: SplineMode,
     samplepoints: usize,
     bgcolor: []const u8,
@@ -1031,6 +1032,7 @@ pub const Graph = struct {
                     try self.setGraphAttrRaw("ranksep", text);
                 },
             },
+            .mclimit => |value| try self.setGraphAttrFloat("mclimit", value),
             .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
             .samplepoints => |value| {
                 var buffer: [32]u8 = undefined;
@@ -4609,11 +4611,34 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| (effective_options.crossing_passes +| 1));
     const repeat_crossing_minimization = layout_graph.subgraphs.items.len > 0 and remincrossEnabled(layout_graph);
     if (layout_graph.subgraphs.items.len > 0 and !repeat_crossing_minimization) {
-        try reduceVirtualClusterBlockCrossings(allocator, layout_graph, &virtual_levels, ranks, effective_options.crossing_passes);
+        _ = try reduceVirtualClusterBlockCrossings(
+            allocator,
+            layout_graph,
+            &virtual_levels,
+            ranks,
+            effective_options.crossing_passes,
+            effective_options.crossing_min_quit,
+        );
     } else {
-        try reduceVirtualLevelCrossings(allocator, layout_graph, &virtual_levels, ranks, effective_options.crossing_passes);
+        _ = try reduceVirtualLevelCrossings(
+            allocator,
+            layout_graph,
+            &virtual_levels,
+            ranks,
+            effective_options.crossing_passes,
+            effective_options.crossing_min_quit,
+        );
     }
-    replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch try reduceLayerCrossings(allocator, layout_graph, levels, ranks, effective_options.crossing_passes);
+    replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch {
+        _ = try reduceLayerCrossings(
+            allocator,
+            layout_graph,
+            levels,
+            ranks,
+            effective_options.crossing_passes,
+            effective_options.crossing_min_quit,
+        );
+    };
     if (repeat_crossing_minimization or layout_graph.subgraphs.items.len == 0) {
         refineAdjacentExchanges(layout_graph, levels, ranks, 2);
     }
@@ -6351,10 +6376,22 @@ fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: 
     return .{ .allocator = allocator, .levels = levels };
 }
 
-fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, passes: usize) !void {
-    if (virtual_levels.levels.len <= 1 or passes == 0) return;
+fn reduceVirtualLevelCrossings(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    virtual_levels: *VirtualLevels,
+    ranks: []const usize,
+    passes: usize,
+    min_quit: usize,
+) !usize {
+    if (virtual_levels.levels.len <= 1 or passes == 0) return 0;
 
+    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    if (best_crossings == 0) return 0;
+    var without_improvement: usize = 0;
+    var completed: usize = 0;
     for (0..passes) |_| {
+        completed += 1;
         var rank: usize = 1;
         while (rank < virtual_levels.levels.len) : (rank += 1) {
             try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true);
@@ -6366,7 +6403,14 @@ fn reduceVirtualLevelCrossings(allocator: std.mem.Allocator, graph: *const Graph
             try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false);
         }
         refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
+        if (crossingPassShouldQuit(
+            totalVirtualLayerCrossings(graph, virtual_levels, ranks),
+            &best_crossings,
+            &without_improvement,
+            min_quit,
+        )) break;
     }
+    return completed;
 }
 
 fn reduceVirtualClusterBlockCrossings(
@@ -6375,13 +6419,48 @@ fn reduceVirtualClusterBlockCrossings(
     virtual_levels: *VirtualLevels,
     ranks: []const usize,
     passes: usize,
-) !void {
+    min_quit: usize,
+) !usize {
     _ = allocator;
-    if (virtual_levels.levels.len <= 1 or passes == 0) return;
+    if (virtual_levels.levels.len <= 1 or passes == 0) return 0;
     for (virtual_levels.levels, 0..) |*level, rank| {
         stableGroupVirtualLevelByBlock(graph, ranks, rank, level);
     }
-    for (0..passes) |_| refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
+    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    if (best_crossings == 0) return 0;
+    var without_improvement: usize = 0;
+    var completed: usize = 0;
+    for (0..passes) |_| {
+        completed += 1;
+        refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
+        if (crossingPassShouldQuit(
+            totalVirtualLayerCrossings(graph, virtual_levels, ranks),
+            &best_crossings,
+            &without_improvement,
+            min_quit,
+        )) break;
+    }
+    return completed;
+}
+
+fn crossingPassShouldQuit(
+    crossings: usize,
+    best_crossings: *usize,
+    without_improvement: *usize,
+    min_quit: usize,
+) bool {
+    if (crossings == 0) {
+        best_crossings.* = 0;
+        without_improvement.* = 0;
+        return true;
+    }
+    if (crossings < best_crossings.*) {
+        best_crossings.* = crossings;
+        without_improvement.* = 0;
+    } else {
+        without_improvement.* +|= 1;
+    }
+    return without_improvement.* >= @max(min_quit, 1);
 }
 
 fn stableGroupVirtualLevelByBlock(
@@ -9233,15 +9312,27 @@ fn recordMaxFieldLen(node: RecordAst) usize {
     return max_len;
 }
 
-fn reduceLayerCrossings(allocator: std.mem.Allocator, graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) !void {
-    if (levels.len <= 1 or passes == 0) return;
+fn reduceLayerCrossings(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    levels: []std.ArrayList(NodeId),
+    ranks: []const usize,
+    passes: usize,
+    min_quit: usize,
+) !usize {
+    if (levels.len <= 1 or passes == 0) return 0;
 
     const positions = try allocator.alloc(usize, graph.nodes.items.len);
     defer allocator.free(positions);
     const median_positions = try allocator.alloc(usize, graph.nodes.items.len);
     defer allocator.free(median_positions);
 
+    var best_crossings = totalLayerCrossings(graph, levels, ranks);
+    if (best_crossings == 0) return 0;
+    var without_improvement: usize = 0;
+    var completed: usize = 0;
     for (0..passes) |_| {
+        completed += 1;
         var rank: usize = 1;
         while (rank < levels.len) : (rank += 1) {
             buildPositionMap(positions, levels[rank - 1].items);
@@ -9253,7 +9344,14 @@ fn reduceLayerCrossings(allocator: std.mem.Allocator, graph: *const Graph, level
             buildPositionMap(positions, levels[rank].items);
             try orderLevelByMedianGuarded(allocator, graph, ranks, levels, rank - 1, positions, median_positions, false);
         }
+        if (crossingPassShouldQuit(
+            totalLayerCrossings(graph, levels, ranks),
+            &best_crossings,
+            &without_improvement,
+            min_quit,
+        )) break;
     }
+    return completed;
 }
 
 fn buildPositionMap(positions: []usize, level: []const NodeId) void {
@@ -20205,6 +20303,145 @@ test "layered layout honors pass budgets from DOT and typed API" {
     try std.testing.expectEqual(@as(usize, 2), typed.coordinate_passes);
 }
 
+test "layered layout maps Graphviz mclimit to crossing effort" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [mclimit=0.5];
+        \\  a -> c;
+        \\  b -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    const scaled = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 12), scaled.crossing_passes);
+    try std.testing.expectEqual(@as(usize, 4), scaled.crossing_min_quit);
+
+    try graph.setGraphAttr(.{ .mclimit = 0.05 });
+    const minimum = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 1), minimum.crossing_passes);
+    try std.testing.expectEqual(@as(usize, 1), minimum.crossing_min_quit);
+    try std.testing.expectEqualStrings("0.05", attrValue(graph.attrs.items, "mclimit").?);
+}
+
+test "explicit crossing passes override mclimit maximum" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [mclimit=2, vex_crossing_passes=3];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 3), options.crossing_passes);
+    try std.testing.expectEqual(@as(usize, 16), options.crossing_min_quit);
+}
+
+test "invalid and nonpositive mclimit preserve Vex crossing defaults" {
+    const allocator = std.testing.allocator;
+    const values = [_][]const u8{ "0", "-1", "invalid", "nan" };
+    for (values) |value| {
+        var graph = try Graph.init(allocator, .{ .directed = true });
+        defer graph.deinit();
+        try graph.setGraphAttrRaw("mclimit", value);
+        const options = layoutOptionsWithGraphAttrs(.{}, &graph);
+        try std.testing.expectEqual(@as(usize, 24), options.crossing_passes);
+        try std.testing.expectEqual(@as(usize, 8), options.crossing_min_quit);
+    }
+}
+
+test "crossing MinQuit stops after consecutive non-improving passes" {
+    var best: usize = 7;
+    var without_improvement: usize = 0;
+    try std.testing.expect(!crossingPassShouldQuit(6, &best, &without_improvement, 2));
+    try std.testing.expectEqual(@as(usize, 6), best);
+    try std.testing.expectEqual(@as(usize, 0), without_improvement);
+    try std.testing.expect(!crossingPassShouldQuit(6, &best, &without_improvement, 2));
+    try std.testing.expectEqual(@as(usize, 1), without_improvement);
+    try std.testing.expect(crossingPassShouldQuit(8, &best, &without_improvement, 2));
+    try std.testing.expect(crossingPassShouldQuit(0, &best, &without_improvement, 8));
+    try std.testing.expectEqual(@as(usize, 0), best);
+    try std.testing.expectEqual(@as(usize, 0), without_improvement);
+}
+
+test "virtual crossing reducer skips zero-crossing graphs" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    _ = try graph.addEdge(a, b, .{});
+    const ranks = [_]usize{ 0, 1 };
+
+    var limited = try buildVirtualLevels(allocator, &graph, ranks[0..]);
+    defer limited.deinit();
+    const limited_passes = try reduceVirtualLevelCrossings(allocator, &graph, &limited, ranks[0..], 8, 1);
+    try std.testing.expectEqual(@as(usize, 0), limited_passes);
+
+    var complete = try buildVirtualLevels(allocator, &graph, ranks[0..]);
+    defer complete.deinit();
+    const complete_passes = try reduceVirtualLevelCrossings(
+        allocator,
+        &graph,
+        &complete,
+        ranks[0..],
+        24,
+        std.math.maxInt(usize),
+    );
+    try std.testing.expectEqual(@as(usize, 0), complete_passes);
+
+    var graphviz_default = try buildVirtualLevels(allocator, &graph, ranks[0..]);
+    defer graphviz_default.deinit();
+    const default_passes = try reduceVirtualLevelCrossings(
+        allocator,
+        &graph,
+        &graphviz_default,
+        ranks[0..],
+        24,
+        8,
+    );
+    try std.testing.expectEqual(@as(usize, 0), default_passes);
+}
+
+test "mclimit trades crossing quality for crossing effort" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  { rank=same; a0; a1; a2; a3; }
+        \\  { rank=same; b0; b1; b2; b3; }
+        \\  { rank=same; c0; c1; c2; c3; }
+        \\  a0 -> b0;
+        \\  a0 -> b3;
+        \\  a1 -> b0;
+        \\  a1 -> b1;
+        \\  a2 -> b3;
+        \\  b0 -> c0;
+        \\  b0 -> c2;
+        \\  b1 -> c0;
+        \\  b3 -> c1;
+        \\  b3 -> c3;
+        \\}
+    ;
+
+    var limited_graph = try parseDot(allocator, source);
+    defer limited_graph.deinit();
+    try limited_graph.setGraphAttr(.{ .mclimit = 0.05 });
+    var limited = try layoutLayered(allocator, &limited_graph, .{});
+    defer limited.deinit();
+
+    var default_graph = try parseDot(allocator, source);
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), layoutAdjacentRankCrossingCount(&limited_graph, &limited));
+    try std.testing.expectEqual(@as(usize, 0), layoutAdjacentRankCrossingCount(&default_graph, &default_layout));
+}
+
 test "layered layout accepts compatibility pass budget aliases" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -22393,7 +22630,7 @@ test "virtual level median orders dummy nodes" {
     defer virtual_levels.deinit();
     try std.testing.expect(virtualLevelContains(virtual_levels.levels[1].items, .{ .dummy = 0 }));
 
-    try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2);
+    _ = try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2, std.math.maxInt(usize));
     const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
     const c_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = c }).?;
     try std.testing.expect(dummy_pos < c_pos);
@@ -22646,7 +22883,7 @@ test "virtual reducer real-node order can be extracted" {
 
     var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
     defer virtual_levels.deinit();
-    try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2);
+    _ = try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2, std.math.maxInt(usize));
     const real_levels = try extractRealLevelsFromVirtual(allocator, &virtual_levels);
     defer {
         for (real_levels) |*level| level.deinit(allocator);
@@ -22713,7 +22950,7 @@ test "virtual positions expose dummy along coordinates" {
 
     var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
     defer virtual_levels.deinit();
-    try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2);
+    _ = try reduceVirtualLevelCrossings(allocator, &graph, &virtual_levels, ranks, 2, std.math.maxInt(usize));
 
     const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
     defer allocator.free(sizes);
@@ -30294,6 +30531,30 @@ fn layoutEdgesCross(graph: *const Graph, layout: *const Layout, first: EdgeId, s
     const b_from = axes.pointAlong(layout.nodes[b.from].center);
     const b_to = axes.pointAlong(layout.nodes[b.to].center);
     return (a_from < b_from and a_to > b_to) or (a_from > b_from and a_to < b_to);
+}
+
+fn layoutAdjacentRankCrossingCount(graph: *const Graph, layout: *const Layout) usize {
+    const axes = LayoutAxes.init(layout.rankdir);
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |left, left_index| {
+        if (left.from >= layout.ranks.len or left.to >= layout.ranks.len) continue;
+        const upper_rank = layout.ranks[left.from];
+        if (layout.ranks[left.to] != upper_rank + 1) continue;
+        const left_upper = axes.pointAlong(layout.nodes[left.from].center);
+        const left_lower = axes.pointAlong(layout.nodes[left.to].center);
+        for (graph.edges.items[left_index + 1 ..]) |right| {
+            if (right.from >= layout.ranks.len or right.to >= layout.ranks.len) continue;
+            if (layout.ranks[right.from] != upper_rank or layout.ranks[right.to] != upper_rank + 1) continue;
+            const right_upper = axes.pointAlong(layout.nodes[right.from].center);
+            const right_lower = axes.pointAlong(layout.nodes[right.to].center);
+            if ((left_upper < right_upper and left_lower > right_lower) or
+                (left_upper > right_upper and left_lower < right_lower))
+            {
+                crossings += 1;
+            }
+        }
+    }
+    return crossings;
 }
 
 test "typed remincross serializes Graphviz crossing repeat control" {

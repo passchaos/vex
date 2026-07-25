@@ -354,6 +354,9 @@ The parser currently supports a practical, mainstream DOT subset:
   second time by default, matching Graphviz `remincross=true`. Set graph
   `remincross=false` to retain the stable first-pass cluster block order; the
   typed Zig API exposes the switch as `GraphAttr.remincross`.
+- Layered crossing minimization honors Graphviz `mclimit`: it scales the
+  MaxIter=24 and MinQuit=8 effort limits, while `vex_crossing_passes` remains a
+  direct maximum-pass override. The typed API exposes `GraphAttr.mclimit`.
 - Layered ranking defaults to integrated `newrank=true` semantics, so rank
   constraints can span sibling subgraphs without Graphviz's recursive-ranking
   restriction. Set `newrank=false` to restore Graphviz's legacy rank-constraint
