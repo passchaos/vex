@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
+const big5_mod = @import("big5.zig");
 const layout_mod = @import("layout/mod.zig");
 const size_mod = @import("size.zig");
 const svg_mod = @import("svg/mod.zig");
@@ -3222,44 +3223,55 @@ fn freeTempAttrs(allocator: std.mem.Allocator, attrs: *AttrList) void {
 
 fn normalizeParsedGraphCharset(graph: *Graph) !void {
     const charset = attrValue(graph.attrs.items, "charset") orelse return;
-    if (!isLatin1Charset(charset)) return;
+    const encoding: ParsedCharset = if (isLatin1Charset(charset))
+        .latin1
+    else if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, charset, " \t\r\n"), "big-5") or
+        std.ascii.eqlIgnoreCase(std.mem.trim(u8, charset, " \t\r\n"), "big5"))
+        .big5
+    else
+        return;
 
-    try replaceLatin1Owned(graph.allocator, &graph.name);
-    try transcodeAttrListLatin1(graph.allocator, graph.attrs.items);
-    try transcodeAttrListLatin1(graph.allocator, graph.node_default_attrs.items);
-    try transcodeAttrListLatin1(graph.allocator, graph.edge_default_attrs.items);
-    try replaceLatin1Owned(graph.allocator, &graph.node_defaults.color);
-    try replaceLatin1Owned(graph.allocator, &graph.edge_defaults.color);
+    try replaceEncodedOwned(graph.allocator, &graph.name, encoding);
+    try transcodeAttrList(graph.allocator, graph.attrs.items, encoding);
+    try transcodeAttrList(graph.allocator, graph.node_default_attrs.items, encoding);
+    try transcodeAttrList(graph.allocator, graph.edge_default_attrs.items, encoding);
+    try replaceEncodedOwned(graph.allocator, &graph.node_defaults.color, encoding);
+    try replaceEncodedOwned(graph.allocator, &graph.edge_defaults.color, encoding);
 
     for (graph.nodes.items) |*node| {
-        try replaceLatin1Owned(graph.allocator, &node.label);
-        try replaceLatin1Owned(graph.allocator, &node.color);
-        try transcodeAttrListLatin1(graph.allocator, node.attrs.items);
+        try replaceEncodedOwned(graph.allocator, &node.label, encoding);
+        try replaceEncodedOwned(graph.allocator, &node.color, encoding);
+        try transcodeAttrList(graph.allocator, node.attrs.items, encoding);
     }
     for (graph.edges.items) |*edge| {
         if (edge.label) |label| {
             var owned = label;
-            try replaceLatin1Owned(graph.allocator, &owned);
+            try replaceEncodedOwned(graph.allocator, &owned, encoding);
             edge.label = owned;
         }
-        try replaceLatin1Owned(graph.allocator, &edge.color);
+        try replaceEncodedOwned(graph.allocator, &edge.color, encoding);
         if (edge.tail_record_port) |port| {
             var owned = port;
-            try replaceLatin1Owned(graph.allocator, &owned);
+            try replaceEncodedOwned(graph.allocator, &owned, encoding);
             edge.tail_record_port = owned;
         }
         if (edge.head_record_port) |port| {
             var owned = port;
-            try replaceLatin1Owned(graph.allocator, &owned);
+            try replaceEncodedOwned(graph.allocator, &owned, encoding);
             edge.head_record_port = owned;
         }
-        try transcodeAttrListLatin1(graph.allocator, edge.attrs.items);
+        try transcodeAttrList(graph.allocator, edge.attrs.items, encoding);
     }
     for (graph.subgraphs.items) |*subgraph| {
-        try replaceLatin1Owned(graph.allocator, &subgraph.label);
-        try transcodeAttrListLatin1(graph.allocator, subgraph.attrs.items);
+        try replaceEncodedOwned(graph.allocator, &subgraph.label, encoding);
+        try transcodeAttrList(graph.allocator, subgraph.attrs.items, encoding);
     }
 }
+
+const ParsedCharset = enum {
+    latin1,
+    big5,
+};
 
 fn isLatin1Charset(value: []const u8) bool {
     const trimmed = std.mem.trim(u8, value, " \t\r\n");
@@ -3272,15 +3284,18 @@ fn isLatin1Charset(value: []const u8) bool {
         std.ascii.eqlIgnoreCase(trimmed, "ISO-IR-100");
 }
 
-fn transcodeAttrListLatin1(allocator: std.mem.Allocator, attrs: []Attr) !void {
+fn transcodeAttrList(allocator: std.mem.Allocator, attrs: []Attr, encoding: ParsedCharset) !void {
     for (attrs) |*attr| {
-        try replaceLatin1Owned(allocator, &attr.name);
-        try replaceLatin1Owned(allocator, &attr.value);
+        try replaceEncodedOwned(allocator, &attr.name, encoding);
+        try replaceEncodedOwned(allocator, &attr.value, encoding);
     }
 }
 
-fn replaceLatin1Owned(allocator: std.mem.Allocator, value: *[]const u8) !void {
-    const converted = try latin1ToUtf8Alloc(allocator, value.*);
+fn replaceEncodedOwned(allocator: std.mem.Allocator, value: *[]const u8, encoding: ParsedCharset) !void {
+    const converted = switch (encoding) {
+        .latin1 => try latin1ToUtf8Alloc(allocator, value.*),
+        .big5 => try big5_mod.toUtf8Alloc(allocator, value.*),
+    };
     allocator.free(value.*);
     value.* = converted;
 }
@@ -22846,6 +22861,33 @@ test "UTF-8 charset leaves valid UTF-8 text unchanged" {
     try std.testing.expectEqualStrings("東京", graph.name);
     try std.testing.expectEqualStrings("größer", attrValue(graph.attrs.items, "label").?);
     try std.testing.expect(nodeIdByLabel(&graph, "节点") < graph.nodes.items.len);
+}
+
+test "DOT parser normalizes Graphviz Big-5 charsets to UTF-8" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "big5", "big-5" }) |charset| {
+        const source = try std.fmt.allocPrint(
+            allocator,
+            "digraph G {{ graph [charset=\"{s}\", label=\"\xa4\xa4\xa4\xe5\"]; \"\xb4\xfa\xb8\xd5\" -> target [label=\"\xa4\xe5\"]; }}",
+            .{charset},
+        );
+        defer allocator.free(source);
+        var graph = try parseDot(allocator, source);
+        defer graph.deinit();
+
+        try std.testing.expectEqualStrings("中文", attrValue(graph.attrs.items, "label").?);
+        const test_node = nodeIdByLabel(&graph, "測試");
+        try std.testing.expectEqual(test_node, graph.edges.items[0].from);
+        try std.testing.expectEqualStrings("文", graph.edges.items[0].label.?);
+
+        var layout = try layoutLayered(allocator, &graph, .{});
+        defer layout.deinit();
+        const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+        defer allocator.free(svg);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(svg));
+        try std.testing.expect(std.mem.indexOf(u8, svg, "中文") != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, "測試") != null);
+    }
 }
 
 test "DOT graph stream parses independent directed and undirected graphs" {

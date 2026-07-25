@@ -465,6 +465,10 @@ The parser currently supports a practical, mainstream DOT subset:
   to UTF-8 at the graph-model boundary. Graph, default, node, edge, subgraph,
   and record-port text therefore remains valid XML; the upstream `b56.gv`
   Latin-1 fixture renders as valid UTF-8 SVG.
+- Graphviz `big5` / `big-5` graphs use an embedded, runtime-independent Big-5
+  decoder covering Graphviz's `0xA1–0xFE` lead and standard trail ranges.
+  Valid pairs become UTF-8 model text and malformed bytes become U+FFFD, so SVG
+  remains XML-safe without depending on platform `iconv`.
 - SVG text rendering honors `nojustify=true` for graph, node, edge, and subgraph labels.
 - SVG rendering honors Graphviz `outputorder=edgesfirst|nodesfirst|breadthfirst`.
 - Node and cluster `peripheries=0` hide borders while preserving fills.
