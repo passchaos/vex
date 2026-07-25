@@ -534,6 +534,7 @@ pub const SubgraphAttr = union(enum) {
     label: []const u8,
     label_position: Point,
     bounding_box: BoundingBox,
+    compact: bool,
     rankdir: RankDir,
     layout: LayoutAlgorithm,
     compound: bool,
@@ -577,6 +578,7 @@ pub const SubgraphOptions = struct {
     label: ?[]const u8 = null,
     label_position: ?Point = null,
     bounding_box: ?BoundingBox = null,
+    compact: ?bool = null,
     rankdir: ?RankDir = null,
     layout: ?LayoutAlgorithm = null,
     compound: ?bool = null,
@@ -1687,6 +1689,7 @@ pub const Graph = struct {
         if (options.label) |value| try self.setSubgraphAttr(id, .{ .label = value });
         if (options.label_position) |value| try self.setSubgraphAttr(id, .{ .label_position = value });
         if (options.bounding_box) |value| try self.setSubgraphAttr(id, .{ .bounding_box = value });
+        if (options.compact) |value| try self.setSubgraphAttr(id, .{ .compact = value });
         if (options.rankdir) |value| try self.setSubgraphAttr(id, .{ .rankdir = value });
         if (options.layout) |value| try self.setSubgraphAttr(id, .{ .layout = value });
         if (options.compound) |value| try self.setSubgraphAttr(id, .{ .compound = value });
@@ -1734,6 +1737,7 @@ pub const Graph = struct {
                 var buffer: [256]u8 = undefined;
                 try self.setSubgraphAttrRaw(id, "bb", try boundingBoxAttrText(&buffer, value));
             },
+            .compact => |value| try self.setSubgraphAttrRaw(id, "compact", boolAttrValue(value)),
             .rankdir => |value| try self.setSubgraphAttrRaw(id, "rankdir", value.name()),
             .layout => |value| try self.setSubgraphAttrRaw(id, "layout", value.name()),
             .compound => |value| try self.setSubgraphAttrRaw(id, "compound", boolAttrValue(value)),
@@ -4145,6 +4149,90 @@ fn clusterRankMode(graph: *const Graph) ClusterRankMode {
     return .local;
 }
 
+const strongClusterWeight: f64 = 1000.0;
+const backwardRankPenalty: f64 = 1000.0;
+
+fn subgraphCompact(subgraph: Subgraph) bool {
+    const value = attrValue(subgraph.attrs.items, "compact") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn subgraphIsAncestorOf(graph: *const Graph, ancestor: SubgraphId, descendant: SubgraphId) bool {
+    var current: ?SubgraphId = descendant;
+    var remaining = graph.subgraphs.items.len + 1;
+    while (current) |id| {
+        if (remaining == 0) return false;
+        remaining -= 1;
+        if (id == ancestor) return true;
+        if (id >= graph.subgraphs.items.len) return false;
+        current = graph.subgraphs.items[id].parent;
+    }
+    return false;
+}
+
+fn nodeInSubgraphHierarchy(graph: *const Graph, subgraph_id: SubgraphId, node_id: NodeId) bool {
+    if (subgraph_id >= graph.subgraphs.items.len) return false;
+    for (graph.subgraphs.items) |candidate| {
+        if (!containsNode(candidate.nodes, node_id)) continue;
+        if (subgraphIsAncestorOf(graph, subgraph_id, candidate.id)) return true;
+    }
+    return false;
+}
+
+fn subgraphDepth(graph: *const Graph, subgraph_id: SubgraphId) usize {
+    if (subgraph_id >= graph.subgraphs.items.len) return 0;
+    var depth: usize = 1;
+    var current = graph.subgraphs.items[subgraph_id].parent;
+    var remaining = graph.subgraphs.items.len;
+    while (current) |id| {
+        if (remaining == 0 or id >= graph.subgraphs.items.len) break;
+        remaining -= 1;
+        depth += 1;
+        current = graph.subgraphs.items[id].parent;
+    }
+    return depth;
+}
+
+fn deepestCompactSubgraphContainingNode(graph: *const Graph, node_id: NodeId) ?SubgraphId {
+    var best: ?SubgraphId = null;
+    var best_depth: usize = 0;
+    for (graph.subgraphs.items) |subgraph| {
+        if (!subgraphCompact(subgraph) or !nodeInSubgraphHierarchy(graph, subgraph.id, node_id)) continue;
+        const depth = subgraphDepth(graph, subgraph.id);
+        if (best == null or depth > best_depth) {
+            best = subgraph.id;
+            best_depth = depth;
+        }
+    }
+    return best;
+}
+
+fn edgeEndpointsShareHierarchy(graph: *const Graph, edge_item: Edge) bool {
+    for (graph.subgraphs.items) |subgraph| {
+        if (nodeInSubgraphHierarchy(graph, subgraph.id, edge_item.from) and
+            nodeInSubgraphHierarchy(graph, subgraph.id, edge_item.to))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn rankEdgeUsesStrongClusterPenalty(graph: *const Graph, edge_item: Edge) bool {
+    if (!edge_item.constraint) return false;
+    const from_strong = deepestCompactSubgraphContainingNode(graph, edge_item.from);
+    const to_strong = deepestCompactSubgraphContainingNode(graph, edge_item.to);
+    if (from_strong == null and to_strong == null) return false;
+    if (from_strong) |from_id| {
+        if (to_strong) |to_id| {
+            return !(from_id == to_id or
+                subgraphIsAncestorOf(graph, from_id, to_id) or
+                subgraphIsAncestorOf(graph, to_id, from_id));
+        }
+    }
+    return !edgeEndpointsShareHierarchy(graph, edge_item);
+}
+
 fn layeredGraphView(graph: *const Graph, clusterless_storage: *Graph) *const Graph {
     if (clusterRankMode(graph) == .local) return graph;
     clusterless_storage.* = graph.*;
@@ -4222,9 +4310,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var acyclic_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
     defer allocator.free(acyclic_edge);
     @memset(acyclic_edge, false);
+    const strong_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
+    defer allocator.free(strong_edge);
+    for (layout_graph.edges.items) |edge_item| {
+        strong_edge[edge_item.id] = rankEdgeUsesStrongClusterPenalty(layout_graph, edge_item);
+    }
 
     for (layout_graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
+        if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
         if (edge_item.to < n) indegree[edge_item.to] += 1;
     }
 
@@ -4236,7 +4329,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     while (head < queue.items.len) : (head += 1) {
         const u = queue.items[head];
         for (layout_graph.edges.items) |edge_item| {
-            if (!edge_item.constraint) continue;
+            if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
             if (edge_item.from != u) continue;
             const min_len = @max(edge_item.min_len, 1);
             if (ranks[edge_item.to] < ranks[u] + min_len) ranks[edge_item.to] = ranks[u] + min_len;
@@ -4248,13 +4341,22 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         }
     }
 
-    assignRanksForCyclicComponents(layout_graph, ranks, acyclic_edge);
-    applyRankConstraints(layout_graph, ranks);
+    assignRanksForCyclicComponents(layout_graph, ranks, acyclic_edge, strong_edge);
+    if (graphHasStrongClusters(layout_graph)) {
+        settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
+    } else {
+        applyRankConstraints(layout_graph, ranks);
+    }
     tightenRanksTowardSinks(layout_graph, ranks, acyclic_edge);
     improveRanksByLocalSearch(layout_graph, ranks, acyclic_edge, 2);
     try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| 4);
     _ = try improveRanksByNetworkSimplex(allocator, layout_graph, ranks, acyclic_edge, n * 2);
-    applyRankConstraints(layout_graph, ranks);
+    if (graphHasStrongClusters(layout_graph)) {
+        settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
+        _ = try improveStrongClusterRanks(allocator, layout_graph, ranks, acyclic_edge, strong_edge, n * 4);
+    } else {
+        applyRankConstraints(layout_graph, ranks);
+    }
 
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -7309,14 +7411,72 @@ fn rankConstraintsSatisfied(graph: *const Graph, ranks: []const usize) bool {
     return true;
 }
 
-fn assignRanksForCyclicComponents(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
+fn rankConstraintsSatisfiedUpToTranslation(graph: *const Graph, ranks: []const usize) bool {
+    if (ranks.len == 0) return graph.rank_constraints.items.len == 0;
+    var min_rank = ranks[0];
+    var max_rank = ranks[0];
+    for (ranks[1..]) |rank| {
+        min_rank = @min(min_rank, rank);
+        max_rank = @max(max_rank, rank);
+    }
+    for (graph.rank_constraints.items) |constraint| {
+        switch (constraint.kind) {
+            .same => {
+                var target: ?usize = null;
+                for (constraint.node_ids) |id| {
+                    if (id >= ranks.len) continue;
+                    if (target) |rank| {
+                        if (ranks[id] != rank) return false;
+                    } else {
+                        target = ranks[id];
+                    }
+                }
+            },
+            .min, .source => {
+                for (constraint.node_ids) |id| {
+                    if (id < ranks.len and ranks[id] != min_rank) return false;
+                }
+            },
+            .max, .sink => {
+                for (constraint.node_ids) |id| {
+                    if (id < ranks.len and ranks[id] != max_rank) return false;
+                }
+            },
+        }
+    }
+    if (hasRankConstraintKind(graph, .source)) {
+        for (ranks, 0..) |rank, node_id| {
+            if (rank == min_rank and !nodeInRankConstraintKind(graph, node_id, .source)) return false;
+        }
+    }
+    if (hasRankConstraintKind(graph, .sink)) {
+        for (ranks, 0..) |rank, node_id| {
+            if (rank == max_rank and !nodeInRankConstraintKind(graph, node_id, .sink)) return false;
+        }
+    }
+    return true;
+}
+
+fn assignRanksForCyclicComponents(
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    strong_edge: []const bool,
+) void {
     const state = graph.allocator.alloc(u8, ranks.len) catch return;
     defer graph.allocator.free(state);
     @memset(state, 0);
-    for (graph.nodes.items, 0..) |_, id| relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, id);
+    for (graph.nodes.items, 0..) |_, id| relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, id);
 }
 
-fn relaxRanksDepthFirst(graph: *const Graph, ranks: []usize, state: []u8, acyclic_edge: []const bool, node_id: NodeId) void {
+fn relaxRanksDepthFirst(
+    graph: *const Graph,
+    ranks: []usize,
+    state: []u8,
+    acyclic_edge: []const bool,
+    strong_edge: []const bool,
+    node_id: NodeId,
+) void {
     if (node_id >= state.len) return;
     if (state[node_id] == 1) return;
     if (state[node_id] == 2) return;
@@ -7324,6 +7484,7 @@ fn relaxRanksDepthFirst(graph: *const Graph, ranks: []usize, state: []u8, acycli
     for (graph.edges.items) |edge_item| {
         if (edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id]) continue;
         if (!edge_item.constraint or edge_item.from != node_id) continue;
+        if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) continue;
         if (edge_item.to >= ranks.len or edge_item.to == node_id) continue;
         if (state[edge_item.to] == 1) continue;
         const candidate = ranks[node_id] + @max(edge_item.min_len, 1);
@@ -7331,7 +7492,7 @@ fn relaxRanksDepthFirst(graph: *const Graph, ranks: []usize, state: []u8, acycli
             ranks[edge_item.to] = candidate;
             if (state[edge_item.to] == 2) state[edge_item.to] = 0;
         }
-        relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, edge_item.to);
+        relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, edge_item.to);
     }
     state[node_id] = 2;
 }
@@ -7512,6 +7673,458 @@ fn rankAssignmentCost(graph: *const Graph, ranks: []const usize, acyclic_edge: [
         cost += rankSpanCost(ranks[edge_item.from], ranks[edge_item.to], edge_item.weight);
     }
     return cost;
+}
+
+fn graphHasStrongClusters(graph: *const Graph) bool {
+    for (graph.subgraphs.items) |subgraph| {
+        if (subgraphCompact(subgraph)) return true;
+    }
+    return false;
+}
+
+fn settleStrongRanksWithExplicitConstraints(
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    max_passes: usize,
+) void {
+    for (0..max_passes) |_| {
+        applyRankConstraints(graph, ranks);
+        if (rankAssignmentFeasible(graph, ranks, acyclic_edge) and rankConstraintsSatisfied(graph, ranks)) return;
+        for (graph.edges.items) |edge_item| {
+            if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+            if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+            ranks[edge_item.to] = @max(ranks[edge_item.to], ranks[edge_item.from] +| @max(edge_item.min_len, 1));
+        }
+        if (rankAssignmentFeasible(graph, ranks, acyclic_edge) and rankConstraintsSatisfied(graph, ranks)) return;
+    }
+}
+
+fn strongClusterAncestor(graph: *const Graph, subgraph_id: SubgraphId) ?SubgraphId {
+    if (subgraph_id >= graph.subgraphs.items.len) return null;
+    var current = graph.subgraphs.items[subgraph_id].parent;
+    while (current) |id| {
+        if (id >= graph.subgraphs.items.len) return null;
+        if (subgraphCompact(graph.subgraphs.items[id])) return id;
+        current = graph.subgraphs.items[id].parent;
+    }
+    return null;
+}
+
+const StrongRankProblem = struct {
+    allocator: std.mem.Allocator,
+    real_node_count: usize,
+    ranks: []usize,
+    edges: []RankEdge,
+
+    fn deinit(self: *StrongRankProblem) void {
+        self.allocator.free(self.ranks);
+        self.allocator.free(self.edges);
+        self.* = undefined;
+    }
+};
+
+fn improveStrongClusterRanks(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    strong_edge: []const bool,
+    max_pivots: usize,
+) !usize {
+    if (ranks.len == 0 or max_pivots == 0 or !graphHasStrongClusters(graph)) return 0;
+    var problem = try buildStrongRankProblem(allocator, graph, ranks, acyclic_edge, strong_edge);
+    defer problem.deinit();
+    if (problem.edges.len == 0) return 0;
+
+    const initial_cost = augmentedRankEdgesCost(problem.edges, problem.ranks);
+    const pivot_limit = @max(max_pivots, problem.ranks.len * 2);
+    const pivots = try improveAugmentedRankEdges(
+        allocator,
+        graph,
+        problem.edges,
+        problem.ranks,
+        acyclic_edge,
+        problem.real_node_count,
+        pivot_limit,
+    );
+    if (augmentedRankEdgesCost(problem.edges, problem.ranks) > initial_cost + 0.0001) return 0;
+
+    var min_rank: usize = std.math.maxInt(usize);
+    for (problem.ranks[0..problem.real_node_count]) |rank| min_rank = @min(min_rank, rank);
+    for (ranks, 0..) |*rank, node_id| rank.* = problem.ranks[node_id] - min_rank;
+    return @max(pivots, 1);
+}
+
+fn buildStrongRankProblem(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    ranks: []const usize,
+    acyclic_edge: []const bool,
+    strong_edge: []const bool,
+) !StrongRankProblem {
+    var rank_list = std.ArrayList(usize).empty;
+    errdefer rank_list.deinit(allocator);
+    var edge_list = std.ArrayList(RankEdge).empty;
+    errdefer edge_list.deinit(allocator);
+
+    var rank_offset: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) {
+            rank_offset = @max(rank_offset, @max(edge_item.min_len, 1));
+        }
+    }
+    for (ranks) |rank| try rank_list.append(allocator, rank +| rank_offset);
+
+    for (graph.edges.items) |edge_item| {
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        try appendRankEdge(
+            allocator,
+            &edge_list,
+            edge_item.from,
+            edge_item.to,
+            @max(edge_item.min_len, 1),
+            @max(edge_item.weight, 0.1),
+            edge_item.id,
+        );
+    }
+
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.id >= strong_edge.len or !strong_edge[edge_item.id]) continue;
+        const min_len = @max(edge_item.min_len, 1);
+        const auxiliary = rank_list.items.len;
+        const tail_rank = rank_list.items[edge_item.from];
+        const head_rank = rank_list.items[edge_item.to];
+        try rank_list.append(allocator, @min(tail_rank, head_rank - min_len));
+        const weight = @max(edge_item.weight, 0.1);
+        try appendRankEdge(allocator, &edge_list, auxiliary, edge_item.from, 0, weight * backwardRankPenalty, edge_item.id);
+        try appendRankEdge(allocator, &edge_list, auxiliary, edge_item.to, min_len, weight, edge_item.id);
+    }
+
+    for (graph.subgraphs.items, 0..) |subgraph, subgraph_id| {
+        if (!subgraphCompact(subgraph) or
+            strongClusterAncestor(graph, subgraph_id) != null or
+            !subgraphHierarchyHasNodes(graph, subgraph_id)) continue;
+        var top_rank: usize = std.math.maxInt(usize);
+        var bottom_rank: usize = 0;
+        for (graph.nodes.items) |node_item| {
+            const node_id = node_item.id;
+            if (node_id >= ranks.len or !nodeInSubgraphHierarchy(graph, subgraph_id, node_id)) continue;
+            top_rank = @min(top_rank, rank_list.items[node_id]);
+            bottom_rank = @max(bottom_rank, rank_list.items[node_id]);
+        }
+        if (top_rank == std.math.maxInt(usize)) continue;
+        const top = rank_list.items.len;
+        try rank_list.append(allocator, top_rank);
+        const bottom = rank_list.items.len;
+        try rank_list.append(allocator, bottom_rank);
+        for (graph.nodes.items) |node_item| {
+            const node_id = node_item.id;
+            if (node_id >= ranks.len or !nodeInSubgraphHierarchy(graph, subgraph_id, node_id)) continue;
+            try appendRankEdge(allocator, &edge_list, top, node_id, 0, 0, std.math.maxInt(EdgeId));
+            try appendRankEdge(allocator, &edge_list, node_id, bottom, 0, 0, std.math.maxInt(EdgeId));
+        }
+        try appendRankEdge(
+            allocator,
+            &edge_list,
+            top,
+            bottom,
+            0,
+            strongClusterWeight * @as(f64, @floatFromInt(strongClusterGroupSize(graph, subgraph_id))),
+            std.math.maxInt(EdgeId),
+        );
+    }
+
+    const root = rank_list.items.len;
+    try rank_list.append(allocator, 0);
+    for (0..root) |node_id| {
+        try appendRankEdge(allocator, &edge_list, root, node_id, 0, 0, std.math.maxInt(EdgeId));
+    }
+
+    const owned_ranks = try rank_list.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_ranks);
+    const owned_edges = try edge_list.toOwnedSlice(allocator);
+    return .{
+        .allocator = allocator,
+        .real_node_count = ranks.len,
+        .ranks = owned_ranks,
+        .edges = owned_edges,
+    };
+}
+
+fn subgraphHierarchyHasNodes(graph: *const Graph, subgraph_id: SubgraphId) bool {
+    for (graph.nodes.items) |node_item| {
+        if (nodeInSubgraphHierarchy(graph, subgraph_id, node_item.id)) return true;
+    }
+    return false;
+}
+
+fn strongClusterGroupSize(graph: *const Graph, root_id: SubgraphId) usize {
+    var count: usize = 0;
+    for (graph.subgraphs.items, 0..) |subgraph, subgraph_id| {
+        if (!subgraphCompact(subgraph)) continue;
+        var root = subgraph_id;
+        while (strongClusterAncestor(graph, root)) |ancestor| root = ancestor;
+        if (root == root_id) count += 1;
+    }
+    return @max(count, 1);
+}
+
+fn appendRankEdge(
+    allocator: std.mem.Allocator,
+    edges: *std.ArrayList(RankEdge),
+    from: NodeId,
+    to: NodeId,
+    min_len: usize,
+    weight: f64,
+    edge_id: EdgeId,
+) !void {
+    try edges.append(allocator, .{
+        .edge_id = edge_id,
+        .from = from,
+        .to = to,
+        .min_len = min_len,
+        .weight = weight,
+    });
+}
+
+fn improveAugmentedRankEdges(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    edges: []const RankEdge,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    real_node_count: usize,
+    max_pivots: usize,
+) !usize {
+    if (edges.len == 0 or ranks.len == 0 or real_node_count > ranks.len) return 0;
+    const initial = try allocator.dupe(usize, ranks);
+    defer allocator.free(initial);
+    const initial_cost = augmentedRankEdgesCost(edges, ranks);
+
+    var shifts = try improveRankEdgesByClosureShifts(
+        allocator,
+        graph,
+        edges,
+        ranks,
+        acyclic_edge,
+        real_node_count,
+        max_pivots,
+    );
+    shifts += try balanceAugmentedRankTies(
+        allocator,
+        graph,
+        edges,
+        ranks,
+        acyclic_edge,
+        real_node_count,
+    );
+    if (!augmentedRankSolutionValid(graph, edges, ranks, acyclic_edge, real_node_count) or
+        augmentedRankEdgesCost(edges, ranks) > initial_cost + 0.0001)
+    {
+        @memcpy(ranks, initial);
+        return 0;
+    }
+    return shifts;
+}
+
+fn balanceAugmentedRankTies(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    edges: []const RankEdge,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    real_node_count: usize,
+) !usize {
+    const closure = try allocator.alloc(bool, ranks.len);
+    defer allocator.free(closure);
+    const backup = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(backup);
+    var shifts: usize = 0;
+    for (0..real_node_count) |seed| {
+        buildRankShiftClosure(graph, edges, ranks, closure, seed, true, real_node_count);
+        if (@abs(rankShiftDerivative(edges, closure)) > 0.0001) continue;
+        const limit = rankShiftLimit(edges, ranks, closure, true) orelse continue;
+        if (limit == 0) continue;
+        @memcpy(backup, ranks);
+        const before = augmentedRankEdgesCost(edges, ranks);
+        shiftRankClosure(ranks, closure, limit, true);
+        if (augmentedRankSolutionValid(graph, edges, ranks, acyclic_edge, real_node_count) and
+            @abs(augmentedRankEdgesCost(edges, ranks) - before) <= 0.0001)
+        {
+            shifts += 1;
+        } else {
+            @memcpy(ranks, backup);
+        }
+    }
+    return shifts;
+}
+
+fn improveRankEdgesByClosureShifts(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    edges: []const RankEdge,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    real_node_count: usize,
+    max_shifts: usize,
+) !usize {
+    if (max_shifts == 0) return 0;
+    const closure = try allocator.alloc(bool, ranks.len);
+    defer allocator.free(closure);
+    const backup = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(backup);
+    var shifts: usize = 0;
+
+    while (shifts < max_shifts) {
+        var changed = false;
+        for (0..ranks.len) |seed| {
+            buildRankShiftClosure(graph, edges, ranks, closure, seed, true, real_node_count);
+            if (rankShiftDerivative(edges, closure) < -0.0001) {
+                const limit = rankShiftLimit(edges, ranks, closure, true) orelse 0;
+                if (limit > 0) {
+                    @memcpy(backup, ranks);
+                    shiftRankClosure(ranks, closure, limit, true);
+                    if (augmentedRankSolutionValid(graph, edges, ranks, acyclic_edge, real_node_count) and
+                        augmentedRankEdgesCost(edges, ranks) + 0.0001 < augmentedRankEdgesCost(edges, backup))
+                    {
+                        shifts += 1;
+                        changed = true;
+                        break;
+                    }
+                    @memcpy(ranks, backup);
+                }
+            }
+
+            buildRankShiftClosure(graph, edges, ranks, closure, seed, false, real_node_count);
+            if (rankShiftDerivative(edges, closure) > 0.0001) {
+                const limit = rankShiftLimit(edges, ranks, closure, false) orelse 0;
+                if (limit > 0) {
+                    @memcpy(backup, ranks);
+                    shiftRankClosure(ranks, closure, limit, false);
+                    if (augmentedRankSolutionValid(graph, edges, ranks, acyclic_edge, real_node_count) and
+                        augmentedRankEdgesCost(edges, ranks) + 0.0001 < augmentedRankEdgesCost(edges, backup))
+                    {
+                        shifts += 1;
+                        changed = true;
+                        break;
+                    }
+                    @memcpy(ranks, backup);
+                }
+            }
+        }
+        if (!changed) break;
+    }
+    return shifts;
+}
+
+fn buildRankShiftClosure(
+    graph: *const Graph,
+    edges: []const RankEdge,
+    ranks: []const usize,
+    closure: []bool,
+    seed: NodeId,
+    increasing: bool,
+    real_node_count: usize,
+) void {
+    @memset(closure, false);
+    if (seed >= closure.len) return;
+    closure[seed] = true;
+    while (true) {
+        var changed = false;
+        for (edges) |edge| {
+            if (!rankEdgeTight(edge, ranks)) continue;
+            if (increasing and edge.from < closure.len and edge.to < closure.len and closure[edge.from] and !closure[edge.to]) {
+                closure[edge.to] = true;
+                changed = true;
+            } else if (!increasing and edge.from < closure.len and edge.to < closure.len and closure[edge.to] and !closure[edge.from]) {
+                closure[edge.from] = true;
+                changed = true;
+            }
+        }
+        for (graph.rank_constraints.items) |constraint| {
+            if (constraint.kind != .same) continue;
+            var touches = false;
+            for (constraint.node_ids) |node_id| {
+                if (node_id < real_node_count and node_id < closure.len and closure[node_id]) {
+                    touches = true;
+                    break;
+                }
+            }
+            if (!touches) continue;
+            for (constraint.node_ids) |node_id| {
+                if (node_id < real_node_count and node_id < closure.len and !closure[node_id]) {
+                    closure[node_id] = true;
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn rankShiftDerivative(edges: []const RankEdge, closure: []const bool) f64 {
+    var derivative: f64 = 0;
+    for (edges) |edge| {
+        if (edge.from >= closure.len or edge.to >= closure.len) continue;
+        if (closure[edge.from] == closure[edge.to]) continue;
+        if (closure[edge.from]) {
+            derivative -= @max(edge.weight, 0);
+        } else {
+            derivative += @max(edge.weight, 0);
+        }
+    }
+    return derivative;
+}
+
+fn rankShiftLimit(
+    edges: []const RankEdge,
+    ranks: []const usize,
+    closure: []const bool,
+    increasing: bool,
+) ?usize {
+    var limit: usize = std.math.maxInt(usize);
+    if (!increasing) {
+        for (ranks, 0..) |rank, node_id| {
+            if (node_id < closure.len and closure[node_id]) limit = @min(limit, rank);
+        }
+    }
+    for (edges) |edge| {
+        if (edge.from >= closure.len or edge.to >= closure.len) continue;
+        const bounded = if (increasing)
+            closure[edge.from] and !closure[edge.to]
+        else
+            !closure[edge.from] and closure[edge.to];
+        if (!bounded) continue;
+        limit = @min(limit, rankEdgeSlack(edge, ranks) orelse return null);
+    }
+    if (limit == std.math.maxInt(usize)) return null;
+    return limit;
+}
+
+fn shiftRankClosure(ranks: []usize, closure: []const bool, amount: usize, increasing: bool) void {
+    for (ranks, 0..) |*rank, node_id| {
+        if (node_id >= closure.len or !closure[node_id]) continue;
+        if (increasing) {
+            rank.* +|= amount;
+        } else {
+            rank.* -= amount;
+        }
+    }
+}
+
+fn augmentedRankSolutionValid(
+    graph: *const Graph,
+    edges: []const RankEdge,
+    ranks: []const usize,
+    acyclic_edge: []const bool,
+    real_node_count: usize,
+) bool {
+    if (real_node_count > ranks.len) return false;
+    const real_ranks = ranks[0..real_node_count];
+    return rankEdgesFeasible(edges, ranks) and
+        rankAssignmentFeasible(graph, real_ranks, acyclic_edge) and
+        rankConstraintsSatisfiedUpToTranslation(graph, real_ranks);
 }
 
 fn rankAssignmentFeasible(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool) bool {
@@ -8035,6 +8648,19 @@ fn rankEdgesCost(edges: []const RankEdge, ranks: []const usize) f64 {
     for (edges) |edge| {
         if (edge.from >= ranks.len or edge.to >= ranks.len) continue;
         cost += rankSpanCost(ranks[edge.from], ranks[edge.to], edge.weight);
+    }
+    return cost;
+}
+
+fn augmentedRankEdgesCost(edges: []const RankEdge, ranks: []const usize) f64 {
+    var cost: f64 = 0;
+    for (edges) |edge| {
+        if (edge.from >= ranks.len or edge.to >= ranks.len) continue;
+        const span = if (ranks[edge.from] > ranks[edge.to])
+            ranks[edge.from] - ranks[edge.to]
+        else
+            ranks[edge.to] - ranks[edge.from];
+        cost += @as(f64, @floatFromInt(span)) * @max(edge.weight, 0);
     }
     return cost;
 }
@@ -28928,6 +29554,250 @@ test "typed clusterrank serializes all Graphviz modes" {
     try std.testing.expectEqualStrings("global", attrValue(graph.attrs.items, "clusterrank").?);
     try graph.setGraphAttr(.{ .clusterrank = .none });
     try std.testing.expectEqualStrings("none", attrValue(graph.attrs.items, "clusterrank").?);
+}
+
+test "typed compact serializes strong subgraph rank mode" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const subgraph = try graph.addSubgraph("ordinary-name", null, &.{a}, .{ .compact = true });
+    try std.testing.expectEqualStrings("true", attrValue(graph.subgraphs.items[subgraph].attrs.items, "compact").?);
+
+    try graph.setSubgraphAttr(subgraph, .{ .compact = false });
+    try std.testing.expectEqualStrings("false", attrValue(graph.subgraphs.items[subgraph].attrs.items, "compact").?);
+}
+
+test "compact strong subgraph minimizes rank span without name prefix" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  subgraph ordinary_name {
+        \\    a; b;
+        \\  }
+        \\  x -> a;
+        \\}
+    ;
+
+    var loose_graph = try parseDot(allocator, source);
+    defer loose_graph.deinit();
+    var loose = try layoutLayered(allocator, &loose_graph, .{});
+    defer loose.deinit();
+
+    var compact_graph = try parseDot(allocator, source);
+    defer compact_graph.deinit();
+    const compact_id = subgraphIndexByLabel(&compact_graph, "ordinary_name") orelse return error.MissingCompactSubgraph;
+    try compact_graph.setSubgraphAttr(compact_id, .{ .compact = true });
+    var compact = try layoutLayered(allocator, &compact_graph, .{});
+    defer compact.deinit();
+
+    const loose_a = nodeIdByLabel(&loose_graph, "a");
+    const loose_b = nodeIdByLabel(&loose_graph, "b");
+    const compact_a = nodeIdByLabel(&compact_graph, "a");
+    const compact_b = nodeIdByLabel(&compact_graph, "b");
+    const compact_x = nodeIdByLabel(&compact_graph, "x");
+    try std.testing.expect(loose.ranks[loose_a] != loose.ranks[loose_b]);
+    try std.testing.expectEqual(compact.ranks[compact_a], compact.ranks[compact_b]);
+    try std.testing.expect(compact.ranks[compact_x] < compact.ranks[compact_a]);
+}
+
+test "compact strong subgraph keeps cross edges forward around compacted span" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service {
+        \\    compact=true;
+        \\    a; b;
+        \\  }
+        \\  x -> a;
+        \\  a -> y;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const x = nodeIdByLabel(&graph, "x");
+    const y = nodeIdByLabel(&graph, "y");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+    try std.testing.expect(layout.ranks[x] < layout.ranks[a]);
+    try std.testing.expect(layout.ranks[a] < layout.ranks[y]);
+}
+
+test "nested compact subgraphs share a strong rank envelope" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph outer {
+        \\    compact=true;
+        \\    subgraph inner {
+        \\      compact=true;
+        \\      a; b;
+        \\    }
+        \\    x;
+        \\    x -> a;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const x = nodeIdByLabel(&graph, "x");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+    try std.testing.expect(layout.ranks[x] < layout.ranks[a]);
+}
+
+test "typed parent compact subgraph includes child members recursively" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const x = try graph.addNode("x", .{});
+    const outer = try graph.addSubgraph("outer", null, &.{x}, .{ .compact = true });
+    _ = try graph.addSubgraph("inner", outer, &.{ a, b }, .{});
+    _ = try graph.addEdge(x, a, .{});
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+    try std.testing.expect(layout.ranks[x] < layout.ranks[a]);
+}
+
+test "compact edge classification distinguishes siblings from parent-child scope" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const x = try graph.addNode("x", .{});
+    const y = try graph.addNode("y", .{});
+    const outer = try graph.addSubgraph("outer", null, &.{y}, .{});
+    _ = try graph.addSubgraph("left", outer, &.{a}, .{ .compact = true });
+    _ = try graph.addSubgraph("right", outer, &.{x}, .{ .compact = true });
+    const sibling_edge = try graph.addEdge(x, a, .{});
+    const parent_child_edge = try graph.addEdge(y, a, .{});
+
+    try std.testing.expect(rankEdgeUsesStrongClusterPenalty(&graph, graph.edges.items[sibling_edge]));
+    try std.testing.expect(!rankEdgeUsesStrongClusterPenalty(&graph, graph.edges.items[parent_child_edge]));
+}
+
+test "compact subgraph preserves internal minlen constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service {
+        \\    compact=true;
+        \\    a -> b [minlen=2];
+        \\    c;
+        \\  }
+        \\  x -> a;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expect(layout.ranks[b] >= layout.ranks[a] + 2);
+}
+
+test "clusterrank global disables compact strong subgraph ranking" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  subgraph service {
+        \\    compact=true;
+        \\    a; b;
+        \\  }
+        \\  x -> a;
+        \\}
+    ;
+
+    var local_graph = try parseDot(allocator, source);
+    defer local_graph.deinit();
+    var local = try layoutLayered(allocator, &local_graph, .{});
+    defer local.deinit();
+
+    var global_graph = try parseDot(allocator, source);
+    defer global_graph.deinit();
+    try global_graph.setGraphAttr(.{ .clusterrank = .global });
+    var global = try layoutLayered(allocator, &global_graph, .{});
+    defer global.deinit();
+
+    const local_a = nodeIdByLabel(&local_graph, "a");
+    const local_b = nodeIdByLabel(&local_graph, "b");
+    const global_a = nodeIdByLabel(&global_graph, "a");
+    const global_b = nodeIdByLabel(&global_graph, "b");
+    try std.testing.expectEqual(local.ranks[local_a], local.ranks[local_b]);
+    try std.testing.expect(global.ranks[global_a] != global.ranks[global_b]);
+}
+
+test "compact strong subgraph preserves explicit rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service { compact=true; a; b; c; }
+        \\  subgraph source_rank { rank=source; x; }
+        \\  subgraph same_rank { rank=same; a; b; }
+        \\  subgraph sink_rank { rank=sink; y; }
+        \\  x -> a;
+        \\  a -> c;
+        \\  c -> y;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    const x = nodeIdByLabel(&graph, "x");
+    const y = nodeIdByLabel(&graph, "y");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+    try std.testing.expect(layout.ranks[c] >= layout.ranks[a] + 1);
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[x]);
+    try std.testing.expect(layout.ranks[x] < layout.ranks[a]);
+    try std.testing.expect(layout.ranks[a] < layout.ranks[y]);
+    for (layout.ranks, 0..) |rank, node_id| {
+        if (node_id != y) try std.testing.expect(rank < layout.ranks[y]);
+    }
+}
+
+test "compact subgraph keeps internal edges hard across overlapping rank sets" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph service { compact=true; a; b; c; }
+        \\  subgraph same_rank { rank=same; a; b; }
+        \\  x -> a;
+        \\  a -> c;
+        \\  c -> y;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+    try std.testing.expect(layout.ranks[c] >= layout.ranks[a] + 1);
 }
 
 test "cluster members are kept contiguous within a rank" {

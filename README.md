@@ -335,6 +335,12 @@ The parser currently supports a practical, mainstream DOT subset:
   `global` and `none` retain subgraph structure and rank constraints while
   disabling special subgraph layout. Vex applies this mode by subgraph model
   identity and does not require a `cluster_` name prefix.
+- In local cluster ranking, subgraph `compact=true` enables a strong-cluster
+  rank objective: member rank span is minimized with nested strong envelopes,
+  cross-subgraph edges use a soft directional penalty, and internal `minlen`
+  plus explicit rank constraints remain hard. The Zig API exposes this through
+  `SubgraphOptions.compact` and `SubgraphAttr.compact`; it works for every Vex
+  subgraph identity rather than only names beginning with `cluster_`.
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
