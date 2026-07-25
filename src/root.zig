@@ -26411,7 +26411,9 @@ test "SVG renderer accepts Graphviz arrow marker aliases" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#f59e0b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#9333ea\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#0f172a\" stroke=\"#0f172a\"") != null);
-    try std.testing.expect(countSubstrings(svg, "transform=\"translate(10.0 0)\"") >= 3);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-3-head\" viewBox=\"0 0 18.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-4-head\" viewBox=\"0 0 18.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-5-head\" viewBox=\"0 0 18.0 10\"") != null);
 }
 
 test "SVG renderer accepts Graphviz half-arrow marker aliases" {
@@ -26475,18 +26477,22 @@ test "SVG renderer composes up to four Graphviz arrow shapes" {
     const gap = parseMarkerSpec("normalnoneodot", .normal);
     try std.testing.expectEqual(@as(u3, 3), gap.len);
     try std.testing.expectEqual(MarkerShape.gap, gap.parts[1].shape);
+    const truncated = parseMarkerSpec("dotboxdiamondteenormal", .normal);
+    try std.testing.expectEqual(@as(u3, 4), truncated.len);
+    const prefix = parseMarkerSpec("odotteeunknown", .normal);
+    try std.testing.expectEqual(@as(u3, 2), prefix.len);
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head\" viewBox=\"0 0 20.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head\" viewBox=\"0 0 13.0 10\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-1-head-clip-0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-1-head-clip-1\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-2-tail\" viewBox=\"0 0 20.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-2-tail\" viewBox=\"0 0 18.0 10\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-2-head\" viewBox=\"0 0 20.0 10\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-3-head\" viewBox=\"0 0 40.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-3-head\" viewBox=\"0 0 35.0 10\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-2-tail)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-3-head)\"") != null);
 }
@@ -26517,7 +26523,7 @@ test "code API exposes typed composite and half arrow shapes" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head-clip-0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head-clip-1\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-tail\" viewBox=\"0 0 20.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-tail\" viewBox=\"0 0 18.0 10\"") != null);
 }
 
 test "SVG renderer honors arrowsize and edge clipping attributes" {

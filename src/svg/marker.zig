@@ -79,17 +79,18 @@ pub const AttrOptions = struct {
 pub fn writeDef(writer: *Io.Writer, edge_id: usize, suffix: []const u8, spec: Spec, stroke: []const u8, fill: []const u8, scale: f64) Io.Writer.Error!void {
     if (scale <= 0 or spec.isNone()) return;
     const segment_width: f64 = 10.0;
-    const part_count: f64 = @floatFromInt(spec.len);
+    const length_scale = spec.lengthScale();
     const marker_height = 7.0 * scale;
-    const marker_width = marker_height * part_count;
-    const view_width = segment_width * part_count;
-    const ref_x = segment_width * (part_count - 1.0) + refX(spec.parts[0].shape);
-    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 {d:.1} 10\" refX=\"{d:.1}\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, view_width, ref_x, marker_width, marker_height });
+    const marker_width = marker_height * length_scale;
+    const view_width = segment_width * length_scale;
+    try writer.print("<marker id=\"arrow-{d}-{s}\" viewBox=\"0 0 {d:.1} 10\" refX=\"{d:.1}\" refY=\"5\" markerWidth=\"{d:.2}\" markerHeight=\"{d:.2}\" orient=\"auto", .{ edge_id, suffix, view_width, view_width, marker_width, marker_height });
     if (std.mem.eql(u8, suffix, "tail")) try writer.writeAll("-start-reverse");
     try writer.writeAll("\">");
+    var cursor = view_width;
     for (spec.parts[0..spec.len], 0..) |part, index| {
-        const reverse_index = spec.len - 1 - @as(u3, @intCast(index));
-        const offset = segment_width * @as(f64, @floatFromInt(reverse_index));
+        const part_width = segment_width * shapeLengthScale(part.shape);
+        const offset = cursor - refX(part.shape);
+        cursor -= part_width;
         if (part.side != .both) {
             try writer.print("<clipPath id=\"arrow-{d}-{s}-clip-{d}\"><rect x=\"0\" y=\"", .{ edge_id, suffix, index });
             try writer.writeAll(if (part.side == .left) "0" else "5");
@@ -146,7 +147,8 @@ pub fn parseSpec(value: ?[]const u8, fallback: Shape) Spec {
     var result = Spec{};
     var offset: usize = 0;
     while (offset < text.len and result.len < result.parts.len) {
-        const parsed = parsePart(text[offset..]) orelse return Spec.single(fallback);
+        const parsed = parsePart(text[offset..]) orelse
+            return if (result.len > 0) result else Spec.single(fallback);
         if (parsed.part.shape == .gap and result.len == 0 and parsed.consumed == text.len) return .{};
         if (!(parsed.part.shape == .gap and result.len == result.parts.len - 1)) {
             result.parts[result.len] = parsed.part;
@@ -154,7 +156,7 @@ pub fn parseSpec(value: ?[]const u8, fallback: Shape) Spec {
         }
         offset += parsed.consumed;
     }
-    if (offset != text.len) return Spec.single(fallback);
+    if (offset != text.len and result.len < result.parts.len) return Spec.single(fallback);
     return result;
 }
 
