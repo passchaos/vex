@@ -28,16 +28,17 @@ NONFINITE_ATTR_RE = re.compile(
 KNOWN_MALFORMED = {
     Path("1308_1.dot"),
     Path("1411.dot"),
+    Path("1474.dot"),
     Path("1489.dot"),
     Path("1676.dot"),
 }
 KNOWN_PLAIN_OUTPUT = {Path("share/b545.gv")}
 KNOWN_SLOW_SVG: set[Path] = set()
 BASELINE = {
-    "candidates": 786,
-    "html": 59,
-    "ok": 722,
-    "malformed": 4,
+    "candidates": 808,
+    "html": 65,
+    "ok": 737,
+    "malformed": 5,
     "plain": 1,
     "timeout": 0,
     "unexpected": 0,
@@ -310,7 +311,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("graphviz_root", type=Path, help="Graphviz source checkout")
     parser.add_argument("--vex", type=Path, required=True, help="ReleaseFast Vex CLI")
-    parser.add_argument("--max-bytes", type=int, default=256 * 1024)
+    parser.add_argument("--max-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--render-clusters", action="store_true")

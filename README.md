@@ -341,12 +341,13 @@ Run them directly with `zig build test-parse-scale`.
 
 The development-only Graphviz corpus audit is reproducible with
 `zig build audit-dot-corpus -Dgraphviz-root=/path/to/graphviz`. It scans every
-`.dot` / `.gv` fixture below 256 KiB with the ReleaseFast Vex `--check` path,
-excludes explicit HTML-like label fixtures, and gates the checked-in baseline:
-786 candidates, 59 HTML-like exclusions, 722 successful non-HTML parses, four
-known malformed fixtures, one Graphviz plain-output fixture, zero timeouts, and
-zero unexpected results. This command requires a Graphviz source checkout only
-as development corpus data; Vex never calls `dot`.
+`.dot` / `.gv` fixture below 16 MiB with the ReleaseFast Vex `--check` path,
+covering the full local corpus. It excludes explicit HTML-like label fixtures
+and gates the checked-in baseline: 808 candidates, 65 HTML-like exclusions,
+737 successful non-HTML parses, five known malformed fixtures, one Graphviz
+plain-output fixture, zero timeouts, and zero unexpected results. This command
+requires a Graphviz source checkout only as development corpus data; Vex never
+calls `dot`.
 
 `zig build audit-cluster-corpus -Dgraphviz-root=/path/to/graphviz` extends the
 same policy through native layout and SVG rendering for every non-HTML fixture
