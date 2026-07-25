@@ -3237,15 +3237,25 @@ fn freeTempAttrs(allocator: std.mem.Allocator, attrs: *AttrList) void {
 }
 
 fn normalizeParsedGraphCharset(graph: *Graph) !void {
-    const charset = attrValue(graph.attrs.items, "charset") orelse return;
-    const encoding: ParsedCharset = if (isLatin1Charset(charset))
+    const encoding: ParsedCharset = if (attrValue(graph.attrs.items, "charset")) |charset|
+        if (isLatin1Charset(charset))
+            .latin1
+        else if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, charset, " \t\r\n"), "big-5") or
+            std.ascii.eqlIgnoreCase(std.mem.trim(u8, charset, " \t\r\n"), "big5"))
+            .big5
+        else if (!graphTextIsValidUtf8(graph))
+            .latin1
+        else
+            return
+    else if (!graphTextIsValidUtf8(graph))
         .latin1
-    else if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, charset, " \t\r\n"), "big-5") or
-        std.ascii.eqlIgnoreCase(std.mem.trim(u8, charset, " \t\r\n"), "big5"))
-        .big5
     else
         return;
 
+    try transcodeGraph(graph, encoding);
+}
+
+fn transcodeGraph(graph: *Graph, encoding: ParsedCharset) !void {
     try replaceEncodedOwned(graph.allocator, &graph.name, encoding);
     try transcodeAttrList(graph.allocator, graph.attrs.items, encoding);
     try transcodeAttrList(graph.allocator, graph.node_default_attrs.items, encoding);
@@ -3281,6 +3291,49 @@ fn normalizeParsedGraphCharset(graph: *Graph) !void {
         try replaceEncodedOwned(graph.allocator, &subgraph.label, encoding);
         try transcodeAttrList(graph.allocator, subgraph.attrs.items, encoding);
     }
+}
+
+fn graphTextIsValidUtf8(graph: *const Graph) bool {
+    if (!std.unicode.utf8ValidateSlice(graph.name)) return false;
+    if (!attrListIsValidUtf8(graph.attrs.items) or
+        !attrListIsValidUtf8(graph.node_default_attrs.items) or
+        !attrListIsValidUtf8(graph.edge_default_attrs.items) or
+        !std.unicode.utf8ValidateSlice(graph.node_defaults.color) or
+        !std.unicode.utf8ValidateSlice(graph.edge_defaults.color))
+    {
+        return false;
+    }
+    for (graph.nodes.items) |node| {
+        if (!std.unicode.utf8ValidateSlice(node.label) or
+            !std.unicode.utf8ValidateSlice(node.color) or
+            !attrListIsValidUtf8(node.attrs.items))
+        {
+            return false;
+        }
+    }
+    for (graph.edges.items) |edge| {
+        if ((edge.label != null and !std.unicode.utf8ValidateSlice(edge.label.?)) or
+            !std.unicode.utf8ValidateSlice(edge.color) or
+            (edge.tail_record_port != null and !std.unicode.utf8ValidateSlice(edge.tail_record_port.?)) or
+            (edge.head_record_port != null and !std.unicode.utf8ValidateSlice(edge.head_record_port.?)) or
+            !attrListIsValidUtf8(edge.attrs.items))
+        {
+            return false;
+        }
+    }
+    for (graph.subgraphs.items) |subgraph| {
+        if (!std.unicode.utf8ValidateSlice(subgraph.label) or !attrListIsValidUtf8(subgraph.attrs.items)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn attrListIsValidUtf8(attrs: []const Attr) bool {
+    for (attrs) |attr| {
+        if (!std.unicode.utf8ValidateSlice(attr.name) or !std.unicode.utf8ValidateSlice(attr.value)) return false;
+    }
+    return true;
 }
 
 const ParsedCharset = enum {
@@ -23181,6 +23234,44 @@ test "UTF-8 charset leaves valid UTF-8 text unchanged" {
     try std.testing.expectEqualStrings("東京", graph.name);
     try std.testing.expectEqualStrings("größer", attrValue(graph.attrs.items, "label").?);
     try std.testing.expect(nodeIdByLabel(&graph, "节点") < graph.nodes.items.len);
+}
+
+test "implicit UTF-8 text remains unchanged without charset" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, @embedFile("testdata/dot_non_html_implicit_latin1.dot"));
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("áâãäåæçèéêëìíîïðñòóôõöøùúûü", graph.nodes.items[0].label);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(graph.nodes.items[0].label));
+}
+
+test "invalid implicit UTF-8 falls back to Graphviz Latin-1" {
+    const allocator = std.testing.allocator;
+    const source = "digraph G { a [label=\"\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf8\xf9\xfa\xfb\xfc\"]; }";
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("áâãäåæçèéêëìíîïðñòóôõöøùúûü", graph.nodes.items[0].label);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(graph.nodes.items[0].label));
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(svg));
+}
+
+test "SVG replaces XML-forbidden control characters" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, "digraph G { a [label=\"left\x14middle\x19right\"]; }");
+    defer graph.deinit();
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOfScalar(u8, svg, 0x14) == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, svg, 0x19) == null);
+    try std.testing.expectEqual(@as(usize, 2), countSubstrings(svg, "\xEF\xBF\xBD"));
 }
 
 test "DOT parser normalizes Graphviz Big-5 charsets to UTF-8" {

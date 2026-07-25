@@ -16,37 +16,50 @@ pub const Rect = struct {
 };
 
 pub fn xmlEscaped(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
-    for (text) |c| {
-        switch (c) {
-            '&' => try writer.writeAll("&amp;"),
-            '<' => try writer.writeAll("&lt;"),
-            '>' => try writer.writeAll("&gt;"),
-            '"' => try writer.writeAll("&quot;"),
-            0x27 => try writer.writeAll("&apos;"),
-            else => try writer.writeByte(c),
-        }
-    }
+    try xmlEscapedImpl(writer, text, null, null);
 }
 
 pub fn xmlEscapedWithLineBreaks(writer: *Io.Writer, text: []const u8, left_break: u8, right_break: u8) Io.Writer.Error!void {
-    for (text) |c| {
-        if (c == left_break or c == right_break) {
+    try xmlEscapedImpl(writer, text, left_break, right_break);
+}
+
+fn xmlEscapedImpl(writer: *Io.Writer, text: []const u8, left_break: ?u8, right_break: ?u8) Io.Writer.Error!void {
+    var view = std.unicode.Utf8View.init(text) catch {
+        try writer.writeAll("\xEF\xBF\xBD");
+        return;
+    };
+    var iterator = view.iterator();
+    while (iterator.nextCodepointSlice()) |slice| {
+        const codepoint = std.unicode.utf8Decode(slice) catch unreachable;
+        const internal_break = slice.len == 1 and
+            ((left_break != null and slice[0] == left_break.?) or
+                (right_break != null and slice[0] == right_break.?));
+        if (internal_break) {
             try writer.writeByte('\n');
+        } else if (!xmlCodepointAllowed(codepoint)) {
+            try writer.writeAll("\xEF\xBF\xBD");
+        } else if (slice.len == 1) {
+            switch (slice[0]) {
+                '&' => try writer.writeAll("&amp;"),
+                '<' => try writer.writeAll("&lt;"),
+                '>' => try writer.writeAll("&gt;"),
+                '"' => try writer.writeAll("&quot;"),
+                0x27 => try writer.writeAll("&apos;"),
+                else => try writer.writeByte(slice[0]),
+            }
         } else {
-            try xmlEscapedByte(writer, c);
+            try writer.writeAll(slice);
         }
     }
 }
 
-fn xmlEscapedByte(writer: *Io.Writer, c: u8) Io.Writer.Error!void {
-    switch (c) {
-        '&' => try writer.writeAll("&amp;"),
-        '<' => try writer.writeAll("&lt;"),
-        '>' => try writer.writeAll("&gt;"),
-        '"' => try writer.writeAll("&quot;"),
-        0x27 => try writer.writeAll("&apos;"),
-        else => try writer.writeByte(c),
-    }
+fn xmlCodepointAllowed(codepoint: u21) bool {
+    return codepoint == 0x09 or
+        codepoint == 0x0A or
+        codepoint == 0x0D or
+        (codepoint >= 0x20 and codepoint <= 0xD7FF) or
+        (codepoint >= 0xE000 and codepoint <= 0xFFFD) or
+        (codepoint >= 0x10000 and codepoint <= 0x10FFFF);
 }
 
 pub fn title(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {

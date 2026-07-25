@@ -1,0 +1,4 @@
+digraph G {
+  node [label="\N", fontsize=10];
+  a [label="áâãäåæçèéêëìíîïðñòóôõöøùúûü"];
+}

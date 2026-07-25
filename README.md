@@ -357,6 +357,13 @@ geometry violations. The audit enables SVG metadata and requires every nonempty
 child subgraph box to be contained by its declared parent. XML processing
 instructions such as `xml-stylesheet` are accepted before the SVG root.
 
+`zig build audit-svg-corpus -Dgraphviz-root=/path/to/graphviz` renders the
+entire non-HTML parse corpus. Its fast tier contains 704 valid XML SVG results
+under a two-second per-fixture gate; 18 known large/pathological fixtures form
+an explicit slow queue, and five known malformed/plain inputs remain excluded.
+Any new timeout, renderer failure, non-finite numeric attribute, or invalid XML
+fails the audit.
+
 The ReleaseFast `test-layout-render-scale` gate covers every native layout
 family: layered, neato, fdp, Fruchterman-Reingold, sfdp, twopi, circo,
 patchwork, and osage. Workloads include 256-node / 512-edge iterative graphs, a
@@ -544,6 +551,10 @@ The parser currently supports a practical, mainstream DOT subset:
   to UTF-8 at the graph-model boundary. Graph, default, node, edge, subgraph,
   and record-port text therefore remains valid XML; the upstream `b56.gv`
   Latin-1 fixture renders as valid UTF-8 SVG.
+- When input is declared/defaulted as UTF-8 but contains invalid byte
+  sequences, Vex follows Graphviz and falls back to Latin-1 for that graph.
+  XML 1.0-forbidden control characters are emitted as U+FFFD, so all SVG text
+  and metadata remain UTF-8 and XML-valid.
 - Graphviz `big5` / `big-5` graphs use an embedded, runtime-independent Big-5
   decoder covering Graphviz's `0xA1–0xFE` lead and standard trail ranges.
   Valid pairs become UTF-8 model text and malformed bytes become U+FFFD, so SVG

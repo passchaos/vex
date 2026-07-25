@@ -9,6 +9,7 @@ import hashlib
 import re
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ElementTree
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,10 @@ HTML_LABEL_RE = re.compile(
 CLUSTER_RE = re.compile(rb"(?i)\bsubgraph\b|\bcluster\b")
 SUBGRAPH_METADATA_RE = re.compile(rb"<vex:subgraph\b([^>]*)/>")
 XML_ATTR_RE = re.compile(rb'\b([A-Za-z][A-Za-z0-9_-]*)="([^"]*)"')
+NONFINITE_ATTR_RE = re.compile(
+    rb'="[^"]*(?<![A-Za-z])(?:nan|[+-]?inf)(?![A-Za-z])[^"]*"',
+    re.IGNORECASE,
+)
 KNOWN_MALFORMED = {
     Path("1308_1.dot"),
     Path("1411.dot"),
@@ -27,6 +32,26 @@ KNOWN_MALFORMED = {
     Path("1676.dot"),
 }
 KNOWN_PLAIN_OUTPUT = {Path("share/b545.gv")}
+KNOWN_SLOW_SVG = {
+    Path("1652.dot"),
+    Path("1718.dot"),
+    Path("2095_1.dot"),
+    Path("2343.dot"),
+    Path("2743.dot"),
+    Path("graphs/b102.gv"),
+    Path("graphs/b124.gv"),
+    Path("graphs/b143.gv"),
+    Path("graphs/b29.gv"),
+    Path("graphs/badvoro.gv"),
+    Path("graphs/root.gv"),
+    Path("graphs/xx.gv"),
+    Path("linux.i386/b102.gv"),
+    Path("linux.i386/b29.gv"),
+    Path("share/b102.gv"),
+    Path("share/b29.gv"),
+    Path("windows/b102.gv"),
+    Path("windows/b29.gv"),
+}
 BASELINE = {
     "candidates": 786,
     "html": 59,
@@ -44,6 +69,16 @@ CLUSTER_BASELINE = {
     "failed": 0,
     "invalid_svg": 0,
     "invalid_hierarchy": 0,
+}
+SVG_BASELINE = {
+    "candidates": 727,
+    "ok": 704,
+    "excluded": 5,
+    "slow": 18,
+    "timeout": 0,
+    "failed": 0,
+    "nonfinite": 0,
+    "invalid_svg": 0,
 }
 
 
@@ -106,6 +141,7 @@ def render_one(
     output_root: Path,
     path: Path,
     timeout: float,
+    metadata: bool = True,
 ) -> AuditResult:
     relative = path.relative_to(tests_root)
     if relative in KNOWN_MALFORMED:
@@ -113,15 +149,11 @@ def render_one(
     output_name = hashlib.sha256(str(relative).encode("utf-8")).hexdigest() + ".svg"
     output = output_root / output_name
     try:
+        command = [str(vex), "--input", str(path), "--output", str(output)]
+        if metadata:
+            command.append("--svg-metadata")
         result = subprocess.run(
-            [
-                str(vex),
-                "--input",
-                str(path),
-                "--output",
-                str(output),
-                "--svg-metadata",
-            ],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
@@ -137,13 +169,35 @@ def render_one(
             stderr[0] if stderr else f"exit {result.returncode}",
         )
     svg = output.read_bytes() if output.is_file() else b""
-    svg_start = svg.find(b"<svg")
-    if svg_start < 0 or not svg.rstrip().endswith(b"</svg>"):
-        return AuditResult("invalid_svg", relative, f"bytes={len(svg)}")
-    hierarchy_error = validate_subgraph_hierarchy(svg)
-    if hierarchy_error:
-        return AuditResult("invalid_hierarchy", relative, hierarchy_error)
+    xml_error = validate_svg_documents(svg)
+    if xml_error:
+        return AuditResult("invalid_svg", relative, xml_error)
+    if NONFINITE_ATTR_RE.search(svg):
+        return AuditResult("nonfinite", relative)
+    if metadata:
+        hierarchy_error = validate_subgraph_hierarchy(svg)
+        if hierarchy_error:
+            return AuditResult("invalid_hierarchy", relative, hierarchy_error)
     return AuditResult("ok", relative, f"bytes={len(svg)}")
+
+
+def validate_svg_documents(svg: bytes) -> str:
+    starts = [match.start() for match in re.finditer(rb"<svg\b", svg)]
+    ends = [match.end() for match in re.finditer(rb"</svg>", svg)]
+    if not starts:
+        return "no SVG root"
+    if len(starts) != len(ends):
+        return f"roots={len(starts)} closes={len(ends)}"
+    try:
+        svg.decode("utf-8")
+    except UnicodeDecodeError as error:
+        return str(error)
+    for start, end in zip(starts, ends):
+        try:
+            ElementTree.fromstring(svg[start:end])
+        except ElementTree.ParseError as error:
+            return str(error)
+    return ""
 
 
 def validate_subgraph_hierarchy(svg: bytes) -> str:
@@ -209,6 +263,7 @@ def run_cluster_audit(
                         Path(output_dir),
                         path,
                         timeout,
+                        True,
                     ),
                     paths,
                 )
@@ -231,6 +286,45 @@ def run_cluster_audit(
     return 0
 
 
+def run_svg_audit(
+    vex: Path,
+    tests_root: Path,
+    candidates: list[Path],
+    timeout: float,
+    jobs: int,
+) -> int:
+    paths = [path for path in candidates if not HTML_LABEL_RE.search(path.read_bytes())]
+    with tempfile.TemporaryDirectory(prefix="vex-svg-audit-") as output_dir:
+        output_root = Path(output_dir)
+
+        def render(path: Path) -> AuditResult:
+            relative = path.relative_to(tests_root)
+            if relative in KNOWN_MALFORMED or relative in KNOWN_PLAIN_OUTPUT:
+                return AuditResult("excluded", relative)
+            if relative in KNOWN_SLOW_SVG:
+                return AuditResult("slow", relative)
+            return render_one(vex, tests_root, output_root, path, timeout, False)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(jobs, 1)) as pool:
+            results = list(pool.map(render, paths))
+    counts: Counter[str] = Counter(result.kind for result in results)
+    counts["candidates"] = len(paths)
+    print(
+        "svg-corpus-audit "
+        + " ".join(f"{name}={counts[name]}" for name in SVG_BASELINE)
+    )
+    for result in results:
+        if result.kind in {"timeout", "failed", "nonfinite", "invalid_svg"}:
+            suffix = f": {result.detail}" if result.detail else ""
+            print(f"{result.kind}: {result.path}{suffix}")
+    failures = check_baseline(counts, SVG_BASELINE)
+    if failures:
+        for failure in failures:
+            print(f"SVG baseline mismatch: {failure}")
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("graphviz_root", type=Path, help="Graphviz source checkout")
@@ -239,6 +333,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--render-clusters", action="store_true")
+    parser.add_argument("--render-all", action="store_true")
     args = parser.parse_args()
 
     tests_root = args.graphviz_root / "tests"
@@ -248,6 +343,14 @@ def main() -> int:
         raise SystemExit(f"Vex executable not found: {args.vex}")
 
     candidates = candidate_files(tests_root, args.max_bytes)
+    if args.render_all:
+        return run_svg_audit(
+            args.vex,
+            tests_root,
+            candidates,
+            args.timeout,
+            args.jobs,
+        )
     if args.render_clusters:
         return run_cluster_audit(
             args.vex,
