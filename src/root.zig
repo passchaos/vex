@@ -7561,7 +7561,11 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
         };
     }
 
-    for (graph.subgraphs.items, 0..) |cluster, index| {
+    var remaining_subgraphs = graph.subgraphs.items.len;
+    while (remaining_subgraphs > 0) {
+        remaining_subgraphs -= 1;
+        const index = remaining_subgraphs;
+        const cluster = graph.subgraphs.items[index];
         const parent_index = cluster.parent orelse continue;
         if (parent_index >= clusters.len or index >= clusters.len) continue;
         const child = clusters[index];
@@ -32316,6 +32320,48 @@ test "nested cluster layout expands parent around child cluster" {
     const outer_pos = std.mem.indexOf(u8, svg, "Outer") orelse return error.MissingOuterCluster;
     const inner_pos = std.mem.indexOf(u8, svg, "Inner") orelse return error.MissingInnerCluster;
     try std.testing.expect(outer_pos < inner_pos);
+}
+
+test "deep nested clusters propagate descendant bounds to every ancestor" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, @embedFile("testdata/dot_non_html_deep_nested_clusters.dot"));
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const outer = subgraphIndexByLabel(&graph, "Outer").?;
+    const middle = subgraphIndexByLabel(&graph, "Middle").?;
+    const inner = subgraphIndexByLabel(&graph, "Inner\nVery Wide Label").?;
+    const sibling = subgraphIndexByLabel(&graph, "Sibling").?;
+    try std.testing.expect(rectContainsRect(
+        .{ .x = layout.subgraphs[outer].x, .y = layout.subgraphs[outer].y, .width = layout.subgraphs[outer].width, .height = layout.subgraphs[outer].height },
+        .{ .x = layout.subgraphs[middle].x, .y = layout.subgraphs[middle].y, .width = layout.subgraphs[middle].width, .height = layout.subgraphs[middle].height },
+    ));
+    try std.testing.expect(rectContainsRect(
+        .{ .x = layout.subgraphs[middle].x, .y = layout.subgraphs[middle].y, .width = layout.subgraphs[middle].width, .height = layout.subgraphs[middle].height },
+        .{ .x = layout.subgraphs[inner].x, .y = layout.subgraphs[inner].y, .width = layout.subgraphs[inner].width, .height = layout.subgraphs[inner].height },
+    ));
+    try std.testing.expect(rectContainsRect(
+        .{ .x = layout.subgraphs[outer].x, .y = layout.subgraphs[outer].y, .width = layout.subgraphs[outer].width, .height = layout.subgraphs[outer].height },
+        .{ .x = layout.subgraphs[sibling].x, .y = layout.subgraphs[sibling].y, .width = layout.subgraphs[sibling].width, .height = layout.subgraphs[sibling].height },
+    ));
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    const node = try typed.addNode("leaf", .{});
+    const level0 = try typed.addSubgraph("L0", null, &.{}, .{});
+    const level1 = try typed.addSubgraph("L1", level0, &.{}, .{});
+    const level2 = try typed.addSubgraph("L2", level1, &.{}, .{});
+    const level3 = try typed.addSubgraph("L3", level2, &.{node}, .{ .margin = "32" });
+    var typed_layout = try layoutLayered(allocator, &typed, .{});
+    defer typed_layout.deinit();
+    for ([_][2]SubgraphId{ .{ level0, level1 }, .{ level1, level2 }, .{ level2, level3 } }) |pair| {
+        try std.testing.expect(rectContainsRect(
+            .{ .x = typed_layout.subgraphs[pair[0]].x, .y = typed_layout.subgraphs[pair[0]].y, .width = typed_layout.subgraphs[pair[0]].width, .height = typed_layout.subgraphs[pair[0]].height },
+            .{ .x = typed_layout.subgraphs[pair[1]].x, .y = typed_layout.subgraphs[pair[1]].y, .width = typed_layout.subgraphs[pair[1]].width, .height = typed_layout.subgraphs[pair[1]].height },
+        ));
+    }
 }
 
 test "clusterrank global and none disable special subgraph layout" {

@@ -386,6 +386,9 @@ The parser currently supports a practical, mainstream DOT subset:
   `global` and `none` retain subgraph structure and rank constraints while
   disabling special subgraph layout. Vex applies this mode by subgraph model
   identity and does not require a `cluster_` name prefix.
+- Nested cluster bounds propagate deepest-first, so every ancestor contains
+  expanded descendant labels, margins, and sibling boxes even across three or
+  more hierarchy levels.
 - Compound `ltail` / `lhead` clipping follows endpoint membership: the target
   subgraph or one of its descendants must contain the corresponding tail/head
   node and must not contain both endpoints. Invalid hints remain available as

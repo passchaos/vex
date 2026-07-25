@@ -1,0 +1,19 @@
+digraph G {
+  subgraph outer {
+    label="Outer";
+    margin=4;
+    subgraph middle {
+      label="Middle";
+      margin=4;
+      subgraph inner {
+        label="Inner\nVery Wide Label";
+        margin=40;
+        a;
+      }
+    }
+    subgraph sibling {
+      label="Sibling";
+      b;
+    }
+  }
+}
