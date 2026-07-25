@@ -318,6 +318,10 @@ one-decimal coordinate grid, `--max-residual` to gate the absolute residual, and
 The parser currently supports a practical, mainstream DOT subset:
 
 - `graph` / `digraph` and optional `strict`.
+- DOT graph streams containing multiple top-level graphs. `parseDotGraphs` /
+  `parseInputGraphs` return an owned graph sequence, while the existing
+  `parseDot` / `parseInput` APIs remain strict single-graph entry points. The
+  CLI renders one complete SVG document per input graph in stream order.
 - Node statements: `A [label="Start", shape=box]`.
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
 - Graphviz edge `key` is handled as parser-local edge identity: the same

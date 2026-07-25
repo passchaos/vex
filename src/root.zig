@@ -127,6 +127,22 @@ pub const ParseResult = union(enum) {
     diagnostic: ParseDiagnostic,
 };
 
+pub const GraphStream = struct {
+    allocator: std.mem.Allocator,
+    items: []Graph,
+
+    pub fn deinit(self: *GraphStream) void {
+        for (self.items) |*graph| graph.deinit();
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
+pub const ParseGraphStreamResult = union(enum) {
+    graphs: GraphStream,
+    diagnostic: ParseDiagnostic,
+};
+
 pub const ParseDiagnostics = struct {
     allocator: std.mem.Allocator,
     items: []ParseDiagnostic,
@@ -1842,6 +1858,11 @@ fn freeStringList(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8)
     list.deinit(allocator);
 }
 
+fn clearStringList(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8)) void {
+    for (list.items) |item| allocator.free(item);
+    list.clearRetainingCapacity();
+}
+
 fn copyAttrList(allocator: std.mem.Allocator, source: []const Attr) !std.ArrayList(Attr) {
     var result = std.ArrayList(Attr).empty;
     errdefer freeAttrList(allocator, &result);
@@ -2434,6 +2455,14 @@ const Parser = struct {
 
     fn parse(self: *Parser) !Graph {
         defer self.deinit();
+        var graph = try self.parseGraph();
+        errdefer graph.deinit();
+        try self.expect(.eof);
+        return graph;
+    }
+
+    fn parseGraph(self: *Parser) !Graph {
+        self.resetGraphScope();
         var strict = false;
         if (self.matchKeyword("strict")) strict = true;
 
@@ -2450,11 +2479,22 @@ const Parser = struct {
         try self.expect(.lbrace);
         try self.parseStmtList(&graph);
         try self.expect(.rbrace);
-        try self.expect(.eof);
         if (attrValue(graph.attrs.items, "root")) |root_name| {
             if (self.node_index.get(root_name)) |root_id| graph.radial_root = root_id;
         }
         return graph;
+    }
+
+    fn resetGraphScope(self: *Parser) void {
+        clearStringList(self.allocator, &self.subgraph_text_ids);
+        clearStringList(self.allocator, &self.edge_key_index_keys);
+        clearStringList(self.allocator, &self.node_index_keys);
+        self.node_index.clearRetainingCapacity();
+        self.edge_key_index.clearRetainingCapacity();
+        self.collectors.clearRetainingCapacity();
+        self.rank_scopes.clearRetainingCapacity();
+        self.subgraph_scopes.clearRetainingCapacity();
+        self.subgraph_stack.clearRetainingCapacity();
     }
 
     fn recoverStatement(self: *Parser) !void {
@@ -2475,6 +2515,25 @@ const Parser = struct {
                 },
                 .lbracket => bracket_depth += 1,
                 .rbracket => bracket_depth -|= 1,
+                else => {},
+            }
+            try self.advance();
+        }
+    }
+
+    fn recoverGraphBoundary(self: *Parser) !void {
+        var brace_depth: usize = 0;
+        while (self.current.tag != .eof) {
+            if (brace_depth == 0 and self.current.tag == .id and
+                (std.ascii.eqlIgnoreCase(self.current.lexeme, "strict") or
+                    std.ascii.eqlIgnoreCase(self.current.lexeme, "graph") or
+                    std.ascii.eqlIgnoreCase(self.current.lexeme, "digraph")))
+            {
+                return;
+            }
+            switch (self.current.tag) {
+                .lbrace => brace_depth += 1,
+                .rbrace => brace_depth -|= 1,
                 else => {},
             }
             try self.advance();
@@ -3199,6 +3258,21 @@ pub fn parseDot(allocator: std.mem.Allocator, source: []const u8) !Graph {
     return parser.parse();
 }
 
+pub fn parseDotGraphs(allocator: std.mem.Allocator, source: []const u8) !GraphStream {
+    var parser = try Parser.init(allocator, source);
+    defer parser.deinit();
+    var graphs = std.ArrayList(Graph).empty;
+    errdefer {
+        for (graphs.items) |*graph| graph.deinit();
+        graphs.deinit(allocator);
+    }
+    while (parser.current.tag != .eof) {
+        try graphs.ensureUnusedCapacity(allocator, 1);
+        graphs.appendAssumeCapacity(try parser.parseGraph());
+    }
+    return .{ .allocator = allocator, .items = try graphs.toOwnedSlice(allocator) };
+}
+
 pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
     var parser = Parser.init(allocator, source) catch |err| {
         return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
@@ -3207,6 +3281,29 @@ pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !Par
         return .{ .diagnostic = try parseDiagnosticFromParser(allocator, source, &parser, err) };
     };
     return .{ .graph = graph };
+}
+
+pub fn parseDotGraphsDiagnostic(allocator: std.mem.Allocator, source: []const u8) !ParseGraphStreamResult {
+    var parser = Parser.init(allocator, source) catch |err| {
+        return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
+    };
+    defer parser.deinit();
+    var graphs = std.ArrayList(Graph).empty;
+    errdefer {
+        for (graphs.items) |*graph| graph.deinit();
+        graphs.deinit(allocator);
+    }
+    while (parser.current.tag != .eof) {
+        try graphs.ensureUnusedCapacity(allocator, 1);
+        const graph = parser.parseGraph() catch |err| {
+            const diagnostic = try parseDiagnosticFromParser(allocator, source, &parser, err);
+            for (graphs.items) |*item| item.deinit();
+            graphs.deinit(allocator);
+            return .{ .diagnostic = diagnostic };
+        };
+        graphs.appendAssumeCapacity(graph);
+    }
+    return .{ .graphs = .{ .allocator = allocator, .items = try graphs.toOwnedSlice(allocator) } };
 }
 
 pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max_diagnostics: usize) !ParseDiagnostics {
@@ -3225,6 +3322,21 @@ pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max
     };
     defer parser.deinit();
 
+    while (parser.current.tag != .eof and diagnostics.items.len < max_diagnostics and parser.lex_error == null) {
+        try parseDotGraphDiagnostics(allocator, source, &parser, &diagnostics, max_diagnostics);
+    }
+
+    return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+}
+
+fn parseDotGraphDiagnostics(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    parser: *Parser,
+    diagnostics: *std.ArrayList(ParseDiagnostic),
+    max_diagnostics: usize,
+) !void {
+    parser.resetGraphScope();
     var strict = false;
     if (parser.matchKeyword("strict")) strict = true;
     const directed = if (parser.matchKeyword("digraph"))
@@ -3232,13 +3344,15 @@ pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max
     else if (parser.matchKeyword("graph"))
         false
     else {
-        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, error.ExpectedGraph));
-        return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, error.ExpectedGraph));
+        parser.recoverGraphBoundary() catch {};
+        return;
     };
     const parsed_name = if (parser.current.tag == .id or parser.current.tag == .string or parser.current.tag == .angle_string)
         parser.parseIdText() catch |err| {
-            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
-            return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, err));
+            parser.recoverGraphBoundary() catch {};
+            return;
         }
     else
         try allocator.dupe(u8, "G");
@@ -3247,23 +3361,24 @@ pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max
     defer graph.deinit();
 
     parser.expect(.lbrace) catch |err| {
-        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
-        return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
+        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, err));
+        parser.recoverGraphBoundary() catch {};
+        return;
     };
 
     while (parser.current.tag != .rbrace and parser.current.tag != .eof and diagnostics.items.len < max_diagnostics) {
         if (parser.current.tag == .semicolon or parser.current.tag == .comma) {
             parser.advance() catch |err| {
-                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, err));
                 break;
             };
             continue;
         }
         parser.parseStmt(&graph) catch |err| {
-            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
+            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, err));
             if (parser.lex_error != null) break;
             parser.recoverStatement() catch |recover_err| {
-                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, recover_err));
+                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, recover_err));
                 break;
             };
             continue;
@@ -3271,20 +3386,14 @@ pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max
         _ = parser.match(.semicolon);
     }
 
-    if (diagnostics.items.len < max_diagnostics and parser.lex_error == null) {
-        if (parser.current.tag == .rbrace) {
-            parser.advance() catch |err| {
-                try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, err));
-            };
-        } else if (parser.current.tag == .eof) {
-            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, error.UnexpectedToken));
-        }
+    if (diagnostics.items.len >= max_diagnostics or parser.lex_error != null) return;
+    if (parser.current.tag == .rbrace) {
+        parser.advance() catch |err| {
+            try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, err));
+        };
+    } else {
+        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, parser, error.UnexpectedToken));
     }
-    if (diagnostics.items.len < max_diagnostics and parser.lex_error == null and parser.current.tag != .eof) {
-        try diagnostics.append(allocator, try parseDiagnosticFromParser(allocator, source, &parser, error.UnexpectedToken));
-    }
-
-    return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
 }
 
 fn parseDiagnosticFromLexerError(allocator: std.mem.Allocator, source: []const u8, err: anyerror) !ParseDiagnostic {
@@ -3385,11 +3494,37 @@ pub fn parseInput(allocator: std.mem.Allocator, source: []const u8, format: Inpu
     };
 }
 
+pub fn parseInputGraphs(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !GraphStream {
+    return switch (if (format == .auto) detectInputFormat(source) else format) {
+        .auto => unreachable,
+        .dot => parseDotGraphs(allocator, source),
+        .mermaid => blk: {
+            const items = try allocator.alloc(Graph, 1);
+            errdefer allocator.free(items);
+            items[0] = try parseMermaid(allocator, source);
+            break :blk .{ .allocator = allocator, .items = items };
+        },
+    };
+}
+
 pub fn parseInputDiagnostic(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !ParseResult {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
         .dot => parseDotDiagnostic(allocator, source),
         .mermaid => .{ .graph = try parseMermaid(allocator, source) },
+    };
+}
+
+pub fn parseInputGraphsDiagnostic(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !ParseGraphStreamResult {
+    return switch (if (format == .auto) detectInputFormat(source) else format) {
+        .auto => unreachable,
+        .dot => parseDotGraphsDiagnostic(allocator, source),
+        .mermaid => blk: {
+            const items = try allocator.alloc(Graph, 1);
+            errdefer allocator.free(items);
+            items[0] = try parseMermaid(allocator, source);
+            break :blk .{ .graphs = .{ .allocator = allocator, .items = items } };
+        },
     };
 }
 
@@ -21046,6 +21181,72 @@ test "DOT parser supports subgraphs, ports, escaped strings, and angle strings" 
     try std.testing.expectEqualStrings("hello\nworld", graph.nodes.items[a].label);
     try std.testing.expect(graph.attrs.items.len >= 2);
     try std.testing.expectEqualStrings(" <B>Fancy</B> Graph ", graph.attrs.items[1].value);
+}
+
+test "DOT graph stream parses independent directed and undirected graphs" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_graph_stream.dot");
+    var stream = try parseInputGraphs(allocator, source, .auto);
+    defer stream.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), stream.items.len);
+    try std.testing.expect(!stream.items[0].directed);
+    try std.testing.expect(stream.items[1].directed);
+    try std.testing.expectEqualStrings("Infrastructure", stream.items[0].name);
+    try std.testing.expectEqualStrings("Pipeline", stream.items[1].name);
+    try std.testing.expectEqual(@as(usize, 2), stream.items[0].nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 4), stream.items[1].nodes.items.len);
+    try std.testing.expectEqualStrings("api", stream.items[0].nodes.items[0].label);
+    try std.testing.expectEqualStrings("start", stream.items[1].nodes.items[0].label);
+}
+
+test "DOT graph stream reports diagnostics in later graphs" {
+    const allocator = std.testing.allocator;
+    var result = try parseDotGraphsDiagnostic(allocator,
+        \\digraph First { a -> b; }
+        \\digraph Broken { c -> ; }
+    );
+    switch (result) {
+        .graphs => |*graphs| {
+            graphs.deinit();
+            return error.ExpectedGraphStreamDiagnostic;
+        },
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqual(@as(usize, 2), diagnostic.line);
+            try std.testing.expectEqualStrings("expected DOT identifier, string, or angle-string", diagnostic.message);
+        },
+    }
+}
+
+test "DOT batch diagnostics validate every graph in a stream" {
+    const allocator = std.testing.allocator;
+    var valid = try parseDotDiagnostics(allocator,
+        \\digraph First { a -> b; }
+        \\graph Second { c -- d; }
+    , 8);
+    defer valid.deinit();
+    try std.testing.expectEqual(@as(usize, 0), valid.items.len);
+
+    var invalid = try parseDotDiagnostics(allocator,
+        \\digraph First { a -> ; }
+        \\graph Second { c -- ; }
+    , 8);
+    defer invalid.deinit();
+    try std.testing.expectEqual(@as(usize, 2), invalid.items.len);
+    try std.testing.expectEqual(@as(usize, 1), invalid.items[0].line);
+    try std.testing.expectEqual(@as(usize, 2), invalid.items[1].line);
+}
+
+test "single DOT graph API rejects trailing graph stream content" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        parseDot(allocator,
+            \\digraph First { a -> b; }
+            \\digraph Second { c -> d; }
+        ),
+    );
 }
 
 test "layered layout orients rank progression for every rankdir" {

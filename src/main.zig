@@ -214,9 +214,9 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    const parse_result = try vex.parseInputDiagnostic(allocator, dot, input_format);
-    var graph = switch (parse_result) {
-        .graph => |graph| graph,
+    const parse_result = try vex.parseInputGraphsDiagnostic(allocator, dot, input_format);
+    var graphs = switch (parse_result) {
+        .graphs => |graphs| graphs,
         .diagnostic => |diagnostic_value| {
             var diagnostic = diagnostic_value;
             defer diagnostic.deinit(allocator);
@@ -224,10 +224,10 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         },
     };
-    defer graph.deinit();
+    defer graphs.deinit();
 
     if (check_only) {
-        try writeCheckSummary(io, &graph);
+        try writeCheckSummaries(io, graphs.items);
         return;
     }
 
@@ -241,31 +241,46 @@ pub fn main(init: std.process.Init) !void {
         .force = if (layout_iterations) |iterations| .{ .iterations = iterations } else .{},
         .control = if (layout_work_budget != null) work_budget.control() else .{},
     };
-    var layout = vex.layoutGraph(allocator, &graph, layout_config) catch |err| {
-        if (err == error.LayoutCanceled) {
-            try writeLayoutCanceled(io, &work_budget);
-            std.process.exit(2);
-        }
-        if (err == error.MissingNodePosition or err == error.InvalidNodePosition) {
-            try writePositionedLayoutError(io, err);
-            std.process.exit(2);
-        }
-        return err;
-    };
-    defer layout.deinit();
     const render_options = vex.RenderOptions{ .svg = .{ .interactive_all = interactive_all, .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try vex.render(&file_writer.interface, &layout, format, render_options);
+        try layoutAndRenderGraphs(allocator, io, &file_writer.interface, graphs.items, format, render_options, layout_config, &work_budget);
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try vex.render(&stdout_file_writer.interface, &layout, format, render_options);
+        try layoutAndRenderGraphs(allocator, io, &stdout_file_writer.interface, graphs.items, format, render_options, layout_config, &work_budget);
         try stdout_file_writer.interface.flush();
+    }
+}
+
+fn layoutAndRenderGraphs(
+    allocator: std.mem.Allocator,
+    io: Io,
+    writer: *Io.Writer,
+    graphs: []vex.Graph,
+    format: vex.OutputFormat,
+    render_options: vex.RenderOptions,
+    layout_config: vex.LayoutConfig,
+    work_budget: *vex.LayoutWorkBudget,
+) !void {
+    for (graphs) |*graph| {
+        var layout = vex.layoutGraph(allocator, graph, layout_config) catch |err| {
+            if (err == error.LayoutCanceled) {
+                try writeLayoutCanceled(io, work_budget);
+                std.process.exit(2);
+            }
+            if (err == error.MissingNodePosition or err == error.InvalidNodePosition) {
+                try writePositionedLayoutError(io, err);
+                std.process.exit(2);
+            }
+            return err;
+        };
+        defer layout.deinit();
+        try vex.render(writer, &layout, format, render_options);
     }
 }
 
@@ -338,6 +353,13 @@ fn writeCheckSummary(io: Io, graph: *const vex.Graph) !void {
     try stderr_file_writer.interface.flush();
 }
 
+fn writeCheckSummaries(io: Io, graphs: []const vex.Graph) !void {
+    var stderr_buffer: [2048]u8 = undefined;
+    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    for (graphs) |*graph| try writeCheckSummaryWriter(&stderr_file_writer.interface, graph);
+    try stderr_file_writer.interface.flush();
+}
+
 fn writeLayoutCanceled(io: Io, budget: *const vex.LayoutWorkBudget) !void {
     var stderr_buffer: [512]u8 = undefined;
     var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
@@ -394,6 +416,51 @@ test "check summary reports graph counts" {
         "input ok: graph=Vex directed=true nodes=3 edges=3 subgraphs=0\n",
         summary,
     );
+}
+
+test "graph stream check summaries and SVG output preserve every graph" {
+    const allocator = std.testing.allocator;
+    var graphs = try vex.parseDotGraphs(allocator,
+        \\digraph First { a -> b; }
+        \\graph Second { c -- d; }
+    );
+    defer graphs.deinit();
+
+    var summary_writer = Io.Writer.Allocating.init(allocator);
+    defer summary_writer.deinit();
+    for (graphs.items) |*graph| try writeCheckSummaryWriter(&summary_writer.writer, graph);
+    const summaries = try summary_writer.toOwnedSlice();
+    defer allocator.free(summaries);
+    try std.testing.expect(std.mem.indexOf(u8, summaries, "graph=First directed=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, summaries, "graph=Second directed=false") != null);
+
+    var svg_writer = Io.Writer.Allocating.init(allocator);
+    defer svg_writer.deinit();
+    var work_budget = vex.LayoutWorkBudget{ .limit = std.math.maxInt(usize) };
+    try layoutAndRenderGraphs(
+        allocator,
+        std.testing.io,
+        &svg_writer.writer,
+        graphs.items,
+        .svg,
+        .{},
+        .{ .algorithm = .sugiyama },
+        &work_budget,
+    );
+    const svg = try svg_writer.toOwnedSlice();
+    defer allocator.free(svg);
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(svg, "<svg "));
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(svg, "</svg>"));
+}
+
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var offset: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, offset, needle)) |index| {
+        count += 1;
+        offset = index + needle.len;
+    }
+    return count;
 }
 
 test "batch diagnostic writer reports every error" {

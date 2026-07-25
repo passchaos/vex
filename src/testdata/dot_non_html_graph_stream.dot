@@ -1,0 +1,9 @@
+graph Infrastructure {
+  subgraph services {
+    api -- worker;
+  }
+}
+
+digraph Pipeline {
+  start -> build -> test -> deploy;
+}
