@@ -348,6 +348,13 @@ known malformed fixtures, one Graphviz plain-output fixture, zero timeouts, and
 zero unexpected results. This command requires a Graphviz source checkout only
 as development corpus data; Vex never calls `dot`.
 
+`zig build audit-cluster-corpus -Dgraphviz-root=/path/to/graphviz` extends the
+same policy through native layout and SVG rendering for every non-HTML fixture
+below 256 KiB that mentions subgraphs/clusters. Its checked-in baseline is 259
+candidates: 257 valid SVG renders, two known malformed fixtures, and zero
+timeouts, renderer failures, or invalid SVG documents. XML processing
+instructions such as `xml-stylesheet` are accepted before the SVG root.
+
 The ReleaseFast `test-layout-render-scale` gate covers every native layout
 family: layered, neato, fdp, Fruchterman-Reingold, sfdp, twopi, circo,
 patchwork, and osage. Workloads include 256-node / 512-edge iterative graphs, a

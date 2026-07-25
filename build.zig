@@ -156,6 +156,17 @@ pub fn build(b: *std.Build) void {
     const dot_corpus_audit_step = b.step("audit-dot-corpus", "Audit the local Graphviz DOT corpus (requires -Dgraphviz-root=...)");
     dot_corpus_audit_step.dependOn(&run_dot_corpus_audit.step);
 
+    const run_cluster_corpus_audit = b.addSystemCommand(&.{
+        "python3",
+        "tools/dot_corpus_audit.py",
+        graphviz_root,
+        "--vex",
+    });
+    run_cluster_corpus_audit.addArtifactArg(corpus_audit_vex);
+    run_cluster_corpus_audit.addArg("--render-clusters");
+    const cluster_corpus_audit_step = b.step("audit-cluster-corpus", "Audit Graphviz cluster layout/SVG corpus (requires -Dgraphviz-root=...)");
+    cluster_corpus_audit_step.dependOn(&run_cluster_corpus_audit.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.

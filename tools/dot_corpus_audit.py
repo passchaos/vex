@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import re
 import subprocess
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from pathlib import Path
 HTML_LABEL_RE = re.compile(
     rb"(?i)\b(?:label|xlabel|headlabel|taillabel)\s*=\s*<"
 )
+CLUSTER_RE = re.compile(rb"(?i)\bsubgraph\b|\bcluster\b")
 KNOWN_MALFORMED = {
     Path("1308_1.dot"),
     Path("1411.dot"),
@@ -30,6 +32,14 @@ BASELINE = {
     "plain": 1,
     "timeout": 0,
     "unexpected": 0,
+}
+CLUSTER_BASELINE = {
+    "candidates": 259,
+    "ok": 257,
+    "malformed": 2,
+    "timeout": 0,
+    "failed": 0,
+    "invalid_svg": 0,
 }
 
 
@@ -77,13 +87,93 @@ def parse_one(vex: Path, tests_root: Path, path: Path, timeout: float) -> AuditR
     return AuditResult("unexpected", relative, detail)
 
 
-def check_baseline(counts: Counter[str]) -> list[str]:
+def check_baseline(counts: Counter[str], baseline: dict[str, int]) -> list[str]:
     failures = []
-    for name, expected in BASELINE.items():
+    for name, expected in baseline.items():
         actual = counts[name]
         if actual != expected:
             failures.append(f"{name}: expected {expected}, got {actual}")
     return failures
+
+
+def render_one(
+    vex: Path,
+    tests_root: Path,
+    output_root: Path,
+    path: Path,
+    timeout: float,
+) -> AuditResult:
+    relative = path.relative_to(tests_root)
+    if relative in KNOWN_MALFORMED:
+        return AuditResult("malformed", relative)
+    output = output_root / f"{len(str(relative))}-{path.name}.svg"
+    try:
+        result = subprocess.run(
+            [str(vex), "--input", str(path), "--output", str(output)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return AuditResult("timeout", relative)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        return AuditResult(
+            "failed",
+            relative,
+            stderr[0] if stderr else f"exit {result.returncode}",
+        )
+    svg = output.read_bytes() if output.is_file() else b""
+    svg_start = svg.find(b"<svg")
+    if svg_start < 0 or not svg.rstrip().endswith(b"</svg>"):
+        return AuditResult("invalid_svg", relative, f"bytes={len(svg)}")
+    return AuditResult("ok", relative, f"bytes={len(svg)}")
+
+
+def run_cluster_audit(
+    vex: Path,
+    tests_root: Path,
+    candidates: list[Path],
+    timeout: float,
+    jobs: int,
+) -> int:
+    paths = [
+        path
+        for path in candidates
+        if not HTML_LABEL_RE.search(path.read_bytes())
+        and CLUSTER_RE.search(path.read_bytes())
+    ]
+    with tempfile.TemporaryDirectory(prefix="vex-cluster-audit-") as output_dir:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(jobs, 1)) as pool:
+            results = list(
+                pool.map(
+                    lambda path: render_one(
+                        vex,
+                        tests_root,
+                        Path(output_dir),
+                        path,
+                        timeout,
+                    ),
+                    paths,
+                )
+            )
+    counts: Counter[str] = Counter(result.kind for result in results)
+    counts["candidates"] = len(paths)
+    print(
+        "cluster-layout-audit "
+        + " ".join(f"{name}={counts[name]}" for name in CLUSTER_BASELINE)
+    )
+    for result in results:
+        if result.kind in {"timeout", "failed", "invalid_svg"}:
+            suffix = f": {result.detail}" if result.detail else ""
+            print(f"{result.kind}: {result.path}{suffix}")
+    failures = check_baseline(counts, CLUSTER_BASELINE)
+    if failures:
+        for failure in failures:
+            print(f"cluster baseline mismatch: {failure}")
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -93,6 +183,7 @@ def main() -> int:
     parser.add_argument("--max-bytes", type=int, default=256 * 1024)
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--render-clusters", action="store_true")
     args = parser.parse_args()
 
     tests_root = args.graphviz_root / "tests"
@@ -102,6 +193,14 @@ def main() -> int:
         raise SystemExit(f"Vex executable not found: {args.vex}")
 
     candidates = candidate_files(tests_root, args.max_bytes)
+    if args.render_clusters:
+        return run_cluster_audit(
+            args.vex,
+            tests_root,
+            candidates,
+            args.timeout,
+            args.jobs,
+        )
     html_paths = []
     parse_paths = []
     for path in candidates:
@@ -131,7 +230,7 @@ def main() -> int:
             suffix = f": {result.detail}" if result.detail else ""
             print(f"{result.kind}: {result.path}{suffix}")
 
-    failures = check_baseline(counts)
+    failures = check_baseline(counts, BASELINE)
     if failures:
         for failure in failures:
             print(f"baseline mismatch: {failure}")
