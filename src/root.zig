@@ -349,6 +349,11 @@ pub const NodeAttr = union(enum) {
 pub const EdgeStyle = svg_mod.style.EdgeStyle;
 
 pub const ArrowShape = svg_mod.edge.ArrowShape;
+pub const ArrowSide = svg_mod.marker.Side;
+pub const ArrowPart = struct {
+    shape: ArrowShape,
+    side: ArrowSide = .both,
+};
 pub const EdgeDir = svg_mod.edge.Dir;
 
 pub const EdgePort = struct {
@@ -448,6 +453,8 @@ pub const EdgeOptions = struct {
     tail_target: ?[]const u8 = null,
     arrowhead: ?ArrowShape = null,
     arrowtail: ?ArrowShape = null,
+    arrowheads: []const ArrowPart = &.{},
+    arrowtails: []const ArrowPart = &.{},
     arrowsize: ?f64 = null,
     dir: ?EdgeDir = null,
     taillabel: ?[]const u8 = null,
@@ -520,6 +527,8 @@ pub const EdgeAttr = union(enum) {
     tail_target: []const u8,
     arrowhead: ArrowShape,
     arrowtail: ArrowShape,
+    arrowheads: []const ArrowPart,
+    arrowtails: []const ArrowPart,
     arrowsize: f64,
     dir: EdgeDir,
     taillabel: []const u8,
@@ -1243,6 +1252,8 @@ pub const Graph = struct {
             .tail_target => |value| try self.setDefaultEdgeAttrRaw("tailtarget", value),
             .arrowhead => |value| try self.setDefaultEdgeAttrRaw("arrowhead", value.name()),
             .arrowtail => |value| try self.setDefaultEdgeAttrRaw("arrowtail", value.name()),
+            .arrowheads => |value| try self.setDefaultEdgeArrowParts("arrowhead", value),
+            .arrowtails => |value| try self.setDefaultEdgeArrowParts("arrowtail", value),
             .arrowsize => |value| try self.setDefaultEdgeAttrFloat("arrowsize", value),
             .dir => |value| try self.setDefaultEdgeAttrRaw("dir", value.name()),
             .taillabel => |value| try self.setDefaultEdgeAttrRaw("taillabel", value),
@@ -1282,6 +1293,13 @@ pub const Graph = struct {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
         try self.setDefaultEdgeAttrRaw(name, text);
+    }
+
+    fn setDefaultEdgeArrowParts(self: *Graph, name: []const u8, parts: []const ArrowPart) !void {
+        var text = std.ArrayList(u8).empty;
+        defer text.deinit(self.allocator);
+        try appendArrowPartsAttrText(&text, self.allocator, parts);
+        try self.setDefaultEdgeAttrRaw(name, text.items);
     }
 
     fn setDefaultEdgeAttrRaw(self: *Graph, name: []const u8, value: []const u8) !void {
@@ -1498,6 +1516,8 @@ pub const Graph = struct {
         if (options.tail_target) |value| try self.setEdgeAttr(id, .{ .tail_target = value });
         if (options.arrowhead) |value| try self.setEdgeAttr(id, .{ .arrowhead = value });
         if (options.arrowtail) |value| try self.setEdgeAttr(id, .{ .arrowtail = value });
+        if (options.arrowheads.len > 0) try self.setEdgeAttr(id, .{ .arrowheads = options.arrowheads });
+        if (options.arrowtails.len > 0) try self.setEdgeAttr(id, .{ .arrowtails = options.arrowtails });
         if (options.arrowsize) |value| try self.setEdgeAttr(id, .{ .arrowsize = value });
         if (options.dir) |value| try self.setEdgeAttr(id, .{ .dir = value });
         if (options.taillabel) |value| try self.setEdgeAttr(id, .{ .taillabel = value });
@@ -1573,6 +1593,8 @@ pub const Graph = struct {
             .tail_target => |value| try self.setEdgeAttrRaw(id, "tailtarget", value),
             .arrowhead => |value| try self.setEdgeAttrRaw(id, "arrowhead", value.name()),
             .arrowtail => |value| try self.setEdgeAttrRaw(id, "arrowtail", value.name()),
+            .arrowheads => |value| try self.setEdgeArrowParts(id, "arrowhead", value),
+            .arrowtails => |value| try self.setEdgeArrowParts(id, "arrowtail", value),
             .arrowsize => |value| try self.setEdgeAttrFloat(id, "arrowsize", value),
             .dir => |value| try self.setEdgeAttrRaw(id, "dir", value.name()),
             .taillabel => |value| try self.setEdgeAttrRaw(id, "taillabel", value),
@@ -1644,6 +1666,13 @@ pub const Graph = struct {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
         try self.setEdgeAttrRaw(id, name, text);
+    }
+
+    fn setEdgeArrowParts(self: *Graph, id: EdgeId, name: []const u8, parts: []const ArrowPart) !void {
+        var text = std.ArrayList(u8).empty;
+        defer text.deinit(self.allocator);
+        try appendArrowPartsAttrText(&text, self.allocator, parts);
+        try self.setEdgeAttrRaw(id, name, text.items);
     }
 
     fn setEdgePointAttr(self: *Graph, id: EdgeId, name: []const u8, point: Point) !void {
@@ -2051,6 +2080,18 @@ fn setDefaultEdgeStylesAttrRaw(graph: *Graph, values: []const EdgeStyle) !void {
         try text.appendSlice(graph.allocator, value.name());
     }
     try graph.setDefaultEdgeAttrRaw("style", text.items);
+}
+
+fn appendArrowPartsAttrText(text: *std.ArrayList(u8), allocator: std.mem.Allocator, parts: []const ArrowPart) !void {
+    if (parts.len == 0 or parts.len > 4) return error.InvalidArrowParts;
+    for (parts) |part| {
+        switch (part.side) {
+            .both => {},
+            .left => try text.append(allocator, 'l'),
+            .right => try text.append(allocator, 'r'),
+        }
+        try text.appendSlice(allocator, part.shape.name());
+    }
 }
 
 fn nodeFixedSizeName(fixedsize: NodeFixedSize) []const u8 {
@@ -10679,8 +10720,8 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
             const edge_concentrate = svgConcentrateForEdge(graph, edge_item, concentrate);
             if (edge_concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
             const visual = resolveEdgeVisual(graph, edge_item);
-            if (visual.marker_end != .none and visual.marker_end != .normal) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(graph, edge_item, visual, true), edgeMarkerFill(graph, edge_item, visual, true), visual.marker_scale);
-            if (visual.marker_start != .none and visual.marker_start != .normal) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(graph, edge_item, visual, false), edgeMarkerFill(graph, edge_item, visual, false), visual.marker_scale);
+            if (visual.marker_end.needsDef()) try writeSvgMarkerDef(writer, edge_item.id, "head", visual.marker_end, edgeMarkerColor(graph, edge_item, visual, true), edgeMarkerFill(graph, edge_item, visual, true), visual.marker_scale);
+            if (visual.marker_start.needsDef()) try writeSvgMarkerDef(writer, edge_item.id, "tail", visual.marker_start, edgeMarkerColor(graph, edge_item, visual, false), edgeMarkerFill(graph, edge_item, visual, false), visual.marker_scale);
         }
         try writer.writeAll("</defs>\n");
     }
@@ -12509,8 +12550,8 @@ fn svgNeedsMarkerDefs(graph: *const Graph, concentrate: bool) bool {
     for (graph.edges.items) |edge_item| {
         if (concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) continue;
         const visual = resolveEdgeVisual(graph, edge_item);
-        if (visual.marker_end != .none and visual.marker_end != .normal) return true;
-        if (visual.marker_start != .none and visual.marker_start != .normal) return true;
+        if (visual.marker_end.needsDef()) return true;
+        if (visual.marker_start.needsDef()) return true;
     }
     return false;
 }
@@ -13988,11 +14029,11 @@ fn renderSvgPositionedEdgeSpline(
     const first_segment = spline.segments[0];
     const last_segment = spline.segments[spline.segments.len - 1];
     var arrow_visual = visual;
-    if (first_segment.start_tip == null) arrow_visual.marker_start = .none;
-    if (last_segment.end_tip == null) arrow_visual.marker_end = .none;
+    if (first_segment.start_tip == null) arrow_visual.marker_start = MarkerSpec.none();
+    if (last_segment.end_tip == null) arrow_visual.marker_end = MarkerSpec.none();
     var path_visual = arrow_visual;
-    path_visual.marker_start = .none;
-    path_visual.marker_end = .none;
+    path_visual.marker_start = MarkerSpec.none();
+    path_visual.marker_end = MarkerSpec.none();
 
     try writer.writeAll("<path");
     if (label_path_id) |path_id| try writeSvgEdgePathIdAttr(writer, path_id);
@@ -14010,9 +14051,9 @@ fn renderSvgPositionedEdgeSpline(
 
 fn writePositionedEdgeSplineMarkers(writer: *Io.Writer, directed: bool, edge_id: EdgeId, route: EdgeRoute, visual: EdgeVisual) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
-    if (visual.marker_start != .none and visual.marker_start != .normal) {
+    if (visual.marker_start.needsDef()) {
         var marker_visual = visual;
-        marker_visual.marker_end = .none;
+        marker_visual.marker_end = MarkerSpec.none();
         try writer.writeAll("<path fill=\"none\" stroke=\"none\" d=\"");
         try writePathMove(writer, route.start);
         try writePathLine(writer, route.control1);
@@ -14020,9 +14061,9 @@ fn writePositionedEdgeSplineMarkers(writer: *Io.Writer, directed: bool, edge_id:
         try writeSvgMarkerAttrs(writer, true, edge_id, marker_visual);
         try writer.writeAll("/>\n");
     }
-    if (visual.marker_end != .none and visual.marker_end != .normal) {
+    if (visual.marker_end.needsDef()) {
         var marker_visual = visual;
-        marker_visual.marker_start = .none;
+        marker_visual.marker_start = MarkerSpec.none();
         try writer.writeAll("<path fill=\"none\" stroke=\"none\" d=\"");
         try writePathMove(writer, route.control2);
         try writePathLine(writer, route.end);
@@ -14282,10 +14323,10 @@ fn edgeVisualForSegment(graph: *const Graph, edge_item: Edge, visual: EdgeVisual
     var result = visual;
     result.stroke = color;
     if (attrValue(edge_item.attrs.items, "fillcolor") == null) result.fill = color;
-    if (index != 0) result.marker_end = .none;
-    if (index != @min(color_count - 1, 1)) result.marker_start = .none;
-    if (result.marker_start != .none) result.stroke = edgeMarkerColor(graph, edge_item, visual, false);
-    if (result.marker_end != .none) result.stroke = edgeMarkerColor(graph, edge_item, visual, true);
+    if (index != 0) result.marker_end = MarkerSpec.none();
+    if (index != @min(color_count - 1, 1)) result.marker_start = MarkerSpec.none();
+    if (!result.marker_start.isNone()) result.stroke = edgeMarkerColor(graph, edge_item, visual, false);
+    if (!result.marker_end.isNone()) result.stroke = edgeMarkerColor(graph, edge_item, visual, true);
     return result;
 }
 
@@ -14660,12 +14701,12 @@ fn lerpPoint(a: Point, b: Point, t: f64) Point {
 
 fn routeForPathMarkers(route: EdgeRoute, visual: EdgeVisual) EdgeRoute {
     var result = route;
-    if (visual.marker_start != .none) {
-        result.start = shortenPointToward(route.start, route.control1, 10.0 * visual.marker_scale);
+    if (!visual.marker_start.isNone()) {
+        result.start = shortenPointToward(route.start, route.control1, 10.0 * visual.marker_scale * visual.marker_start.lengthScale());
         result.control1 = shortenPointToward(route.control1, route.control2, 2.0 * visual.marker_scale);
     }
-    if (visual.marker_end != .none) {
-        result.end = shortenPointToward(route.end, route.control2, 10.0 * visual.marker_scale);
+    if (!visual.marker_end.isNone()) {
+        result.end = shortenPointToward(route.end, route.control2, 10.0 * visual.marker_scale * visual.marker_end.lengthScale());
         result.control2 = shortenPointToward(route.control2, route.control1, 2.0 * visual.marker_scale);
     }
     return result;
@@ -14673,8 +14714,8 @@ fn routeForPathMarkers(route: EdgeRoute, visual: EdgeVisual) EdgeRoute {
 
 fn edgePathClip(visual: EdgeVisual) EdgePathClip {
     return .{
-        .tail = if (visual.marker_start != .none) 10.0 * visual.marker_scale else 0,
-        .head = if (visual.marker_end != .none) 10.0 * visual.marker_scale else 0,
+        .tail = if (!visual.marker_start.isNone()) 10.0 * visual.marker_scale * visual.marker_start.lengthScale() else 0,
+        .head = if (!visual.marker_end.isNone()) 10.0 * visual.marker_scale * visual.marker_end.lengthScale() else 0,
     };
 }
 
@@ -15202,6 +15243,7 @@ const EdgePathHints = struct {
 const DashStyle = svg_mod.style.Dash;
 
 const MarkerShape = svg_mod.marker.Shape;
+const MarkerSpec = svg_mod.marker.Spec;
 
 const default_graphviz_fontname = svg_mod.font.default_graphviz_name;
 const default_svg_font_family = svg_mod.font.default_svg_family;
@@ -15229,8 +15271,8 @@ const EdgeVisual = struct {
     font_size: f64,
     width: f64,
     dash: DashStyle,
-    marker_start: MarkerShape,
-    marker_end: MarkerShape,
+    marker_start: MarkerSpec,
+    marker_end: MarkerSpec,
     marker_scale: f64,
     hidden: bool,
 };
@@ -16783,8 +16825,8 @@ fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
         .font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0),
         .width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0),
         .dash = dashStyleFromAttr(style),
-        .marker_start = if (tail_enabled) parseMarkerShape(arrowtail, .normal) else .none,
-        .marker_end = if (head_enabled) parseMarkerShape(arrowhead, .normal) else .none,
+        .marker_start = if (tail_enabled) parseMarkerSpec(arrowtail, .normal) else MarkerSpec.none(),
+        .marker_end = if (head_enabled) parseMarkerSpec(arrowhead, .normal) else MarkerSpec.none(),
         .marker_scale = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "arrowsize", 1.0), 0.0, 8.0),
         .hidden = styleHas(style, "invis"),
     };
@@ -16910,8 +16952,8 @@ fn writeSvgDash(writer: *Io.Writer, dash: DashStyle) Io.Writer.Error!void {
     try svg_mod.style.writeDash(writer, dash);
 }
 
-fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, shape: MarkerShape, stroke: []const u8, fill: []const u8, scale: f64) Io.Writer.Error!void {
-    try svg_mod.marker.writeDef(writer, edge_id, suffix, shape, stroke, fill, scale);
+fn writeSvgMarkerDef(writer: *Io.Writer, edge_id: EdgeId, suffix: []const u8, spec: MarkerSpec, stroke: []const u8, fill: []const u8, scale: f64) Io.Writer.Error!void {
+    try svg_mod.marker.writeDef(writer, edge_id, suffix, spec, stroke, fill, scale);
 }
 
 fn writeSvgMarkerAttrs(writer: *Io.Writer, directed: bool, edge_id: EdgeId, visual: EdgeVisual) Io.Writer.Error!void {
@@ -16938,10 +16980,10 @@ const InlineArrowOptions = struct {
 
 fn writeSvgInlineArrowheads(writer: *Io.Writer, directed: bool, route: EdgeRoute, visual: EdgeVisual, options: InlineArrowOptions) Io.Writer.Error!void {
     if (!directed or visual.marker_scale <= 0) return;
-    if (visual.marker_end == .normal) {
+    if (visual.marker_end.isSingleNormal()) {
         try writeSvgInlineNormalArrow(writer, route.end, route.control2, visual.stroke, visual.fill, visual.marker_scale, options.head_length_scale, false, .{ .y_shift = options.head_y_shift, .tip_x_shift = options.head_tip_x_shift, .tip_y_shift = options.head_tip_y_shift, .right_x_shift = options.head_right_x_shift, .right_y_shift = options.head_right_y_shift, .left_x_shift = options.head_left_x_shift, .left_y_shift = options.head_left_y_shift, .precise = options.head_precise, .tip_precise = options.head_tip_precise });
     }
-    if (visual.marker_start == .normal) {
+    if (visual.marker_start.isSingleNormal()) {
         try writeSvgInlineNormalArrow(writer, route.start, route.control1, visual.stroke, visual.fill, visual.marker_scale, options.tail_length_scale, true, .{});
     }
 }
@@ -17003,6 +17045,10 @@ fn writeSvgArrowPoint(writer: *Io.Writer, point: Point, precise: bool) Io.Writer
 
 fn parseMarkerShape(value: ?[]const u8, fallback: MarkerShape) MarkerShape {
     return svg_mod.marker.parseShape(value, fallback);
+}
+
+fn parseMarkerSpec(value: ?[]const u8, fallback: MarkerShape) MarkerSpec {
+    return svg_mod.marker.parseSpec(value, fallback);
 }
 
 fn markerEnabledByDir(dir: ?[]const u8, head: bool) bool {
@@ -26333,7 +26379,7 @@ test "SVG renderer honors additional Graphviz arrow marker shapes" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1 L 8.5 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 0.8 0.8 L 9.2 5 L 0.8 9.2 z") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#0ea5e9\" stroke-width=\"1.4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#0ea5e9\" stroke-width=\"1.8\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#fed7aa\" stroke=\"#ea580c\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"#0891b2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1.5 1.2 C 8.5 1.2 8.5 8.8 1.5 8.8\" fill=\"none\" stroke=\"#7c3aed\"") != null);
@@ -26364,7 +26410,8 @@ test "SVG renderer accepts Graphviz arrow marker aliases" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 5 0.8 L 9.2 5 L 5 9.2 L 0.8 5 z\" fill=\"#ffffff\" stroke=\"#16a34a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#f59e0b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#9333ea\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"3.5\" fill=\"#ffffff\" stroke=\"#0f172a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#0f172a\" stroke=\"#0f172a\"") != null);
+    try std.testing.expect(countSubstrings(svg, "transform=\"translate(10.0 0)\"") >= 3);
 }
 
 test "SVG renderer accepts Graphviz half-arrow marker aliases" {
@@ -26396,10 +26443,81 @@ test "SVG renderer accepts Graphviz half-arrow marker aliases" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1 L 8.5 9\" fill=\"none\" stroke=\"#f59e0b\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1 L 1 5 L 9 9 M 1 5 L 9 5\" fill=\"none\" stroke=\"#9333ea\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 8.5 1.2 C 1.5 1.2 1.5 8.8 8.5 8.8\" fill=\"none\" stroke=\"#0f172a\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#14b8a6\" stroke=\"#14b8a6\" points=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-6-head-clip-0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "clip-path=\"url(#arrow-6-head-clip-0)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 1 1 L 9 5 L 1 9\" fill=\"none\" stroke=\"#a855f7\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ef4444\" stroke=\"#ef4444\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "M 9 1.4 L 0.8 5 L 9 8.6 z\" fill=\"#ffffff\" stroke=\"#64748b\"") != null);
+}
+
+test "SVG renderer composes up to four Graphviz arrow shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  rankdir=LR;
+        \\  a -> b [arrowhead=odottee, color="#2563eb"];
+        \\  b -> c [arrowhead=lboxrdiamond, color="#dc2626"];
+        \\  c -> d [dir=both, arrowtail=onormaldot, arrowhead=veeobox, color="#16a34a"];
+        \\  d -> e [arrowhead=dotboxdiamondtee, color="#7c3aed"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const first = parseMarkerSpec(attrValue(graph.edges.items[0].attrs.items, "arrowhead"), .normal);
+    try std.testing.expectEqual(@as(u3, 2), first.len);
+    try std.testing.expectEqual(MarkerShape.odot, first.parts[0].shape);
+    try std.testing.expectEqual(MarkerShape.tee, first.parts[1].shape);
+    const half = parseMarkerSpec(attrValue(graph.edges.items[1].attrs.items, "arrowhead"), .normal);
+    try std.testing.expectEqual(svg_mod.marker.Side.left, half.parts[0].side);
+    try std.testing.expectEqual(svg_mod.marker.Side.right, half.parts[1].side);
+    const four = parseMarkerSpec(attrValue(graph.edges.items[3].attrs.items, "arrowhead"), .normal);
+    try std.testing.expectEqual(@as(u3, 4), four.len);
+    const gap = parseMarkerSpec("normalnoneodot", .normal);
+    try std.testing.expectEqual(@as(u3, 3), gap.len);
+    try std.testing.expectEqual(MarkerShape.gap, gap.parts[1].shape);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head\" viewBox=\"0 0 20.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-1-head-clip-0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-1-head-clip-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-2-tail\" viewBox=\"0 0 20.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-2-head\" viewBox=\"0 0 20.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-3-head\" viewBox=\"0 0 40.0 10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-start=\"url(#arrow-2-tail)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "marker-end=\"url(#arrow-3-head)\"") != null);
+}
+
+test "code API exposes typed composite and half arrow shapes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    try graph.setDefaultEdgeAttr(.{ .arrowtails = &.{
+        .{ .shape = .empty },
+        .{ .shape = .dot },
+    } });
+    const edge = try graph.addEdge(a, b, .{
+        .dir = .both,
+        .arrowheads = &.{
+            .{ .shape = .box, .side = .left },
+            .{ .shape = .diamond, .side = .right },
+        },
+    });
+
+    try std.testing.expectEqualStrings("lboxrdiamond", attrValue(graph.edges.items[edge].attrs.items, "arrowhead").?);
+    try std.testing.expectEqualStrings("emptydot", attrValue(graph.edges.items[edge].attrs.items, "arrowtail").?);
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head-clip-0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-head-clip-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "id=\"arrow-0-tail\" viewBox=\"0 0 20.0 10\"") != null);
 }
 
 test "SVG renderer honors arrowsize and edge clipping attributes" {
@@ -28540,8 +28658,8 @@ test "SVG marker path route shortens arrow endpoints" {
         .font_size = 14,
         .width = 1,
         .dash = .none,
-        .marker_start = .none,
-        .marker_end = .none,
+        .marker_start = MarkerSpec.none(),
+        .marker_end = MarkerSpec.none(),
         .marker_scale = 1,
         .hidden = false,
     });
@@ -28555,8 +28673,8 @@ test "SVG marker path route shortens arrow endpoints" {
         .font_size = 14,
         .width = 1,
         .dash = .none,
-        .marker_start = .none,
-        .marker_end = .normal,
+        .marker_start = MarkerSpec.none(),
+        .marker_end = MarkerSpec.single(.normal),
         .marker_scale = 1,
         .hidden = false,
     });
