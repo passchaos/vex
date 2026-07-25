@@ -34,6 +34,14 @@ KNOWN_MALFORMED = {
 }
 KNOWN_PLAIN_OUTPUT = {Path("share/b545.gv")}
 KNOWN_SLOW_SVG: set[Path] = set()
+KNOWN_LARGE_SLOW_SVG = {
+    Path("2064.dot"),
+    Path("2108.dot"),
+    Path("2371.dot"),
+    Path("2593.dot"),
+    Path("2646.dot"),
+}
+LARGE_SVG_MIN_BYTES = 256 * 1024
 BASELINE = {
     "candidates": 808,
     "html": 65,
@@ -57,6 +65,16 @@ SVG_BASELINE = {
     "ok": 722,
     "excluded": 5,
     "slow": 0,
+    "timeout": 0,
+    "failed": 0,
+    "nonfinite": 0,
+    "invalid_svg": 0,
+}
+LARGE_SVG_BASELINE = {
+    "candidates": 16,
+    "ok": 10,
+    "malformed": 1,
+    "slow": 5,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,
@@ -307,6 +325,50 @@ def run_svg_audit(
     return 0
 
 
+def run_large_svg_audit(
+    vex: Path,
+    tests_root: Path,
+    candidates: list[Path],
+    timeout: float,
+    jobs: int,
+) -> int:
+    paths = [
+        path
+        for path in candidates
+        if path.stat().st_size >= LARGE_SVG_MIN_BYTES
+        and not HTML_LABEL_RE.search(path.read_bytes())
+    ]
+    with tempfile.TemporaryDirectory(prefix="vex-large-svg-audit-") as output_dir:
+        output_root = Path(output_dir)
+
+        def render(path: Path) -> AuditResult:
+            relative = path.relative_to(tests_root)
+            if relative in KNOWN_MALFORMED:
+                return AuditResult("malformed", relative)
+            if relative in KNOWN_LARGE_SLOW_SVG:
+                return AuditResult("slow", relative)
+            return render_one(vex, tests_root, output_root, path, timeout, False)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(jobs, 1)) as pool:
+            results = list(pool.map(render, paths))
+    counts: Counter[str] = Counter(result.kind for result in results)
+    counts["candidates"] = len(paths)
+    print(
+        "large-svg-corpus-audit "
+        + " ".join(f"{name}={counts[name]}" for name in LARGE_SVG_BASELINE)
+    )
+    for result in results:
+        if result.kind in {"timeout", "failed", "nonfinite", "invalid_svg"}:
+            suffix = f": {result.detail}" if result.detail else ""
+            print(f"{result.kind}: {result.path}{suffix}")
+    failures = check_baseline(counts, LARGE_SVG_BASELINE)
+    if failures:
+        for failure in failures:
+            print(f"large SVG baseline mismatch: {failure}")
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("graphviz_root", type=Path, help="Graphviz source checkout")
@@ -316,6 +378,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--render-clusters", action="store_true")
     parser.add_argument("--render-all", action="store_true")
+    parser.add_argument("--render-large", action="store_true")
     args = parser.parse_args()
 
     tests_root = args.graphviz_root / "tests"
@@ -325,6 +388,14 @@ def main() -> int:
         raise SystemExit(f"Vex executable not found: {args.vex}")
 
     candidates = candidate_files(tests_root, args.max_bytes)
+    if args.render_large:
+        return run_large_svg_audit(
+            args.vex,
+            tests_root,
+            candidates,
+            args.timeout,
+            args.jobs,
+        )
     if args.render_all:
         return run_svg_audit(
             args.vex,

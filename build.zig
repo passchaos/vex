@@ -163,7 +163,7 @@ pub fn build(b: *std.Build) void {
         "--vex",
     });
     run_cluster_corpus_audit.addArtifactArg(corpus_audit_vex);
-    run_cluster_corpus_audit.addArg("--render-clusters");
+    run_cluster_corpus_audit.addArgs(&.{ "--render-clusters", "--max-bytes", "262144" });
     const cluster_corpus_audit_step = b.step("audit-cluster-corpus", "Audit Graphviz cluster layout/SVG corpus (requires -Dgraphviz-root=...)");
     cluster_corpus_audit_step.dependOn(&run_cluster_corpus_audit.step);
 
@@ -174,9 +174,20 @@ pub fn build(b: *std.Build) void {
         "--vex",
     });
     run_svg_corpus_audit.addArtifactArg(corpus_audit_vex);
-    run_svg_corpus_audit.addArg("--render-all");
+    run_svg_corpus_audit.addArgs(&.{ "--render-all", "--max-bytes", "262144" });
     const svg_corpus_audit_step = b.step("audit-svg-corpus", "Audit full non-HTML Graphviz SVG corpus (requires -Dgraphviz-root=...)");
     svg_corpus_audit_step.dependOn(&run_svg_corpus_audit.step);
+
+    const run_large_svg_corpus_audit = b.addSystemCommand(&.{
+        "python3",
+        "tools/dot_corpus_audit.py",
+        graphviz_root,
+        "--vex",
+    });
+    run_large_svg_corpus_audit.addArtifactArg(corpus_audit_vex);
+    run_large_svg_corpus_audit.addArgs(&.{ "--render-large", "--timeout", "8" });
+    const large_svg_corpus_audit_step = b.step("audit-large-svg-corpus", "Audit large non-HTML Graphviz SVG corpus (requires -Dgraphviz-root=...)");
+    large_svg_corpus_audit_step.dependOn(&run_large_svg_corpus_audit.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
