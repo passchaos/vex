@@ -220,6 +220,7 @@ pub const GraphAttr = union(enum) {
     colorscheme: []const u8,
     fillcolor: []const u8,
     pencolor: []const u8,
+    imagepath: []const u8,
     area: f64,
     pack: f64,
     packmode: []const u8,
@@ -997,6 +998,7 @@ pub const Graph = struct {
             .colorscheme => |value| try self.setGraphAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setGraphAttrRaw("fillcolor", value),
             .pencolor => |value| try self.setGraphAttrRaw("pencolor", value),
+            .imagepath => |value| try self.setGraphAttrRaw("imagepath", value),
             .area => |value| try self.setGraphAttrFloat("area", value),
             .pack => |value| try self.setGraphAttrFloat("pack", value),
             .packmode => |value| try self.setGraphAttrRaw("packmode", value),
@@ -12351,7 +12353,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         try resolveSvgGradientFill(writer, graph, "vex-node-fill", node_item.id + 1, node_item.attrs.items, nodeRect(l), &visual.fill, &fill_buf);
     }
     try renderSvgNodeShape(writer, node_item, l, visual, options);
-    try renderSvgNodeImage(writer, node_item, l);
+    try renderSvgNodeImage(writer, graph, node_item, l);
     if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
         try renderSvgNodeLabel(writer, node_item, l, visual);
     }
@@ -14316,11 +14318,13 @@ fn renderSvgNodeAuxLabels(writer: *Io.Writer, node_item: Node, layout: NodeLayou
     }
 }
 
-fn renderSvgNodeImage(writer: *Io.Writer, node_item: Node, layout: NodeLayout) Io.Writer.Error!void {
+fn renderSvgNodeImage(writer: *Io.Writer, graph: *const Graph, node_item: Node, layout: NodeLayout) Io.Writer.Error!void {
     const image = nodeImageSource(node_item.attrs.items) orelse return;
     if (image.len == 0 or node_item.shape == .point) return;
     const image_rect = nodeImageRect(node_item, layout);
     if (image_rect.width <= 0 or image_rect.height <= 0) return;
+    const resolved_image = resolveNodeImagePath(graph.allocator, graph, image) catch image;
+    defer if (resolved_image.ptr != image.ptr) graph.allocator.free(resolved_image);
 
     try writer.writeAll("<image x=\"");
     try writeSvgNumber(writer, image_rect.x);
@@ -14333,14 +14337,42 @@ fn renderSvgNodeImage(writer: *Io.Writer, node_item: Node, layout: NodeLayout) I
     try writer.writeAll("\" preserveAspectRatio=\"");
     try writer.writeAll(nodeImagePreserveAspectRatio(node_item.attrs.items));
     try writer.writeAll("\" href=\"");
-    try writeXmlEscaped(writer, image);
+    try writeXmlEscaped(writer, resolved_image);
     try writer.writeAll("\" xlink:href=\"");
-    try writeXmlEscaped(writer, image);
+    try writeXmlEscaped(writer, resolved_image);
     try writer.writeAll("\"/>\n");
 }
 
 fn nodeImageSource(attrs: []const Attr) ?[]const u8 {
     return svg_mod.image.source(attrs);
+}
+
+fn resolveNodeImagePath(allocator: std.mem.Allocator, graph: *const Graph, image: []const u8) ![]const u8 {
+    const imagepath = attrValue(graph.attrs.items, "imagepath") orelse return image;
+    if (imagepath.len == 0 or std.fs.path.isAbsolute(image)) return image;
+    var dirs = std.mem.splitScalar(u8, imagepath, imagePathListSeparator());
+    while (dirs.next()) |raw_dir| {
+        const dir = std.mem.trim(u8, raw_dir, " \t\r\n");
+        if (dir.len == 0) continue;
+        const candidate = try std.fs.path.join(allocator, &.{ dir, image });
+        if (imagePathReadable(candidate)) return candidate;
+        allocator.free(candidate);
+    }
+    return image;
+}
+
+fn imagePathListSeparator() u8 {
+    return if (builtin.os.tag == .windows) ';' else ':';
+}
+
+fn imagePathReadable(path: []const u8) bool {
+    return switch (builtin.os.tag) {
+        .windows, .wasi, .freestanding => false,
+        else => blk: {
+            const terminated = std.posix.toPosixPath(path) catch break :blk false;
+            break :blk std.c.access(&terminated, std.c.R_OK) == 0;
+        },
+    };
 }
 
 fn nodeImageRect(node_item: Node, layout: NodeLayout) RectF {
@@ -25612,6 +25644,56 @@ test "SVG renderer emits node images" {
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "preserveAspectRatio=\"xMidYMin meet\" href=\"fallback&amp;shape.svg\" xlink:href=\"fallback&amp;shape.svg\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "href=\"primary.svg\" xlink:href=\"primary.svg\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "ignored.svg") == null);
+}
+
+test "SVG renderer resolves graph imagepath in search order" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "first");
+    try tmp.dir.createDirPath(std.testing.io, "second");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "first/icon.svg", .data = "first" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "second/icon.svg", .data = "second" });
+
+    const base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer allocator.free(base);
+    const first = try std.fs.path.join(allocator, &.{ base, "first" });
+    defer allocator.free(first);
+    const second = try std.fs.path.join(allocator, &.{ base, "second" });
+    defer allocator.free(second);
+    const imagepath = try std.mem.join(allocator, &.{imagePathListSeparator()}, &.{ first, second });
+    defer allocator.free(imagepath);
+    const expected = try std.fs.path.join(allocator, &.{ first, "icon.svg" });
+    defer allocator.free(expected);
+    const absolute = try std.fs.path.join(allocator, &.{ second, "icon.svg" });
+    defer allocator.free(absolute);
+
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .imagepath = imagepath });
+    _ = try graph.addNode("relative", .{ .image = "icon.svg" });
+    _ = try graph.addNode("missing", .{ .image = "missing.svg" });
+    _ = try graph.addNode("absolute", .{ .image = absolute });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expectEqualStrings(imagepath, attrValue(graph.attrs.items, "imagepath").?);
+    var expected_href = std.ArrayList(u8).empty;
+    defer expected_href.deinit(allocator);
+    try expected_href.appendSlice(allocator, "href=\"");
+    try expected_href.appendSlice(allocator, expected);
+    try expected_href.appendSlice(allocator, "\"");
+    try std.testing.expect(std.mem.indexOf(u8, svg, expected_href.items) != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "href=\"missing.svg\"") != null);
+    var absolute_href = std.ArrayList(u8).empty;
+    defer absolute_href.deinit(allocator);
+    try absolute_href.appendSlice(allocator, "href=\"");
+    try absolute_href.appendSlice(allocator, absolute);
+    try absolute_href.appendSlice(allocator, "\"");
+    try std.testing.expect(std.mem.indexOf(u8, svg, absolute_href.items) != null);
 }
 
 test "SVG renderer uses Graphviz default text color" {

@@ -38,7 +38,7 @@
 | rankdir、rank constraints、spacing | 已验证 | TB/BT/LR/RL、same/min/max/source/sink、ranksep/nodesep 测试 | 所有方向持续通过 |
 | records、ports、compound edges | 已验证 | record field、compass port、scoped ltail/lhead 与 clipping 测试 | DOT/API 与 metadata 语义一致 |
 | parent-scoped subgraph identity | 已验证 | Graphviz `agsubg` source oracle；same-parent reopen merge、different-parent isolation 和 file corpus 测试 | 保持成员/属性合并和最近作用域引用语义 |
-| Graphviz 常用 shapes/styles/colors/fonts/images | 部分完成 | shapes、SBOLv、markers、gradients、layers、fonts、images 测试 | 用支持清单和 oracle corpus 明确剩余非 HTML 渲染差异 |
+| Graphviz 常用 shapes/styles/colors/fonts/images | 部分完成 | Graphviz shape 注册表差分仅排除 PostScript-only `epsf`，其余 canonical shapes/aliases、SBOLv、markers、gradients、layers、fonts、`image`/`shapefile`/`imagescale`/`imagepos` 与 graph `imagepath` first-readable search 均有 typed/API/SVG 测试 | 继续用 oracle corpus 收敛非 HTML 渲染几何差异 |
 | SVG canvas 与对象分组 | 已验证 | size/ratio/dpi/rotate/center/outputorder/id/class 测试 | XML 安全与 Graphviz-style group 结构持续通过 |
 
 ## 超越 Graphviz 的能力
