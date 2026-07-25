@@ -307,6 +307,15 @@ limit and an independent 32 MiB parser-arena budget inside a reusable fixed
 64 MiB buffer. Both report source bytes, arena bytes, and elapsed milliseconds.
 Run them directly with `zig build test-parse-scale`.
 
+The development-only Graphviz corpus audit is reproducible with
+`zig build audit-dot-corpus -Dgraphviz-root=/path/to/graphviz`. It scans every
+`.dot` / `.gv` fixture below 256 KiB with the ReleaseFast Vex `--check` path,
+excludes explicit HTML-like label fixtures, and gates the checked-in baseline:
+786 candidates, 59 HTML-like exclusions, 722 successful non-HTML parses, four
+known malformed fixtures, one Graphviz plain-output fixture, zero timeouts, and
+zero unexpected results. This command requires a Graphviz source checkout only
+as development corpus data; Vex never calls `dot`.
+
 The ReleaseFast `test-layout-render-scale` gate covers every native layout
 family: layered, neato, fdp, Fruchterman-Reingold, sfdp, twopi, circo,
 patchwork, and osage. Workloads range from 64-node iterative graphs through a

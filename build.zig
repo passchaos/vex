@@ -119,6 +119,28 @@ pub fn build(b: *std.Build) void {
     const layout_render_scale_step = b.step("test-layout-render-scale", "Run all native layout/SVG scale gates");
     layout_render_scale_step.dependOn(&run_layout_render_scale.step);
 
+    const corpus_audit_vex = b.addExecutable(.{
+        .name = "vex-corpus-audit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "vex", .module = mod },
+            },
+        }),
+    });
+    const graphviz_root = b.option([]const u8, "graphviz-root", "Graphviz source checkout for audit-dot-corpus") orelse "";
+    const run_dot_corpus_audit = b.addSystemCommand(&.{
+        "python3",
+        "tools/dot_corpus_audit.py",
+        graphviz_root,
+        "--vex",
+    });
+    run_dot_corpus_audit.addArtifactArg(corpus_audit_vex);
+    const dot_corpus_audit_step = b.step("audit-dot-corpus", "Audit the local Graphviz DOT corpus (requires -Dgraphviz-root=...)");
+    dot_corpus_audit_step.dependOn(&run_dot_corpus_audit.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
