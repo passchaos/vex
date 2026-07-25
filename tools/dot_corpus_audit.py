@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -17,6 +18,8 @@ HTML_LABEL_RE = re.compile(
     rb"(?i)\b(?:label|xlabel|headlabel|taillabel)\s*=\s*<"
 )
 CLUSTER_RE = re.compile(rb"(?i)\bsubgraph\b|\bcluster\b")
+SUBGRAPH_METADATA_RE = re.compile(rb"<vex:subgraph\b([^>]*)/>")
+XML_ATTR_RE = re.compile(rb'\b([A-Za-z][A-Za-z0-9_-]*)="([^"]*)"')
 KNOWN_MALFORMED = {
     Path("1308_1.dot"),
     Path("1411.dot"),
@@ -40,6 +43,7 @@ CLUSTER_BASELINE = {
     "timeout": 0,
     "failed": 0,
     "invalid_svg": 0,
+    "invalid_hierarchy": 0,
 }
 
 
@@ -106,10 +110,18 @@ def render_one(
     relative = path.relative_to(tests_root)
     if relative in KNOWN_MALFORMED:
         return AuditResult("malformed", relative)
-    output = output_root / f"{len(str(relative))}-{path.name}.svg"
+    output_name = hashlib.sha256(str(relative).encode("utf-8")).hexdigest() + ".svg"
+    output = output_root / output_name
     try:
         result = subprocess.run(
-            [str(vex), "--input", str(path), "--output", str(output)],
+            [
+                str(vex),
+                "--input",
+                str(path),
+                "--output",
+                str(output),
+                "--svg-metadata",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
@@ -128,7 +140,50 @@ def render_one(
     svg_start = svg.find(b"<svg")
     if svg_start < 0 or not svg.rstrip().endswith(b"</svg>"):
         return AuditResult("invalid_svg", relative, f"bytes={len(svg)}")
+    hierarchy_error = validate_subgraph_hierarchy(svg)
+    if hierarchy_error:
+        return AuditResult("invalid_hierarchy", relative, hierarchy_error)
     return AuditResult("ok", relative, f"bytes={len(svg)}")
+
+
+def validate_subgraph_hierarchy(svg: bytes) -> str:
+    boxes: dict[int, tuple[int | None, float, float, float, float]] = {}
+    for match in SUBGRAPH_METADATA_RE.finditer(svg):
+        attrs = {
+            name.decode("ascii"): value.decode("utf-8", "replace")
+            for name, value in XML_ATTR_RE.findall(match.group(1))
+        }
+        if not {"id", "x", "y", "width", "height"} <= attrs.keys():
+            continue
+        graph_id = int(attrs["id"])
+        boxes[graph_id] = (
+            int(attrs["parent"]) if "parent" in attrs else None,
+            float(attrs["x"]),
+            float(attrs["y"]),
+            float(attrs["width"]),
+            float(attrs["height"]),
+        )
+    epsilon = 0.02
+    for graph_id, (parent_id, x, y, width, height) in boxes.items():
+        if parent_id is None or width <= epsilon or height <= epsilon:
+            continue
+        parent = boxes.get(parent_id)
+        if parent is None:
+            return f"subgraph {graph_id} missing parent {parent_id}"
+        _, px, py, pwidth, pheight = parent
+        if pwidth <= epsilon or pheight <= epsilon:
+            return f"subgraph {graph_id} has empty parent {parent_id}"
+        if (
+            x < px - epsilon
+            or y < py - epsilon
+            or x + width > px + pwidth + epsilon
+            or y + height > py + pheight + epsilon
+        ):
+            return (
+                f"subgraph {graph_id} box=({x},{y},{width},{height}) outside "
+                f"parent {parent_id}=({px},{py},{pwidth},{pheight})"
+            )
+    return ""
 
 
 def run_cluster_audit(
@@ -165,7 +220,7 @@ def run_cluster_audit(
         + " ".join(f"{name}={counts[name]}" for name in CLUSTER_BASELINE)
     )
     for result in results:
-        if result.kind in {"timeout", "failed", "invalid_svg"}:
+        if result.kind in {"timeout", "failed", "invalid_svg", "invalid_hierarchy"}:
             suffix = f": {result.detail}" if result.detail else ""
             print(f"{result.kind}: {result.path}{suffix}")
     failures = check_baseline(counts, CLUSTER_BASELINE)

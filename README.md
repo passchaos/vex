@@ -352,7 +352,9 @@ as development corpus data; Vex never calls `dot`.
 same policy through native layout and SVG rendering for every non-HTML fixture
 below 256 KiB that mentions subgraphs/clusters. Its checked-in baseline is 259
 candidates: 257 valid SVG renders, two known malformed fixtures, and zero
-timeouts, renderer failures, or invalid SVG documents. XML processing
+timeouts, renderer failures, invalid SVG documents, or subgraph hierarchy
+geometry violations. The audit enables SVG metadata and requires every nonempty
+child subgraph box to be contained by its declared parent. XML processing
 instructions such as `xml-stylesheet` are accepted before the SVG root.
 
 The ReleaseFast `test-layout-render-scale` gate covers every native layout
