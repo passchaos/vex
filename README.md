@@ -366,6 +366,11 @@ The parser currently supports a practical, mainstream DOT subset:
 - Layered coordinate refinement honors Graphviz `nslimit` as
   `floor(nslimit * node_count)` refinement passes. `vex_coordinate_passes`
   remains a direct override; the typed API exposes `GraphAttr.nslimit`.
+- Layered layout honors Graphviz `ratio=compress` together with `size` by
+  compacting complete virtual ranks, including long-edge waypoints, toward the
+  rankdir-aware requested width. Node dimensions and hard same-rank spacing
+  remain unchanged, and physically infeasible requests stop at the minimum
+  non-overlapping extent.
 - Layered ranking honors Graphviz `TBbalance=min|max`, moving unconstrained
   source/sink floaters to the selected boundary rank in every `rankdir`.
   Explicit `rank=source|sink` constraints remain exclusive and take precedence.
@@ -404,6 +409,8 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
 - SVG output honors Graphviz `size` for physical output dimensions while preserving layout coordinates in the `viewBox`.
 - SVG output honors Graphviz `ratio` for numeric aspect ratios, `ratio=fill` with `size`, and `ratio=expand` with `size` at the SVG canvas level.
+- Layered `ratio=compress` is resolved during layout rather than by scaling the
+  SVG canvas, so node and text sizes remain unchanged.
 - SVG output honors Graphviz `dpi` and `resolution` when converting graph points to SVG device units.
 - SVG output honors Graphviz `rotate=90`, `landscape=true`, and `orientation=landscape`.
 - SVG output honors Graphviz `center=true` by centering drawings in oversized SVG canvases.

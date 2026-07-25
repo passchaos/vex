@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const layout_mod = @import("layout/mod.zig");
+const size_mod = @import("size.zig");
 const svg_mod = @import("svg/mod.zig");
 
 pub const NodeId = usize;
@@ -4763,9 +4764,26 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
     }
     applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_budget);
+    const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
+    var compression_applied = false;
+    if (compression_target) |target_extent| {
+        var compressed_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, centers);
+        if (virtualPositionsExtent(&virtual_levels, &compressed_virtual_positions, axis_sizes, layout_graph) > target_extent + 0.0001) {
+            compressVirtualLayerCoordinates(layout_graph, &virtual_levels, &compressed_virtual_positions, axis_sizes, effective_options.node_gap, target_extent);
+            applyVirtualRealPositions(&virtual_levels, &compressed_virtual_positions, centers);
+            final_virtual_positions.deinit();
+            final_virtual_positions = compressed_virtual_positions;
+            compression_applied = true;
+        } else {
+            compressed_virtual_positions.deinit();
+        }
+    }
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
+    if (compression_applied) {
+        total_along = @max(total_along, virtualPositionsExtent(&virtual_levels, &final_virtual_positions, axis_sizes, layout_graph));
+    }
 
     var rank_heights = try allocator.alloc(f64, levels.len);
     defer allocator.free(rank_heights);
@@ -4808,7 +4826,9 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     }
     @memcpy(layout_ranks, ranks);
     computeSubgraphLayouts(layout_graph, axes, nodes, cluster_layouts);
-    alignCrossClusterMembersGraphvizLikeTb(layout_graph, axes, nodes, ranks, cluster_layouts);
+    if (!compression_applied) {
+        alignCrossClusterMembersGraphvizLikeTb(layout_graph, axes, nodes, ranks, cluster_layouts);
+    }
     shiftClusterMemberNodesDownForCrossClusterTb(layout_graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, layout_graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
@@ -10026,6 +10046,92 @@ fn centersExtent(centers: []const f64, sizes: []const NodeSize) f64 {
         extent = @max(extent, center + sizes[id].width / 2.0);
     }
     return extent;
+}
+
+fn layeredCompressionTarget(graph: *const Graph, axes: LayoutAxes, options: LayoutOptions) ?f64 {
+    const ratio = attrValue(graph.attrs.items, "ratio") orelse return null;
+    if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, ratio, " \t\r\n"), "compress")) return null;
+    const requested = size_mod.attr(graph.attrs.items) orelse return null;
+    const requested_along = if (axes.horizontalRanks()) requested.height else requested.width;
+    const target_extent = requested_along - axes.alongMargin(options) * 2.0;
+    return if (std.math.isFinite(target_extent) and target_extent > 0) target_extent else null;
+}
+
+fn compressVirtualLayerCoordinates(graph: *const Graph, virtual_levels: *const VirtualLevels, positions: *VirtualPositions, sizes: []const NodeSize, gap: f64, target_extent: f64) void {
+    for (virtual_levels.levels, 0..) |level, rank| {
+        if (level.items.len == 0 or rank >= positions.positions.len) continue;
+        const rank_positions = positions.positions[rank].items;
+        if (rank_positions.len != level.items.len) continue;
+        var minimum_width = virtualNodeWidth(level.items[0], sizes, graph);
+        var current_width = minimum_width;
+        var previous = level.items[0];
+        for (level.items[1..], 1..) |vnode, index| {
+            const previous_width = virtualNodeWidth(previous, sizes, graph);
+            const width = virtualNodeWidth(vnode, sizes, graph);
+            const minimum_gap = compressionVirtualNodePairGap(graph, previous, vnode, gap);
+            const current_gap = @max(
+                minimum_gap,
+                rank_positions[index] - width / 2.0 -
+                    (rank_positions[index - 1] + previous_width / 2.0),
+            );
+            minimum_width += minimum_gap + width;
+            current_width += current_gap + width;
+            previous = vnode;
+        }
+
+        const compressed_width = @max(minimum_width, @min(current_width, target_extent));
+        const current_slack = @max(0.0, current_width - minimum_width);
+        const compressed_slack = @max(0.0, compressed_width - minimum_width);
+        const slack_scale = if (current_slack > 0.0001) compressed_slack / current_slack else 0.0;
+        const first = level.items[0];
+        const last = level.items[level.items.len - 1];
+        const current_left = rank_positions[0] - virtualNodeWidth(first, sizes, graph) / 2.0;
+        const current_right = rank_positions[rank_positions.len - 1] + virtualNodeWidth(last, sizes, graph) / 2.0;
+        const current_midpoint = (current_left + current_right) / 2.0;
+        const max_left = @max(0.0, target_extent - compressed_width);
+        const compressed_left = std.math.clamp(current_midpoint - compressed_width / 2.0, 0.0, max_left);
+
+        var cursor = compressed_left;
+        previous = first;
+        var previous_original_right = rank_positions[0] + virtualNodeWidth(first, sizes, graph) / 2.0;
+        for (level.items, 0..) |vnode, index| {
+            const width = virtualNodeWidth(vnode, sizes, graph);
+            const original_right = rank_positions[index] + width / 2.0;
+            if (index > 0) {
+                const minimum_gap = compressionVirtualNodePairGap(graph, previous, vnode, gap);
+                const current_gap = @max(
+                    minimum_gap,
+                    rank_positions[index] - width / 2.0 - previous_original_right,
+                );
+                cursor += minimum_gap + (current_gap - minimum_gap) * slack_scale;
+            }
+            rank_positions[index] = cursor + width / 2.0;
+            cursor += width;
+            previous = vnode;
+            previous_original_right = original_right;
+        }
+    }
+}
+
+fn compressionVirtualNodePairGap(graph: *const Graph, left: VirtualNode, right: VirtualNode, fallback: f64) f64 {
+    var gap = virtualNodePairGap(graph, left, right, fallback);
+    const left_id = switch (left) {
+        .real => |node_id| node_id,
+        .dummy => return gap,
+    };
+    const right_id = switch (right) {
+        .real => |node_id| node_id,
+        .dummy => return gap,
+    };
+    const left_cluster = clusterIndexContainingNode(graph, left_id);
+    const right_cluster = clusterIndexContainingNode(graph, right_id);
+    if ((left_cluster != null or right_cluster != null) and left_cluster != right_cluster) {
+        const cluster_padding: f64 = 12.0;
+        const left_padding = if (left_cluster != null) cluster_padding else 0.0;
+        const right_padding = if (right_cluster != null) cluster_padding else 0.0;
+        gap = @max(gap, left_padding + defaultInterClusterGap + right_padding);
+    }
+    return gap;
 }
 
 fn shiftCentersRightWithinBudget(centers: []f64, sizes: []const NodeSize, desired_shift: f64, max_extent: f64) void {
@@ -21015,15 +21121,20 @@ fn expectNodeCentersEqual(expected: *const Layout, actual: *const Layout) !void 
 }
 
 fn expectNoSameRankNodeOverlap(graph: *const Graph, layout: *const Layout) !void {
+    const axes = LayoutAxes.init(layout.rankdir);
     for (layout.nodes, 0..) |left_node, left_id| {
         for (layout.nodes[left_id + 1 ..], left_id + 1..) |right_node, right_id| {
             if (left_id >= layout.ranks.len or right_id >= layout.ranks.len) continue;
             if (layout.ranks[left_id] != layout.ranks[right_id]) continue;
             const gap = layout_mod.subgraph.nodePairGap(graph.subgraphs.items, left_id, right_id, 36.0);
-            const left_right = left_node.center.x + left_node.width / 2.0;
-            const right_left = right_node.center.x - right_node.width / 2.0;
-            const right_right = right_node.center.x + right_node.width / 2.0;
-            const left_left = left_node.center.x - left_node.width / 2.0;
+            const left_center = axes.pointAlong(left_node.center);
+            const right_center = axes.pointAlong(right_node.center);
+            const left_half_size = axes.nodeAlongHalfSize(left_node);
+            const right_half_size = axes.nodeAlongHalfSize(right_node);
+            const left_right = left_center + left_half_size;
+            const right_left = right_center - right_half_size;
+            const right_right = right_center + right_half_size;
+            const left_left = left_center - left_half_size;
             try std.testing.expect(right_left - left_right >= gap - 0.001 or left_left - right_right >= gap - 0.001);
         }
     }
@@ -21084,6 +21195,141 @@ test "layered layout default margin is compact and overrideable" {
     try std.testing.expectEqual(@as(f64, 40), roomy.margin);
     try std.testing.expect(roomy.width > compact.width);
     try std.testing.expect(roomy.height > compact.height);
+}
+
+test "layered ratio compress honors size without scaling or overlapping nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; c; }
+        \\  { rank=same; d; e; }
+        \\  { rank=same; f; g; h; }
+        \\  a -> e;
+        \\  b -> d;
+        \\  c -> e;
+        \\  d -> h;
+        \\  e -> f;
+        \\}
+    );
+    defer graph.deinit();
+
+    var natural = try layoutLayered(allocator, &graph, .{});
+    defer natural.deinit();
+    try graph.setGraphAttr(.{ .size = "4,4" });
+    try graph.setGraphAttr(.{ .ratio = .compress });
+    var compressed = try layoutLayered(allocator, &graph, .{});
+    defer compressed.deinit();
+
+    try std.testing.expect(natural.width > compressed.width + 40.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 288), compressed.width, 0.001);
+    try std.testing.expectApproxEqAbs(natural.height, compressed.height, 0.001);
+    for (natural.nodes, compressed.nodes) |natural_node, compressed_node| {
+        try std.testing.expectEqual(natural_node.width, compressed_node.width);
+        try std.testing.expectEqual(natural_node.height, compressed_node.height);
+    }
+    try expectNoSameRankNodeOverlap(&graph, &compressed);
+
+    try graph.setGraphAttr(.{ .size = "3,3" });
+    var minimum = try layoutLayered(allocator, &graph, .{});
+    defer minimum.deinit();
+    try std.testing.expect(minimum.width > 216.0);
+    try std.testing.expect(minimum.width < natural.width);
+    try expectNoSameRankNodeOverlap(&graph, &minimum);
+}
+
+test "layered ratio compress uses the rankdir-aware size axis" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=LR];
+        \\  { rank=same; a; b; c; }
+        \\  { rank=same; d; e; }
+        \\  { rank=same; f; g; h; }
+        \\  a -> e;
+        \\  b -> d;
+        \\  c -> e;
+        \\  d -> h;
+        \\  e -> f;
+        \\}
+    );
+    defer graph.deinit();
+
+    var natural = try layoutLayered(allocator, &graph, .{});
+    defer natural.deinit();
+    try graph.setGraphAttr(.{ .size = "4,3!" });
+    try graph.setGraphAttr(.{ .ratio = .compress });
+    var compressed = try layoutLayered(allocator, &graph, .{});
+    defer compressed.deinit();
+
+    try std.testing.expectApproxEqAbs(natural.width, compressed.width, 0.001);
+    try std.testing.expect(natural.height > compressed.height + 30.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 216), compressed.height, 0.001);
+    try expectNoSameRankNodeOverlap(&graph, &compressed);
+}
+
+test "layered ratio compress requires a valid size and never expands" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [ratio=compress];
+        \\  s -> { a b c };
+        \\  { a b c } -> t;
+        \\}
+    );
+    defer graph.deinit();
+
+    var natural = try layoutLayered(allocator, &graph, .{});
+    defer natural.deinit();
+    try graph.setGraphAttr(.{ .size = "invalid" });
+    var invalid = try layoutLayered(allocator, &graph, .{});
+    defer invalid.deinit();
+    try std.testing.expectApproxEqAbs(natural.width, invalid.width, 0.001);
+    try std.testing.expectApproxEqAbs(natural.height, invalid.height, 0.001);
+
+    try graph.setGraphAttr(.{ .size = "20,20" });
+    var roomy = try layoutLayered(allocator, &graph, .{});
+    defer roomy.deinit();
+    try std.testing.expectApproxEqAbs(natural.width, roomy.width, 0.001);
+    try std.testing.expectApproxEqAbs(natural.height, roomy.height, 0.001);
+}
+
+test "layered ratio compress keeps long-edge waypoints and subgraphs inside along bounds" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [size="4,4", ratio=compress];
+        \\  subgraph left { a; b; f; }
+        \\  subgraph right { c; d; h; }
+        \\  { rank=same; a; b; c; }
+        \\  { rank=same; d; e; }
+        \\  { rank=same; f; g; h; }
+        \\  a -> e;
+        \\  b -> d;
+        \\  c -> e;
+        \\  d -> h;
+        \\  e -> f;
+        \\  a -> h [minlen=2];
+        \\  c -> f [minlen=2];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    var waypoint_count: usize = 0;
+    for (layout.edge_waypoints) |waypoints| {
+        for (waypoints.points) |waypoint| {
+            waypoint_count += 1;
+            try std.testing.expect(waypoint.point.x >= 0 and waypoint.point.x <= layout.width);
+            try std.testing.expect(waypoint.point.y >= 0 and waypoint.point.y <= layout.height);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), waypoint_count);
+    for (layout.subgraphs) |subgraph| {
+        try std.testing.expect(subgraph.x >= 0 and subgraph.x + subgraph.width <= layout.width);
+    }
+    try expectNoSameRankNodeOverlap(&graph, &layout);
 }
 
 test "layered layout honors graph margin attribute" {

@@ -5,6 +5,7 @@
 //! callers keep ownership of graph data and actual rendering.
 
 const std = @import("std");
+const size_attr = @import("../size.zig");
 
 pub const Size = struct {
     x: f64,
@@ -22,11 +23,7 @@ pub const Padding = struct {
     y: f64,
 };
 
-const RequestedSize = struct {
-    width: f64,
-    height: f64,
-    exact: bool,
-};
+const RequestedSize = size_attr.Requested;
 
 const Ratio = union(enum) {
     value: f64,
@@ -65,7 +62,7 @@ pub fn centerTranslate(attrs: anytype, output: Size, natural: Size, landscape_mo
 }
 
 pub fn canvas(attrs: anytype, natural: Size) Canvas {
-    const requested = sizeAttr(attrs);
+    const requested = size_attr.attr(attrs);
     const ratio = ratioAttr(attrs);
     var view_box = natural;
     var fill_output = false;
@@ -154,23 +151,6 @@ fn dpiScale(attrs: anytype) f64 {
     const value = std.mem.trim(u8, raw, " \t\r\n");
     const dpi = std.fmt.parseFloat(f64, value) catch return 1.0;
     return if (dpi > 0) dpi / 72.0 else 1.0;
-}
-
-fn sizeAttr(attrs: anytype) ?RequestedSize {
-    var raw = attrValue(attrs, "size") orelse return null;
-    raw = std.mem.trim(u8, raw, " \t\r\n");
-    var exact = false;
-    if (std.mem.endsWith(u8, raw, "!")) {
-        exact = true;
-        raw = std.mem.trim(u8, raw[0 .. raw.len - 1], " \t\r\n");
-    }
-    var parts = std.mem.tokenizeAny(u8, raw, ", \t");
-    const first = parts.next() orelse return null;
-    const second = parts.next() orelse first;
-    const width = parseInchMargin(first) orelse return null;
-    const height = parseInchMargin(second) orelse return null;
-    if (width <= 0 or height <= 0) return null;
-    return .{ .width = width, .height = height, .exact = exact };
 }
 
 fn parseInchMargin(value: []const u8) ?f64 {
