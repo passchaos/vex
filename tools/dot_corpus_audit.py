@@ -32,10 +32,7 @@ KNOWN_MALFORMED = {
     Path("1676.dot"),
 }
 KNOWN_PLAIN_OUTPUT = {Path("share/b545.gv")}
-KNOWN_SLOW_SVG = {
-    Path("1652.dot"),
-    Path("2095_1.dot"),
-}
+KNOWN_SLOW_SVG: set[Path] = set()
 BASELINE = {
     "candidates": 786,
     "html": 59,
@@ -56,9 +53,9 @@ CLUSTER_BASELINE = {
 }
 SVG_BASELINE = {
     "candidates": 727,
-    "ok": 720,
+    "ok": 722,
     "excluded": 5,
-    "slow": 2,
+    "slow": 0,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,

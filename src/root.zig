@@ -6752,6 +6752,54 @@ const VirtualNode = union(enum) {
     dummy: EdgeId,
 };
 
+const EdgeAdjacency = struct {
+    allocator: std.mem.Allocator,
+    offsets: []usize,
+    edge_ids: []EdgeId,
+
+    fn init(allocator: std.mem.Allocator, graph: *const Graph) !EdgeAdjacency {
+        const offsets = try allocator.alloc(usize, graph.nodes.items.len +| 1);
+        errdefer allocator.free(offsets);
+        @memset(offsets, 0);
+        for (graph.edges.items) |edge_item| {
+            if (edge_item.from < graph.nodes.items.len) offsets[edge_item.from + 1] +|= 1;
+            if (edge_item.to < graph.nodes.items.len and edge_item.to != edge_item.from) offsets[edge_item.to + 1] +|= 1;
+        }
+        for (1..offsets.len) |index| offsets[index] +|= offsets[index - 1];
+
+        const edge_ids = try allocator.alloc(EdgeId, offsets[offsets.len - 1]);
+        errdefer allocator.free(edge_ids);
+        const cursors = try allocator.dupe(usize, offsets[0 .. offsets.len - 1]);
+        defer allocator.free(cursors);
+        for (graph.edges.items) |edge_item| {
+            if (edge_item.from < graph.nodes.items.len) {
+                edge_ids[cursors[edge_item.from]] = edge_item.id;
+                cursors[edge_item.from] += 1;
+            }
+            if (edge_item.to < graph.nodes.items.len and edge_item.to != edge_item.from) {
+                edge_ids[cursors[edge_item.to]] = edge_item.id;
+                cursors[edge_item.to] += 1;
+            }
+        }
+        return .{
+            .allocator = allocator,
+            .offsets = offsets,
+            .edge_ids = edge_ids,
+        };
+    }
+
+    fn deinit(self: *EdgeAdjacency) void {
+        self.allocator.free(self.offsets);
+        self.allocator.free(self.edge_ids);
+        self.* = undefined;
+    }
+
+    fn incident(self: *const EdgeAdjacency, node_id: NodeId) []const EdgeId {
+        if (node_id +| 1 >= self.offsets.len) return &.{};
+        return self.edge_ids[self.offsets[node_id]..self.offsets[node_id + 1]];
+    }
+};
+
 const VirtualLevels = struct {
     allocator: std.mem.Allocator,
     levels: []std.ArrayList(VirtualNode),
@@ -6779,16 +6827,84 @@ const VirtualPositionSegment = struct {
     lower: usize,
 };
 
+const RankLayerEdges = struct {
+    allocator: std.mem.Allocator,
+    offsets: []usize,
+    edge_ids: []EdgeId,
+
+    fn init(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize, level_count: usize) !RankLayerEdges {
+        const interval_count = level_count -| 1;
+        const offsets = try allocator.alloc(usize, interval_count +| 1);
+        errdefer allocator.free(offsets);
+        @memset(offsets, 0);
+        for (graph.edges.items) |edge_item| {
+            const span = rankLayerEdgeSpan(edge_item, ranks, interval_count) orelse continue;
+            for (span.start..span.end) |rank| offsets[rank + 1] +|= 1;
+        }
+        for (1..offsets.len) |index| offsets[index] +|= offsets[index - 1];
+
+        const edge_ids = try allocator.alloc(EdgeId, offsets[offsets.len - 1]);
+        errdefer allocator.free(edge_ids);
+        const cursors = try allocator.dupe(usize, offsets[0 .. offsets.len - 1]);
+        defer allocator.free(cursors);
+        for (graph.edges.items) |edge_item| {
+            const span = rankLayerEdgeSpan(edge_item, ranks, interval_count) orelse continue;
+            for (span.start..span.end) |rank| {
+                edge_ids[cursors[rank]] = edge_item.id;
+                cursors[rank] += 1;
+            }
+        }
+        return .{
+            .allocator = allocator,
+            .offsets = offsets,
+            .edge_ids = edge_ids,
+        };
+    }
+
+    fn deinit(self: *RankLayerEdges) void {
+        self.allocator.free(self.offsets);
+        self.allocator.free(self.edge_ids);
+        self.* = undefined;
+    }
+
+    fn at(self: *const RankLayerEdges, rank: usize) []const EdgeId {
+        if (rank +| 1 >= self.offsets.len) return &.{};
+        return self.edge_ids[self.offsets[rank]..self.offsets[rank + 1]];
+    }
+};
+
+const RankLayerEdgeSpan = struct {
+    start: usize,
+    end: usize,
+};
+
+fn rankLayerEdgeSpan(edge_item: Edge, ranks: []const usize, interval_count: usize) ?RankLayerEdgeSpan {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank >= to_rank or from_rank >= interval_count) return null;
+    const end = @min(to_rank, interval_count);
+    if (from_rank >= end) return null;
+    return .{ .start = from_rank, .end = end };
+}
+
 const VirtualCrossingWorkspace = struct {
     allocator: std.mem.Allocator,
+    edge_adjacency: EdgeAdjacency,
+    rank_layer_edges: RankLayerEdges,
     upper_positions: []usize,
     lower_positions: []usize,
     segments: []VirtualPositionSegment,
     fenwick: []usize,
     left_neighbors: []usize,
     right_neighbors: []usize,
+    level_backup: []VirtualNode,
 
-    fn init(allocator: std.mem.Allocator, graph: *const Graph) !VirtualCrossingWorkspace {
+    fn init(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize, level_count: usize) !VirtualCrossingWorkspace {
+        var edge_adjacency = try EdgeAdjacency.init(allocator, graph);
+        errdefer edge_adjacency.deinit();
+        var rank_layer_edges = try RankLayerEdges.init(allocator, graph, ranks, level_count);
+        errdefer rank_layer_edges.deinit();
         const position_count = graph.nodes.items.len +| graph.edges.items.len;
         const upper_positions = try allocator.alloc(usize, position_count);
         errdefer allocator.free(upper_positions);
@@ -6802,24 +6918,32 @@ const VirtualCrossingWorkspace = struct {
         errdefer allocator.free(left_neighbors);
         const right_neighbors = try allocator.alloc(usize, position_count);
         errdefer allocator.free(right_neighbors);
+        const level_backup = try allocator.alloc(VirtualNode, position_count);
+        errdefer allocator.free(level_backup);
         return .{
             .allocator = allocator,
+            .edge_adjacency = edge_adjacency,
+            .rank_layer_edges = rank_layer_edges,
             .upper_positions = upper_positions,
             .lower_positions = lower_positions,
             .segments = segments,
             .fenwick = fenwick,
             .left_neighbors = left_neighbors,
             .right_neighbors = right_neighbors,
+            .level_backup = level_backup,
         };
     }
 
     fn deinit(self: *VirtualCrossingWorkspace) void {
+        self.edge_adjacency.deinit();
+        self.rank_layer_edges.deinit();
         self.allocator.free(self.upper_positions);
         self.allocator.free(self.lower_positions);
         self.allocator.free(self.segments);
         self.allocator.free(self.fenwick);
         self.allocator.free(self.left_neighbors);
         self.allocator.free(self.right_neighbors);
+        self.allocator.free(self.level_backup);
         self.* = undefined;
     }
 };
@@ -6874,9 +6998,12 @@ fn reduceVirtualLevelCrossings(
 ) !usize {
     if (virtual_levels.levels.len <= 1 or passes == 0) return 0;
 
-    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, graph);
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, graph, ranks, virtual_levels.levels.len);
     defer crossing_workspace.deinit();
-    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace);
+    const layer_crossings = try allocator.alloc(usize, virtual_levels.levels.len - 1);
+    defer allocator.free(layer_crossings);
+    refreshVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace, layer_crossings);
+    var best_crossings = sumCrossings(layer_crossings);
     if (best_crossings == 0) return 0;
     var without_improvement: usize = 0;
     var completed: usize = 0;
@@ -6884,17 +7011,22 @@ fn reduceVirtualLevelCrossings(
         completed += 1;
         var rank: usize = 1;
         while (rank < virtual_levels.levels.len) : (rank += 1) {
-            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true, &crossing_workspace);
-            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true, &crossing_workspace);
+            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true, &crossing_workspace, layer_crossings);
+            if (graph.subgraphs.items.len > 0) {
+                try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true, &crossing_workspace, layer_crossings);
+            }
         }
         rank = virtual_levels.levels.len - 1;
         while (rank > 0) : (rank -= 1) {
-            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false, &crossing_workspace);
-            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false, &crossing_workspace);
+            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false, &crossing_workspace, layer_crossings);
+            if (graph.subgraphs.items.len > 0) {
+                try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false, &crossing_workspace, layer_crossings);
+            }
         }
         refineVirtualAdjacentExchangesWithWorkspace(graph, virtual_levels, ranks, &crossing_workspace);
+        refreshVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace, layer_crossings);
         if (crossingPassShouldQuit(
-            totalVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace),
+            sumCrossings(layer_crossings),
             &best_crossings,
             &without_improvement,
             min_quit,
@@ -6912,7 +7044,7 @@ fn reduceVirtualClusterBlockCrossings(
     min_quit: usize,
 ) !usize {
     if (virtual_levels.levels.len <= 1 or passes == 0) return 0;
-    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, graph);
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, graph, ranks, virtual_levels.levels.len);
     defer crossing_workspace.deinit();
     for (virtual_levels.levels, 0..) |*level, rank| {
         stableGroupVirtualLevelByBlock(graph, ranks, rank, level);
@@ -6994,32 +7126,32 @@ const VirtualMedianOrder = struct {
     original: usize,
 };
 
-const VirtualPairCrossings = struct {
+const PairCrossings = struct {
     exact: usize = 0,
     distinct: usize = 0,
 
-    fn add(self: *VirtualPairCrossings, other: VirtualPairCrossings) void {
+    fn add(self: *PairCrossings, other: PairCrossings) void {
         self.exact +|= other.exact;
         self.distinct +|= other.distinct;
     }
 
-    fn betterThan(self: VirtualPairCrossings, other: VirtualPairCrossings) bool {
+    fn betterThan(self: PairCrossings, other: PairCrossings) bool {
         return self.exact < other.exact or
             (self.exact == other.exact and self.distinct < other.distinct);
     }
 };
 
-const VirtualPairComparison = struct {
-    before: VirtualPairCrossings = .{},
-    after: VirtualPairCrossings = .{},
+const PairCrossingComparison = struct {
+    before: PairCrossings = .{},
+    after: PairCrossings = .{},
 
-    fn add(self: *VirtualPairComparison, other: VirtualPairComparison) void {
+    fn add(self: *PairCrossingComparison, other: PairCrossingComparison) void {
         self.before.add(other.before);
         self.after.add(other.after);
     }
 };
 
-fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) void {
+fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, edge_adjacency: ?*const EdgeAdjacency) void {
     if (rank >= virtual_levels.levels.len) return;
     if (use_parents and rank == 0) return;
     if (!use_parents and rank + 1 >= virtual_levels.levels.len) return;
@@ -7033,7 +7165,7 @@ fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels
     for (level.items, 0..) |node, original| {
         orders[original] = .{
             .node = node,
-            .median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, original),
+            .median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, original, edge_adjacency),
             .original = original,
         };
     }
@@ -7047,16 +7179,22 @@ fn lessThanVirtualMedianOrder(_: void, a: VirtualMedianOrder, b: VirtualMedianOr
     return a.median < b.median;
 }
 
-fn orderVirtualLevelByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, crossing_workspace: *VirtualCrossingWorkspace) !void {
+fn orderVirtualLevelByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, crossing_workspace: *VirtualCrossingWorkspace, layer_crossings: []usize) !void {
+    _ = allocator;
     if (rank >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
     if (level.items.len <= 1) return;
-    const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
-    const backup = try allocator.dupe(VirtualNode, level.items);
-    defer allocator.free(backup);
-    orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, use_parents);
+    const before = cachedVirtualCrossingScoreAroundLevel(layer_crossings, rank);
+    if (level.items.len > crossing_workspace.level_backup.len) return error.OutOfMemory;
+    const backup = crossing_workspace.level_backup[0..level.items.len];
+    @memcpy(backup, level.items);
+    orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, use_parents, &crossing_workspace.edge_adjacency);
     const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
-    if (after > before) @memcpy(level.items, backup);
+    if (after > before) {
+        @memcpy(level.items, backup);
+    } else {
+        refreshVirtualCrossingsAroundLevel(graph, virtual_levels, ranks, crossing_workspace, layer_crossings, rank);
+    }
 }
 
 const VirtualBlockOrder = struct {
@@ -7066,7 +7204,7 @@ const VirtualBlockOrder = struct {
     first: usize,
 };
 
-fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) void {
+fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, edge_adjacency: ?*const EdgeAdjacency) void {
     if (rank >= virtual_levels.levels.len) return;
     if (use_parents and rank == 0) return;
     if (!use_parents and rank + 1 >= virtual_levels.levels.len) return;
@@ -7078,7 +7216,7 @@ fn orderVirtualLevelBlocksByMedian(graph: *const Graph, virtual_levels: *Virtual
     var block_count: usize = 0;
     for (level.items, 0..) |node, index| {
         const key = virtualBlockKeyAtRank(graph, ranks, node, rank);
-        const median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, index);
+        const median = virtualNodeNeighborMedian(graph, virtual_levels, ranks, node, rank, use_parents, index, edge_adjacency);
         node_medians[index] = median;
         const block_index = virtualBlockIndex(blocks[0..block_count], key) orelse blk: {
             blocks[block_count] = .{ .key = key, .median_sum = 0, .count = 0, .first = index };
@@ -7136,16 +7274,22 @@ fn lessThanVirtualBlockOrder(_: void, a: VirtualBlockOrder, b: VirtualBlockOrder
     return a_median < b_median;
 }
 
-fn orderVirtualLevelBlocksByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, crossing_workspace: *VirtualCrossingWorkspace) !void {
+fn orderVirtualLevelBlocksByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, crossing_workspace: *VirtualCrossingWorkspace, layer_crossings: []usize) !void {
+    _ = allocator;
     if (rank >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
     if (level.items.len <= 1) return;
-    const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
-    const backup = try allocator.dupe(VirtualNode, level.items);
-    defer allocator.free(backup);
-    orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank, use_parents);
+    const before = cachedVirtualCrossingScoreAroundLevel(layer_crossings, rank);
+    if (level.items.len > crossing_workspace.level_backup.len) return error.OutOfMemory;
+    const backup = crossing_workspace.level_backup[0..level.items.len];
+    @memcpy(backup, level.items);
+    orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank, use_parents, &crossing_workspace.edge_adjacency);
     const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
-    if (after > before) @memcpy(level.items, backup);
+    if (after > before) {
+        @memcpy(level.items, backup);
+    } else {
+        refreshVirtualCrossingsAroundLevel(graph, virtual_levels, ranks, crossing_workspace, layer_crossings, rank);
+    }
 }
 
 fn virtualBlockKey(graph: *const Graph, node: VirtualNode) usize {
@@ -7182,7 +7326,66 @@ fn crossClusterEndpointBlockKey(edge_item: Edge, ranks: []const usize, rank: usi
     return null;
 }
 
-fn virtualNodeNeighborMedian(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, node: VirtualNode, rank: usize, use_parents: bool, fallback: usize) f64 {
+fn virtualNodeNeighborMedian(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, node: VirtualNode, rank: usize, use_parents: bool, fallback: usize, edge_adjacency: ?*const EdgeAdjacency) f64 {
+    if (edge_adjacency == null) {
+        return virtualNodeNeighborMedianAllEdges(graph, virtual_levels, ranks, node, rank, use_parents, fallback);
+    }
+    var weighted_sum: f64 = 0;
+    var total_weight: f64 = 0;
+    switch (node) {
+        .real => |node_id| {
+            for (edge_adjacency.?.incident(node_id)) |edge_id| {
+                if (edge_id >= graph.edges.items.len) continue;
+                accumulateVirtualNeighborMedian(
+                    graph.edges.items[edge_id],
+                    virtual_levels,
+                    ranks,
+                    node,
+                    rank,
+                    use_parents,
+                    &weighted_sum,
+                    &total_weight,
+                );
+            }
+        },
+        .dummy => |edge_id| {
+            if (edge_id < graph.edges.items.len) {
+                accumulateVirtualNeighborMedian(
+                    graph.edges.items[edge_id],
+                    virtual_levels,
+                    ranks,
+                    node,
+                    rank,
+                    use_parents,
+                    &weighted_sum,
+                    &total_weight,
+                );
+            }
+        },
+    }
+    if (total_weight == 0) return @floatFromInt(fallback);
+    return weighted_sum / total_weight;
+}
+
+fn accumulateVirtualNeighborMedian(
+    edge_item: Edge,
+    virtual_levels: *const VirtualLevels,
+    ranks: []const usize,
+    node: VirtualNode,
+    rank: usize,
+    use_parents: bool,
+    weighted_sum: *f64,
+    total_weight: *f64,
+) void {
+    const neighbor = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse return;
+    const adjacent_rank = if (use_parents) rank - 1 else rank + 1;
+    const pos = positionInVirtualLevel(virtual_levels.levels[adjacent_rank].items, neighbor) orelse return;
+    const weight = if (edge_item.weight <= 0) 1.0 else edge_item.weight;
+    weighted_sum.* += @as(f64, @floatFromInt(pos)) * weight;
+    total_weight.* += weight;
+}
+
+fn virtualNodeNeighborMedianAllEdges(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, node: VirtualNode, rank: usize, use_parents: bool, fallback: usize) f64 {
     var weighted_sum: f64 = 0;
     var total_weight: f64 = 0;
     for (graph.edges.items) |edge_item| {
@@ -7220,7 +7423,7 @@ fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usiz
 }
 
 fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize) void {
-    var crossing_workspace = VirtualCrossingWorkspace.init(graph.allocator, graph) catch return;
+    var crossing_workspace = VirtualCrossingWorkspace.init(graph.allocator, graph, ranks, virtual_levels.levels.len) catch return;
     defer crossing_workspace.deinit();
     refineVirtualAdjacentExchangesWithWorkspace(graph, virtual_levels, ranks, &crossing_workspace);
 }
@@ -7256,13 +7459,13 @@ fn refineVirtualAdjacentExchangesWithWorkspace(graph: *const Graph, virtual_leve
     }
 }
 
-fn adjacentVirtualPairComparison(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize, left_index: usize, right_index: usize, crossing_workspace: *VirtualCrossingWorkspace) VirtualPairComparison {
+fn adjacentVirtualPairComparison(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize, left_index: usize, right_index: usize, crossing_workspace: *VirtualCrossingWorkspace) PairCrossingComparison {
     if (rank >= virtual_levels.levels.len) return .{};
     const level = virtual_levels.levels[rank].items;
     if (left_index >= level.len or right_index >= level.len) return .{};
     const left = level[left_index];
     const right = level[right_index];
-    var comparison = VirtualPairComparison{};
+    var comparison = PairCrossingComparison{};
     if (rank > 0) {
         const fixed_layer = virtual_levels.levels[rank - 1].items;
         buildVirtualPositionMap(crossing_workspace.upper_positions, fixed_layer, graph.nodes.items.len);
@@ -7306,30 +7509,36 @@ fn adjacentVirtualPairComparisonWithFixedLayer(
     fixed_positions: []const usize,
     fixed_count: usize,
     crossing_workspace: *VirtualCrossingWorkspace,
-) VirtualPairComparison {
+) PairCrossingComparison {
     const left_neighbors = crossing_workspace.left_neighbors[0..fixed_count];
     const right_neighbors = crossing_workspace.right_neighbors[0..fixed_count];
     @memset(left_neighbors, 0);
     @memset(right_neighbors, 0);
 
-    for (graph.edges.items) |edge_item| {
-        if (virtualAdjacentNode(edge_item, left, ranks, rank, use_parents)) |neighbor| {
-            const key = virtualPositionKey(neighbor, graph.nodes.items.len);
-            if (key < fixed_positions.len) {
-                const position = fixed_positions[key];
-                if (position < fixed_count) left_neighbors[position] +|= 1;
-            }
-        }
-        if (virtualAdjacentNode(edge_item, right, ranks, rank, use_parents)) |neighbor| {
-            const key = virtualPositionKey(neighbor, graph.nodes.items.len);
-            if (key < fixed_positions.len) {
-                const position = fixed_positions[key];
-                if (position < fixed_count) right_neighbors[position] +|= 1;
-            }
-        }
-    }
+    accumulateVirtualNeighborCounts(
+        graph,
+        ranks,
+        rank,
+        left,
+        use_parents,
+        fixed_positions,
+        fixed_count,
+        left_neighbors,
+        &crossing_workspace.edge_adjacency,
+    );
+    accumulateVirtualNeighborCounts(
+        graph,
+        ranks,
+        rank,
+        right,
+        use_parents,
+        fixed_positions,
+        fixed_count,
+        right_neighbors,
+        &crossing_workspace.edge_adjacency,
+    );
 
-    var comparison = VirtualPairComparison{};
+    var comparison = PairCrossingComparison{};
     var right_exact_before: usize = 0;
     var right_distinct_before: usize = 0;
     var left_exact_before: usize = 0;
@@ -7355,6 +7564,69 @@ fn adjacentVirtualPairComparisonWithFixedLayer(
     return comparison;
 }
 
+fn accumulateVirtualNeighborCounts(
+    graph: *const Graph,
+    ranks: []const usize,
+    rank: usize,
+    node: VirtualNode,
+    use_parents: bool,
+    fixed_positions: []const usize,
+    fixed_count: usize,
+    counts: []usize,
+    edge_adjacency: *const EdgeAdjacency,
+) void {
+    switch (node) {
+        .real => |node_id| {
+            for (edge_adjacency.incident(node_id)) |edge_id| {
+                if (edge_id >= graph.edges.items.len) continue;
+                accumulateVirtualNeighborCount(
+                    graph.edges.items[edge_id],
+                    graph.nodes.items.len,
+                    ranks,
+                    rank,
+                    node,
+                    use_parents,
+                    fixed_positions,
+                    fixed_count,
+                    counts,
+                );
+            }
+        },
+        .dummy => |edge_id| {
+            if (edge_id >= graph.edges.items.len) return;
+            accumulateVirtualNeighborCount(
+                graph.edges.items[edge_id],
+                graph.nodes.items.len,
+                ranks,
+                rank,
+                node,
+                use_parents,
+                fixed_positions,
+                fixed_count,
+                counts,
+            );
+        },
+    }
+}
+
+fn accumulateVirtualNeighborCount(
+    edge_item: Edge,
+    real_node_count: usize,
+    ranks: []const usize,
+    rank: usize,
+    node: VirtualNode,
+    use_parents: bool,
+    fixed_positions: []const usize,
+    fixed_count: usize,
+    counts: []usize,
+) void {
+    const neighbor = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse return;
+    const key = virtualPositionKey(neighbor, real_node_count);
+    if (key >= fixed_positions.len) return;
+    const position = fixed_positions[key];
+    if (position < fixed_count and position < counts.len) counts[position] +|= 1;
+}
+
 fn virtualSwapCrossesClusterBlock(graph: *const Graph, ranks: []const usize, rank: usize, a: VirtualNode, b: VirtualNode) bool {
     const a_key = virtualBlockKeyAtRank(graph, ranks, a, rank);
     const b_key = virtualBlockKeyAtRank(graph, ranks, b, rank);
@@ -7373,6 +7645,47 @@ fn virtualCrossingScoreAroundLevel(graph: *const Graph, virtual_levels: *const V
     return score;
 }
 
+fn cachedVirtualCrossingScoreAroundLevel(layer_crossings: []const usize, rank: usize) usize {
+    var score: usize = 0;
+    if (rank > 0 and rank - 1 < layer_crossings.len) score += layer_crossings[rank - 1];
+    if (rank < layer_crossings.len) score += layer_crossings[rank];
+    return score;
+}
+
+fn refreshVirtualLayerCrossings(
+    graph: *const Graph,
+    virtual_levels: *const VirtualLevels,
+    ranks: []const usize,
+    crossing_workspace: *VirtualCrossingWorkspace,
+    layer_crossings: []usize,
+) void {
+    for (layer_crossings, 0..) |*crossings, rank| {
+        crossings.* = countVirtualLayerCrossings(graph, virtual_levels, ranks, rank, crossing_workspace);
+    }
+}
+
+fn refreshVirtualCrossingsAroundLevel(
+    graph: *const Graph,
+    virtual_levels: *const VirtualLevels,
+    ranks: []const usize,
+    crossing_workspace: *VirtualCrossingWorkspace,
+    layer_crossings: []usize,
+    rank: usize,
+) void {
+    if (rank > 0 and rank - 1 < layer_crossings.len) {
+        layer_crossings[rank - 1] = countVirtualLayerCrossings(graph, virtual_levels, ranks, rank - 1, crossing_workspace);
+    }
+    if (rank < layer_crossings.len) {
+        layer_crossings[rank] = countVirtualLayerCrossings(graph, virtual_levels, ranks, rank, crossing_workspace);
+    }
+}
+
+fn sumCrossings(layer_crossings: []const usize) usize {
+    var total: usize = 0;
+    for (layer_crossings) |crossings| total +|= crossings;
+    return total;
+}
+
 fn totalVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, crossing_workspace: *VirtualCrossingWorkspace) usize {
     var total: usize = 0;
     if (virtual_levels.levels.len < 2) return 0;
@@ -7388,7 +7701,9 @@ fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const Virtua
     buildVirtualPositionMap(crossing_workspace.lower_positions, virtual_levels.levels[upper_rank + 1].items, graph.nodes.items.len);
 
     var segment_count: usize = 0;
-    for (graph.edges.items) |edge_item| {
+    for (crossing_workspace.rank_layer_edges.at(upper_rank)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
         const segment = virtualEdgePositionSegment(
             edge_item,
             ranks,
@@ -8580,6 +8895,8 @@ fn relaxRanksDepthFirst(
 
 fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
     if (ranks.len == 0) return;
+    var edge_adjacency: ?EdgeAdjacency = EdgeAdjacency.init(graph.allocator, graph) catch null;
+    defer if (edge_adjacency) |*adjacency| adjacency.deinit();
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
     if (max_rank == 0) return;
@@ -8591,7 +8908,10 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
             for (ranks, 0..) |node_rank, node_id| {
                 if (node_rank != rank) continue;
                 if (rankTighteningPinned(graph, node_id)) continue;
-                const target_rank = bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id) orelse continue;
+                const target_rank = (if (edge_adjacency) |*adjacency|
+                    bestFeasibleRankForNodeIndexed(graph, ranks, acyclic_edge, node_id, adjacency)
+                else
+                    bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id)) orelse continue;
                 if (target_rank > ranks[node_id]) {
                     const current_rank = ranks[node_id];
                     ranks[node_id] = target_rank;
@@ -8635,6 +8955,102 @@ fn feasibleRankBoundsForNode(graph: *const Graph, ranks: []const usize, acyclic_
 
 fn bestFeasibleRankForNode(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId) ?usize {
     const bounds = feasibleRankBoundsForNode(graph, ranks, acyclic_edge, node_id) orelse return null;
+    var total_weight: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        if ((edge_item.from == node_id and edge_item.to < ranks.len) or
+            (edge_item.to == node_id and edge_item.from < ranks.len))
+        {
+            total_weight += @max(edge_item.weight, 0);
+        }
+    }
+    if (total_weight <= 0) return bounds.max;
+
+    var low = bounds.min;
+    var high = bounds.max;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        var cumulative_weight: f64 = 0;
+        for (graph.edges.items) |edge_item| {
+            if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+            const neighbor_rank = if (edge_item.from == node_id and edge_item.to < ranks.len)
+                ranks[edge_item.to]
+            else if (edge_item.to == node_id and edge_item.from < ranks.len)
+                ranks[edge_item.from]
+            else
+                continue;
+            if (neighbor_rank <= mid) cumulative_weight += @max(edge_item.weight, 0);
+        }
+        if (cumulative_weight > total_weight / 2.0) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return low;
+}
+
+fn bestFeasibleRankForNodeIndexed(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, edge_adjacency: *const EdgeAdjacency) ?usize {
+    const edge_ids = edge_adjacency.incident(node_id);
+    const bounds = feasibleRankBoundsForNodeIndexed(graph, ranks, acyclic_edge, node_id, edge_ids) orelse return null;
+    var total_weight: f64 = 0;
+    for (edge_ids) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        total_weight += @max(edge_item.weight, 0);
+    }
+    if (total_weight <= 0) return bounds.max;
+
+    var low = bounds.min;
+    var high = bounds.max;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        var cumulative_weight: f64 = 0;
+        for (edge_ids) |edge_id| {
+            if (edge_id >= graph.edges.items.len) continue;
+            const edge_item = graph.edges.items[edge_id];
+            if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+            const neighbor_rank = if (edge_item.from == node_id and edge_item.to < ranks.len)
+                ranks[edge_item.to]
+            else if (edge_item.to == node_id and edge_item.from < ranks.len)
+                ranks[edge_item.from]
+            else
+                continue;
+            if (neighbor_rank <= mid) cumulative_weight += @max(edge_item.weight, 0);
+        }
+        if (cumulative_weight > total_weight / 2.0) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return low;
+}
+
+fn feasibleRankBoundsForNodeIndexed(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, edge_ids: []const EdgeId) ?RankBounds {
+    if (node_id >= ranks.len) return null;
+    var min_rank: usize = 0;
+    var max_rank: usize = std.math.maxInt(usize);
+    for (edge_ids) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        const min_len = edge_item.min_len;
+        if (edge_item.to == node_id and edge_item.from < ranks.len) {
+            min_rank = @max(min_rank, ranks[edge_item.from] + min_len);
+        } else if (edge_item.from == node_id and edge_item.to < ranks.len) {
+            if (ranks[edge_item.to] < min_len) return null;
+            max_rank = @min(max_rank, ranks[edge_item.to] - min_len);
+        }
+    }
+    if (max_rank == std.math.maxInt(usize)) max_rank = ranks[node_id];
+    if (min_rank > max_rank) return null;
+    return .{ .min = min_rank, .max = max_rank };
+}
+
+fn bestFeasibleRankForNodeEnumerated(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId) ?usize {
+    const bounds = feasibleRankBoundsForNode(graph, ranks, acyclic_edge, node_id) orelse return null;
     var best_rank = bounds.min;
     var best_cost = incidentRankSpanCost(graph, ranks, acyclic_edge, node_id, best_rank);
     var candidate = bounds.min + 1;
@@ -8650,16 +9066,28 @@ fn bestFeasibleRankForNode(graph: *const Graph, ranks: []const usize, acyclic_ed
 
 fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, passes: usize) void {
     if (passes == 0) return;
+    var edge_adjacency: ?EdgeAdjacency = EdgeAdjacency.init(graph.allocator, graph) catch null;
+    defer if (edge_adjacency) |*adjacency| adjacency.deinit();
     for (0..passes) |_| {
         var changed = false;
         for (ranks, 0..) |current_rank, node_id| {
             if (rankTighteningPinned(graph, node_id)) continue;
-            const target_rank = bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id) orelse continue;
+            const target_rank = (if (edge_adjacency) |*adjacency|
+                bestFeasibleRankForNodeIndexed(graph, ranks, acyclic_edge, node_id, adjacency)
+            else
+                bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id)) orelse continue;
             if (target_rank == current_rank) continue;
-            const before = rankAssignmentCost(graph, ranks, acyclic_edge);
+            const before = if (edge_adjacency) |*adjacency|
+                incidentRankSpanCostIndexed(graph, ranks, acyclic_edge, node_id, current_rank, adjacency.incident(node_id))
+            else
+                rankAssignmentCost(graph, ranks, acyclic_edge);
             ranks[node_id] = target_rank;
-            const after = rankAssignmentCost(graph, ranks, acyclic_edge);
-            if (after < before and rankAssignmentFeasible(graph, ranks, acyclic_edge) and rankConstraintsSatisfied(graph, ranks)) {
+            const after = if (edge_adjacency) |*adjacency|
+                incidentRankSpanCostIndexed(graph, ranks, acyclic_edge, node_id, target_rank, adjacency.incident(node_id))
+            else
+                rankAssignmentCost(graph, ranks, acyclic_edge);
+            const feasible = if (edge_adjacency != null) true else rankAssignmentFeasible(graph, ranks, acyclic_edge);
+            if (after < before and feasible and rankConstraintsSatisfied(graph, ranks)) {
                 changed = true;
             } else {
                 ranks[node_id] = current_rank;
@@ -8744,6 +9172,28 @@ fn improveRanksByNetworkSimplex(
 fn incidentRankSpanCost(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId, candidate_rank: usize) f64 {
     var cost: f64 = 0;
     for (graph.edges.items) |edge_item| {
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        if (edge_item.from == node_id and edge_item.to < ranks.len) {
+            cost += rankSpanCost(candidate_rank, ranks[edge_item.to], edge_item.weight);
+        } else if (edge_item.to == node_id and edge_item.from < ranks.len) {
+            cost += rankSpanCost(ranks[edge_item.from], candidate_rank, edge_item.weight);
+        }
+    }
+    return cost;
+}
+
+fn incidentRankSpanCostIndexed(
+    graph: *const Graph,
+    ranks: []const usize,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    candidate_rank: usize,
+    edge_ids: []const EdgeId,
+) f64 {
+    var cost: f64 = 0;
+    for (edge_ids) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
         if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
         if (edge_item.from == node_id and edge_item.to < ranks.len) {
             cost += rankSpanCost(candidate_rank, ranks[edge_item.to], edge_item.weight);
@@ -10176,11 +10626,11 @@ fn orderLevelByMedianGuardedWithWorkspace(
     crossing_workspace: *LayerCrossingWorkspace,
 ) !void {
     if (rank >= levels.len or levels[rank].items.len <= 1) return;
-    const before = totalLayerCrossingsWithWorkspace(graph, levels, ranks, crossing_workspace);
+    const before = crossingScoreAroundLevelWithWorkspace(graph, levels, ranks, rank, crossing_workspace);
     const backup = try allocator.dupe(NodeId, levels[rank].items);
     defer allocator.free(backup);
     orderLevelByMedian(graph, ranks, &levels[rank], adjacent_positions, median_positions, use_parents);
-    const after = totalLayerCrossingsWithWorkspace(graph, levels, ranks, crossing_workspace);
+    const after = crossingScoreAroundLevelWithWorkspace(graph, levels, ranks, rank, crossing_workspace);
     if (after > before) @memcpy(levels[rank].items, backup);
 }
 
@@ -11851,15 +12301,24 @@ const svg_clip_padding: f64 = 4.0;
 pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions) Io.Writer.Error!void {
     const edge_routing = svgEdgeRoutingMode(graph);
     const concentrate = graphConcentrateEnabled(graph);
+    const render_node_rects = graph.allocator.alloc(?RectF, graph.nodes.items.len) catch null;
+    defer if (render_node_rects) |rects| graph.allocator.free(rects);
+    if (render_node_rects) |rects| @memset(rects, null);
     const background = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "bgcolor") orelse options.background);
     const graph_pad = graphSvgPad(graph);
     var canvas_width = @ceil(layout.width);
     var canvas_height = @ceil(layout.height);
     var content_translate = Point{ .x = svgGraphContentTranslate(layout), .y = 0 };
-    if (svgGraphContentBounds(graph, layout)) |content_bounds| {
+    if (svgGraphContentBoundsWithCache(graph, layout, render_node_rects)) |content_bounds| {
         fitSvgContentAxis(content_bounds.x, content_bounds.x + content_bounds.width, graph_pad.x, &canvas_width, &content_translate.x);
         fitSvgContentAxis(content_bounds.y, content_bounds.y + content_bounds.height, graph_pad.y, &canvas_height, &content_translate.y);
     }
+    var render_node_rect_index: ?SvgNodeRectIndex = if (render_node_rects) |rects|
+        SvgNodeRectIndex.init(graph.allocator, rects) catch null
+    else
+        null;
+    defer if (render_node_rect_index) |*index| index.deinit();
+    const render_node_index: ?*const SvgNodeRectIndex = if (render_node_rect_index) |*node_index| node_index else null;
     canvas_width = @ceil(canvas_width);
     canvas_height = @ceil(canvas_height);
     const landscape = graphSvgLandscape(graph);
@@ -12047,19 +12506,19 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
                 const context = SvgLayerContext{ .layers = layers, .index = index };
                 try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
                 try renderSvgClusters(writer, graph, layout, context, write_interactive_search, write_interactive_collapse, write_interactive_inspector, write_svg_metadata);
-                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector, write_svg_metadata);
+                try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector, write_svg_metadata, render_node_index);
                 try writer.writeAll("</g>\n");
             }
         } else for (layers.names, 0..) |layer_name, index| {
             const context = SvgLayerContext{ .layers = layers, .index = index };
             try writeSvgLayerOpen(writer, layer_name, write_interactive_layers);
             try renderSvgClusters(writer, graph, layout, context, write_interactive_search, write_interactive_collapse, write_interactive_inspector, write_svg_metadata);
-            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector, write_svg_metadata);
+            try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, context, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector, write_svg_metadata, render_node_index);
             try writer.writeAll("</g>\n");
         }
     } else {
         try renderSvgClusters(writer, graph, layout, null, write_interactive_search, write_interactive_collapse, write_interactive_inspector, write_svg_metadata);
-        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector, write_svg_metadata);
+        try renderSvgGraphItems(writer, graph, layout, options, edge_routing, concentrate, null, write_interactive_search, write_interactive_collapse, write_interactive_focus, write_interactive_inspector, write_svg_metadata, render_node_index);
     }
     try writer.writeAll("</g>\n");
     if (write_interactive_viewport) try writer.writeAll("</g>\n");
@@ -13396,22 +13855,22 @@ fn clusterLayerMembership(graph: *const Graph, cluster: Subgraph, layer: SvgLaye
     return .inherit;
 }
 
-fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool, metadata: bool) Io.Writer.Error!void {
+fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, options: SvgOptions, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool, metadata: bool, node_rect_index: ?*const SvgNodeRectIndex) Io.Writer.Error!void {
     switch (svgOutputOrder(graph)) {
         .edgesfirst => {
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata, node_rect_index);
             for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector, metadata);
             return;
         },
         .nodesfirst => {
             for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector, metadata);
-            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata);
+            for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata, node_rect_index);
             return;
         },
         .breadthfirst => {},
     }
     if (graph.nodes.items.len > 512 or graph.edges.items.len > 1024) {
-        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata);
+        for (graph.edges.items) |edge_item| try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata, node_rect_index);
         for (graph.nodes.items) |node_item| try renderSvgNodeGroup(writer, graph, layout, options, node_item, layer, search, collapse, focus, inspector, metadata);
         return;
     }
@@ -13442,14 +13901,14 @@ fn renderSvgGraphItems(writer: *Io.Writer, graph: *const Graph, layout: *const L
                 try renderSvgNodeGroup(writer, graph, layout, options, graph.nodes.items[edge_item.to], layer, search, collapse, focus, inspector, metadata);
                 node_written[edge_item.to] = true;
             }
-            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata);
+            try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata, node_rect_index);
             edge_written[edge_item.id] = true;
         }
     }
 
     for (graph.edges.items) |edge_item| {
         if (edge_item.id < edge_written.len and edge_written[edge_item.id]) continue;
-        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata);
+        try renderSvgEdgeGroup(writer, graph, layout, edge_item, edge_routing, concentrate, layer, search, collapse, focus, inspector, metadata, node_rect_index);
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id < node_written.len and node_written[node_item.id]) continue;
@@ -13472,7 +13931,7 @@ fn lessThanEdgeTarget(graph: *const Graph, a_id: EdgeId, b_id: EdgeId) bool {
     return a.to < b.to;
 }
 
-fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool, metadata: bool) Io.Writer.Error!void {
+fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, edge_routing: SvgEdgeRouting, concentrate: bool, layer: ?SvgLayerContext, search: bool, collapse: bool, focus: bool, inspector: bool, metadata: bool, node_rect_index: ?*const SvgNodeRectIndex) Io.Writer.Error!void {
     const edge_concentrate = svgConcentrateForEdge(graph, edge_item, concentrate);
     if (edge_concentrate and isConcentratedDuplicateEdge(graph, edge_item.id)) return;
     if (layer) |context| {
@@ -13570,13 +14029,15 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
             } else {
                 const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
                     Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+                else if (node_rect_index) |index|
+                    edgeLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, visual, label, index)
                 else
                     edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
                 main_label_center = label_center;
                 try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
             }
         }
-        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center);
+        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center, node_rect_index);
         try writeSvgInteractiveClose(writer, edge_wrap);
         try writer.writeAll("</g>\n");
         return;
@@ -13597,7 +14058,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
                 try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
             }
         }
-        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, route.label);
+        try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, route.label, node_rect_index);
         try writeSvgInteractiveClose(writer, edge_wrap);
         try writer.writeAll("</g>\n");
         return;
@@ -13623,30 +14084,42 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         } else {
             const label_center = if (edgeLabelFloatEnabled(edge_item.attrs.items))
                 Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+            else if (node_rect_index) |index|
+                edgeLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, visual, label, index)
             else
                 edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
             main_label_center = label_center;
             try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, label_center, visual.font_size, visual.font_color, visual.font);
         }
     }
-    try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center);
+    try renderSvgExtraEdgeLabels(writer, graph, layout, edge_item, route, visual, main_label_center, node_rect_index);
     try writeSvgInteractiveClose(writer, edge_wrap);
     try writer.writeAll("</g>\n");
 }
 
 fn edgeLabelCenterAvoidingNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, label: []const u8) Point {
     if (positionedAttrPoint(layout, edge_item.attrs.items, "lp")) |point| return point;
-    return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, visual.font_size, .{ .x = route.label.x, .y = route.label.y - 6.0 });
+    return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, visual.font_size, .{ .x = route.label.x, .y = route.label.y - 6.0 }, null);
 }
 
 fn edgeXLabelCenterAvoidingNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, label: []const u8, font_size: f64) Point {
     if (positionedAttrPoint(layout, edge_item.attrs.items, "xlp")) |point| return point;
-    return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, font_size, .{ .x = route.label.x, .y = route.label.y + 18.0 });
+    return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, font_size, .{ .x = route.label.x, .y = route.label.y + 18.0 }, null);
 }
 
-fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, edge_item: Edge, label: []const u8, font_size: f64, base: Point) Point {
+fn edgeLabelCenterAvoidingNodesIndexed(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, label: []const u8, node_rect_index: *const SvgNodeRectIndex) Point {
+    if (positionedAttrPoint(layout, edge_item.attrs.items, "lp")) |point| return point;
+    return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, visual.font_size, .{ .x = route.label.x, .y = route.label.y - 6.0 }, node_rect_index);
+}
+
+fn edgeXLabelCenterAvoidingNodesIndexed(graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, label: []const u8, font_size: f64, node_rect_index: *const SvgNodeRectIndex) Point {
+    if (positionedAttrPoint(layout, edge_item.attrs.items, "xlp")) |point| return point;
+    return edgeLabelCenterAvoidingNodesFrom(graph, layout, edge_item, label, font_size, .{ .x = route.label.x, .y = route.label.y + 18.0 }, node_rect_index);
+}
+
+fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, edge_item: Edge, label: []const u8, font_size: f64, base: Point, node_rect_index: ?*const SvgNodeRectIndex) Point {
     const base_rect = edgeLabelRect(label, base, font_size);
-    if (!edgeLabelOverlapsNodes(graph, layout, edge_item, base_rect)) return base;
+    if (!edgeLabelOverlapsNodes(graph, layout, edge_item, base_rect, node_rect_index)) return base;
 
     var candidates: [96]Point = undefined;
     var candidate_count: usize = 0;
@@ -13662,17 +14135,24 @@ fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, 
     }
 
     const label_rect = edgeLabelRect(label, base, font_size);
-    for (graph.nodes.items) |node_item| {
-        if (node_item.id >= layout.nodes.len) continue;
-        if (resolveNodeVisual(graph, node_item).hidden) continue;
-        const rect = expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), 4.0);
-        if (!rectsOverlap(label_rect, rect)) continue;
-        const half_width = label_rect.width / 2.0;
-        const half_height = label_rect.height / 2.0;
-        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = base.x, .y = rect.y - half_height - 6.0 });
-        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = base.x, .y = rect.y + rect.height + half_height + 6.0 });
-        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = rect.x - half_width - 6.0, .y = base.y });
-        appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = rect.x + rect.width + half_width + 6.0, .y = base.y });
+    if (node_rect_index) |index| {
+        index.appendAvoidanceCandidates(label_rect, base, &candidates, &candidate_count);
+    } else {
+        for (graph.nodes.items) |node_item| {
+            const raw_rect = blk: {
+                if (node_item.id >= layout.nodes.len) break :blk null;
+                if (nodeHiddenForSvg(node_item)) break :blk null;
+                break :blk nodeRect(graphvizRenderNodeLayout(graph, layout, node_item));
+            };
+            const rect = expandRect(raw_rect orelse continue, 4.0);
+            if (!rectsOverlap(label_rect, rect)) continue;
+            const half_width = label_rect.width / 2.0;
+            const half_height = label_rect.height / 2.0;
+            appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = base.x, .y = rect.y - half_height - 6.0 });
+            appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = base.x, .y = rect.y + rect.height + half_height + 6.0 });
+            appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = rect.x - half_width - 6.0, .y = base.y });
+            appendEdgeLabelCandidate(&candidates, &candidate_count, .{ .x = rect.x + rect.width + half_width + 6.0, .y = base.y });
+        }
     }
 
     var best = base;
@@ -13680,7 +14160,7 @@ fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, 
     for (candidates[0..candidate_count]) |candidate| {
         const rect = edgeLabelRect(label, candidate, font_size);
         if (!labelRectInsideLayout(rect, layout)) continue;
-        if (edgeLabelOverlapsNodes(graph, layout, edge_item, rect)) continue;
+        if (edgeLabelOverlapsNodes(graph, layout, edge_item, rect, node_rect_index)) continue;
         const dx = candidate.x - base.x;
         const dy = candidate.y - base.y;
         const score = dx * dx + dy * dy;
@@ -13724,12 +14204,142 @@ fn edgeLabelRect(label: []const u8, center: Point, font_size: f64) RectF {
     };
 }
 
-fn edgeLabelOverlapsNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, label_rect: RectF) bool {
+const SvgNodeRectEntry = struct {
+    node_id: NodeId,
+    rect: RectF,
+};
+
+const SvgNodeRectIndex = struct {
+    allocator: std.mem.Allocator,
+    by_id: []const ?RectF,
+    entries: []SvgNodeRectEntry,
+    prefix_max_right: []f64,
+
+    fn init(allocator: std.mem.Allocator, node_rects: []const ?RectF) !SvgNodeRectIndex {
+        var count: usize = 0;
+        for (node_rects) |maybe_rect| if (maybe_rect != null) {
+            count += 1;
+        };
+        const entries = try allocator.alloc(SvgNodeRectEntry, count);
+        errdefer allocator.free(entries);
+        const prefix_max_right = try allocator.alloc(f64, count);
+        errdefer allocator.free(prefix_max_right);
+        var index: usize = 0;
+        for (node_rects, 0..) |maybe_rect, node_id| {
+            entries[index] = .{
+                .node_id = node_id,
+                .rect = maybe_rect orelse continue,
+            };
+            index += 1;
+        }
+        std.mem.sort(SvgNodeRectEntry, entries, {}, lessThanNodeRectEntryX);
+        var max_right: f64 = -std.math.floatMax(f64);
+        for (entries, prefix_max_right) |entry, *prefix| {
+            max_right = @max(max_right, entry.rect.x + entry.rect.width);
+            prefix.* = max_right;
+        }
+        return .{
+            .allocator = allocator,
+            .by_id = node_rects,
+            .entries = entries,
+            .prefix_max_right = prefix_max_right,
+        };
+    }
+
+    fn deinit(self: *SvgNodeRectIndex) void {
+        self.allocator.free(self.entries);
+        self.allocator.free(self.prefix_max_right);
+        self.* = undefined;
+    }
+
+    fn overlaps(self: *const SvgNodeRectIndex, query: RectF, padding: f64) bool {
+        var index = self.endBefore(query.x + query.width + padding);
+        while (index > 0) {
+            if (self.prefix_max_right[index - 1] <= query.x - padding) break;
+            index -= 1;
+            if (rectsOverlap(query, expandRect(self.entries[index].rect, padding))) return true;
+        }
+        return false;
+    }
+
+    fn appendAvoidanceCandidates(
+        self: *const SvgNodeRectIndex,
+        query: RectF,
+        base: Point,
+        candidates: *[96]Point,
+        candidate_count: *usize,
+    ) void {
+        var matching_ids: [96]NodeId = undefined;
+        var matching_count: usize = 0;
+        var index = self.endBefore(query.x + query.width + 4.0);
+        while (index > 0) {
+            if (self.prefix_max_right[index - 1] <= query.x - 4.0) break;
+            index -= 1;
+            const entry = self.entries[index];
+            const rect = expandRect(entry.rect, 4.0);
+            if (!rectsOverlap(query, rect)) continue;
+            insertSmallestNodeId(&matching_ids, &matching_count, entry.node_id);
+        }
+        for (matching_ids[0..matching_count]) |node_id| {
+            const rect = expandRect(self.by_id[node_id] orelse continue, 4.0);
+            const half_width = query.width / 2.0;
+            const half_height = query.height / 2.0;
+            appendEdgeLabelCandidate(candidates, candidate_count, .{ .x = base.x, .y = rect.y - half_height - 6.0 });
+            appendEdgeLabelCandidate(candidates, candidate_count, .{ .x = base.x, .y = rect.y + rect.height + half_height + 6.0 });
+            appendEdgeLabelCandidate(candidates, candidate_count, .{ .x = rect.x - half_width - 6.0, .y = base.y });
+            appendEdgeLabelCandidate(candidates, candidate_count, .{ .x = rect.x + rect.width + half_width + 6.0, .y = base.y });
+        }
+    }
+
+    fn endBefore(self: *const SvgNodeRectIndex, x: f64) usize {
+        var low: usize = 0;
+        var high = self.entries.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.entries[mid].rect.x < x) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    }
+};
+
+fn lessThanNodeRectEntryX(_: void, a: SvgNodeRectEntry, b: SvgNodeRectEntry) bool {
+    if (a.rect.x == b.rect.x) {
+        if (a.rect.y == b.rect.y) return a.node_id < b.node_id;
+        return a.rect.y < b.rect.y;
+    }
+    return a.rect.x < b.rect.x;
+}
+
+fn insertSmallestNodeId(ids: *[96]NodeId, count: *usize, node_id: NodeId) void {
+    var insert_at: usize = 0;
+    while (insert_at < count.* and ids[insert_at] < node_id) : (insert_at += 1) {}
+    if (insert_at < count.* and ids[insert_at] == node_id) return;
+    if (count.* < ids.len) {
+        var move = count.*;
+        while (move > insert_at) : (move -= 1) ids[move] = ids[move - 1];
+        ids[insert_at] = node_id;
+        count.* += 1;
+    } else if (insert_at < ids.len) {
+        var move = ids.len - 1;
+        while (move > insert_at) : (move -= 1) ids[move] = ids[move - 1];
+        ids[insert_at] = node_id;
+    }
+}
+
+fn edgeLabelOverlapsNodes(graph: *const Graph, layout: *const Layout, edge_item: Edge, label_rect: RectF, node_rect_index: ?*const SvgNodeRectIndex) bool {
     _ = edge_item;
+    if (node_rect_index) |index| return index.overlaps(label_rect, 2.0);
     for (graph.nodes.items) |node_item| {
-        if (node_item.id >= layout.nodes.len) continue;
-        if (resolveNodeVisual(graph, node_item).hidden) continue;
-        const rect = expandRect(nodeRect(graphvizRenderNodeLayout(graph, layout, node_item)), 2.0);
+        const raw_rect = blk: {
+            if (node_item.id >= layout.nodes.len) break :blk null;
+            if (nodeHiddenForSvg(node_item)) break :blk null;
+            break :blk nodeRect(graphvizRenderNodeLayout(graph, layout, node_item));
+        };
+        const rect = expandRect(raw_rect orelse continue, 2.0);
         if (rectsOverlap(label_rect, rect)) return true;
     }
     return false;
@@ -13923,7 +14533,18 @@ fn fitSvgContentAxis(content_min: f64, content_max: f64, padding: f64, canvas_si
 }
 
 fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
+    return svgGraphContentBoundsWithCache(graph, layout, null);
+}
+
+fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, shared_node_rects: ?[]?RectF) ?RectF {
     var bounds = BoundsBuilder{};
+    const owned_node_rects = if (shared_node_rects == null)
+        graph.allocator.alloc(?RectF, graph.nodes.items.len) catch null
+    else
+        null;
+    defer if (owned_node_rects) |rects| graph.allocator.free(rects);
+    const cached_node_rects = shared_node_rects orelse owned_node_rects;
+    if (cached_node_rects) |rects| @memset(rects, null);
     if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |point| {
         if (attrValue(graph.attrs.items, "label")) |label| {
             bounds.includeRect(edgeLabelRect(label, point, parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0)));
@@ -13942,9 +14563,18 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
         if (resolveNodeVisual(graph, node_item).hidden) continue;
         const node_layout = graphvizRenderNodeLayout(graph, layout, node_item);
         const visual = resolveNodeVisual(graph, node_item);
-        bounds.includeRect(nodeRect(node_layout));
+        const node_rect = nodeRect(node_layout);
+        if (cached_node_rects) |rects| {
+            if (node_item.id < rects.len) rects[node_item.id] = node_rect;
+        }
+        bounds.includeRect(node_rect);
         if (nodeXLabelRect(layout, node_item, node_layout, visual)) |rect| bounds.includeRect(rect);
     }
+    var node_rect_index: ?SvgNodeRectIndex = if (cached_node_rects) |rects|
+        SvgNodeRectIndex.init(graph.allocator, rects) catch null
+    else
+        null;
+    defer if (node_rect_index) |*index| index.deinit();
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) continue;
         const visual = resolveEdgeVisual(graph, edge_item);
@@ -13961,13 +14591,18 @@ fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
                     route.label
                 else if (edgeLabelFloatEnabled(edge_item.attrs.items))
                     Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+                else if (node_rect_index) |*index|
+                    edgeLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, visual, label, index)
                 else
                     edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
             bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
         }
         if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
             const font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
-            const center = edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, font_size);
+            const center = if (node_rect_index) |*index|
+                edgeXLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, label, font_size, index)
+            else
+                edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, font_size);
             bounds.includeRect(edgeLabelRect(label, center, font_size));
         }
     }
@@ -15169,7 +15804,7 @@ fn writeSvgInteractiveClose(writer: *Io.Writer, wrap: SvgInteractiveWrap) Io.Wri
     }
 }
 
-fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, main_label_center: ?Point) Io.Writer.Error!void {
+fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, main_label_center: ?Point, node_rect_index: ?*const SvgNodeRectIndex) Io.Writer.Error!void {
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
     const label_font_color = attrValue(edge_item.attrs.items, "labelfontcolor") orelse visual.font_color;
     const label_font = if (attrValue(edge_item.attrs.items, "labelfontname")) |fontname| svgFont(graph, fontname) else visual.font;
@@ -15186,7 +15821,10 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .head, label, pos, label_font_size, label_font_color, label_font);
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
-        const pos = edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size);
+        const pos = if (node_rect_index) |index|
+            edgeXLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, label, label_font_size, index)
+        else
+            edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size);
         try renderSvgEdgeInteractiveLabel(writer, graph, edge_item, .label, label, pos, label_font_size, label_font_color, label_font);
     }
     if (edge_item.label != null and main_label_center != null and edgeDecorateEnabled(edge_item.attrs.items)) {
@@ -18115,6 +18753,10 @@ fn resolveNodeVisual(graph: *const Graph, node_item: Node) NodeVisual {
         .peripheries = @max(peripheries, 1),
         .hidden = invisible,
     };
+}
+
+fn nodeHiddenForSvg(node_item: Node) bool {
+    return styleHas(attrValue(node_item.attrs.items, "style"), "invis");
 }
 
 fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
@@ -25052,7 +25694,7 @@ test "virtual level block ordering keeps cluster members adjacent" {
     virtual_levels.levels[1].items[1] = .{ .real = outside };
     virtual_levels.levels[1].items[2] = .{ .real = b };
 
-    orderVirtualLevelBlocksByMedian(&graph, &virtual_levels, ranks, 1, true);
+    orderVirtualLevelBlocksByMedian(&graph, &virtual_levels, ranks, 1, true, null);
     const a_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = a }).?;
     const b_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .real = b }).?;
     try std.testing.expect(a_pos + 1 == b_pos or b_pos + 1 == a_pos);
@@ -25085,7 +25727,7 @@ test "virtual level block ordering sorts members by individual medians" {
     virtual_levels.levels[1].items[0] = .{ .real = b };
     virtual_levels.levels[1].items[1] = .{ .real = a };
 
-    orderVirtualLevelBlocksByMedian(&graph, &virtual_levels, ranks, 1, true);
+    orderVirtualLevelBlocksByMedian(&graph, &virtual_levels, ranks, 1, true, null);
     try std.testing.expectEqual(a, virtual_levels.levels[1].items[0].real);
     try std.testing.expectEqual(b, virtual_levels.levels[1].items[1].real);
 }
@@ -25116,7 +25758,13 @@ test "virtual neighbor medians account for edge weights" {
     virtual_levels.levels[0].items[2] = .{ .real = right };
     virtual_levels.levels[1].items[0] = .{ .real = child };
 
-    const median = virtualNodeNeighborMedian(&graph, &virtual_levels, ranks, .{ .real = child }, 1, true, 0);
+    const median = virtualNodeNeighborMedian(&graph, &virtual_levels, ranks, .{ .real = child }, 1, true, 0, null);
+    var edge_adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer edge_adjacency.deinit();
+    try std.testing.expectEqual(
+        median,
+        virtualNodeNeighborMedian(&graph, &virtual_levels, ranks, .{ .real = child }, 1, true, 0, &edge_adjacency),
+    );
     try std.testing.expect(median > 1.5);
 }
 
@@ -25244,7 +25892,7 @@ test "virtual adjacent exchange reduces dummy crossings" {
 
     var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
     defer virtual_levels.deinit();
-    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph);
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph, ranks, virtual_levels.levels.len);
     defer crossing_workspace.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1, &crossing_workspace));
@@ -25274,7 +25922,7 @@ test "virtual crossing counter ignores shared endpoints" {
 
     var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
     defer virtual_levels.deinit();
-    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph);
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph, ranks, virtual_levels.levels.len);
     defer crossing_workspace.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), countVirtualLayerCrossings(&graph, &virtual_levels, ranks, 0, &crossing_workspace));
@@ -25310,7 +25958,7 @@ test "virtual Fenwick crossing counter matches pairwise definition" {
 
     var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
     defer virtual_levels.deinit();
-    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph);
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph, ranks, virtual_levels.levels.len);
     defer crossing_workspace.deinit();
 
     for (0..virtual_levels.levels.len - 1) |rank| {
@@ -30572,6 +31220,52 @@ test "rank local search finds best feasible node rank" {
     try std.testing.expectEqual(@as(usize, 2), bestFeasibleRankForNode(&graph, ranks, acyclic_edge, x).?);
 }
 
+test "weighted median rank selection matches enumerated optimum" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  low -> x [weight=1];
+        \\  x -> high [weight=8];
+        \\  low -> a -> b -> c -> high;
+        \\  flat -> x [weight=0];
+        \\}
+    );
+    defer graph.deinit();
+
+    const acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(acyclic_edge);
+    @memset(acyclic_edge, true);
+
+    const low = nodeIdByLabel(&graph, "low");
+    const x = nodeIdByLabel(&graph, "x");
+    const high = nodeIdByLabel(&graph, "high");
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    const flat = nodeIdByLabel(&graph, "flat");
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[low] = 0;
+    ranks[a] = 1;
+    ranks[b] = 2;
+    ranks[c] = 3;
+    ranks[high] = 4;
+    ranks[x] = 1;
+    ranks[flat] = 0;
+
+    var edge_adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer edge_adjacency.deinit();
+    const enumerated = bestFeasibleRankForNodeEnumerated(&graph, ranks, acyclic_edge, x).?;
+    try std.testing.expectEqual(
+        enumerated,
+        bestFeasibleRankForNode(&graph, ranks, acyclic_edge, x).?,
+    );
+    try std.testing.expectEqual(
+        enumerated,
+        bestFeasibleRankForNodeIndexed(&graph, ranks, acyclic_edge, x, &edge_adjacency).?,
+    );
+}
+
 test "bounded rank local search can move nodes upward when it lowers cost" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -31649,10 +32343,10 @@ test "SVG edge labels avoid overlapping intervening nodes" {
     const edge_item = graph.edges.items[edge_id];
     const visual = resolveEdgeVisual(&graph, edge_item);
     const before = edgeLabelRect(edge_item.label.?, .{ .x = route.label.x, .y = route.label.y - 6.0 }, visual.font_size);
-    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, before));
+    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, before, null));
     const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, visual, edge_item.label.?);
     const after = edgeLabelRect(edge_item.label.?, label_center, visual.font_size);
-    try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, after));
+    try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, after, null));
     try std.testing.expect(label_center.y != route.label.y - 6.0);
     try graph.setEdgeAttr(edge_id, .{ .labelfloat = true });
     const floating_edge = graph.edges.items[edge_id];
@@ -31662,16 +32356,16 @@ test "SVG edge labels avoid overlapping intervening nodes" {
     else
         edgeLabelCenterAvoidingNodes(&graph, &layout, floating_edge, route, visual, floating_edge.label.?);
     const floating_rect = edgeLabelRect(floating_edge.label.?, floating_center, visual.font_size);
-    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, floating_edge, floating_rect));
+    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, floating_edge, floating_rect, null));
     try std.testing.expectEqual(route.label.y - 6.0, floating_center.y);
 
     const xlabel = attrValue(edge_item.attrs.items, "xlabel").?;
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
     const xbefore = edgeLabelRect(xlabel, .{ .x = route.label.x, .y = route.label.y + 18.0 }, label_font_size);
-    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, xbefore));
+    try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, xbefore, null));
     const xlabel_center = edgeXLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, xlabel, label_font_size);
     const xafter = edgeLabelRect(xlabel, xlabel_center, label_font_size);
-    try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, xafter));
+    try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, xafter, null));
     try std.testing.expect(xlabel_center.y != route.label.y + 18.0);
     _ = middle;
 }

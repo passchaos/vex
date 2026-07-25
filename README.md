@@ -358,9 +358,9 @@ child subgraph box to be contained by its declared parent. XML processing
 instructions such as `xml-stylesheet` are accepted before the SVG root.
 
 `zig build audit-svg-corpus -Dgraphviz-root=/path/to/graphviz` renders the
-entire non-HTML parse corpus. Its fast tier contains 720 valid XML SVG results
-under a two-second per-fixture gate; two known large/pathological fixtures form
-an explicit slow queue, and five known malformed/plain inputs remain excluded.
+entire non-HTML parse corpus. Its fast tier contains all 722 valid XML SVG
+results under a two-second per-fixture gate; no slow fixtures remain, and five
+known malformed/plain inputs remain excluded.
 Any new timeout, renderer failure, non-finite numeric attribute, or invalid XML
 fails the audit.
 
