@@ -1355,7 +1355,7 @@ pub const Graph = struct {
         } else if (std.ascii.eqlIgnoreCase(name, "weight")) {
             self.edge_defaults.weight = std.fmt.parseFloat(f64, value) catch self.edge_defaults.weight;
         } else if (std.ascii.eqlIgnoreCase(name, "constraint")) {
-            self.edge_defaults.constraint = parseBool(value) orelse self.edge_defaults.constraint;
+            self.edge_defaults.constraint = parseBool(value) orelse false;
         } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
             self.edge_defaults.min_len = std.fmt.parseInt(usize, value, 10) catch self.edge_defaults.min_len;
         }
@@ -1771,7 +1771,7 @@ pub const Graph = struct {
         } else if (std.ascii.eqlIgnoreCase(name, "weight")) {
             e.weight = std.fmt.parseFloat(f64, value) catch e.weight;
         } else if (std.ascii.eqlIgnoreCase(name, "constraint")) {
-            e.constraint = parseBool(value) orelse e.constraint;
+            e.constraint = parseBool(value) orelse false;
         } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
             e.min_len = std.fmt.parseInt(usize, value, 10) catch e.min_len;
         }
@@ -29659,6 +29659,52 @@ test "DOT parser accepts Graphviz boolean aliases" {
     try std.testing.expect(fixedsizeMode(graph.nodes.items[a].attrs.items) == .false);
     try std.testing.expect(!graph.edges.items[0].constraint);
     try std.testing.expect(graph.edges.items[1].constraint);
+}
+
+test "Graphviz unknown constraint text maps to false" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  edge [constraint=none];
+        \\  a -> b;
+        \\  b -> c [constraint=invalid];
+        \\  c -> d [constraint=true];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(!graph.edges.items[0].constraint);
+    try std.testing.expect(!graph.edges.items[1].constraint);
+    try std.testing.expect(graph.edges.items[2].constraint);
+    try std.testing.expectEqualStrings("none", attrValue(graph.edges.items[0].attrs.items, "constraint").?);
+    try std.testing.expectEqualStrings("invalid", attrValue(graph.edges.items[1].attrs.items, "constraint").?);
+}
+
+test "Graphviz 258 constraint none inter-subgraph edge renders once" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph one {
+        \\    { rank=same; A -> B; }
+        \\    C -> A;
+        \\  }
+        \\  subgraph two {
+        \\    { rank=same; D -> E; }
+        \\    F -> E;
+        \\  }
+        \\  B -> D [constraint=none];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(!graph.edges.items[4].constraint);
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expectEqual(@as(usize, 1), countSubstrings(svg, "data-vex-object-label=\"B-&gt;D\""));
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-constraint=\"false\"") != null);
 }
 
 test "layered layout respects edge constraint false and minlen" {

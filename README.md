@@ -423,6 +423,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Edge `minlen=0` is preserved across DOT and typed APIs, allowing same-rank
   edges without silently raising the minimum rank distance to one.
+- Graphviz boolean parsing for edge `constraint` treats unknown explicit text,
+  including legacy `constraint=none`, as false instead of retaining the
+  inherited default.
 - Graphviz arrow marker grammar including `normal`, `open`, `inv`, `curve`,
   `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, open variants, `l` / `r`
   half-arrow modifiers, compatibility aliases, and compositions of up to four
