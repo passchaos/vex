@@ -7,18 +7,22 @@ const rank_width: usize = 16;
 const layered_node_count: usize = rank_count * rank_width;
 const layered_subgraph_count: usize = 4;
 const layered_edge_count: usize = 388;
+const extreme_minlen: usize = 60_000;
 const force_node_count: usize = 2048;
 const force_edge_count: usize = 4096;
 const layout_memory_limit: usize = 16 * 1024 * 1024;
 const render_memory_limit: usize = 8 * 1024 * 1024;
 const layout_arena_limit: usize = 8 * 1024 * 1024;
 const render_arena_limit: usize = 4 * 1024 * 1024;
+const extreme_layout_memory_limit: usize = 48 * 1024 * 1024;
+const extreme_layout_arena_limit: usize = 48 * 1024 * 1024;
 const layout_time_limit_ns: i96 = 3 * std.time.ns_per_s;
 const render_time_limit_ns: i96 = std.time.ns_per_s;
 const peak_rss_limit: usize = 96 * 1024 * 1024;
 
 pub fn main(init: std.process.Init) !void {
     const layered = try runLayeredGate(init);
+    const minlen = try runExtremeMinlenGate(init);
     const force = try runForceGate(init);
     const engine_cases = [_]EngineGateCase{
         .{ .name = "neato", .algorithm = .stress_majorization, .node_count = 256, .edges = true, .iterations = 30 },
@@ -37,6 +41,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_buffer: [4096]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), init.io, &stdout_buffer);
     try printGateResult(&stdout.interface, "layered", layered);
+    try printGateResult(&stdout.interface, "minlen-60000", minlen);
     try printGateResult(&stdout.interface, "sfdp", force);
     for (engine_cases, engine_results) |case, result| try printGateResult(&stdout.interface, case.name, result);
     try stdout.interface.print("layout-render-scale peak_rss_bytes={d}\n", .{peak_rss_bytes});
@@ -167,6 +172,53 @@ fn buildLayeredGraph(allocator: std.mem.Allocator) !vex.Graph {
     }
     if (graph.edges.items.len != layered_edge_count) return error.LayoutScaleEdgeCountMismatch;
     return graph;
+}
+
+fn runExtremeMinlenGate(init: std.process.Init) !LayoutRenderGateResult {
+    const allocator = init.gpa;
+    var graph = try vex.Graph.init(allocator, .{
+        .directed = true,
+        .name = "ExtremeMinlenScale",
+    });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const sink = try graph.addNode("sink", .{});
+    const edge = try graph.addEdge(source, sink, .{ .min_len = extreme_minlen });
+
+    const layout_memory = try allocator.alloc(u8, extreme_layout_memory_limit);
+    defer allocator.free(layout_memory);
+    var layout_fixed = std.heap.FixedBufferAllocator.init(layout_memory);
+    const layout_start = std.Io.Clock.awake.now(init.io);
+    var layout = try vex.layoutGraph(layout_fixed.allocator(), &graph, .{ .algorithm = .sugiyama });
+    const layout_elapsed_ns = layout_start.durationTo(std.Io.Clock.awake.now(init.io)).toNanoseconds();
+    const layout_arena_bytes = layout_fixed.end_index;
+    defer layout.deinit();
+
+    if (layout.nodes.len != 2) return error.LayoutScaleNodeCountMismatch;
+    if (layout.ranks[sink] - layout.ranks[source] != extreme_minlen) return error.LayoutScaleRankSpanMismatch;
+    if (layout.edge_waypoints[edge].points.len != extreme_minlen - 1) return error.LayoutScaleWaypointCountMismatch;
+    if (layout_elapsed_ns > layout_time_limit_ns) return error.LayoutScaleTimeLimitExceeded;
+    if (layout_arena_bytes > extreme_layout_arena_limit) return error.LayoutScaleMemoryLimitExceeded;
+
+    const render_memory = try allocator.alloc(u8, render_memory_limit);
+    defer allocator.free(render_memory);
+    const rendered = try renderGate(init, render_memory, &layout, .{
+        .nodes = 2,
+        .edges = 1,
+        .subgraphs = 0,
+    });
+
+    return .{
+        .nodes = graph.nodes.items.len,
+        .edges = graph.edges.items.len,
+        .subgraphs = graph.subgraphs.items.len,
+        .layout_arena_bytes = layout_arena_bytes,
+        .layout_elapsed_ns = layout_elapsed_ns,
+        .render_arena_bytes = rendered.arena_bytes,
+        .render_elapsed_ns = rendered.elapsed_ns,
+        .svg_bytes = rendered.bytes,
+        .svg_hash = rendered.hash,
+    };
 }
 
 fn runForceGate(init: std.process.Init) !LayoutRenderGateResult {

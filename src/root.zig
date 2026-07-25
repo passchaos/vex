@@ -5068,7 +5068,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     defer allocator.free(centers);
     @memset(centers, 0);
 
-    var initial_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, null);
+    var initial_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, ranks, axis_sizes, effective_options.node_gap, null);
     defer initial_virtual_positions.deinit();
     applyVirtualRealPositions(&virtual_levels, &initial_virtual_positions, centers);
 
@@ -5078,7 +5078,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     straightenSimpleAdjacentEdges(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 2);
     alignGroupedCenters(layout_graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
-    var virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, centers);
+    var virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, ranks, axis_sizes, effective_options.node_gap, centers);
     defer virtual_positions.deinit();
     applyVirtualRealPositions(&virtual_levels, &virtual_positions, centers);
     straightenSimpleAdjacentEdges(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 1);
@@ -5086,7 +5086,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     normalizeCenters(centers, axis_sizes);
     const cluster_along_budget = clusterSpacingAlongBudget(axes, effective_options);
     applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
-    var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, centers);
+    var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, ranks, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
     applyVirtualRealPositionsExceptGroups(layout_graph, &virtual_levels, &final_virtual_positions, centers);
     if (!graphHasExplicitEdgeWeight(layout_graph)) {
@@ -5105,7 +5105,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
-        var compressed_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, centers);
+        var compressed_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, ranks, axis_sizes, effective_options.node_gap, centers);
         if (virtualPositionsExtent(&virtual_levels, &compressed_virtual_positions, axis_sizes, layout_graph) > target_extent + 0.0001) {
             compressVirtualLayerCoordinates(layout_graph, &virtual_levels, &compressed_virtual_positions, axis_sizes, effective_options.node_gap, target_extent);
             applyVirtualRealPositions(&virtual_levels, &compressed_virtual_positions, centers);
@@ -7285,14 +7285,14 @@ fn virtualAdjacentNode(edge_item: Edge, node: VirtualNode, ranks: []const usize,
     return null;
 }
 
-fn computeVirtualPositions(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels, graph: *const Graph, sizes: []const NodeSize, gap: f64, real_hints: ?[]const f64) !VirtualPositions {
+fn computeVirtualPositions(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels, graph: *const Graph, ranks: []const usize, sizes: []const NodeSize, gap: f64, real_hints: ?[]const f64) !VirtualPositions {
     const positions = try allocator.alloc(std.ArrayList(f64), virtual_levels.levels.len);
     errdefer allocator.free(positions);
     for (positions) |*level| level.* = .empty;
     errdefer for (positions) |*level| level.deinit(allocator);
 
     if (real_hints) |hints| {
-        try computeVirtualPositionsFromHints(allocator, virtual_levels, graph, sizes, gap, hints, positions);
+        try computeVirtualPositionsFromHints(allocator, virtual_levels, graph, ranks, sizes, gap, hints, positions);
     } else {
         try computeVirtualPositionsPacked(virtual_levels, graph, sizes, gap, positions, allocator);
     }
@@ -7319,12 +7319,12 @@ fn computeVirtualPositionsPacked(virtual_levels: *const VirtualLevels, graph: *c
     }
 }
 
-fn computeVirtualPositionsFromHints(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels, graph: *const Graph, sizes: []const NodeSize, gap: f64, hints: []const f64, positions: []std.ArrayList(f64)) !void {
+fn computeVirtualPositionsFromHints(allocator: std.mem.Allocator, virtual_levels: *const VirtualLevels, graph: *const Graph, ranks: []const usize, sizes: []const NodeSize, gap: f64, hints: []const f64, positions: []std.ArrayList(f64)) !void {
     for (virtual_levels.levels, 0..) |level, rank| {
         for (level.items) |vnode| {
             const pos = switch (vnode) {
                 .real => |node_id| if (node_id < hints.len) hints[node_id] else 0,
-                .dummy => |edge_id| virtualDummyHint(virtual_levels, graph, hints, edge_id, rank) orelse 0,
+                .dummy => |edge_id| virtualDummyHint(graph, ranks, hints, edge_id, rank) orelse 0,
             };
             try positions[rank].append(allocator, pos);
         }
@@ -7381,28 +7381,17 @@ fn applyVirtualRealPositionsExceptGroups(graph: *const Graph, virtual_levels: *c
     }
 }
 
-fn virtualDummyHint(virtual_levels: *const VirtualLevels, graph: *const Graph, hints: []const f64, edge_id: EdgeId, rank: usize) ?f64 {
+fn virtualDummyHint(graph: *const Graph, ranks: []const usize, hints: []const f64, edge_id: EdgeId, rank: usize) ?f64 {
     if (edge_id >= graph.edges.items.len) return null;
     const edge_item = graph.edges.items[edge_id];
     if (edge_item.from >= hints.len or edge_item.to >= hints.len) return null;
-    const from_rank = virtualRealRank(virtual_levels, edge_item.from) orelse return null;
-    const to_rank = virtualRealRank(virtual_levels, edge_item.to) orelse return null;
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
     if (from_rank + 1 >= to_rank or rank <= from_rank or rank >= to_rank) return null;
     const span = @as(f64, @floatFromInt(to_rank - from_rank));
     const t = @as(f64, @floatFromInt(rank - from_rank)) / span;
     return hints[edge_item.from] + (hints[edge_item.to] - hints[edge_item.from]) * t;
-}
-
-fn virtualRealRank(virtual_levels: *const VirtualLevels, node_id: NodeId) ?usize {
-    for (virtual_levels.levels, 0..) |level, rank| {
-        for (level.items) |vnode| {
-            switch (vnode) {
-                .real => |id| if (id == node_id) return rank,
-                .dummy => {},
-            }
-        }
-    }
-    return null;
 }
 
 fn virtualNodeWidth(vnode: VirtualNode, sizes: []const NodeSize, graph: *const Graph) f64 {
@@ -18531,7 +18520,7 @@ fn longEdgeWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, of
     const to_rank = layout.ranks[edge_item.to];
     const increasing = to_rank > from_rank;
     const rank = if (increasing) from_rank + index + 1 else from_rank - index - 1;
-    if (storedEdgeWaypoint(layout, edge_item.id, rank)) |point| {
+    if (storedEdgeWaypoint(layout, edge_item, rank)) |point| {
         const avoided = avoidNodeAtRankForWaypoint(layout, edge_item, rankdir, rank, point);
         if (edgeTouchesMultipleClusters(layout, edge_item) and waypointLeavesEndpointSpan(layout, edge_item, rankdir, avoided)) {
             return fallbackLongEdgeWaypoint(layout, edge_item, rankdir, offset, index, count, rank);
@@ -18628,11 +18617,29 @@ fn pushWaypointOutsideNode(point: Point, node: NodeLayout, rankdir: RankDir, cle
     return result;
 }
 
-fn storedEdgeWaypoint(layout: *const Layout, edge_id: EdgeId, rank: usize) ?Point {
-    if (edge_id >= layout.edge_waypoints.len) return null;
-    for (layout.edge_waypoints[edge_id].points) |waypoint| {
-        if (waypoint.rank == rank) return waypoint.point;
+fn storedEdgeWaypoint(layout: *const Layout, edge_item: Edge, rank: usize) ?Point {
+    if (edge_item.id >= layout.edge_waypoints.len) return null;
+    const waypoints = layout.edge_waypoints[edge_item.id].points;
+    if (waypoints.len == 0) return null;
+    if (edge_item.from < layout.ranks.len) {
+        const from_rank = layout.ranks[edge_item.from];
+        if (rank > from_rank) {
+            const index = rank - from_rank - 1;
+            if (index < waypoints.len and waypoints[index].rank == rank) return waypoints[index].point;
+        }
     }
+
+    var low: usize = 0;
+    var high = waypoints.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (waypoints[mid].rank < rank) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    if (low < waypoints.len and waypoints[low].rank == rank) return waypoints[low].point;
     return null;
 }
 
@@ -24827,7 +24834,7 @@ test "virtual positions expose dummy along coordinates" {
     defer allocator.free(sizes);
     for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
 
-    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, null);
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, ranks, sizes, 10, null);
     defer positions.deinit();
     const dummy_along = virtualDummyAlong(&virtual_levels, &positions, 0, 1) orelse return error.MissingDummyAlong;
     const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
@@ -24863,7 +24870,7 @@ test "virtual positions use real node coordinate hints" {
     hints[b] = 80;
     hints[c] = 110;
 
-    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, hints);
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, ranks, sizes, 10, hints);
     defer positions.deinit();
     const dummy_pos = positionInVirtualLevel(virtual_levels.levels[1].items, .{ .dummy = 0 }).?;
     try std.testing.expect(positions.positions[1].items[dummy_pos] > 60.0);
@@ -24896,7 +24903,7 @@ test "virtual positions compact overlaps while preserving order" {
     hints[a] = 10;
     hints[b] = 12;
 
-    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, hints);
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, ranks, sizes, 10, hints);
     defer positions.deinit();
     try std.testing.expectEqual(@as(f64, 10), positions.positions[0].items[0]);
     try std.testing.expectEqual(@as(f64, 40), positions.positions[0].items[1]);
@@ -24993,7 +25000,7 @@ test "virtual position compaction honors node gap" {
     hints[a] = 10;
     hints[b] = 12;
 
-    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 30, hints);
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, ranks, sizes, 30, hints);
     defer positions.deinit();
     try std.testing.expectEqual(@as(f64, 10), positions.positions[0].items[0]);
     try std.testing.expectEqual(@as(f64, 60), positions.positions[0].items[1]);
@@ -25025,7 +25032,7 @@ test "virtual positions can update real node centers" {
     hints[a] = 30;
     hints[b] = 90;
 
-    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, hints);
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, ranks, sizes, 10, hints);
     defer positions.deinit();
     const centers = try allocator.alloc(f64, graph.nodes.items.len);
     defer allocator.free(centers);
@@ -25059,7 +25066,7 @@ test "virtual real center update preserves grouped nodes" {
     defer allocator.free(hints);
     hints[grouped] = 20;
     hints[plain] = 80;
-    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, sizes, 10, hints);
+    var positions = try computeVirtualPositions(allocator, &virtual_levels, &graph, ranks, sizes, 10, hints);
     defer positions.deinit();
     const centers = try allocator.alloc(f64, graph.nodes.items.len);
     defer allocator.free(centers);

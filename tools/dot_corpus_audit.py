@@ -37,7 +37,6 @@ KNOWN_SLOW_SVG = {
     Path("1718.dot"),
     Path("2095_1.dot"),
     Path("2343.dot"),
-    Path("2743.dot"),
     Path("graphs/b102.gv"),
     Path("graphs/b124.gv"),
     Path("graphs/b143.gv"),
@@ -72,9 +71,9 @@ CLUSTER_BASELINE = {
 }
 SVG_BASELINE = {
     "candidates": 727,
-    "ok": 704,
+    "ok": 705,
     "excluded": 5,
-    "slow": 18,
+    "slow": 17,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,
@@ -331,7 +330,7 @@ def main() -> int:
     parser.add_argument("--vex", type=Path, required=True, help="ReleaseFast Vex CLI")
     parser.add_argument("--max-bytes", type=int, default=256 * 1024)
     parser.add_argument("--timeout", type=float, default=2.0)
-    parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--render-clusters", action="store_true")
     parser.add_argument("--render-all", action="store_true")
     args = parser.parse_args()
