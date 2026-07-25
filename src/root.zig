@@ -2568,6 +2568,7 @@ const Parser = struct {
         if (attrValue(graph.attrs.items, "root")) |root_name| {
             if (self.node_index.get(root_name)) |root_id| graph.radial_root = root_id;
         }
+        try normalizeParsedGraphCharset(&graph);
         return graph;
     }
 
@@ -3217,6 +3218,91 @@ fn freeTempAttrs(allocator: std.mem.Allocator, attrs: *AttrList) void {
         allocator.free(attr.value);
     }
     attrs.deinit(allocator);
+}
+
+fn normalizeParsedGraphCharset(graph: *Graph) !void {
+    const charset = attrValue(graph.attrs.items, "charset") orelse return;
+    if (!isLatin1Charset(charset)) return;
+
+    try replaceLatin1Owned(graph.allocator, &graph.name);
+    try transcodeAttrListLatin1(graph.allocator, graph.attrs.items);
+    try transcodeAttrListLatin1(graph.allocator, graph.node_default_attrs.items);
+    try transcodeAttrListLatin1(graph.allocator, graph.edge_default_attrs.items);
+    try replaceLatin1Owned(graph.allocator, &graph.node_defaults.color);
+    try replaceLatin1Owned(graph.allocator, &graph.edge_defaults.color);
+
+    for (graph.nodes.items) |*node| {
+        try replaceLatin1Owned(graph.allocator, &node.label);
+        try replaceLatin1Owned(graph.allocator, &node.color);
+        try transcodeAttrListLatin1(graph.allocator, node.attrs.items);
+    }
+    for (graph.edges.items) |*edge| {
+        if (edge.label) |label| {
+            var owned = label;
+            try replaceLatin1Owned(graph.allocator, &owned);
+            edge.label = owned;
+        }
+        try replaceLatin1Owned(graph.allocator, &edge.color);
+        if (edge.tail_record_port) |port| {
+            var owned = port;
+            try replaceLatin1Owned(graph.allocator, &owned);
+            edge.tail_record_port = owned;
+        }
+        if (edge.head_record_port) |port| {
+            var owned = port;
+            try replaceLatin1Owned(graph.allocator, &owned);
+            edge.head_record_port = owned;
+        }
+        try transcodeAttrListLatin1(graph.allocator, edge.attrs.items);
+    }
+    for (graph.subgraphs.items) |*subgraph| {
+        try replaceLatin1Owned(graph.allocator, &subgraph.label);
+        try transcodeAttrListLatin1(graph.allocator, subgraph.attrs.items);
+    }
+}
+
+fn isLatin1Charset(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    return std.ascii.eqlIgnoreCase(trimmed, "latin-1") or
+        std.ascii.eqlIgnoreCase(trimmed, "latin1") or
+        std.ascii.eqlIgnoreCase(trimmed, "l1") or
+        std.ascii.eqlIgnoreCase(trimmed, "ISO-8859-1") or
+        std.ascii.eqlIgnoreCase(trimmed, "ISO_8859-1") or
+        std.ascii.eqlIgnoreCase(trimmed, "ISO8859-1") or
+        std.ascii.eqlIgnoreCase(trimmed, "ISO-IR-100");
+}
+
+fn transcodeAttrListLatin1(allocator: std.mem.Allocator, attrs: []Attr) !void {
+    for (attrs) |*attr| {
+        try replaceLatin1Owned(allocator, &attr.name);
+        try replaceLatin1Owned(allocator, &attr.value);
+    }
+}
+
+fn replaceLatin1Owned(allocator: std.mem.Allocator, value: *[]const u8) !void {
+    const converted = try latin1ToUtf8Alloc(allocator, value.*);
+    allocator.free(value.*);
+    value.* = converted;
+}
+
+fn latin1ToUtf8Alloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var extra: usize = 0;
+    for (value) |byte| {
+        if (byte >= 0x80) extra += 1;
+    }
+    const result = try allocator.alloc(u8, value.len + extra);
+    var out: usize = 0;
+    for (value) |byte| {
+        if (byte < 0x80) {
+            result[out] = byte;
+            out += 1;
+        } else {
+            result[out] = 0xC0 | (byte >> 6);
+            result[out + 1] = 0x80 | (byte & 0x3F);
+            out += 2;
+        }
+    }
+    return result;
 }
 
 fn dupeDotString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
@@ -22707,6 +22793,59 @@ test "DOT parser supports subgraphs, ports, escaped strings, and angle strings" 
     try std.testing.expectEqualStrings("hello\nworld", graph.nodes.items[a].label);
     try std.testing.expect(graph.attrs.items.len >= 2);
     try std.testing.expectEqualStrings(" <B>Fancy</B> Graph ", graph.attrs.items[1].value);
+}
+
+test "DOT parser normalizes Graphviz Latin-1 charsets to UTF-8 model text" {
+    const allocator = std.testing.allocator;
+    const aliases = [_][]const u8{
+        "latin-1",
+        "latin1",
+        "l1",
+        "ISO-8859-1",
+        "ISO_8859-1",
+        "ISO8859-1",
+        "ISO-IR-100",
+    };
+    for (aliases) |alias| {
+        const source = try std.fmt.allocPrint(
+            allocator,
+            "digraph \"Gr\xe4ph\" {{ graph [charset=\"{s}\", label=\"Gr\xf6\xdfe\"]; node [tooltip=\"N\xf6de\"]; subgraph cl\xe4 {{ label=\"Cl\xfcster\"; \"T\xfcr\"; }} \"T\xfcr\":\"p\xf6rt\" -> Ziel [label=\"f\xfchrt\"]; }}",
+            .{alias},
+        );
+        defer allocator.free(source);
+        var graph = try parseDot(allocator, source);
+        defer graph.deinit();
+
+        try std.testing.expectEqualStrings("Gräph", graph.name);
+        try std.testing.expectEqualStrings("Größe", attrValue(graph.attrs.items, "label").?);
+        const door = nodeIdByLabel(&graph, "Tür");
+        try std.testing.expectEqualStrings("Nöde", attrValue(graph.nodes.items[door].attrs.items, "tooltip").?);
+        try std.testing.expectEqualStrings("Clüster", graph.subgraphs.items[0].label);
+        try std.testing.expectEqualStrings("führt", graph.edges.items[0].label.?);
+        try std.testing.expectEqualStrings("pört", graph.edges.items[0].tail_record_port.?);
+
+        var layout = try layoutLayered(allocator, &graph, .{});
+        defer layout.deinit();
+        const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+        defer allocator.free(svg);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(svg));
+        try std.testing.expect(std.mem.indexOf(u8, svg, "Größe") != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, "führt") != null);
+    }
+}
+
+test "UTF-8 charset leaves valid UTF-8 text unchanged" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph "東京" {
+        \\  graph [charset="utf-8", label="größer"];
+        \\  "节点";
+        \\}
+    );
+    defer graph.deinit();
+    try std.testing.expectEqualStrings("東京", graph.name);
+    try std.testing.expectEqualStrings("größer", attrValue(graph.attrs.items, "label").?);
+    try std.testing.expect(nodeIdByLabel(&graph, "节点") < graph.nodes.items.len);
 }
 
 test "DOT graph stream parses independent directed and undirected graphs" {

@@ -460,6 +460,11 @@ The parser currently supports a practical, mainstream DOT subset:
   arrow parts. The typed API exposes composite `ArrowPart` sequences through
   `EdgeOptions.arrowheads` / `arrowtails` and `EdgeAttr`.
 - Quoted strings with common Graphviz escapes (`\n`, `\l`, `\r`, escaped quotes/backslashes, line continuations), quoted-string concatenation with `+`, balanced angle-bracket IDs/labels retained as plain text, Graphviz NAME/NUMBER lexical boundaries, BOM, whitespace-free edge operators, numeric IDs, negative numeric IDs, UTF-8 IDs, and simple boolean attributes including `true` / `false`, `yes` / `no`, `on` / `off`, and `1` / `0`. Ambiguous numbers follow Graphviz `chkNum` tokenization, so inputs such as `1.2.3` split into `1.2` and `.3`, and the non-HTML Graphviz #2743 corpus parses without treating joined attributes as one malformed number. Bare IDs containing hyphens are rejected with a quote-it diagnostic, matching Graphviz's NAME grammar. Node-list edge fanout preserves each endpoint's record/compass port. SVG text rendering honors `\l` / `\r` line alignment for graph, node, subgraph, and external labels such as `xlabel`, `headlabel`, and `taillabel`; Graphviz object escapes include `\G`, `\N`, `\E`, `\T`, `\H`, and `\L`; default `node [...]` and `edge [...]` label attributes expand in each concrete node or edge context.
+- DOT graphs declaring any Graphviz Latin-1 alias (`latin-1`, `latin1`, `l1`,
+  `ISO-8859-1`, `ISO_8859-1`, `ISO8859-1`, or `ISO-IR-100`) are normalized
+  to UTF-8 at the graph-model boundary. Graph, default, node, edge, subgraph,
+  and record-port text therefore remains valid XML; the upstream `b56.gv`
+  Latin-1 fixture renders as valid UTF-8 SVG.
 - SVG text rendering honors `nojustify=true` for graph, node, edge, and subgraph labels.
 - SVG rendering honors Graphviz `outputorder=edgesfirst|nodesfirst|breadthfirst`.
 - Node and cluster `peripheries=0` hide borders while preserving fills.
