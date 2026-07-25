@@ -4387,7 +4387,7 @@ fn clusterRankMode(graph: *const Graph) ClusterRankMode {
 
 fn remincrossEnabled(graph: *const Graph) bool {
     const value = attrValue(graph.attrs.items, "remincross") orelse return true;
-    return parseBool(value) orelse true;
+    return parseBool(value) orelse false;
 }
 
 fn newrankEnabled(graph: *const Graph) bool {
@@ -18307,7 +18307,7 @@ fn subgraphCompoundEnabled(graph: *const Graph, id: SubgraphId) bool {
 
 fn edgeClipEnabled(attrs: []const Attr, name: []const u8) bool {
     const value = attrValue(attrs, name) orelse return true;
-    return parseBool(value) orelse true;
+    return parseBool(value) orelse false;
 }
 
 fn samePortBoundaryPoint(graph: *const Graph, layout: *const Layout, edge_item: Edge, head: bool) ?Point {
@@ -27310,6 +27310,29 @@ test "SVG renderer honors arrowsize and edge clipping attributes" {
     try std.testing.expectEqual(layout.nodes[c].center.y, unclipped.end.y);
 }
 
+test "invalid explicit edge clip booleans disable clipping" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  rankdir=LR;
+        \\  a [shape=box];
+        \\  b [shape=box];
+        \\  a -> b [tailclip=invalid, headclip=none];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const route = edgeRouteForEdge(&graph, &layout, graph.edges.items[0], layout.rankdir, 0);
+    try std.testing.expectEqual(layout.nodes[a].center.x, route.start.x);
+    try std.testing.expectEqual(layout.nodes[a].center.y, route.start.y);
+    try std.testing.expectEqual(layout.nodes[b].center.x, route.end.x);
+    try std.testing.expectEqual(layout.nodes[b].center.y, route.end.y);
+}
+
 test "SVG renderer uses typed edge arrowsize attribute" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
@@ -31248,6 +31271,8 @@ test "typed remincross serializes Graphviz crossing repeat control" {
     try graph.setGraphAttr(.{ .remincross = true });
     try std.testing.expectEqualStrings("true", attrValue(graph.attrs.items, "remincross").?);
     try std.testing.expect(remincrossEnabled(&graph));
+    try graph.setGraphAttrRaw("remincross", "invalid");
+    try std.testing.expect(!remincrossEnabled(&graph));
 }
 
 test "remincross repeats crossing minimization after cluster grouping" {
@@ -31284,6 +31309,13 @@ test "remincross repeats crossing minimization after cluster grouping" {
     try std.testing.expect(layoutEdgesCross(&single_graph, &single, 1, 2));
     try std.testing.expect(!layoutEdgesCross(&repeated_graph, &repeated, 1, 2));
     try expectNodeCentersEqual(&repeated, &default_layout);
+
+    var invalid_graph = try parseDot(allocator, source);
+    defer invalid_graph.deinit();
+    try invalid_graph.setGraphAttrRaw("remincross", "invalid");
+    var invalid = try layoutLayered(allocator, &invalid_graph, .{});
+    defer invalid.deinit();
+    try expectNodeCentersEqual(&single, &invalid);
 }
 
 test "remincross is inert without subgraphs" {

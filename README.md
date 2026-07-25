@@ -426,6 +426,8 @@ The parser currently supports a practical, mainstream DOT subset:
 - Graphviz boolean parsing for edge `constraint` treats unknown explicit text,
   including legacy `constraint=none`, as false instead of retaining the
   inherited default.
+- True-default Graphviz booleans keep their default only when absent: explicit
+  invalid `remincross`, `headclip`, or `tailclip` text maps to false.
 - In layered layout, edge `weight=0` keeps its hard `minlen` constraint but is
   excluded from rank-span and coordinate attraction objectives. It still
   participates in ordinary crossing avoidance, matching Graphviz `xpenalty`.
