@@ -4944,6 +4944,8 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     @memset(acyclic_edge, false);
     const strong_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
     defer allocator.free(strong_edge);
+    var rank_edge_adjacency = try EdgeAdjacency.init(allocator, layout_graph);
+    defer rank_edge_adjacency.deinit();
     for (layout_graph.edges.items) |edge_item| {
         strong_edge[edge_item.id] = rankEdgeUsesStrongClusterPenalty(layout_graph, edge_item);
     }
@@ -4960,7 +4962,9 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         const u = queue.items[head];
-        for (layout_graph.edges.items) |edge_item| {
+        for (rank_edge_adjacency.incident(u)) |edge_id| {
+            if (edge_id >= layout_graph.edges.items.len) continue;
+            const edge_item = layout_graph.edges.items[edge_id];
             if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
             if (edge_item.from != u) continue;
             const min_len = edge_item.min_len;
@@ -4973,14 +4977,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         }
     }
 
-    assignRanksForCyclicComponents(layout_graph, ranks, acyclic_edge, strong_edge);
+    assignRanksForCyclicComponentsIndexed(layout_graph, ranks, acyclic_edge, strong_edge, &rank_edge_adjacency);
     if (graphHasStrongClusters(layout_graph)) {
         settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
-    tightenRanksTowardSinks(layout_graph, ranks, acyclic_edge);
-    improveRanksByLocalSearch(layout_graph, ranks, acyclic_edge, 2);
+    tightenRanksTowardSinksIndexed(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
+    improveRanksByLocalSearchIndexed(layout_graph, ranks, acyclic_edge, 2, &rank_edge_adjacency);
     try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| 4);
     const rank_pivot_limit = rankSimplexPivotLimit(layout_graph, n * 2);
     _ = try improveRanksByNetworkSimplex(
@@ -7183,7 +7187,7 @@ fn orderVirtualLevelByMedianGuarded(allocator: std.mem.Allocator, graph: *const 
     _ = allocator;
     if (rank >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
-    if (level.items.len <= 1) return;
+    if (level.items.len <= 1 or level.items.len > 128) return;
     const before = cachedVirtualCrossingScoreAroundLevel(layer_crossings, rank);
     if (level.items.len > crossing_workspace.level_backup.len) return error.OutOfMemory;
     const backup = crossing_workspace.level_backup[0..level.items.len];
@@ -7278,7 +7282,7 @@ fn orderVirtualLevelBlocksByMedianGuarded(allocator: std.mem.Allocator, graph: *
     _ = allocator;
     if (rank >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
-    if (level.items.len <= 1) return;
+    if (level.items.len <= 1 or level.items.len > 128) return;
     const before = cachedVirtualCrossingScoreAroundLevel(layer_crossings, rank);
     if (level.items.len > crossing_workspace.level_backup.len) return error.OutOfMemory;
     const backup = crossing_workspace.level_backup[0..level.items.len];
@@ -8837,10 +8841,41 @@ fn assignRanksForCyclicComponents(
     acyclic_edge: []const bool,
     strong_edge: []const bool,
 ) void {
+    var edge_adjacency: ?EdgeAdjacency = EdgeAdjacency.init(graph.allocator, graph) catch null;
+    defer if (edge_adjacency) |*adjacency| adjacency.deinit();
+    if (edge_adjacency) |*adjacency| {
+        assignRanksForCyclicComponentsIndexed(graph, ranks, acyclic_edge, strong_edge, adjacency);
+        return;
+    }
     const state = graph.allocator.alloc(u8, ranks.len) catch return;
     defer graph.allocator.free(state);
     @memset(state, 0);
-    for (graph.nodes.items, 0..) |_, id| relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, id);
+    for (graph.nodes.items, 0..) |_, id| {
+        relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, null, id);
+    }
+}
+
+fn assignRanksForCyclicComponentsIndexed(
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    strong_edge: []const bool,
+    edge_adjacency: *const EdgeAdjacency,
+) void {
+    const state = graph.allocator.alloc(u8, ranks.len) catch return;
+    defer graph.allocator.free(state);
+    @memset(state, 0);
+    for (graph.nodes.items, 0..) |_, id| {
+        relaxRanksDepthFirst(
+            graph,
+            ranks,
+            state,
+            acyclic_edge,
+            strong_edge,
+            edge_adjacency,
+            id,
+        );
+    }
 }
 
 fn applyTopBottomBalance(graph: *const Graph, ranks: []usize) void {
@@ -8871,32 +8906,88 @@ fn relaxRanksDepthFirst(
     state: []u8,
     acyclic_edge: []const bool,
     strong_edge: []const bool,
+    edge_adjacency: ?*const EdgeAdjacency,
     node_id: NodeId,
 ) void {
     if (node_id >= state.len) return;
     if (state[node_id] == 1) return;
     if (state[node_id] == 2) return;
     state[node_id] = 1;
-    for (graph.edges.items) |edge_item| {
-        if (edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id]) continue;
-        if (!edge_item.constraint or edge_item.from != node_id) continue;
-        if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) continue;
-        if (edge_item.to >= ranks.len or edge_item.to == node_id) continue;
-        if (state[edge_item.to] == 1) continue;
-        const candidate = ranks[node_id] + edge_item.min_len;
-        if (ranks[edge_item.to] < candidate) {
-            ranks[edge_item.to] = candidate;
-            if (state[edge_item.to] == 2) state[edge_item.to] = 0;
+    if (edge_adjacency) |adjacency| {
+        for (adjacency.incident(node_id)) |edge_id| {
+            if (edge_id >= graph.edges.items.len) continue;
+            relaxRankEdge(
+                graph,
+                ranks,
+                state,
+                acyclic_edge,
+                strong_edge,
+                adjacency,
+                node_id,
+                graph.edges.items[edge_id],
+            );
         }
-        relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, edge_item.to);
+    } else {
+        for (graph.edges.items) |edge_item| {
+            relaxRankEdge(
+                graph,
+                ranks,
+                state,
+                acyclic_edge,
+                strong_edge,
+                null,
+                node_id,
+                edge_item,
+            );
+        }
     }
     state[node_id] = 2;
+}
+
+fn relaxRankEdge(
+    graph: *const Graph,
+    ranks: []usize,
+    state: []u8,
+    acyclic_edge: []const bool,
+    strong_edge: []const bool,
+    edge_adjacency: ?*const EdgeAdjacency,
+    node_id: NodeId,
+    edge_item: Edge,
+) void {
+    if (edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id]) return;
+    if (!edge_item.constraint or edge_item.from != node_id) return;
+    if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) return;
+    if (edge_item.to >= ranks.len or edge_item.to == node_id) return;
+    if (state[edge_item.to] == 1) return;
+    const candidate = ranks[node_id] + edge_item.min_len;
+    if (ranks[edge_item.to] < candidate) {
+        ranks[edge_item.to] = candidate;
+        if (state[edge_item.to] == 2) state[edge_item.to] = 0;
+    }
+    relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, edge_adjacency, edge_item.to);
 }
 
 fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
     if (ranks.len == 0) return;
     var edge_adjacency: ?EdgeAdjacency = EdgeAdjacency.init(graph.allocator, graph) catch null;
     defer if (edge_adjacency) |*adjacency| adjacency.deinit();
+    if (edge_adjacency) |*adjacency| {
+        tightenRanksTowardSinksIndexed(graph, ranks, acyclic_edge, adjacency);
+        return;
+    }
+    tightenRanksTowardSinksFallback(graph, ranks, acyclic_edge);
+}
+
+fn tightenRanksTowardSinksIndexed(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, edge_adjacency: *const EdgeAdjacency) void {
+    tightenRanksTowardSinksImpl(graph, ranks, acyclic_edge, edge_adjacency);
+}
+
+fn tightenRanksTowardSinksFallback(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
+    tightenRanksTowardSinksImpl(graph, ranks, acyclic_edge, null);
+}
+
+fn tightenRanksTowardSinksImpl(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, edge_adjacency: ?*const EdgeAdjacency) void {
+    if (ranks.len == 0) return;
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
     if (max_rank == 0) return;
@@ -8908,7 +8999,7 @@ fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []
             for (ranks, 0..) |node_rank, node_id| {
                 if (node_rank != rank) continue;
                 if (rankTighteningPinned(graph, node_id)) continue;
-                const target_rank = (if (edge_adjacency) |*adjacency|
+                const target_rank = (if (edge_adjacency) |adjacency|
                     bestFeasibleRankForNodeIndexed(graph, ranks, acyclic_edge, node_id, adjacency)
                 else
                     bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id)) orelse continue;
@@ -9068,21 +9159,34 @@ fn improveRanksByLocalSearch(graph: *const Graph, ranks: []usize, acyclic_edge: 
     if (passes == 0) return;
     var edge_adjacency: ?EdgeAdjacency = EdgeAdjacency.init(graph.allocator, graph) catch null;
     defer if (edge_adjacency) |*adjacency| adjacency.deinit();
+    if (edge_adjacency) |*adjacency| {
+        improveRanksByLocalSearchIndexed(graph, ranks, acyclic_edge, passes, adjacency);
+        return;
+    }
+    improveRanksByLocalSearchImpl(graph, ranks, acyclic_edge, passes, null);
+}
+
+fn improveRanksByLocalSearchIndexed(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, passes: usize, edge_adjacency: *const EdgeAdjacency) void {
+    improveRanksByLocalSearchImpl(graph, ranks, acyclic_edge, passes, edge_adjacency);
+}
+
+fn improveRanksByLocalSearchImpl(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool, passes: usize, edge_adjacency: ?*const EdgeAdjacency) void {
+    if (passes == 0) return;
     for (0..passes) |_| {
         var changed = false;
         for (ranks, 0..) |current_rank, node_id| {
             if (rankTighteningPinned(graph, node_id)) continue;
-            const target_rank = (if (edge_adjacency) |*adjacency|
+            const target_rank = (if (edge_adjacency) |adjacency|
                 bestFeasibleRankForNodeIndexed(graph, ranks, acyclic_edge, node_id, adjacency)
             else
                 bestFeasibleRankForNode(graph, ranks, acyclic_edge, node_id)) orelse continue;
             if (target_rank == current_rank) continue;
-            const before = if (edge_adjacency) |*adjacency|
+            const before = if (edge_adjacency) |adjacency|
                 incidentRankSpanCostIndexed(graph, ranks, acyclic_edge, node_id, current_rank, adjacency.incident(node_id))
             else
                 rankAssignmentCost(graph, ranks, acyclic_edge);
             ranks[node_id] = target_rank;
-            const after = if (edge_adjacency) |*adjacency|
+            const after = if (edge_adjacency) |adjacency|
                 incidentRankSpanCostIndexed(graph, ranks, acyclic_edge, node_id, target_rank, adjacency.incident(node_id))
             else
                 rankAssignmentCost(graph, ranks, acyclic_edge);
@@ -10511,7 +10615,7 @@ fn reduceLayerCrossings(
     defer allocator.free(positions);
     const median_positions = try allocator.alloc(usize, graph.nodes.items.len);
     defer allocator.free(median_positions);
-    var crossing_workspace = try LayerCrossingWorkspace.init(allocator, graph);
+    var crossing_workspace = try LayerCrossingWorkspace.init(allocator, graph, ranks, levels.len);
     defer crossing_workspace.deinit();
 
     var best_crossings = totalLayerCrossingsWithWorkspace(graph, levels, ranks, &crossing_workspace);
@@ -10599,7 +10703,7 @@ fn orderLevelByMedianGuarded(
     median_positions: []usize,
     use_parents: bool,
 ) !void {
-    var crossing_workspace = try LayerCrossingWorkspace.init(allocator, graph);
+    var crossing_workspace = try LayerCrossingWorkspace.init(allocator, graph, ranks, levels.len);
     defer crossing_workspace.deinit();
     try orderLevelByMedianGuardedWithWorkspace(
         allocator,
@@ -10696,20 +10800,124 @@ fn edgeWeightRepeat(weight: f64) usize {
 
 fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId), ranks: []const usize, passes: usize) void {
     if (levels.len < 2 or passes == 0) return;
-    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph) catch return;
+    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph, ranks, levels.len) catch return;
     defer crossing_workspace.deinit();
+    var edge_adjacency = EdgeAdjacency.init(graph.allocator, graph) catch return;
+    defer edge_adjacency.deinit();
+    const adjacent_neighbor_marks = graph.allocator.alloc(usize, graph.nodes.items.len) catch return;
+    defer graph.allocator.free(adjacent_neighbor_marks);
+    @memset(adjacent_neighbor_marks, 0);
+    const adjacent_left_positions = graph.allocator.alloc(usize, graph.nodes.items.len) catch return;
+    defer graph.allocator.free(adjacent_left_positions);
+    var adjacent_neighbor_stamp: usize = 1;
+    const layer_crossings = graph.allocator.alloc(usize, levels.len - 1) catch return;
+    defer graph.allocator.free(layer_crossings);
+    const layer_initialized = graph.allocator.alloc(bool, layer_crossings.len) catch return;
+    defer graph.allocator.free(layer_initialized);
+    @memset(layer_initialized, false);
+    const layer_dirty = graph.allocator.alloc(bool, layer_crossings.len) catch return;
+    defer graph.allocator.free(layer_dirty);
+    @memset(layer_dirty, false);
+    var current_dirty_delta = graph.allocator.alloc(i64, layer_crossings.len + 1) catch return;
+    defer graph.allocator.free(current_dirty_delta);
+    @memset(current_dirty_delta, 0);
+    var next_dirty_delta = graph.allocator.alloc(i64, layer_crossings.len + 1) catch return;
+    defer graph.allocator.free(next_dirty_delta);
+    @memset(next_dirty_delta, 0);
+    buildAllLayerPositionMap(crossing_workspace.node_positions, levels);
     for (0..passes) |_| {
         var changed = false;
+        var dirty_active: i64 = 0;
         for (0..levels.len) |rank| {
+            if (rank < layer_crossings.len) {
+                dirty_active += current_dirty_delta[rank];
+                if (dirty_active > 0) layer_dirty[rank] = true;
+            }
             if (levels[rank].items.len < 2 or levels[rank].items.len > 24) continue;
+            if (rank > 0 and (!layer_initialized[rank - 1] or layer_dirty[rank - 1])) {
+                layer_crossings[rank - 1] = countLayerCrossingsWithPreparedWorkspace(
+                    graph,
+                    levels.len,
+                    ranks,
+                    rank - 1,
+                    &crossing_workspace,
+                );
+                layer_initialized[rank - 1] = true;
+                layer_dirty[rank - 1] = false;
+            }
+            if (rank < layer_crossings.len and (!layer_initialized[rank] or layer_dirty[rank])) {
+                layer_crossings[rank] = countLayerCrossingsWithPreparedWorkspace(
+                    graph,
+                    levels.len,
+                    ranks,
+                    rank,
+                    &crossing_workspace,
+                );
+                layer_initialized[rank] = true;
+                layer_dirty[rank] = false;
+            }
+            var upper_crossings = if (rank > 0) layer_crossings[rank - 1] else 0;
+            var lower_crossings = if (rank < layer_crossings.len) layer_crossings[rank] else 0;
             var i: usize = 0;
             while (i + 1 < levels[rank].items.len) {
-                const pair_before = adjacentPairCrossings(graph, levels, ranks, rank, i, i + 1);
-                const pair_after = adjacentPairCrossings(graph, levels, ranks, rank, i + 1, i);
-                const before = crossingScoreAroundLevelWithWorkspace(graph, levels, ranks, rank, &crossing_workspace);
+                const before = upper_crossings + lower_crossings;
+                const left = levels[rank].items[i];
+                const right = levels[rank].items[i + 1];
                 std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
-                const after = crossingScoreAroundLevelWithWorkspace(graph, levels, ranks, rank, &crossing_workspace);
-                if (after < before or (after == before and pair_after < pair_before)) {
+                if (left < crossing_workspace.node_positions.len) crossing_workspace.node_positions[left] = i + 1;
+                if (right < crossing_workspace.node_positions.len) crossing_workspace.node_positions[right] = i;
+                const upper_after = if (rank > 0)
+                    countLayerCrossingsWithPreparedWorkspace(graph, levels.len, ranks, rank - 1, &crossing_workspace)
+                else
+                    0;
+                const lower_after = if (rank + 1 < levels.len)
+                    countLayerCrossingsWithPreparedWorkspace(graph, levels.len, ranks, rank, &crossing_workspace)
+                else
+                    0;
+                const after = upper_after + lower_after;
+                const tie_improves = if (after == before) blk: {
+                    const pair_before = adjacentPairCrossingsIndexed(
+                        graph,
+                        levels,
+                        ranks,
+                        rank,
+                        left,
+                        right,
+                        &edge_adjacency,
+                        crossing_workspace.node_positions,
+                        adjacent_neighbor_marks,
+                        adjacent_left_positions,
+                        &adjacent_neighbor_stamp,
+                    );
+                    const pair_after = adjacentPairCrossingsIndexed(
+                        graph,
+                        levels,
+                        ranks,
+                        rank,
+                        right,
+                        left,
+                        &edge_adjacency,
+                        crossing_workspace.node_positions,
+                        adjacent_neighbor_marks,
+                        adjacent_left_positions,
+                        &adjacent_neighbor_stamp,
+                    );
+                    break :blk pair_after < pair_before;
+                } else false;
+                if (after < before or tie_improves) {
+                    upper_crossings = upper_after;
+                    lower_crossings = lower_after;
+                    if (rank > 0) layer_crossings[rank - 1] = upper_after;
+                    if (rank < layer_crossings.len) layer_crossings[rank] = lower_after;
+                    markLayerCrossingRangesForMovedNodes(
+                        graph,
+                        ranks,
+                        &edge_adjacency,
+                        current_dirty_delta,
+                        next_dirty_delta,
+                        rank,
+                        &.{ left, right },
+                    );
                     changed = true;
                     if (i > 0) {
                         i -= 1;
@@ -10718,12 +10926,154 @@ fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId),
                     }
                 } else {
                     std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
+                    if (left < crossing_workspace.node_positions.len) crossing_workspace.node_positions[left] = i;
+                    if (right < crossing_workspace.node_positions.len) crossing_workspace.node_positions[right] = i + 1;
                     i += 1;
                 }
             }
         }
         if (!changed) break;
+        const completed_dirty_delta = current_dirty_delta;
+        current_dirty_delta = next_dirty_delta;
+        next_dirty_delta = completed_dirty_delta;
+        @memset(next_dirty_delta, 0);
     }
+}
+
+fn markLayerCrossingRangesForMovedNodes(
+    graph: *const Graph,
+    ranks: []const usize,
+    edge_adjacency: *const EdgeAdjacency,
+    current_dirty_delta: []i64,
+    next_dirty_delta: []i64,
+    rank: usize,
+    moved_nodes: []const NodeId,
+) void {
+    const interval_count = current_dirty_delta.len -| 1;
+    for (moved_nodes) |node_id| {
+        for (edge_adjacency.incident(node_id)) |edge_id| {
+            if (edge_id >= graph.edges.items.len) continue;
+            const span = rankLayerEdgeSpan(graph.edges.items[edge_id], ranks, interval_count) orelse continue;
+            addLayerCrossingDirtyRange(next_dirty_delta, span.start, span.end);
+            const future_start = @max(span.start, rank +| 1);
+            addLayerCrossingDirtyRange(current_dirty_delta, future_start, span.end);
+        }
+    }
+}
+
+fn addLayerCrossingDirtyRange(dirty_delta: []i64, start: usize, end: usize) void {
+    if (start >= end or end >= dirty_delta.len) return;
+    dirty_delta[start] += 1;
+    dirty_delta[end] -= 1;
+}
+
+fn adjacentPairCrossingsIndexed(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    rank: usize,
+    left: NodeId,
+    right: NodeId,
+    edge_adjacency: *const EdgeAdjacency,
+    node_positions: []const usize,
+    neighbor_marks: []usize,
+    left_positions: []usize,
+    neighbor_stamp: *usize,
+) usize {
+    if (rank >= levels.len or left >= ranks.len or right >= ranks.len) return 0;
+    var crossings: usize = 0;
+    if (rank > 0) {
+        crossings += adjacentPairCrossingsWithFixedLayerIndexed(
+            graph,
+            ranks,
+            left,
+            right,
+            true,
+            edge_adjacency,
+            node_positions,
+            neighbor_marks,
+            left_positions,
+            neighbor_stamp,
+        );
+    }
+    if (rank + 1 < levels.len) {
+        crossings += adjacentPairCrossingsWithFixedLayerIndexed(
+            graph,
+            ranks,
+            left,
+            right,
+            false,
+            edge_adjacency,
+            node_positions,
+            neighbor_marks,
+            left_positions,
+            neighbor_stamp,
+        );
+    }
+    return crossings;
+}
+
+fn adjacentPairCrossingsWithFixedLayerIndexed(
+    graph: *const Graph,
+    ranks: []const usize,
+    left: NodeId,
+    right: NodeId,
+    use_parents: bool,
+    edge_adjacency: *const EdgeAdjacency,
+    node_positions: []const usize,
+    neighbor_marks: []usize,
+    left_positions: []usize,
+    neighbor_stamp: *usize,
+) usize {
+    if (neighbor_stamp.* > std.math.maxInt(usize) - 2) {
+        @memset(neighbor_marks, 0);
+        neighbor_stamp.* = 1;
+    }
+    const left_stamp = neighbor_stamp.*;
+    const right_stamp = left_stamp + 1;
+    neighbor_stamp.* += 2;
+
+    var left_count: usize = 0;
+    for (edge_adjacency.incident(left)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        const neighbor = adjacentPairNeighbor(edge_item, ranks, left, use_parents) orelse continue;
+        if (neighbor >= neighbor_marks.len or neighbor >= node_positions.len) continue;
+        if (neighbor_marks[neighbor] == left_stamp) continue;
+        const position = node_positions[neighbor];
+        if (position == std.math.maxInt(usize)) continue;
+        neighbor_marks[neighbor] = left_stamp;
+        left_positions[left_count] = position;
+        left_count += 1;
+    }
+
+    var crossings: usize = 0;
+    for (edge_adjacency.incident(right)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        const neighbor = adjacentPairNeighbor(edge_item, ranks, right, use_parents) orelse continue;
+        if (neighbor >= neighbor_marks.len or neighbor >= node_positions.len) continue;
+        if (neighbor_marks[neighbor] == right_stamp) continue;
+        const position = node_positions[neighbor];
+        if (position == std.math.maxInt(usize)) continue;
+        neighbor_marks[neighbor] = right_stamp;
+        for (left_positions[0..left_count]) |left_position| {
+            if (left_position > position) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn adjacentPairNeighbor(edge_item: Edge, ranks: []const usize, node_id: NodeId, use_parents: bool) ?NodeId {
+    if (node_id >= ranks.len) return null;
+    if (use_parents) {
+        if (edge_item.to != node_id or edge_item.from >= ranks.len) return null;
+        if (ranks[edge_item.from] +| 1 != ranks[node_id]) return null;
+        return edge_item.from;
+    }
+    if (edge_item.from != node_id or edge_item.to >= ranks.len) return null;
+    if (ranks[node_id] +| 1 != ranks[edge_item.to]) return null;
+    return edge_item.to;
 }
 
 fn adjacentPairCrossings(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, rank: usize, left_index: usize, right_index: usize) usize {
@@ -10763,7 +11113,7 @@ fn nodesAdjacentAcrossLayer(graph: *const Graph, ranks: []const usize, node_id: 
 }
 
 fn crossingScoreAroundLevel(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, rank: usize) usize {
-    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph) catch
+    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph, ranks, levels.len) catch
         return crossingScoreAroundLevelPairwise(graph, levels, ranks, rank);
     defer crossing_workspace.deinit();
     return crossingScoreAroundLevelWithWorkspace(graph, levels, ranks, rank, &crossing_workspace);
@@ -10777,7 +11127,7 @@ fn crossingScoreAroundLevelWithWorkspace(graph: *const Graph, levels: []const st
 }
 
 fn totalLayerCrossings(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize) usize {
-    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph) catch
+    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph, ranks, levels.len) catch
         return totalLayerCrossingsPairwise(graph, levels, ranks);
     defer crossing_workspace.deinit();
     return totalLayerCrossingsWithWorkspace(graph, levels, ranks, &crossing_workspace);
@@ -10814,7 +11164,7 @@ const LayerSegment = struct {
 };
 
 fn countLayerCrossingsWithDummies(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, upper_rank: usize) usize {
-    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph) catch
+    var crossing_workspace = LayerCrossingWorkspace.init(graph.allocator, graph, ranks, levels.len) catch
         return countLayerCrossingsWithDummiesPairwise(graph, levels, ranks, upper_rank);
     defer crossing_workspace.deinit();
     return countLayerCrossingsWithDummiesWithWorkspace(graph, levels, ranks, upper_rank, &crossing_workspace);
@@ -10822,12 +11172,15 @@ fn countLayerCrossingsWithDummies(graph: *const Graph, levels: []const std.Array
 
 const LayerCrossingWorkspace = struct {
     allocator: std.mem.Allocator,
+    rank_layer_edges: RankLayerEdges,
     node_positions: []usize,
     segments: []LayerSegment,
     lower_values: []f64,
     fenwick: []usize,
 
-    fn init(allocator: std.mem.Allocator, graph: *const Graph) !LayerCrossingWorkspace {
+    fn init(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize, level_count: usize) !LayerCrossingWorkspace {
+        var rank_layer_edges = try RankLayerEdges.init(allocator, graph, ranks, level_count);
+        errdefer rank_layer_edges.deinit();
         const node_positions = try allocator.alloc(usize, graph.nodes.items.len);
         errdefer allocator.free(node_positions);
         const segments = try allocator.alloc(LayerSegment, graph.edges.items.len);
@@ -10838,6 +11191,7 @@ const LayerCrossingWorkspace = struct {
         errdefer allocator.free(fenwick);
         return .{
             .allocator = allocator,
+            .rank_layer_edges = rank_layer_edges,
             .node_positions = node_positions,
             .segments = segments,
             .lower_values = lower_values,
@@ -10846,6 +11200,7 @@ const LayerCrossingWorkspace = struct {
     }
 
     fn deinit(self: *LayerCrossingWorkspace) void {
+        self.rank_layer_edges.deinit();
         self.allocator.free(self.node_positions);
         self.allocator.free(self.segments);
         self.allocator.free(self.lower_values);
@@ -10863,11 +11218,30 @@ fn countLayerCrossingsWithDummiesWithWorkspace(
 ) usize {
     if (upper_rank + 1 >= levels.len) return 0;
     buildAllLayerPositionMap(crossing_workspace.node_positions, levels);
+    return countLayerCrossingsWithPreparedWorkspace(
+        graph,
+        levels.len,
+        ranks,
+        upper_rank,
+        crossing_workspace,
+    );
+}
+
+fn countLayerCrossingsWithPreparedWorkspace(
+    graph: *const Graph,
+    level_count: usize,
+    ranks: []const usize,
+    upper_rank: usize,
+    crossing_workspace: *LayerCrossingWorkspace,
+) usize {
+    if (upper_rank + 1 >= level_count) return 0;
     var segment_count: usize = 0;
-    for (graph.edges.items) |edge_item| {
+    for (crossing_workspace.rank_layer_edges.at(upper_rank)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
         const segment = edgeVirtualSegmentFromPositions(
             edge_item,
-            levels.len,
+            level_count,
             ranks,
             upper_rank,
             crossing_workspace.node_positions,
@@ -25057,6 +25431,98 @@ test "adjacent exchange bubbles successful swaps backward in one pass" {
     try std.testing.expectEqual(@as(usize, 0), countLayerCrossings(&graph, levels[0].items, levels[1].items, ranks));
 }
 
+test "indexed adjacent pair crossings match scan definition" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const p0 = try graph.addNode("p0", .{});
+    const p1 = try graph.addNode("p1", .{});
+    const p2 = try graph.addNode("p2", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c0 = try graph.addNode("c0", .{});
+    const c1 = try graph.addNode("c1", .{});
+    const c2 = try graph.addNode("c2", .{});
+    _ = try graph.addEdge(p2, a, .{});
+    _ = try graph.addEdge(p0, a, .{});
+    _ = try graph.addEdge(p0, a, .{});
+    _ = try graph.addEdge(p1, b, .{});
+    _ = try graph.addEdge(a, c2, .{});
+    _ = try graph.addEdge(a, c2, .{});
+    _ = try graph.addEdge(a, c0, .{});
+    _ = try graph.addEdge(b, c1, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p0] = 0;
+    ranks[p1] = 0;
+    ranks[p2] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+    ranks[c0] = 2;
+    ranks[c1] = 2;
+    ranks[c2] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, p0);
+    try levels[0].append(allocator, p1);
+    try levels[0].append(allocator, p2);
+    try levels[1].append(allocator, a);
+    try levels[1].append(allocator, b);
+    try levels[2].append(allocator, c0);
+    try levels[2].append(allocator, c1);
+    try levels[2].append(allocator, c2);
+
+    var edge_adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer edge_adjacency.deinit();
+    const node_positions = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(node_positions);
+    buildAllLayerPositionMap(node_positions, levels);
+    const neighbor_marks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(neighbor_marks);
+    @memset(neighbor_marks, 0);
+    const left_positions = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(left_positions);
+    var neighbor_stamp: usize = 1;
+
+    try std.testing.expectEqual(
+        adjacentPairCrossings(&graph, levels, ranks, 1, 0, 1),
+        adjacentPairCrossingsIndexed(
+            &graph,
+            levels,
+            ranks,
+            1,
+            a,
+            b,
+            &edge_adjacency,
+            node_positions,
+            neighbor_marks,
+            left_positions,
+            &neighbor_stamp,
+        ),
+    );
+    try std.testing.expectEqual(
+        adjacentPairCrossings(&graph, levels, ranks, 1, 1, 0),
+        adjacentPairCrossingsIndexed(
+            &graph,
+            levels,
+            ranks,
+            1,
+            b,
+            a,
+            &edge_adjacency,
+            node_positions,
+            neighbor_marks,
+            left_positions,
+            &neighbor_stamp,
+        ),
+    );
+}
+
 test "guarded median ordering refuses worse total crossings" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
@@ -25196,7 +25662,7 @@ test "real-level Fenwick crossing counter matches pairwise definition" {
     try levels[2].append(allocator, e);
     try levels[2].append(allocator, f);
 
-    var crossing_workspace = try LayerCrossingWorkspace.init(allocator, &graph);
+    var crossing_workspace = try LayerCrossingWorkspace.init(allocator, &graph, ranks, levels.len);
     defer crossing_workspace.deinit();
     for (0..levels.len - 1) |rank| {
         try std.testing.expectEqual(
@@ -25252,6 +25718,62 @@ test "adjacent exchange uses virtual long-edge crossings" {
     try std.testing.expectEqual(@as(usize, 1), crossingScoreAroundLevel(&graph, levels, ranks, 1));
     refineAdjacentExchanges(&graph, levels, ranks, 2);
     try std.testing.expectEqual(@as(usize, 0), crossingScoreAroundLevel(&graph, levels, ranks, 1));
+}
+
+test "adjacent exchange invalidates remote long-edge crossing layers" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const x = try graph.addNode("x", .{});
+    const y = try graph.addNode("y", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const e = try graph.addNode("e", .{});
+    const f = try graph.addNode("f", .{});
+    const g = try graph.addNode("g", .{});
+    const h = try graph.addNode("h", .{});
+    _ = try graph.addEdge(a, y, .{});
+    _ = try graph.addEdge(b, x, .{});
+    _ = try graph.addEdge(a, h, .{});
+    _ = try graph.addEdge(b, g, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[x] = 1;
+    ranks[y] = 1;
+    ranks[c] = 1;
+    ranks[d] = 1;
+    ranks[e] = 2;
+    ranks[f] = 2;
+    ranks[g] = 3;
+    ranks[h] = 3;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 4);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[0].append(allocator, b);
+    try levels[1].append(allocator, x);
+    try levels[1].append(allocator, y);
+    try levels[1].append(allocator, c);
+    try levels[1].append(allocator, d);
+    try levels[2].append(allocator, e);
+    try levels[2].append(allocator, f);
+    try levels[3].append(allocator, g);
+    try levels[3].append(allocator, h);
+
+    try std.testing.expect(totalLayerCrossings(&graph, levels, ranks) > 0);
+    refineAdjacentExchanges(&graph, levels, ranks, 1);
+    try std.testing.expectEqual(@as(usize, 0), totalLayerCrossings(&graph, levels, ranks));
+    try std.testing.expectEqualSlices(NodeId, &.{ b, a }, levels[0].items);
+    try std.testing.expectEqualSlices(NodeId, &.{ x, y, c, d }, levels[1].items);
+    try std.testing.expectEqualSlices(NodeId, &.{ e, f }, levels[2].items);
 }
 
 test "long-edge dummy positions influence coordinate refinement" {
