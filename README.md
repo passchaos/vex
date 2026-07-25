@@ -307,6 +307,12 @@ limit and an independent 32 MiB parser-arena budget inside a reusable fixed
 64 MiB buffer. Both report source bytes, arena bytes, and elapsed milliseconds.
 Run them directly with `zig build test-parse-scale`.
 
+The ReleaseFast `test-layout-render-scale` gate builds a 192-node / 388-edge
+crossed layered graph with four named subgraphs, lays it out in a fixed arena,
+and renders SVG twice. It enforces layout/render time and arena limits, checks
+node/edge/subgraph group counts, and requires byte-identical output hashes
+without writing the generated SVG to disk.
+
 ## Mainstream DOT support
 
 The parser currently supports a practical, mainstream DOT subset:
@@ -352,6 +358,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - Layered ranking honors Graphviz `searchsize` as the maximum negative
   cut-value tree-edge candidates examined for each ordinary rank-simplex pivot;
   the default is 30. The typed API exposes `GraphAttr.searchsize`.
+- Layered rank-simplex subtree intervals use unique preorder ranges, so crossed
+  multi-rank DAGs preserve a connected tight tree during pivots instead of
+  failing with `DisconnectedTightTree`.
 - Layered coordinate refinement honors Graphviz `nslimit` as
   `floor(nslimit * node_count)` refinement passes. `vex_coordinate_passes`
   remains a direct override; the typed API exposes `GraphAttr.nslimit`.

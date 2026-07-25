@@ -8846,7 +8846,10 @@ fn computeTightTreeIntervals(tree: *RankTightTree) !void {
         const node_id = frame.node;
         const start = child_starts[node_id];
         const end = child_starts[node_id + 1];
-        if (frame.next_child == 0) tree.low[node_id] = counter;
+        if (frame.next_child == 0) {
+            tree.low[node_id] = counter;
+            counter += 1;
+        }
         if (frame.next_child < end - start) {
             const child = children[start + frame.next_child];
             frame.next_child += 1;
@@ -8855,8 +8858,7 @@ fn computeTightTreeIntervals(tree: *RankTightTree) !void {
             stack_len += 1;
             continue;
         }
-        tree.lim[node_id] = counter;
-        counter += 1;
+        tree.lim[node_id] = counter - 1;
         stack_len -= 1;
     }
 }
@@ -20812,21 +20814,27 @@ test "searchsize trades rank span quality for leaving-edge effort" {
     const allocator = std.testing.allocator;
     const source =
         \\digraph G {
-        \\  n0 -> n2 [weight=3,minlen=3];
-        \\  n0 -> n3 [weight=2,minlen=3];
-        \\  n0 -> n5 [weight=8,minlen=2];
-        \\  n0 -> n7 [weight=14,minlen=3];
-        \\  n1 -> n4 [weight=9,minlen=2];
-        \\  n1 -> n9 [weight=12,minlen=3];
-        \\  n2 -> n4 [weight=6,minlen=1];
-        \\  n2 -> n5 [weight=7,minlen=2];
-        \\  n2 -> n9 [weight=4,minlen=1];
-        \\  n3 -> n5 [weight=14,minlen=1];
-        \\  n4 -> n7 [weight=4,minlen=2];
-        \\  n6 -> n7 [weight=9,minlen=2];
-        \\  n6 -> n8 [weight=13,minlen=2];
-        \\  n6 -> n9 [weight=13,minlen=2];
-        \\  n7 -> n8 [weight=10,minlen=3];
+        \\  n0 -> n4 [weight=14,minlen=1];
+        \\  n0 -> n6 [weight=1,minlen=3];
+        \\  n0 -> n9 [weight=7,minlen=1];
+        \\  n0 -> n11 [weight=9,minlen=2];
+        \\  n1 -> n3 [weight=14,minlen=2];
+        \\  n1 -> n7 [weight=3,minlen=2];
+        \\  n2 -> n6 [weight=10,minlen=3];
+        \\  n2 -> n7 [weight=12,minlen=2];
+        \\  n2 -> n8 [weight=12,minlen=3];
+        \\  n2 -> n9 [weight=2,minlen=2];
+        \\  n3 -> n4 [weight=1,minlen=2];
+        \\  n3 -> n10 [weight=11,minlen=1];
+        \\  n3 -> n11 [weight=8,minlen=2];
+        \\  n4 -> n7 [weight=5,minlen=3];
+        \\  n5 -> n6 [weight=8,minlen=2];
+        \\  n5 -> n7 [weight=8,minlen=2];
+        \\  n5 -> n9 [weight=13,minlen=2];
+        \\  n5 -> n10 [weight=13,minlen=3];
+        \\  n5 -> n11 [weight=15,minlen=2];
+        \\  n8 -> n10 [weight=12,minlen=1];
+        \\  n8 -> n11 [weight=7,minlen=1];
         \\}
     ;
 
@@ -20841,8 +20849,8 @@ test "searchsize trades rank span quality for leaving-edge effort" {
     var default_layout = try layoutLayered(allocator, &default_graph, .{});
     defer default_layout.deinit();
 
-    try std.testing.expectEqual(@as(f64, 433), layoutRankSpanCost(&limited_graph, &limited));
-    try std.testing.expectEqual(@as(f64, 406), layoutRankSpanCost(&default_graph, &default_layout));
+    try std.testing.expectEqual(@as(f64, 604), layoutRankSpanCost(&limited_graph, &limited));
+    try std.testing.expectEqual(@as(f64, 569), layoutRankSpanCost(&default_graph, &default_layout));
 }
 
 test "explicit crossing passes override mclimit maximum" {
@@ -28276,6 +28284,7 @@ test "rank tight tree records parent depth and subtree intervals" {
     try std.testing.expectEqual(@as(usize, 2), tree.depth[leaf]);
     try std.testing.expect(tree.inSubtree(leaf, left));
     try std.testing.expect(!tree.inSubtree(right, left));
+    try std.testing.expect(!tree.inSubtree(root, left));
 }
 
 test "rank tight tree cut values identify negative leaving edge" {
@@ -28581,6 +28590,33 @@ test "bounded network simplex rank pass bounds degenerate zero-slack pivots" {
     try std.testing.expectEqual(@as(usize, 0), try improveRanksByNetworkSimplex(allocator, &graph, ranks, acyclic_edge, 8, 30));
     try std.testing.expectEqualSlices(usize, before, ranks);
     try std.testing.expect(rankAssignmentFeasible(&graph, ranks, acyclic_edge));
+}
+
+test "layered rank simplex preserves a connected tight tree for crossed parallel ranks" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+
+    for (0..12) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try graph.addNode(try std.fmt.bufPrint(&label_buf, "n{d}", .{index}), .{});
+    }
+    for (0..2) |rank| {
+        for (0..4) |column| {
+            const from = rank * 4 + column;
+            _ = try graph.addEdge(from, (rank + 1) * 4 + column, .{});
+            _ = try graph.addEdge(from, (rank + 1) * 4 + ((column * 5 + rank * 3 + 1) % 4), .{});
+        }
+    }
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expectEqual(@as(usize, 12), layout.nodes.len);
+    try std.testing.expectEqual(RankDir.LR, layout.rankdir);
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint) continue;
+        try std.testing.expect(layout.nodes[edge_item.from].center.x < layout.nodes[edge_item.to].center.x);
+    }
 }
 
 test "rank local search preserves explicit same-rank constraints" {

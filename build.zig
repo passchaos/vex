@@ -104,6 +104,21 @@ pub fn build(b: *std.Build) void {
     const parse_scale_step = b.step("test-parse-scale", "Run chain and structured DOT parser scale gates");
     parse_scale_step.dependOn(&run_parse_scale.step);
 
+    const layout_render_scale = b.addExecutable(.{
+        .name = "vex-layout-render-scale",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/layout_render_scale.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "vex", .module = mod },
+            },
+        }),
+    });
+    const run_layout_render_scale = b.addRunArtifact(layout_render_scale);
+    const layout_render_scale_step = b.step("test-layout-render-scale", "Run layered layout and SVG render scale gate");
+    layout_render_scale_step.dependOn(&run_layout_render_scale.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -272,6 +287,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_parse_scale.step);
+    test_step.dependOn(&run_layout_render_scale.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
