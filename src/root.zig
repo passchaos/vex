@@ -175,6 +175,20 @@ pub const GraphRatio = union(enum) {
     auto,
 };
 
+pub const ClusterRankMode = enum {
+    local,
+    global,
+    none,
+
+    pub fn name(self: ClusterRankMode) []const u8 {
+        return switch (self) {
+            .local => "local",
+            .global => "global",
+            .none => "none",
+        };
+    }
+};
+
 const label_left_break: u8 = 0x1e;
 const label_right_break: u8 = 0x1f;
 const svg_label_breaks = svg_mod.text.LabelBreaks{ .left = label_left_break, .right = label_right_break };
@@ -194,6 +208,7 @@ pub const GraphAttr = union(enum) {
     notranslate: bool,
     overlap: OverlapMode,
     separation: Separation,
+    clusterrank: ClusterRankMode,
     compound: bool,
     concentrate: bool,
     nodesep: f64,
@@ -956,6 +971,7 @@ pub const Graph = struct {
                 var buffer: [160]u8 = undefined;
                 try self.setGraphAttrRaw("sep", try separationAttrText(&buffer, value));
             },
+            .clusterrank => |value| try self.setGraphAttrRaw("clusterrank", value.name()),
             .compound => |value| try self.setGraphAttrRaw("compound", boolAttrValue(value)),
             .concentrate => |value| try self.setGraphAttrRaw("concentrate", boolAttrValue(value)),
             .nodesep => |value| try self.setGraphAttrFloat("nodesep", value),
@@ -4122,6 +4138,20 @@ fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) Layo
     return layout_mod.options.withGraphAttrs(options, graph.attrs.items);
 }
 
+fn clusterRankMode(graph: *const Graph) ClusterRankMode {
+    const value = attrValue(graph.attrs.items, "clusterrank") orelse return .local;
+    if (std.ascii.eqlIgnoreCase(value, "global")) return .global;
+    if (std.ascii.eqlIgnoreCase(value, "none")) return .none;
+    return .local;
+}
+
+fn layeredGraphView(graph: *const Graph, clusterless_storage: *Graph) *const Graph {
+    if (clusterRankMode(graph) == .local) return graph;
+    clusterless_storage.* = graph.*;
+    clusterless_storage.subgraphs = .empty;
+    return clusterless_storage;
+}
+
 fn forceLayoutOptionsWithGraphAttrs(options: ForceLayoutOptions, graph: *const Graph) ForceLayoutOptions {
     return layout_mod.options.withForceGraphAttrs(options, graph.attrs.items);
 }
@@ -4142,15 +4172,17 @@ pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options:
 fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions, work: *LayoutWorkTracker) !Layout {
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
-    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
-    const axes = LayoutAxes.init(graph.rankdir);
-    const n = graph.nodes.items.len;
-    try work.checkpoint(n +| graph.edges.items.len +| 1);
+    var clusterless_view: Graph = undefined;
+    const layout_graph = layeredGraphView(graph, &clusterless_view);
+    const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
+    const axes = LayoutAxes.init(layout_graph.rankdir);
+    const n = layout_graph.nodes.items.len;
+    try work.checkpoint(n +| layout_graph.edges.items.len +| 1);
     const nodes = try allocator.alloc(NodeLayout, n);
     errdefer allocator.free(nodes);
-    const cluster_layouts = try allocator.alloc(SubgraphLayout, graph.subgraphs.items.len);
+    const cluster_layouts = try allocator.alloc(SubgraphLayout, layout_graph.subgraphs.items.len);
     errdefer allocator.free(cluster_layouts);
-    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, layout_graph.edges.items.len);
     errdefer allocator.free(edge_waypoints);
     for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
     errdefer freeEdgeWaypoints(allocator, edge_waypoints);
@@ -4187,11 +4219,11 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var indegree = try allocator.alloc(usize, n);
     defer allocator.free(indegree);
     @memset(indegree, 0);
-    var acyclic_edge = try allocator.alloc(bool, graph.edges.items.len);
+    var acyclic_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
     defer allocator.free(acyclic_edge);
     @memset(acyclic_edge, false);
 
-    for (graph.edges.items) |edge_item| {
+    for (layout_graph.edges.items) |edge_item| {
         if (!edge_item.constraint) continue;
         if (edge_item.to < n) indegree[edge_item.to] += 1;
     }
@@ -4203,7 +4235,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         const u = queue.items[head];
-        for (graph.edges.items) |edge_item| {
+        for (layout_graph.edges.items) |edge_item| {
             if (!edge_item.constraint) continue;
             if (edge_item.from != u) continue;
             const min_len = @max(edge_item.min_len, 1);
@@ -4216,13 +4248,13 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         }
     }
 
-    assignRanksForCyclicComponents(graph, ranks, acyclic_edge);
-    applyRankConstraints(graph, ranks);
-    tightenRanksTowardSinks(graph, ranks, acyclic_edge);
-    improveRanksByLocalSearch(graph, ranks, acyclic_edge, 2);
-    try work.checkpoint((n +| graph.edges.items.len +| 1) *| 4);
-    _ = try improveRanksByNetworkSimplex(allocator, graph, ranks, acyclic_edge, n * 2);
-    applyRankConstraints(graph, ranks);
+    assignRanksForCyclicComponents(layout_graph, ranks, acyclic_edge);
+    applyRankConstraints(layout_graph, ranks);
+    tightenRanksTowardSinks(layout_graph, ranks, acyclic_edge);
+    improveRanksByLocalSearch(layout_graph, ranks, acyclic_edge, 2);
+    try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| 4);
+    _ = try improveRanksByNetworkSimplex(allocator, layout_graph, ranks, acyclic_edge, n * 2);
+    applyRankConstraints(layout_graph, ranks);
 
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -4233,20 +4265,20 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     defer for (levels) |*level| level.deinit(allocator);
 
     for (ranks, 0..) |rank, id| try levels[rank].append(allocator, id);
-    var virtual_levels = try buildVirtualLevels(allocator, graph, ranks);
+    var virtual_levels = try buildVirtualLevels(allocator, layout_graph, ranks);
     defer virtual_levels.deinit();
-    try work.checkpoint((n +| graph.edges.items.len +| 1) *| (effective_options.crossing_passes +| 1));
-    try reduceVirtualLevelCrossings(allocator, graph, &virtual_levels, ranks, effective_options.crossing_passes);
-    replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch try reduceLayerCrossings(allocator, graph, levels, ranks, effective_options.crossing_passes);
-    refineAdjacentExchanges(graph, levels, ranks, 2);
-    applyOrderingHints(graph, levels, ranks);
-    enforceClusterContiguity(graph, levels);
-    alignGroupedNodes(graph, levels);
+    try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| (effective_options.crossing_passes +| 1));
+    try reduceVirtualLevelCrossings(allocator, layout_graph, &virtual_levels, ranks, effective_options.crossing_passes);
+    replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch try reduceLayerCrossings(allocator, layout_graph, levels, ranks, effective_options.crossing_passes);
+    refineAdjacentExchanges(layout_graph, levels, ranks, 2);
+    applyOrderingHints(layout_graph, levels, ranks);
+    enforceClusterContiguity(layout_graph, levels);
+    alignGroupedNodes(layout_graph, levels);
     syncVirtualRealOrder(&virtual_levels, levels);
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, effective_options);
+    for (layout_graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, effective_options);
 
     const axis_sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(axis_sizes);
@@ -4255,40 +4287,40 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     defer allocator.free(centers);
     @memset(centers, 0);
 
-    var initial_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, null);
+    var initial_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, null);
     defer initial_virtual_positions.deinit();
     applyVirtualRealPositions(&virtual_levels, &initial_virtual_positions, centers);
 
-    try work.checkpoint((n +| graph.edges.items.len +| 1) *| (effective_options.coordinate_passes +| 1));
-    refineLayerCoordinates(graph, levels, ranks, axis_sizes, centers, effective_options);
-    refineLongEdgeDummyCoordinates(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
-    straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 2);
-    alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
+    try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| (effective_options.coordinate_passes +| 1));
+    refineLayerCoordinates(layout_graph, levels, ranks, axis_sizes, centers, effective_options);
+    refineLongEdgeDummyCoordinates(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
+    straightenSimpleAdjacentEdges(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 2);
+    alignGroupedCenters(layout_graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
-    var virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
+    var virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, centers);
     defer virtual_positions.deinit();
     applyVirtualRealPositions(&virtual_levels, &virtual_positions, centers);
-    straightenSimpleAdjacentEdges(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 1);
-    alignGroupedCenters(graph, levels, centers, axis_sizes, effective_options.node_gap);
+    straightenSimpleAdjacentEdges(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap, 1);
+    alignGroupedCenters(layout_graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
     const cluster_along_budget = clusterSpacingAlongBudget(axes, effective_options);
-    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
-    var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, graph, axis_sizes, effective_options.node_gap, centers);
+    applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
-    applyVirtualRealPositionsExceptGroups(graph, &virtual_levels, &final_virtual_positions, centers);
-    if (!graphHasExplicitEdgeWeight(graph)) {
-        alignLevelsToNeighborSpansIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
+    applyVirtualRealPositionsExceptGroups(layout_graph, &virtual_levels, &final_virtual_positions, centers);
+    if (!graphHasExplicitEdgeWeight(layout_graph)) {
+        alignLevelsToNeighborSpansIfHelpful(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     }
-    applySymmetricCompactionIfHelpful(graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
+    applySymmetricCompactionIfHelpful(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
-    applyBackEdgeChannelCenterConstraints(graph, ranks, centers, axis_sizes, cluster_along_budget);
+    applyBackEdgeChannelCenterConstraints(layout_graph, ranks, centers, axis_sizes, cluster_along_budget);
     shiftCentersRightWithinBudget(centers, axis_sizes, defaultClusterAlongShift, cluster_along_budget);
-    applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
-    if (!graphHasExplicitEdgeWeight(graph)) {
-        alignBoundarySingletonsToIncidentSpan(graph, levels, ranks, centers, axis_sizes);
-        applyInterClusterSpacingWithBudget(graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    if (!graphHasExplicitEdgeWeight(layout_graph)) {
+        alignBoundarySingletonsToIncidentSpan(layout_graph, levels, ranks, centers, axis_sizes);
+        applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
     }
-    applyCrossClusterDiagonalNudges(graph, ranks, centers, axis_sizes, cluster_along_budget);
+    applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_budget);
 
     var total_along: f64 = 0;
     for (centers, 0..) |center, id| total_along = @max(total_along, center + axis_sizes[id].width / 2.0);
@@ -4310,7 +4342,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         for (rank_heights) |rank_height| max_rank_height = @max(max_rank_height, rank_height);
         var equal_rank_gap = effective_options.rank_gap;
         for (0..if (rank_heights.len == 0) 0 else rank_heights.len - 1) |rank| {
-            equal_rank_gap = @max(equal_rank_gap, layout_mod.subgraph.rankGapBetween(graph.subgraphs.items, ranks, rank, effective_options.rank_gap));
+            equal_rank_gap = @max(equal_rank_gap, layout_mod.subgraph.rankGapBetween(layout_graph.subgraphs.items, ranks, rank, effective_options.rank_gap));
         }
         const rank_step = max_rank_height + equal_rank_gap;
         for (rank_heights, 0..) |rank_height, rank| {
@@ -4322,21 +4354,21 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         for (rank_heights, 0..) |rank_height, rank| {
             rank_depths[rank] = total_depth;
             total_depth += rank_height;
-            if (rank + 1 < rank_heights.len) total_depth += layout_mod.subgraph.rankGapBetween(graph.subgraphs.items, ranks, rank, effective_options.rank_gap);
+            if (rank + 1 < rank_heights.len) total_depth += layout_mod.subgraph.rankGapBetween(layout_graph.subgraphs.items, ranks, rank, effective_options.rank_gap);
         }
     }
 
-    for (graph.nodes.items, 0..) |_, id| {
+    for (layout_graph.nodes.items, 0..) |_, id| {
         const rank = ranks[id];
         const depth = rank_depths[rank] + rank_heights[rank] / 2.0;
         const center = axes.orientPoint(centers[id], depth, total_depth, effective_options.margin, effective_options.margin_y);
         nodes[id] = .{ .center = center, .width = sizes[id].width, .height = sizes[id].height };
     }
     @memcpy(layout_ranks, ranks);
-    computeSubgraphLayouts(graph, axes, nodes, cluster_layouts);
-    alignCrossClusterMembersGraphvizLikeTb(graph, axes, nodes, ranks, cluster_layouts);
-    shiftClusterMemberNodesDownForCrossClusterTb(graph, axes, nodes, 0.5);
-    try computeEdgeWaypoints(allocator, graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
+    computeSubgraphLayouts(layout_graph, axes, nodes, cluster_layouts);
+    alignCrossClusterMembersGraphvizLikeTb(layout_graph, axes, nodes, ranks, cluster_layouts);
+    shiftClusterMemberNodesDownForCrossClusterTb(layout_graph, axes, nodes, 0.5);
+    try computeEdgeWaypoints(allocator, layout_graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
     total_along = @max(total_along, clusterLayoutsAlongExtent(axes, cluster_layouts, effective_options));
 
     const along_margin = axes.alongMargin(effective_options);
@@ -4370,9 +4402,11 @@ fn layoutLayeredIncrementalWithControl(allocator: std.mem.Allocator, graph: *con
     var result = try layoutLayeredWithControl(allocator, graph, options, work);
     errdefer result.deinit();
     if (previous.rankdir != result.rankdir) return result;
-    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    var clusterless_view: Graph = undefined;
+    const layout_graph = layeredGraphView(graph, &clusterless_view);
+    const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
     try work.checkpoint(result.nodes.len +| result.edge_waypoints.len +| 1);
-    try stabilizeLayeredLayout(graph, previous, &result, effective_options.node_gap, incremental);
+    try stabilizeLayeredLayout(layout_graph, previous, &result, effective_options.node_gap, incremental);
     return result;
 }
 
@@ -5859,6 +5893,7 @@ fn lessThanIncrementalOrder(context: IncrementalOrderContext, a: NodeId, b: Node
 }
 
 fn recomputeIncrementalSubgraphs(graph: *const Graph, result: *Layout) void {
+    if (result.subgraphs.len != graph.subgraphs.items.len) return;
     computeSubgraphLayouts(graph, LayoutAxes.init(result.rankdir), result.nodes, result.subgraphs);
 }
 
@@ -28789,6 +28824,110 @@ test "nested cluster layout expands parent around child cluster" {
     const outer_pos = std.mem.indexOf(u8, svg, "Outer") orelse return error.MissingOuterCluster;
     const inner_pos = std.mem.indexOf(u8, svg, "Inner") orelse return error.MissingInnerCluster;
     try std.testing.expect(outer_pos < inner_pos);
+}
+
+test "clusterrank global and none disable special subgraph layout" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  compound=true;
+        \\  { rank=same; a; b; c; d; }
+        \\  subgraph outer {
+        \\    label="Outer";
+        \\    subgraph inner {
+        \\      label="Inner";
+        \\      a; c;
+        \\    }
+        \\    b;
+        \\  }
+        \\  a -> d [ltail=inner];
+        \\}
+    ;
+
+    var local_graph = try parseDot(allocator, source);
+    defer local_graph.deinit();
+    var local = try layoutLayered(allocator, &local_graph, .{});
+    defer local.deinit();
+    try std.testing.expectEqual(@as(usize, 2), local.subgraphs.len);
+    const outer = local.subgraphs[subgraphIndexByLabel(&local_graph, "Outer").?];
+    const inner = local.subgraphs[subgraphIndexByLabel(&local_graph, "Inner").?];
+    try std.testing.expect(rectContainsRect(
+        .{ .x = outer.x, .y = outer.y, .width = outer.width, .height = outer.height },
+        .{ .x = inner.x, .y = inner.y, .width = inner.width, .height = inner.height },
+    ));
+    for (local.ranks[1..]) |rank| try std.testing.expectEqual(local.ranks[0], rank);
+
+    var global_graph = try parseDot(allocator, source);
+    defer global_graph.deinit();
+    try global_graph.setGraphAttr(.{ .clusterrank = .global });
+    var global = try layoutLayered(allocator, &global_graph, .{});
+    defer global.deinit();
+    try std.testing.expectEqual(@as(usize, 0), global.subgraphs.len);
+    for (global.ranks[1..]) |rank| try std.testing.expectEqual(global.ranks[0], rank);
+
+    var none_graph = try parseDot(allocator, source);
+    defer none_graph.deinit();
+    try none_graph.setGraphAttr(.{ .clusterrank = .none });
+    var none = try layoutLayered(allocator, &none_graph, .{});
+    defer none.deinit();
+    try std.testing.expectEqual(@as(usize, 0), none.subgraphs.len);
+    try expectNodeCentersEqual(&global, &none);
+
+    const local_svg = try renderSvgAlloc(allocator, &local_graph, &local, .{});
+    defer allocator.free(local_svg);
+    const global_svg = try renderSvgAlloc(allocator, &global_graph, &global, .{});
+    defer allocator.free(global_svg);
+    const none_svg = try renderSvgAlloc(allocator, &none_graph, &none, .{});
+    defer allocator.free(none_svg);
+    try std.testing.expect(std.mem.indexOf(u8, local_svg, "class=\"cluster\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, global_svg, "class=\"cluster\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, none_svg, "class=\"cluster\"") == null);
+}
+
+test "clusterrank controls compound boundary clipping" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  compound=true;
+        \\  subgraph left { a; b; }
+        \\  subgraph right { c; d; }
+        \\  b -> c [ltail=left, lhead=right];
+        \\}
+    ;
+
+    var local_graph = try parseDot(allocator, source);
+    defer local_graph.deinit();
+    var local = try layoutLayered(allocator, &local_graph, .{});
+    defer local.deinit();
+    const edge_item = local_graph.edges.items[0];
+    const local_route = edgeRouteForEdge(&local_graph, &local, edge_item, local.rankdir, 0);
+    const local_tail_distance = distanceBetween(local.nodes[edge_item.from].center, local_route.start);
+    const local_head_distance = distanceBetween(local.nodes[edge_item.to].center, local_route.end);
+
+    var global_graph = try parseDot(allocator, source);
+    defer global_graph.deinit();
+    try global_graph.setGraphAttr(.{ .clusterrank = .global });
+    var global = try layoutLayered(allocator, &global_graph, .{});
+    defer global.deinit();
+    const global_edge = global_graph.edges.items[0];
+    const global_route = edgeRouteForEdge(&global_graph, &global, global_edge, global.rankdir, 0);
+    const global_tail_distance = distanceBetween(global.nodes[global_edge.from].center, global_route.start);
+    const global_head_distance = distanceBetween(global.nodes[global_edge.to].center, global_route.end);
+
+    try std.testing.expect(local_tail_distance > global_tail_distance + 1.0);
+    try std.testing.expect(local_head_distance > global_head_distance + 1.0);
+}
+
+test "typed clusterrank serializes all Graphviz modes" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .clusterrank = .local });
+    try std.testing.expectEqualStrings("local", attrValue(graph.attrs.items, "clusterrank").?);
+    try graph.setGraphAttr(.{ .clusterrank = .global });
+    try std.testing.expectEqualStrings("global", attrValue(graph.attrs.items, "clusterrank").?);
+    try graph.setGraphAttr(.{ .clusterrank = .none });
+    try std.testing.expectEqualStrings("none", attrValue(graph.attrs.items, "clusterrank").?);
 }
 
 test "cluster members are kept contiguous within a rank" {

@@ -330,6 +330,11 @@ The parser currently supports a practical, mainstream DOT subset:
   different parents remain distinct.
 - Anonymous subgraph blocks keep graph attributes local without becoming
   rendered cluster objects.
+- Layered layout honors `clusterrank=local|global|none`: `local` enables
+  nested subgraph boxes, contiguity, spacing, and compound-boundary routing;
+  `global` and `none` retain subgraph structure and rank constraints while
+  disabling special subgraph layout. Vex applies this mode by subgraph model
+  identity and does not require a `cluster_` name prefix.
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.
