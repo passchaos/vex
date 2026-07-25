@@ -344,6 +344,10 @@ The parser currently supports a practical, mainstream DOT subset:
   `global` and `none` retain subgraph structure and rank constraints while
   disabling special subgraph layout. Vex applies this mode by subgraph model
   identity and does not require a `cluster_` name prefix.
+- Compound `ltail` / `lhead` clipping follows endpoint membership: the target
+  subgraph or one of its descendants must contain the corresponding tail/head
+  node and must not contain both endpoints. Invalid hints remain available as
+  attributes/metadata but use ordinary node-boundary routing.
 - In local cluster ranking, subgraph `compact=true` enables a strong-cluster
   rank objective: member rank span is minimized with nested strong envelopes,
   cross-subgraph edges use a soft directional penalty, and internal `minlen`

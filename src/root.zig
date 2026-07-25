@@ -18626,12 +18626,16 @@ fn graphCompoundEnabled(graph: *const Graph) bool {
 
 fn edgeTailCompoundEnabled(graph: *const Graph, edge_item: Edge) bool {
     const subgraph_id = edge_item.ltail orelse return false;
-    return graphCompoundEnabled(graph) or subgraphCompoundEnabled(graph, subgraph_id);
+    if (!graphCompoundEnabled(graph) and !subgraphCompoundEnabled(graph, subgraph_id)) return false;
+    return nodeInSubgraphHierarchy(graph, subgraph_id, edge_item.from) and
+        !nodeInSubgraphHierarchy(graph, subgraph_id, edge_item.to);
 }
 
 fn edgeHeadCompoundEnabled(graph: *const Graph, edge_item: Edge) bool {
     const subgraph_id = edge_item.lhead orelse return false;
-    return graphCompoundEnabled(graph) or subgraphCompoundEnabled(graph, subgraph_id);
+    if (!graphCompoundEnabled(graph) and !subgraphCompoundEnabled(graph, subgraph_id)) return false;
+    return nodeInSubgraphHierarchy(graph, subgraph_id, edge_item.to) and
+        !nodeInSubgraphHierarchy(graph, subgraph_id, edge_item.from);
 }
 
 fn subgraphCompoundEnabled(graph: *const Graph, id: SubgraphId) bool {
@@ -33603,6 +33607,32 @@ test "DOT compound edges clip to cluster boundaries" {
     try std.testing.expect(pointNearRectBoundary(right, path_points.end, 8.0));
 }
 
+test "DOT compound edges ignore clusters that do not match their endpoints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, @embedFile("testdata/dot_non_html_compound_membership.dot"));
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    for (graph.edges.items) |edge_item| {
+        var ordinary = edge_item;
+        ordinary.ltail = null;
+        ordinary.lhead = null;
+        const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+        const ordinary_route = edgeRouteForEdge(&graph, &layout, ordinary, layout.rankdir, 0);
+        try std.testing.expectEqual(ordinary_route.start, route.start);
+        try std.testing.expectEqual(ordinary_route.end, route.end);
+        try std.testing.expect(!edgeTailCompoundEnabled(&graph, edge_item));
+        try std.testing.expect(!edgeHeadCompoundEnabled(&graph, edge_item));
+    }
+
+    try std.testing.expectEqual(@as(SubgraphId, 1), graph.edges.items[0].ltail.?);
+    try std.testing.expectEqual(@as(SubgraphId, 0), graph.edges.items[0].lhead.?);
+    try std.testing.expectEqualStrings("right", attrValue(graph.edges.items[0].attrs.items, "ltail").?);
+    try std.testing.expectEqualStrings("left", attrValue(graph.edges.items[0].attrs.items, "lhead").?);
+}
+
 test "DOT quoted subgraph names match compound edge attrs" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -33713,6 +33743,31 @@ test "subgraph compound inherits through parent chain" {
     try std.testing.expect(!layout_mod.subgraph.compoundEnabled(graph.subgraphs.items[right_child].attrs.items));
     try std.testing.expect(subgraphCompoundEnabled(&graph, left_child));
     try std.testing.expect(subgraphCompoundEnabled(&graph, right_child));
+}
+
+test "typed compound endpoints accept ancestor membership" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .compound = true });
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const left_parent = try graph.addSubgraph("Left", null, &.{a}, .{});
+    _ = try graph.addSubgraph("Left child", left_parent, &.{a}, .{});
+    const right_parent = try graph.addSubgraph("Right", null, &.{b}, .{});
+    _ = try graph.addSubgraph("Right child", right_parent, &.{b}, .{});
+    const edge_id = try graph.addEdge(a, b, .{ .ltail = left_parent, .lhead = right_parent });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const edge_item = graph.edges.items[edge_id];
+    try std.testing.expect(edgeTailCompoundEnabled(&graph, edge_item));
+    try std.testing.expect(edgeHeadCompoundEnabled(&graph, edge_item));
+    const route = edgeRouteForEdge(&graph, &layout, edge_item, layout.rankdir, 0);
+    try std.testing.expect(pointOnRectBoundary(subgraphRect(&graph, &layout, left_parent).?, route.start));
+    try std.testing.expect(pointOnRectBoundary(subgraphRect(&graph, &layout, right_parent).?, route.end));
 }
 
 test "code API exposes typed compound edge ltail and lhead" {

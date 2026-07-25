@@ -1,0 +1,17 @@
+digraph G {
+  compound=true;
+
+  subgraph left {
+    label="Left";
+    a;
+    x;
+  }
+  subgraph right {
+    label="Right";
+    b;
+    y;
+  }
+
+  a -> b [ltail=right, lhead=left];
+  a -> x [ltail=left, lhead=left];
+}
