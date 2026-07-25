@@ -463,7 +463,7 @@ The parser currently supports a practical, mainstream DOT subset:
 - Edge `labelfloat=true` keeps the main edge label at its unconstrained route position.
 - Edge `labelaligned=true` renders plain main edge labels with SVG `textPath` aligned to the edge path.
 - M-shape nodes render `toplabel` and `bottomlabel` auxiliary labels where Graphviz defines them.
-- Root graph labels default to bottom-center while explicit cluster labels default to top-center; unlabeled clusters reserve no label band. Clusters inherit root `labelloc` / `labeljust` and label font attributes unless overridden.
+- Root graph labels default to bottom-center while explicit cluster labels default to top-center; unlabeled clusters reserve no label band. Cluster `labelloc=b` reserves the full label band below members (including inherited and nested cases) rather than only moving rendered text. Clusters inherit root `labelloc` / `labeljust` and label font attributes unless overridden.
 - Clusters inherit root graph `fillcolor` / `pencolor` unless they set their own values.
 - SVG group `id` attributes honor Graphviz object escapes and use the root graph `id` as a default prefix for child objects.
 - SVG interactive anchors are wrapped in Graphviz-style `a_*` groups, including edge label, head label, and tail label anchors.

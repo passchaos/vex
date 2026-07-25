@@ -7517,6 +7517,7 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
         const label_font_size = inheritedClusterFontSize(graph, cluster);
         const label_min_width = displayLabelEstimatedWidth(cluster.label, label_font_size) + label_pad_x * 2.0;
         const label_band = subgraphLabelBand(graph, cluster);
+        const label_at_bottom = subgraphLabelAtBottom(graph, cluster);
         const margin = inheritedSubgraphMargin(graph, cluster, pad_x);
         const cluster_pad_x = margin.x;
         const cluster_pad_y = margin.y;
@@ -7528,11 +7529,11 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
                 width = boundary.right - boundary.left;
             }
         }
-        var y = min_y - cluster_pad_y - label_band;
+        var y = min_y - cluster_pad_y - if (label_at_bottom) 0 else label_band;
         var height = (max_y - min_y) + cluster_pad_y * 2.0 + label_band;
         if (boundary_inputs_available) {
             if (solveClusterBoundary(cluster, center_y_buf[0..nodes.len], size_y_buf[0..nodes.len], cluster_pad_y)) |boundary| {
-                y = boundary.left - label_band;
+                y = boundary.left - if (label_at_bottom) 0 else label_band;
                 height = boundary.right - boundary.left + label_band;
             }
         }
@@ -7556,25 +7557,33 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
         const child = clusters[index];
         if (child.width <= 0 or child.height <= 0) continue;
         var parent = &clusters[parent_index];
-        const label_band = subgraphLabelBand(graph, graph.subgraphs.items[parent_index]);
+        const parent_graph = graph.subgraphs.items[parent_index];
+        const label_band = subgraphLabelBand(graph, parent_graph);
+        const label_at_bottom = subgraphLabelAtBottom(graph, parent_graph);
+        const child_min_x = child.x - child_gap;
+        const child_min_y = child.y - child_gap;
+        const child_max_x = child.x + child.width + child_gap;
+        const child_max_y = child.y + child.height + child_gap;
         if (parent.width <= 0 or parent.height <= 0) {
             parent.* = .{
-                .id = graph.subgraphs.items[parent_index].id,
-                .x = child.x - child_gap,
-                .y = child.y - child_gap - label_band,
-                .width = child.width + child_gap * 2.0,
-                .height = child.height + child_gap * 2.0 + label_band,
+                .id = parent_graph.id,
+                .x = child_min_x,
+                .y = child_min_y - if (label_at_bottom) 0 else label_band,
+                .width = child_max_x - child_min_x,
+                .height = child_max_y - child_min_y + label_band,
             };
             continue;
         }
-        const min_x = @min(parent.x, child.x - child_gap);
-        const min_y = @min(parent.y, child.y - child_gap - label_band);
-        const max_x = @max(parent.x + parent.width, child.x + child.width + child_gap);
-        const max_y = @max(parent.y + parent.height, child.y + child.height + child_gap);
-        parent.x = min_x;
-        parent.y = min_y;
-        parent.width = max_x - min_x;
-        parent.height = max_y - min_y;
+        const parent_content_y = parent.y + if (label_at_bottom) 0 else label_band;
+        const parent_content_bottom = parent.y + parent.height - if (label_at_bottom) label_band else 0;
+        const content_min_x = @min(parent.x, child_min_x);
+        const content_min_y = @min(parent_content_y, child_min_y);
+        const content_max_x = @max(parent.x + parent.width, child_max_x);
+        const content_max_y = @max(parent_content_bottom, child_max_y);
+        parent.x = content_min_x;
+        parent.y = content_min_y - if (label_at_bottom) 0 else label_band;
+        parent.width = content_max_x - content_min_x;
+        parent.height = content_max_y - content_min_y + label_band;
     }
 
     expandSubgraphLayoutsForBackEdges(graph, axes, nodes, clusters);
@@ -7587,6 +7596,11 @@ fn subgraphLabelBand(graph: *const Graph, cluster: Subgraph) f64 {
     const line_count = displayLabelLineCount(cluster.label);
     if (line_count <= 1) return 18.0;
     return @as(f64, @floatFromInt(line_count)) * line_height + 1.0;
+}
+
+fn subgraphLabelAtBottom(graph: *const Graph, cluster: Subgraph) bool {
+    const value = inheritedClusterLabelAttr(graph, cluster, "labelloc") orelse return false;
+    return std.ascii.eqlIgnoreCase(value, "b");
 }
 
 fn expandClusterBoxesForNodes(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []SubgraphLayout) void {
@@ -31937,6 +31951,9 @@ test "cluster labels honor labelloc and labeljust" {
     var expected_buf: [64]u8 = undefined;
     const expected_y = try std.fmt.bufPrint(&expected_buf, "y=\"{s}\"", .{expected_y_value});
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_y) != null);
+    const band = subgraphLabelBand(&graph, graph.subgraphs.items[0]);
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expect(layout.nodes[b].center.y + layout.nodes[b].height / 2.0 <= box.y + box.height - band + 0.01);
 }
 
 test "cluster labels inherit root graph labelloc and labeljust" {
@@ -31966,8 +31983,12 @@ test "cluster labels inherit root graph labelloc and labeljust" {
     const inherited_fragment = svgGroupFragmentByTitle(svg, "Inherited") orelse return error.MissingInheritedCluster;
     try std.testing.expect(std.mem.indexOf(u8, inherited_fragment, "text-anchor=\"end\"") != null);
     const inherited_box = layout.subgraphs[0];
+    const inherited_band = subgraphLabelBand(&graph, graph.subgraphs.items[0]);
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expect(layout.nodes[a].center.y + layout.nodes[a].height / 2.0 <= inherited_box.y + inherited_box.height - inherited_band + 0.01);
+    const inherited_rect = clusterVisualRect(&graph, &layout, 0);
     var inherited_y_value_buf: [32]u8 = undefined;
-    const inherited_y_value = try svgNumberForTest(&inherited_y_value_buf, inherited_box.y + inherited_box.height - 10.0);
+    const inherited_y_value = try svgNumberForTest(&inherited_y_value_buf, inherited_rect.y + inherited_rect.height - 10.0);
     var inherited_y_buf: [64]u8 = undefined;
     const inherited_y = try std.fmt.bufPrint(&inherited_y_buf, "y=\"{s}\"", .{inherited_y_value});
     try std.testing.expect(std.mem.indexOf(u8, inherited_fragment, inherited_y) != null);
@@ -31975,6 +31996,10 @@ test "cluster labels inherit root graph labelloc and labeljust" {
     const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "text-anchor=\"start\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, inherited_y) == null);
+    const explicit_box = layout.subgraphs[1];
+    const explicit_band = subgraphLabelBand(&graph, graph.subgraphs.items[1]);
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expect(layout.nodes[b].center.y - layout.nodes[b].height / 2.0 >= explicit_box.y + explicit_band - 0.01);
 }
 
 test "cluster labels inherit parent subgraph labelloc and labeljust" {
@@ -32013,6 +32038,9 @@ test "cluster labels inherit parent subgraph labelloc and labeljust" {
     const inner_fragment = svgGroupFragmentByTitle(svg, "Inner") orelse return error.MissingInnerCluster;
     try std.testing.expect(std.mem.indexOf(u8, inner_fragment, "text-anchor=\"end\"") != null);
     const inner_box = layout.subgraphs[inner_index];
+    const inner_band = subgraphLabelBand(&graph, graph.subgraphs.items[inner_index]);
+    const a = nodeIdByLabel(&graph, "a");
+    try std.testing.expect(layout.nodes[a].center.y + layout.nodes[a].height / 2.0 <= inner_box.y + inner_box.height - inner_band + 0.01);
     var inner_y_value_buf: [32]u8 = undefined;
     const inner_y_value = try svgNumberForTest(&inner_y_value_buf, inner_box.y + inner_box.height - 10.0);
     var inner_y_buf: [64]u8 = undefined;
@@ -32022,6 +32050,37 @@ test "cluster labels inherit parent subgraph labelloc and labeljust" {
     const explicit_fragment = svgGroupFragmentByTitle(svg, "Explicit") orelse return error.MissingExplicitCluster;
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, "text-anchor=\"start\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, explicit_fragment, inner_y) == null);
+    const outer_index = subgraphIndexByLabel(&graph, "Outer") orelse return error.MissingOuterCluster;
+    try std.testing.expect(rectContainsRect(
+        .{ .x = layout.subgraphs[outer_index].x, .y = layout.subgraphs[outer_index].y, .width = layout.subgraphs[outer_index].width, .height = layout.subgraphs[outer_index].height },
+        .{ .x = inner_box.x, .y = inner_box.y, .width = inner_box.width, .height = inner_box.height },
+    ));
+}
+
+test "cluster bottom labels reserve content space in horizontal rankdir" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  rankdir=LR;
+        \\  graph [labelloc=b];
+        \\  subgraph service {
+        \\    label="Bottom";
+        \\    a -> b;
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const cluster = graph.subgraphs.items[0];
+    const box = layout.subgraphs[0];
+    const band = subgraphLabelBand(&graph, cluster);
+    for (cluster.nodes) |node_id| {
+        const node = layout.nodes[node_id];
+        try std.testing.expect(node.center.y + node.height / 2.0 <= box.y + box.height - band + 0.01);
+    }
 }
 
 test "cluster label layout inherits root graph fontsize" {
