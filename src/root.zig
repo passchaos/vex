@@ -251,7 +251,7 @@ pub const GraphAttr = union(enum) {
     searchsize: usize,
     tb_balance: TopBottomBalance,
     splines: SplineMode,
-    samplepoints: usize,
+    quantum: f64,
     bgcolor: []const u8,
     colorscheme: []const u8,
     fillcolor: []const u8,
@@ -1060,11 +1060,7 @@ pub const Graph = struct {
             },
             .tb_balance => |value| try self.setGraphAttrRaw("TBbalance", value.name()),
             .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
-            .samplepoints => |value| {
-                var buffer: [32]u8 = undefined;
-                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-                try self.setGraphAttrRaw("samplepoints", text);
-            },
+            .quantum => |value| try self.setGraphAttrFloat("quantum", value),
             .bgcolor => |value| try self.setGraphAttrRaw("bgcolor", value),
             .colorscheme => |value| try self.setGraphAttrRaw("colorscheme", value),
             .fillcolor => |value| try self.setGraphAttrRaw("fillcolor", value),
@@ -4935,7 +4931,7 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    const default_layout_options = LayoutOptions{};
+    const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
 
     const positions = try allocator.alloc(Point, n);
@@ -5093,7 +5089,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    const default_layout_options = LayoutOptions{};
+    const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
 
     const positions = try allocator.alloc(Point, n);
@@ -5347,7 +5343,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    const default_layout_options = LayoutOptions{};
+    const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
 
     const positions = try allocator.alloc(Point, n);
@@ -5529,7 +5525,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    const default_layout_options = LayoutOptions{};
+    const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
 
     const sfdp_edges = try allocator.alloc(layout_mod.sfdp.Edge, graph.edges.items.len);
@@ -5628,7 +5624,7 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    const default_layout_options = LayoutOptions{};
+    const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
 
     const edges = try allocator.alloc(layout_mod.twopi.Edge, graph.edges.items.len);
@@ -5757,7 +5753,7 @@ fn layoutCircularWithControl(allocator: std.mem.Allocator, graph: *const Graph, 
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    const default_layout_options = LayoutOptions{};
+    const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     var largest_node: f64 = 0;
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNode(node_item, default_layout_options);
@@ -7159,8 +7155,12 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const line_count = displayLabelLineCount(node_item.label);
     const max_line_len = displayLabelMaxLineLen(node_item.label);
     const margin = nodeMargin(node_item.attrs.items, 0);
-    const text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
-    const text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
+    var text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
+    var text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
+    if (options.quantum > 0) {
+        text_width = @ceil(text_width / options.quantum) * options.quantum;
+        text_height = @ceil(text_height / options.quantum) * options.quantum;
+    }
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0 + margin.x * 2.0);
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
     switch (node_item.shape) {
@@ -19174,21 +19174,51 @@ test "code API allows duplicate node names and uses ids for identity" {
     try std.testing.expectEqual(@as(usize, 2), layout.nodes.len);
 }
 
-test "code API exposes typed graph samplepoints attr" {
+test "graph quantum quantizes estimated label dimensions across layout engines" {
     const allocator = std.testing.allocator;
+    var baseline = try Graph.init(allocator, .{ .directed = true });
+    defer baseline.deinit();
+    _ = try baseline.addNode("quantized label", .{ .shape = .plain });
+    var baseline_layout = try layoutLayered(allocator, &baseline, .{});
+    defer baseline_layout.deinit();
+
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
-    try graph.setGraphAttr(.{ .samplepoints = 16 });
-    try std.testing.expectEqualStrings("16", attrValue(graph.attrs.items, "samplepoints").?);
+    try graph.setGraphAttr(.{ .quantum = 0.5 });
+    _ = try graph.addNode("quantized label", .{ .shape = .plain });
+    var layered = try layoutLayered(allocator, &graph, .{});
+    defer layered.deinit();
+    var force = try layoutFruchtermanReingold(allocator, &graph, .{ .width = 320, .height = 240, .iterations = 4 });
+    defer force.deinit();
+
+    try std.testing.expectEqualStrings("0.5", attrValue(graph.attrs.items, "quantum").?);
+    try std.testing.expect(layered.nodes[0].width > baseline_layout.nodes[0].width);
+    try std.testing.expect(layered.nodes[0].height > baseline_layout.nodes[0].height);
+    try std.testing.expectEqual(layered.nodes[0].width, force.nodes[0].width);
+    try std.testing.expectEqual(layered.nodes[0].height, force.nodes[0].height);
 
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [samplepoints=24];
-        \\  a -> b;
+        \\  graph [quantum=0.25];
+        \\  a [shape=plain, label="abc"];
         \\}
     );
     defer parsed.deinit();
-    try std.testing.expectEqualStrings("24", attrValue(parsed.attrs.items, "samplepoints").?);
+    const options = layoutOptionsWithGraphAttrs(.{}, &parsed);
+    try std.testing.expectApproxEqAbs(@as(f64, 18), options.quantum, 0.001);
+    const size = measureNode(parsed.nodes.items[0], options);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), size.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 18), size.height, 0.001);
+}
+
+test "invalid and nonpositive quantum preserve unquantized label sizes" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "0", "-1", "invalid", "nan" }) |value| {
+        var graph = try Graph.init(allocator, .{ .directed = true });
+        defer graph.deinit();
+        try graph.setGraphAttrRaw("quantum", value);
+        try std.testing.expectEqual(@as(f64, 0), layoutOptionsWithGraphAttrs(.{}, &graph).quantum);
+    }
 }
 
 test "code API sets typed node and edge options at creation" {

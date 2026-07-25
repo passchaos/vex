@@ -396,6 +396,11 @@ The parser currently supports a practical, mainstream DOT subset:
 - Graphviz-style style lists separated by commas, semicolons, or whitespace.
 - Order-sensitive SVG line styles for `solid`, `dashed`, and `dotted`.
 - Graphviz `shape=plain` keeps a compact unboxed text node distinct from `shape=plaintext` / `shape=none`.
+- Graph `quantum` rounds estimated label width and height upward in point-space
+  quanta before shape sizing, consistently across layered and force layouts;
+  invalid or nonpositive values leave dimensions unchanged. Graphviz
+  `samplepoints` only affects image-map outline sampling, so Vex keeps it as a
+  raw DOT attribute rather than exposing a typed SVG capability.
 - SVG rendering for Graphviz-style node `diagonals` on polygonal and ellipse-like shapes.
 - SVG rendering for Graphviz SBOLv node shapes `promoter`, `cds`, `terminator`, `utr`, `primersite`, `restrictionsite`, `fivepoverhang`, `threepoverhang`, `noverhang`, `assembly`, `signature`, `insulator`, `ribosite`, `rnastab`, `proteasesite`, `proteinstab`, `rpromoter`, `lpromoter`, `larrow`, and `rarrow`.
 - SVG rendering for node `image`, deprecated `shapefile`, `imagescale`, and

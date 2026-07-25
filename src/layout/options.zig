@@ -19,6 +19,7 @@ pub const LayoutOptions = struct {
     label_line_height: f64 = 18,
     node_padding_x: f64 = 14,
     node_padding_y: f64 = 9,
+    quantum: f64 = 0,
     crossing_passes: usize = 24,
     crossing_min_quit: usize = 8,
     coordinate_passes: usize = 4,
@@ -184,6 +185,9 @@ pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {
     }
     if (attrValue(graph_attrs, "nodesep")) |value| {
         result.node_gap = spacing.graph(value, result.node_gap);
+    }
+    if (attrValue(graph_attrs, "quantum")) |value| {
+        if (positiveAttrFloatValue(value)) |inches| result.quantum = inches * 72.0;
     }
     if (attrValue(graph_attrs, "mclimit")) |value| {
         if (positiveAttrFloatValue(value)) |scale| {
