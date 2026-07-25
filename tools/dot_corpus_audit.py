@@ -35,19 +35,6 @@ KNOWN_PLAIN_OUTPUT = {Path("share/b545.gv")}
 KNOWN_SLOW_SVG = {
     Path("1652.dot"),
     Path("2095_1.dot"),
-    Path("2343.dot"),
-    Path("graphs/b102.gv"),
-    Path("graphs/b143.gv"),
-    Path("graphs/b29.gv"),
-    Path("graphs/badvoro.gv"),
-    Path("graphs/root.gv"),
-    Path("graphs/xx.gv"),
-    Path("linux.i386/b102.gv"),
-    Path("linux.i386/b29.gv"),
-    Path("share/b102.gv"),
-    Path("share/b29.gv"),
-    Path("windows/b102.gv"),
-    Path("windows/b29.gv"),
 }
 BASELINE = {
     "candidates": 786,
@@ -69,9 +56,9 @@ CLUSTER_BASELINE = {
 }
 SVG_BASELINE = {
     "candidates": 727,
-    "ok": 707,
+    "ok": 720,
     "excluded": 5,
-    "slow": 15,
+    "slow": 2,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,
