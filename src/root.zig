@@ -2465,7 +2465,7 @@ const Parser = struct {
     subgraph_stack: std.ArrayList(SubgraphId) = .empty,
     node_index: std.StringHashMap(NodeId),
     edge_key_index: std.StringHashMap(EdgeId),
-    node_index_keys: std.ArrayList([]const u8) = .empty,
+    node_text_ids: std.ArrayList([]const u8) = .empty,
     edge_key_index_keys: std.ArrayList([]const u8) = .empty,
     subgraph_text_ids: std.ArrayList([]const u8) = .empty,
     lex_error: ?anyerror = null,
@@ -2485,7 +2485,7 @@ const Parser = struct {
     fn deinit(self: *Parser) void {
         freeStringList(self.allocator, &self.subgraph_text_ids);
         freeStringList(self.allocator, &self.edge_key_index_keys);
-        freeStringList(self.allocator, &self.node_index_keys);
+        freeStringList(self.allocator, &self.node_text_ids);
         self.node_index.deinit();
         self.edge_key_index.deinit();
         self.collectors.deinit(self.allocator);
@@ -2529,7 +2529,7 @@ const Parser = struct {
     fn resetGraphScope(self: *Parser) void {
         clearStringList(self.allocator, &self.subgraph_text_ids);
         clearStringList(self.allocator, &self.edge_key_index_keys);
-        clearStringList(self.allocator, &self.node_index_keys);
+        clearStringList(self.allocator, &self.node_text_ids);
         self.node_index.clearRetainingCapacity();
         self.edge_key_index.clearRetainingCapacity();
         self.collectors.clearRetainingCapacity();
@@ -2930,7 +2930,9 @@ const Parser = struct {
         errdefer self.allocator.free(owned_text_id);
         try self.node_index.put(owned_text_id, id);
         errdefer _ = self.node_index.remove(owned_text_id);
-        try self.node_index_keys.append(self.allocator, owned_text_id);
+        std.debug.assert(id == self.node_text_ids.items.len);
+        try self.node_text_ids.append(self.allocator, owned_text_id);
+        errdefer _ = self.node_text_ids.pop();
         try self.expandParsedNodeDefaultLabelAttrs(graph, id);
         return id;
     }
@@ -2974,10 +2976,7 @@ const Parser = struct {
     }
 
     fn nodeTextId(self: *Parser, graph: *const Graph, id: NodeId) []const u8 {
-        var it = self.node_index.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == id) return entry.key_ptr.*;
-        }
+        if (id < self.node_text_ids.items.len) return self.node_text_ids.items[id];
         return graph.nodes.items[id].label;
     }
 
@@ -3005,14 +3004,16 @@ const Parser = struct {
 
     fn expandParsedNodeDefaultLabelAttrs(self: *Parser, graph: *Graph, id: NodeId) !void {
         if (id >= graph.nodes.items.len) return error.InvalidNodeId;
-        const node_name = try self.allocator.dupe(u8, self.nodeTextId(graph, id));
-        defer self.allocator.free(node_name);
-        if (attrValue(graph.nodes.items[id].attrs.items, "label")) |value| {
+        const label = attrValue(graph.nodes.items[id].attrs.items, "label");
+        const xlabel = attrValue(graph.nodes.items[id].attrs.items, "xlabel");
+        if (label == null and xlabel == null) return;
+        const node_name = self.nodeTextId(graph, id);
+        if (label) |value| {
             const expanded = try expandNodeLabel(self.allocator, graph, node_name, value);
             defer self.allocator.free(expanded);
             try graph.setNodeAttrRaw(id, "label", expanded);
         }
-        if (attrValue(graph.nodes.items[id].attrs.items, "xlabel")) |value| {
+        if (xlabel) |value| {
             const expanded = try expandNodeLabel(self.allocator, graph, node_name, value);
             defer self.allocator.free(expanded);
             try graph.setNodeAttrRaw(id, "xlabel", expanded);

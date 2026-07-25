@@ -313,6 +313,11 @@ geometry, skipping the root background polygon by default. Use
 one-decimal coordinate grid, `--max-residual` to gate the absolute residual, and
 `--max-gap` to gate only the remaining gap above that one-decimal lower bound.
 
+`zig build test` also runs a ReleaseFast parser scale gate. The gate generates a
+10,000-node / 9,999-edge DOT chain with default `label="\N"` expansion, parses
+it inside a fixed 64 MiB arena, and requires completion within one second. Run
+it directly with `zig build test-parse-scale`.
+
 ## Mainstream DOT support
 
 The parser currently supports a practical, mainstream DOT subset:

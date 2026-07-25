@@ -134,6 +134,21 @@ pub fn build(b: *std.Build) void {
     const python_api_smoke_step = b.step("test-python-api", "Build and run the Python ctypes smoke test");
     python_api_smoke_step.dependOn(&python_api_smoke.step);
 
+    const parse_scale = b.addExecutable(.{
+        .name = "vex-parse-scale",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/parse_scale.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "vex", .module = mod },
+            },
+        }),
+    });
+    const run_parse_scale = b.addRunArtifact(parse_scale);
+    const parse_scale_step = b.step("test-parse-scale", "Run the 10k-node DOT parser scale gate");
+    parse_scale_step.dependOn(&run_parse_scale.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -309,6 +324,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_c_api_tests.step);
     test_step.dependOn(&run_c_api_smoke.step);
     test_step.dependOn(&python_api_smoke.step);
+    test_step.dependOn(&run_parse_scale.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

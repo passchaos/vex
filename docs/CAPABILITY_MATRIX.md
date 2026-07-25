@@ -48,7 +48,7 @@
 | 自包含交互 SVG | 已验证 | layer、collapse、filter、labels、focus、inspector、search、viewport、minimap、stats 和 `interactive-all` 测试 | 键盘/ARIA 与静态模式回归持续通过 |
 | 机器可读 SVG 对象索引 | 已验证 | graph/node/edge/subgraph 结构、attrs、rank constraints、ports、waypoints、geometry；`SVG_METADATA_V1.md` namespace/version/features/additive policy；静态模式与 CLI/API smoke | v1 只做 additive 扩展，破坏性变化发布新 namespace major |
 | 精确解析诊断 | 已验证 | line/column/source/caret/hint；`parseDotDiagnostics` statement recovery、max cap、UTF-8、lexical stop；CLI `--validate-all` smoke | 持续随目标 grammar 增加语义诊断 |
-| 可配置布局/输入预算 | 部分完成 | parse-only、max input、iterative engine budgets、layered pass budgets；所有当前引擎 `LayoutControl` / `LayoutWorkBudget` 取消和 CLI exit-2 smoke；sfdp Barnes-Hut 精度/交互次数门槛和 512-node SVG smoke | 增加稳定时间/峰值内存观测和更大规模基准门槛 |
+| 可配置布局/输入预算 | 部分完成 | parse-only、max input、iterative engine budgets、layered pass budgets；DOT textual ID 通过 `NodeId` 索引 O(1) 反查；`zig build test-parse-scale` 使用 ReleaseFast 在固定 64 MiB arena 内解析 10,000 nodes / 9,999 edges 且限制为 1 秒；所有当前引擎 `LayoutControl` / `LayoutWorkBudget` 取消和 CLI exit-2 smoke；sfdp Barnes-Hut 精度/交互次数门槛和 512-node SVG smoke | 增加布局/render 的稳定时间、峰值内存观测和更大规模基准门槛 |
 | 增量布局与心理地图稳定性 | 已验证 | `layoutGraphIncremental`；layered/force 共享节点位移门槛、无重叠/边界和 `stability=0` 等价测试 | 保持 NodeId 驱动；共享节点位移显著低于完整重排 |
 | 多语言/运行时绑定 | 部分完成 | stable C ABI v1；installed header/static/shared library；Zig ABI 和真实 C smoke；dependency-free Python ctypes builder/DOT/error/cancel smoke | 按产品需求继续提供 WASM 或 JS 原生绑定 |
 | 流式/并行大图管线 | 未实现 | 当前 parser/layout 为内存内串行流程 | 建立代表性规模、吞吐、峰值内存和取消门槛 |
