@@ -357,6 +357,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - Layered crossing minimization honors Graphviz `mclimit`: it scales the
   MaxIter=24 and MinQuit=8 effort limits, while `vex_crossing_passes` remains a
   direct maximum-pass override. The typed API exposes `GraphAttr.mclimit`.
+- Layered ranking honors Graphviz `nslimit1` as
+  `floor(nslimit1 * node_count)` network-simplex pivots. A zero or invalid value
+  disables the rank simplex pass; the typed API exposes `GraphAttr.nslimit1`.
 - Layered ranking defaults to integrated `newrank=true` semantics, so rank
   constraints can span sibling subgraphs without Graphviz's recursive-ranking
   restriction. Set `newrank=false` to restore Graphviz's legacy rank-constraint

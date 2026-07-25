@@ -233,6 +233,7 @@ pub const GraphAttr = union(enum) {
     nodesep: f64,
     ranksep: RankSep,
     mclimit: f64,
+    nslimit1: f64,
     splines: SplineMode,
     samplepoints: usize,
     bgcolor: []const u8,
@@ -1033,6 +1034,7 @@ pub const Graph = struct {
                 },
             },
             .mclimit => |value| try self.setGraphAttrFloat("mclimit", value),
+            .nslimit1 => |value| try self.setGraphAttrFloat("nslimit1", value),
             .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
             .samplepoints => |value| {
                 var buffer: [32]u8 = undefined;
@@ -4365,6 +4367,15 @@ fn newrankEnabled(graph: *const Graph) bool {
     return parseBool(value) orelse false;
 }
 
+fn rankSimplexPivotLimit(graph: *const Graph, fallback: usize) usize {
+    const value = attrValue(graph.attrs.items, "nslimit1") orelse return fallback;
+    const scale = std.fmt.parseFloat(f64, value) catch return 0;
+    if (!std.math.isFinite(scale) or scale <= 0) return 0;
+    const scaled = @as(f64, @floatFromInt(graph.nodes.items.len)) * scale;
+    if (scaled >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) return std.math.maxInt(usize);
+    return @as(usize, @intFromFloat(scaled));
+}
+
 const strongClusterWeight: f64 = 1000.0;
 const backwardRankPenalty: f64 = 1000.0;
 
@@ -4589,10 +4600,18 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     tightenRanksTowardSinks(layout_graph, ranks, acyclic_edge);
     improveRanksByLocalSearch(layout_graph, ranks, acyclic_edge, 2);
     try work.checkpoint((n +| layout_graph.edges.items.len +| 1) *| 4);
-    _ = try improveRanksByNetworkSimplex(allocator, layout_graph, ranks, acyclic_edge, n * 2);
+    const rank_pivot_limit = rankSimplexPivotLimit(layout_graph, n * 2);
+    _ = try improveRanksByNetworkSimplex(allocator, layout_graph, ranks, acyclic_edge, rank_pivot_limit);
     if (graphHasStrongClusters(layout_graph)) {
         settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
-        _ = try improveStrongClusterRanks(allocator, layout_graph, ranks, acyclic_edge, strong_edge, n * 4);
+        _ = try improveStrongClusterRanks(
+            allocator,
+            layout_graph,
+            ranks,
+            acyclic_edge,
+            strong_edge,
+            rankSimplexPivotLimit(layout_graph, n * 4),
+        );
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
@@ -8115,7 +8134,6 @@ fn improveStrongClusterRanks(
     if (problem.edges.len == 0) return 0;
 
     const initial_cost = augmentedRankEdgesCost(problem.edges, problem.ranks);
-    const pivot_limit = @max(max_pivots, problem.ranks.len * 2);
     const pivots = try improveAugmentedRankEdges(
         allocator,
         graph,
@@ -8123,7 +8141,7 @@ fn improveStrongClusterRanks(
         problem.ranks,
         acyclic_edge,
         problem.real_node_count,
-        pivot_limit,
+        max_pivots,
     );
     if (augmentedRankEdgesCost(problem.edges, problem.ranks) > initial_cost + 0.0001) return 0;
 
@@ -20325,6 +20343,93 @@ test "layered layout maps Graphviz mclimit to crossing effort" {
     try std.testing.expectEqualStrings("0.05", attrValue(graph.attrs.items, "mclimit").?);
 }
 
+test "layered layout maps Graphviz nslimit1 to rank pivot effort" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  nslimit1=0.5;
+        \\  a -> b -> c -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), rankSimplexPivotLimit(&graph, 99));
+    try graph.setGraphAttr(.{ .nslimit1 = 0 });
+    try std.testing.expectEqual(@as(usize, 0), rankSimplexPivotLimit(&graph, 99));
+    try std.testing.expectEqualStrings("0", attrValue(graph.attrs.items, "nslimit1").?);
+    try graph.setGraphAttr(.{ .nslimit1 = 1.75 });
+    try std.testing.expectEqual(@as(usize, 7), rankSimplexPivotLimit(&graph, 99));
+
+    try graph.setGraphAttrRaw("nslimit1", "invalid");
+    try std.testing.expectEqual(@as(usize, 0), rankSimplexPivotLimit(&graph, 99));
+    try graph.setGraphAttrRaw("nslimit1", "-1");
+    try std.testing.expectEqual(@as(usize, 0), rankSimplexPivotLimit(&graph, 99));
+}
+
+test "nslimit1 trades rank span quality for rank effort" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  n0 -> n1 [weight=5,minlen=2];
+        \\  n1 -> n3 [weight=8,minlen=2];
+        \\  n2 -> n5 [weight=12,minlen=1];
+        \\  n2 -> n7 [weight=2,minlen=3];
+        \\  n3 -> n4 [weight=9,minlen=3];
+        \\  n3 -> n6 [weight=6,minlen=3];
+        \\  n4 -> n5 [weight=11,minlen=2];
+        \\  n4 -> n7 [weight=9,minlen=3];
+        \\  n5 -> n6 [weight=2,minlen=1];
+        \\}
+    ;
+
+    var disabled_graph = try parseDot(allocator, source);
+    defer disabled_graph.deinit();
+    try disabled_graph.setGraphAttr(.{ .nslimit1 = 0 });
+    var disabled = try layoutLayered(allocator, &disabled_graph, .{});
+    defer disabled.deinit();
+
+    var default_graph = try parseDot(allocator, source);
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+
+    try std.testing.expectEqual(@as(f64, 170), layoutRankSpanCost(&disabled_graph, &disabled));
+    try std.testing.expectEqual(@as(f64, 167), layoutRankSpanCost(&default_graph, &default_layout));
+}
+
+test "nslimit1 zero disables compact strong-cluster simplex" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  nslimit1=0;
+        \\  subgraph service { compact=true; a; b; }
+        \\  x -> a;
+        \\}
+    );
+    defer graph.deinit();
+
+    const pivot_limit = rankSimplexPivotLimit(&graph, graph.nodes.items.len * 4);
+    try std.testing.expectEqual(@as(usize, 0), pivot_limit);
+    const ranks = try allocator.dupe(usize, &.{ 0, 1, 0 });
+    defer allocator.free(ranks);
+    const before = try allocator.dupe(usize, ranks);
+    defer allocator.free(before);
+    const acyclic_edge = [_]bool{true};
+    const strong_edge = [_]bool{false};
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        try improveStrongClusterRanks(
+            allocator,
+            &graph,
+            ranks,
+            acyclic_edge[0..],
+            strong_edge[0..],
+            pivot_limit,
+        ),
+    );
+    try std.testing.expectEqualSlices(usize, before, ranks);
+}
+
 test "explicit crossing passes override mclimit maximum" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -30555,6 +30660,19 @@ fn layoutAdjacentRankCrossingCount(graph: *const Graph, layout: *const Layout) u
         }
     }
     return crossings;
+}
+
+fn layoutRankSpanCost(graph: *const Graph, layout: *const Layout) f64 {
+    var cost: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) continue;
+        cost += rankSpanCost(
+            layout.ranks[edge_item.from],
+            layout.ranks[edge_item.to],
+            edge_item.weight,
+        );
+    }
+    return cost;
 }
 
 test "typed remincross serializes Graphviz crossing repeat control" {
