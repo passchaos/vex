@@ -253,7 +253,9 @@ For DOT streams with multiple top-level graphs, the CLI uses the same ordered
 batch layout path automatically. `--layout-workers N` caps workers (`1` forces
 serial layout); SVG documents are still rendered serially in input order, so
 worker count does not change output bytes. `--layout-work-budget` is applied
-independently to every graph.
+independently to every graph. With `--layout-workers 1`, the CLI uses a bounded
+parse→layout→render visitor pipeline and releases each graph/layout after its
+SVG is flushed; completed SVG documents remain valid if a later graph fails.
 
 After editing a graph while keeping existing `NodeId` values stable:
 
@@ -326,12 +328,15 @@ geometry, skipping the root background polygon by default. Use
 one-decimal coordinate grid, `--max-residual` to gate the absolute residual, and
 `--max-gap` to gate only the remaining gap above that one-decimal lower bound.
 
-`zig build test` also runs two ReleaseFast parser scale gates. The chain gate
+`zig build test` also runs three ReleaseFast parser scale gates. The chain gate
 generates 10,000 nodes / 9,999 edges with default `label="\N"` expansion. The
 structured gate generates 4,096 nodes / 4,095 attributed edges across 64 named
 subgraphs, with dense node and edge attributes. Each parse has a one-second
 limit and an independent 32 MiB parser-arena budget inside a reusable fixed
-64 MiB buffer. Both report source bytes, arena bytes, and elapsed milliseconds.
+64 MiB buffer. The stream visitor gate consumes 64 graphs with 256 nodes each
+under an 8 MiB active-allocation limit, checks input order/counts, and releases
+each graph before parsing the next. All report source bytes, memory budgets,
+and elapsed milliseconds.
 Run them directly with `zig build test-parse-scale`.
 
 The development-only Graphviz corpus audit is reproducible with

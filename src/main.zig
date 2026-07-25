@@ -246,18 +246,6 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    const parse_result = try vex.parseInputGraphsDiagnostic(allocator, dot, input_format);
-    var graphs = switch (parse_result) {
-        .graphs => |graphs| graphs,
-        .diagnostic => |diagnostic_value| {
-            var diagnostic = diagnostic_value;
-            defer diagnostic.deinit(allocator);
-            try writeParseDiagnostic(io, diagnostic);
-            std.process.exit(1);
-        },
-    };
-    defer graphs.deinit();
-
     var layered_options = vex.LayoutOptions{};
     if (crossing_passes) |value| layered_options.crossing_passes = value;
     if (coordinate_passes) |value| layered_options.coordinate_passes = value;
@@ -272,14 +260,90 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try layoutAndRenderGraphs(allocator, io, &file_writer.interface, graphs.items, format, render_options, layout_config, layout_work_budget, layout_workers);
+        try layoutAndRenderInput(allocator, io, &file_writer.interface, dot, input_format, format, render_options, layout_config, layout_work_budget, layout_workers);
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try layoutAndRenderGraphs(allocator, io, &stdout_file_writer.interface, graphs.items, format, render_options, layout_config, layout_work_budget, layout_workers);
+        try layoutAndRenderInput(allocator, io, &stdout_file_writer.interface, dot, input_format, format, render_options, layout_config, layout_work_budget, layout_workers);
         try stdout_file_writer.interface.flush();
     }
+}
+
+fn layoutAndRenderInput(
+    allocator: std.mem.Allocator,
+    io: Io,
+    writer: *Io.Writer,
+    source: []const u8,
+    input_format: vex.InputFormat,
+    format: vex.OutputFormat,
+    render_options: vex.RenderOptions,
+    layout_config: vex.LayoutConfig,
+    layout_work_budget: ?usize,
+    layout_workers: usize,
+) !void {
+    if (layout_workers == 1) {
+        const Context = struct {
+            allocator: std.mem.Allocator,
+            io: Io,
+            writer: *Io.Writer,
+            format: vex.OutputFormat,
+            render_options: vex.RenderOptions,
+            layout_config: vex.LayoutConfig,
+            layout_work_budget: ?usize,
+
+            fn visit(self: *@This(), graph: *const vex.Graph) !void {
+                var budget = vex.LayoutWorkBudget{ .limit = self.layout_work_budget orelse std.math.maxInt(usize) };
+                var config = self.layout_config;
+                if (self.layout_work_budget != null) config.control = budget.control();
+                var layout = vex.layoutGraph(self.allocator, graph, config) catch |err| {
+                    if (err == error.LayoutCanceled) {
+                        try writeLayoutCanceled(self.io, &budget);
+                        std.process.exit(2);
+                    }
+                    if (err == error.MissingNodePosition or err == error.InvalidNodePosition) {
+                        try writePositionedLayoutError(self.io, err);
+                        std.process.exit(2);
+                    }
+                    return err;
+                };
+                defer layout.deinit();
+                try vex.render(self.writer, &layout, self.format, self.render_options);
+                try self.writer.flush();
+            }
+        };
+        var context = Context{
+            .allocator = allocator,
+            .io = io,
+            .writer = writer,
+            .format = format,
+            .render_options = render_options,
+            .layout_config = layout_config,
+            .layout_work_budget = layout_work_budget,
+        };
+        var result = try vex.visitInputGraphsDiagnostic(allocator, source, input_format, &context, Context.visit);
+        switch (result) {
+            .complete => return,
+            .diagnostic => |*diagnostic| {
+                defer diagnostic.deinit(allocator);
+                try writeParseDiagnostic(io, diagnostic.*);
+                std.process.exit(1);
+            },
+        }
+    }
+
+    const parse_result = try vex.parseInputGraphsDiagnostic(allocator, source, input_format);
+    var graphs = switch (parse_result) {
+        .graphs => |graphs| graphs,
+        .diagnostic => |diagnostic_value| {
+            var diagnostic = diagnostic_value;
+            defer diagnostic.deinit(allocator);
+            try writeParseDiagnostic(io, diagnostic);
+            std.process.exit(1);
+        },
+    };
+    defer graphs.deinit();
+    try layoutAndRenderGraphs(allocator, io, writer, graphs.items, format, render_options, layout_config, layout_work_budget, layout_workers);
 }
 
 fn layoutAndRenderGraphs(
@@ -507,6 +571,50 @@ test "graph stream check summaries and SVG output preserve every graph" {
     const first = std.mem.indexOf(u8, parallel_svg, "<title>First</title>") orelse return error.MissingFirstGraph;
     const second = std.mem.indexOf(u8, parallel_svg, "<title>Second</title>") orelse return error.MissingSecondGraph;
     try std.testing.expect(first < second);
+}
+
+test "serial graph stream render visitor matches parallel owned output" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph First { a -> b; }
+        \\graph Second { c -- d; }
+        \\digraph Third { e -> f; }
+    ;
+    var serial_writer = Io.Writer.Allocating.init(allocator);
+    defer serial_writer.deinit();
+    try layoutAndRenderInput(
+        allocator,
+        std.testing.io,
+        &serial_writer.writer,
+        source,
+        .dot,
+        .svg,
+        .{},
+        .{ .algorithm = .sugiyama },
+        null,
+        1,
+    );
+    const serial_svg = try serial_writer.toOwnedSlice();
+    defer allocator.free(serial_svg);
+
+    var graphs = try vex.parseDotGraphs(allocator, source);
+    defer graphs.deinit();
+    var parallel_writer = Io.Writer.Allocating.init(allocator);
+    defer parallel_writer.deinit();
+    try layoutAndRenderGraphs(
+        allocator,
+        std.testing.io,
+        &parallel_writer.writer,
+        graphs.items,
+        .svg,
+        .{},
+        .{ .algorithm = .sugiyama },
+        null,
+        4,
+    );
+    const parallel_svg = try parallel_writer.toOwnedSlice();
+    defer allocator.free(parallel_svg);
+    try std.testing.expectEqualStrings(parallel_svg, serial_svg);
 }
 
 test "streaming check output keeps consumed summaries before later diagnostic" {

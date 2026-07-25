@@ -4,10 +4,13 @@ const vex = @import("vex");
 const chain_node_count: usize = 10_000;
 const structured_node_count: usize = 4_096;
 const structured_group_size: usize = 64;
+const stream_graph_count: usize = 64;
+const stream_nodes_per_graph: usize = 256;
 const parser_memory_limit: usize = 64 * 1024 * 1024;
 const parse_time_limit_ns: i96 = std.time.ns_per_s;
 const chain_arena_limit: usize = 32 * 1024 * 1024;
 const structured_arena_limit: usize = 32 * 1024 * 1024;
+const stream_active_memory_limit: usize = 8 * 1024 * 1024;
 
 const ParseGateResult = struct {
     nodes: usize,
@@ -27,6 +30,8 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(chain_source);
     const structured_source = try buildStructuredSource(allocator);
     defer allocator.free(structured_source);
+    const stream_source = try buildStreamSource(allocator);
+    defer allocator.free(stream_source);
 
     const parser_memory = try allocator.alloc(u8, parser_memory_limit);
     defer allocator.free(parser_memory);
@@ -49,11 +54,22 @@ pub fn main(init: std.process.Init) !void {
         structured_node_count / structured_group_size,
         structured_arena_limit,
     );
+    const stream = try runStreamGate(init, stream_source);
 
-    var stdout_buffer: [512]u8 = undefined;
+    var stdout_buffer: [1024]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), init.io, &stdout_buffer);
     try printGateResult(&stdout.interface, "chain", chain);
     try printGateResult(&stdout.interface, "structured", structured);
+    try stdout.interface.print(
+        "parse-scale stream ok: graphs={d} nodes_per_graph={d} source_bytes={d} active_memory_limit={d} elapsed_ms={d}\n",
+        .{
+            stream.graphs,
+            stream.nodes_per_graph,
+            stream_source.len,
+            stream_active_memory_limit,
+            @divTrunc(stream.elapsed_ns, std.time.ns_per_ms),
+        },
+    );
     try stdout.interface.flush();
 }
 
@@ -104,6 +120,60 @@ fn buildStructuredSource(allocator: std.mem.Allocator) ![]u8 {
     }
     try source_writer.writer.writeAll("}\n");
     return source_writer.toOwnedSlice();
+}
+
+fn buildStreamSource(allocator: std.mem.Allocator) ![]u8 {
+    var source_writer = std.Io.Writer.Allocating.init(allocator);
+    errdefer source_writer.deinit();
+    for (0..stream_graph_count) |graph_index| {
+        try source_writer.writer.print("digraph Stream{d} {{\n", .{graph_index});
+        for (0..stream_nodes_per_graph) |node_index| {
+            try source_writer.writer.print("  n{d} [label=\"g{d} node {d}\"];\n", .{ node_index, graph_index, node_index });
+            if (node_index > 0) {
+                try source_writer.writer.print("  n{d} -> n{d};\n", .{ node_index - 1, node_index });
+            }
+        }
+        try source_writer.writer.writeAll("}\n");
+    }
+    return source_writer.toOwnedSlice();
+}
+
+const StreamGateResult = struct {
+    graphs: usize,
+    nodes_per_graph: usize,
+    elapsed_ns: i96,
+};
+
+fn runStreamGate(init: std.process.Init, source: []const u8) !StreamGateResult {
+    var limited: std.heap.DebugAllocator(.{
+        .enable_memory_limit = true,
+        .thread_safe = false,
+        .stack_trace_frames = 0,
+    }) = .{};
+    defer _ = limited.deinit();
+    limited.requested_memory_limit = stream_active_memory_limit;
+
+    const Context = struct {
+        graph_index: usize = 0,
+
+        fn visit(self: *@This(), graph: *const vex.Graph) !void {
+            var name_buffer: [32]u8 = undefined;
+            const expected_name = try std.fmt.bufPrint(&name_buffer, "Stream{d}", .{self.graph_index});
+            if (!std.mem.eql(u8, graph.name, expected_name)) return error.ParseScaleStreamOrderMismatch;
+            if (graph.nodes.items.len != stream_nodes_per_graph) return error.ParseScaleStreamNodeCountMismatch;
+            if (graph.edges.items.len != stream_nodes_per_graph - 1) return error.ParseScaleStreamEdgeCountMismatch;
+            self.graph_index += 1;
+        }
+    };
+    var context = Context{};
+    const start = std.Io.Clock.awake.now(init.io);
+    const graph_count = try vex.visitDotGraphs(limited.allocator(), source, &context, Context.visit);
+    const elapsed_ns = start.durationTo(std.Io.Clock.awake.now(init.io)).toNanoseconds();
+    if (graph_count != stream_graph_count or context.graph_index != stream_graph_count) {
+        return error.ParseScaleStreamGraphCountMismatch;
+    }
+    if (elapsed_ns > parse_time_limit_ns) return error.ParseScaleTimeLimitExceeded;
+    return .{ .graphs = graph_count, .nodes_per_graph = stream_nodes_per_graph, .elapsed_ns = elapsed_ns };
 }
 
 fn runParseGate(
