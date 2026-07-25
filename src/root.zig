@@ -206,6 +206,18 @@ pub const ClusterRankMode = enum {
     }
 };
 
+pub const TopBottomBalance = enum {
+    min,
+    max,
+
+    pub fn name(self: TopBottomBalance) []const u8 {
+        return switch (self) {
+            .min => "min",
+            .max => "max",
+        };
+    }
+};
+
 const label_left_break: u8 = 0x1e;
 const label_right_break: u8 = 0x1f;
 const svg_label_breaks = svg_mod.text.LabelBreaks{ .left = label_left_break, .right = label_right_break };
@@ -236,6 +248,7 @@ pub const GraphAttr = union(enum) {
     nslimit: f64,
     nslimit1: f64,
     searchsize: usize,
+    tb_balance: TopBottomBalance,
     splines: SplineMode,
     samplepoints: usize,
     bgcolor: []const u8,
@@ -1043,6 +1056,7 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setGraphAttrRaw("searchsize", text);
             },
+            .tb_balance => |value| try self.setGraphAttrRaw("TBbalance", value.name()),
             .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
             .samplepoints => |value| {
                 var buffer: [32]u8 = undefined;
@@ -4651,6 +4665,8 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
+    applyTopBottomBalance(layout_graph, ranks);
+    applyRankConstraints(layout_graph, ranks);
 
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -7898,6 +7914,28 @@ fn assignRanksForCyclicComponents(
     defer graph.allocator.free(state);
     @memset(state, 0);
     for (graph.nodes.items, 0..) |_, id| relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, id);
+}
+
+fn applyTopBottomBalance(graph: *const Graph, ranks: []usize) void {
+    const value = attrValue(graph.attrs.items, "TBbalance") orelse return;
+    const move_to_min = std.ascii.eqlIgnoreCase(value, "min");
+    const move_to_max = std.ascii.eqlIgnoreCase(value, "max");
+    if (!move_to_min and !move_to_max) return;
+
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    for (ranks, 0..) |*rank, node_id| {
+        if (rankTighteningPinned(graph, node_id)) continue;
+        var has_in = false;
+        var has_out = false;
+        for (graph.edges.items) |edge_item| {
+            if (!edge_item.constraint) continue;
+            if (edge_item.to == node_id) has_in = true;
+            if (edge_item.from == node_id) has_out = true;
+        }
+        if (move_to_min and !has_in) rank.* = 0;
+        if (move_to_max and !has_out) rank.* = max_rank;
+    }
 }
 
 fn relaxRanksDepthFirst(
@@ -20583,6 +20621,77 @@ test "layered layout maps Graphviz searchsize to leaving-edge effort" {
     try std.testing.expectEqual(@as(usize, 1), rankSimplexSearchSize(&graph));
     try graph.setGraphAttrRaw("searchsize", "-1");
     try std.testing.expectEqual(@as(usize, 30), rankSimplexSearchSize(&graph));
+}
+
+test "TBbalance moves floating sources and sinks to boundary ranks" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  min -> middle -> max;
+        \\  floater1;
+        \\  floater2;
+        \\}
+    ;
+
+    var default_graph = try parseDot(allocator, source);
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+
+    var min_graph = try parseDot(allocator, source);
+    defer min_graph.deinit();
+    try min_graph.setGraphAttr(.{ .tb_balance = .min });
+    var min_layout = try layoutLayered(allocator, &min_graph, .{});
+    defer min_layout.deinit();
+
+    var max_graph = try parseDot(allocator, source);
+    defer max_graph.deinit();
+    try max_graph.setGraphAttr(.{ .tb_balance = .max });
+    var max_layout = try layoutLayered(allocator, &max_graph, .{});
+    defer max_layout.deinit();
+
+    const default_f1 = nodeIdByLabel(&default_graph, "floater1");
+    const default_f2 = nodeIdByLabel(&default_graph, "floater2");
+    const min_f1 = nodeIdByLabel(&min_graph, "floater1");
+    const min_f2 = nodeIdByLabel(&min_graph, "floater2");
+    const max_f1 = nodeIdByLabel(&max_graph, "floater1");
+    const max_f2 = nodeIdByLabel(&max_graph, "floater2");
+    const max_node = nodeIdByLabel(&max_graph, "max");
+
+    try std.testing.expectEqual(default_layout.ranks[default_f1], default_layout.ranks[default_f2]);
+    try std.testing.expectEqual(@as(usize, 0), min_layout.ranks[min_f1]);
+    try std.testing.expectEqual(@as(usize, 0), min_layout.ranks[min_f2]);
+    try std.testing.expectEqual(max_layout.ranks[max_node], max_layout.ranks[max_f1]);
+    try std.testing.expectEqual(max_layout.ranks[max_node], max_layout.ranks[max_f2]);
+    try std.testing.expectEqualStrings("min", attrValue(min_graph.attrs.items, "TBbalance").?);
+    try std.testing.expectEqualStrings("max", attrValue(max_graph.attrs.items, "TBbalance").?);
+}
+
+test "TBbalance works for LR and preserves explicit rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  rankdir=LR;
+        \\  TBbalance=max;
+        \\  { rank=source; source; }
+        \\  { rank=sink; sink; }
+        \\  source -> middle -> sink;
+        \\  floater;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const source = nodeIdByLabel(&graph, "source");
+    const sink = nodeIdByLabel(&graph, "sink");
+    const floater = nodeIdByLabel(&graph, "floater");
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[source]);
+    try std.testing.expect(layout.ranks[floater] < layout.ranks[sink]);
+    for (layout.ranks, 0..) |rank, node_id| {
+        if (node_id != sink) try std.testing.expect(rank < layout.ranks[sink]);
+    }
+    try std.testing.expect(layout.nodes[source].center.x < layout.nodes[sink].center.x);
 }
 
 test "searchsize trades rank span quality for leaving-edge effort" {

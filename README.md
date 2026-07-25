@@ -366,6 +366,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - Layered coordinate refinement honors Graphviz `nslimit` as
   `floor(nslimit * node_count)` refinement passes. `vex_coordinate_passes`
   remains a direct override; the typed API exposes `GraphAttr.nslimit`.
+- Layered ranking honors Graphviz `TBbalance=min|max`, moving unconstrained
+  source/sink floaters to the selected boundary rank in every `rankdir`.
+  Explicit `rank=source|sink` constraints remain exclusive and take precedence.
 - Layered ranking defaults to integrated `newrank=true` semantics, so rank
   constraints can span sibling subgraphs without Graphviz's recursive-ranking
   restriction. Set `newrank=false` to restore Graphviz's legacy rank-constraint
