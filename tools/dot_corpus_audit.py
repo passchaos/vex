@@ -37,7 +37,6 @@ KNOWN_SLOW_SVG = {
     Path("2095_1.dot"),
     Path("2343.dot"),
     Path("graphs/b102.gv"),
-    Path("graphs/b124.gv"),
     Path("graphs/b143.gv"),
     Path("graphs/b29.gv"),
     Path("graphs/badvoro.gv"),
@@ -70,9 +69,9 @@ CLUSTER_BASELINE = {
 }
 SVG_BASELINE = {
     "candidates": 727,
-    "ok": 706,
+    "ok": 707,
     "excluded": 5,
-    "slow": 16,
+    "slow": 15,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,
