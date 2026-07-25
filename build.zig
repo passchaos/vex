@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_parse_scale = b.addRunArtifact(parse_scale);
-    const parse_scale_step = b.step("test-parse-scale", "Run the 10k-node DOT parser scale gate");
+    const parse_scale_step = b.step("test-parse-scale", "Run chain and structured DOT parser scale gates");
     parse_scale_step.dependOn(&run_parse_scale.step);
 
     // This creates a top level step. Top level steps have a name and can be
