@@ -1,0 +1,14 @@
+digraph Root {
+  subgraph "group A" {
+    label="graph=\G node=\N label=\L";
+    a;
+  }
+
+  subgraph outer {
+    label="outer=\G";
+    subgraph inner {
+      label="inner=\G";
+      b;
+    }
+  }
+}

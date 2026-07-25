@@ -2964,7 +2964,7 @@ const Parser = struct {
         const attrs = self.subgraph_scopes.items[self.subgraph_scopes.items.len - 1] orelse return false;
         if (std.ascii.eqlIgnoreCase(name, "label")) {
             const subgraph_name = self.currentSubgraphTextId(graph);
-            const expanded = try expandNodeLabel(self.allocator, graph, subgraph_name, value);
+            const expanded = try expandSubgraphLabel(self.allocator, subgraph_name, value);
             defer self.allocator.free(expanded);
             try setAttrInList(self.allocator, attrs, name, expanded);
             return true;
@@ -3357,6 +3357,13 @@ fn expandNodeLabel(allocator: std.mem.Allocator, graph: *const Graph, node_name:
     return expandLabelEscapes(allocator, value, .{
         .graph_name = graph.name,
         .node_name = node_name,
+        .label_name = value,
+    });
+}
+
+fn expandSubgraphLabel(allocator: std.mem.Allocator, subgraph_name: []const u8, value: []const u8) ![]u8 {
+    return expandLabelEscapes(allocator, value, .{
+        .graph_name = subgraph_name,
         .label_name = value,
     });
 }
@@ -30983,6 +30990,28 @@ test "DOT subgraph textual identity stays separate from display label" {
     try std.testing.expect(std.mem.indexOf(u8, svg, ">left group<") == null);
     try std.testing.expect(std.mem.indexOf(u8, right_fragment, ">Visible</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"\"") != null);
+}
+
+test "DOT subgraph labels expand current graph object escapes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator, @embedFile("testdata/dot_non_html_subgraph_label_escapes.dot"));
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), graph.subgraphs.items.len);
+    try std.testing.expectEqualStrings("graph=group A node=\\N label=graph=\\G node=\\N label=\\L", graph.subgraphs.items[0].label);
+    try std.testing.expectEqualStrings("outer=outer", graph.subgraphs.items[1].label);
+    try std.testing.expectEqualStrings("inner=inner", graph.subgraphs.items[2].label);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">graph=group A node=\\N label=graph=\\G node=\\N label=\\L</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">outer=outer</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">inner=inner</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">outer=Root</text>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">inner=Root</text>") == null);
 }
 
 test "non HTML DOT lexical edge corpus parses operator adjacency and ports" {

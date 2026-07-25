@@ -336,7 +336,9 @@ The parser currently supports a practical, mainstream DOT subset:
   one parent merges members and attributes, while identical names under
   different parents remain distinct. The textual subgraph ID stays parser-local
   and is not a display label: only an explicit `label` renders text or reserves
-  a cluster label band.
+  a cluster label band. Within an explicit subgraph label, Graphviz object
+  escape `\G` expands to that subgraph's textual ID rather than the root graph;
+  node-only `\N` remains literal.
 - Anonymous subgraph blocks keep graph attributes local without becoming
   rendered cluster objects.
 - Layered layout honors `clusterrank=local|global|none`: `local` enables
