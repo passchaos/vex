@@ -421,6 +421,8 @@ The parser currently supports a practical, mainstream DOT subset:
 - Vex SVG output can optionally embed a native graph statistics panel via `--interactive-stats`, `vex_interactive_stats=true`, or `SvgOptions.interactive_stats`.
 - Vex SVG output can optionally embed a machine-readable SVG metadata object index with graph structure, rank constraints, layout/canvas facts, rendered graph/node/edge/subgraph object attributes including subgraph parent/member relationships, edge record/compass ports, compound subgraph endpoints and effective edge layout values, a generic custom/future attribute index, object layers, effective `href` / `tooltip` / `target` metadata, graph/node/edge/subgraph object geometry, node ranks, edge waypoints, and layer metadata via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
+- Edge `minlen=0` is preserved across DOT and typed APIs, allowing same-rank
+  edges without silently raising the minimum rank distance to one.
 - Graphviz arrow marker grammar including `normal`, `open`, `inv`, `curve`,
   `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, open variants, `l` / `r`
   half-arrow modifiers, compatibility aliases, and compositions of up to four

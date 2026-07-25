@@ -874,7 +874,7 @@ pub const Graph = struct {
             .color = owned_color,
             .weight = options.weight orelse self.edge_defaults.weight,
             .constraint = options.constraint orelse self.edge_defaults.constraint,
-            .min_len = @max(options.min_len orelse self.edge_defaults.min_len, 1),
+            .min_len = options.min_len orelse self.edge_defaults.min_len,
             .tail_port = options.tail_port,
             .head_port = options.head_port,
             .tail_record_port = owned_tail_record_port,
@@ -1357,7 +1357,7 @@ pub const Graph = struct {
         } else if (std.ascii.eqlIgnoreCase(name, "constraint")) {
             self.edge_defaults.constraint = parseBool(value) orelse self.edge_defaults.constraint;
         } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
-            self.edge_defaults.min_len = @max(std.fmt.parseInt(usize, value, 10) catch self.edge_defaults.min_len, 1);
+            self.edge_defaults.min_len = std.fmt.parseInt(usize, value, 10) catch self.edge_defaults.min_len;
         }
     }
 
@@ -1773,7 +1773,7 @@ pub const Graph = struct {
         } else if (std.ascii.eqlIgnoreCase(name, "constraint")) {
             e.constraint = parseBool(value) orelse e.constraint;
         } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
-            e.min_len = @max(std.fmt.parseInt(usize, value, 10) catch e.min_len, 1);
+            e.min_len = std.fmt.parseInt(usize, value, 10) catch e.min_len;
         }
         try setAttrInList(self.allocator, &e.attrs, name, value);
     }
@@ -4624,7 +4624,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         for (layout_graph.edges.items) |edge_item| {
             if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
             if (edge_item.from != u) continue;
-            const min_len = @max(edge_item.min_len, 1);
+            const min_len = edge_item.min_len;
             if (ranks[edge_item.to] < ranks[u] + min_len) ranks[edge_item.to] = ranks[u] + min_len;
             acyclic_edge[edge_item.id] = true;
             if (indegree[edge_item.to] > 0) {
@@ -7956,7 +7956,7 @@ fn relaxRanksDepthFirst(
         if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) continue;
         if (edge_item.to >= ranks.len or edge_item.to == node_id) continue;
         if (state[edge_item.to] == 1) continue;
-        const candidate = ranks[node_id] + @max(edge_item.min_len, 1);
+        const candidate = ranks[node_id] + edge_item.min_len;
         if (ranks[edge_item.to] < candidate) {
             ranks[edge_item.to] = candidate;
             if (state[edge_item.to] == 2) state[edge_item.to] = 0;
@@ -8008,7 +8008,7 @@ fn feasibleRankBoundsForNode(graph: *const Graph, ranks: []const usize, acyclic_
     var max_rank: usize = std.math.maxInt(usize);
     for (graph.edges.items) |edge_item| {
         if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
-        const min_len = @max(edge_item.min_len, 1);
+        const min_len = edge_item.min_len;
         if (edge_item.to == node_id and edge_item.from < ranks.len) {
             min_rank = @max(min_rank, ranks[edge_item.from] + min_len);
         } else if (edge_item.from == node_id and edge_item.to < ranks.len) {
@@ -8172,7 +8172,7 @@ fn settleStrongRanksWithExplicitConstraints(
         for (graph.edges.items) |edge_item| {
             if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
             if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
-            ranks[edge_item.to] = @max(ranks[edge_item.to], ranks[edge_item.from] +| @max(edge_item.min_len, 1));
+            ranks[edge_item.to] = @max(ranks[edge_item.to], ranks[edge_item.from] +| edge_item.min_len);
         }
         if (rankAssignmentFeasible(graph, ranks, acyclic_edge) and rankConstraintsSatisfied(graph, ranks)) return;
     }
@@ -8248,7 +8248,7 @@ fn buildStrongRankProblem(
     var rank_offset: usize = 0;
     for (graph.edges.items) |edge_item| {
         if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) {
-            rank_offset = @max(rank_offset, @max(edge_item.min_len, 1));
+            rank_offset = @max(rank_offset, edge_item.min_len);
         }
     }
     for (ranks) |rank| try rank_list.append(allocator, rank +| rank_offset);
@@ -8260,7 +8260,7 @@ fn buildStrongRankProblem(
             &edge_list,
             edge_item.from,
             edge_item.to,
-            @max(edge_item.min_len, 1),
+            edge_item.min_len,
             @max(edge_item.weight, 0.1),
             edge_item.id,
         );
@@ -8268,11 +8268,11 @@ fn buildStrongRankProblem(
 
     for (graph.edges.items) |edge_item| {
         if (edge_item.id >= strong_edge.len or !strong_edge[edge_item.id]) continue;
-        const min_len = @max(edge_item.min_len, 1);
+        const min_len = edge_item.min_len;
         const auxiliary = rank_list.items.len;
         const tail_rank = rank_list.items[edge_item.from];
         const head_rank = rank_list.items[edge_item.to];
-        try rank_list.append(allocator, @min(tail_rank, head_rank - min_len));
+        try rank_list.append(allocator, @min(tail_rank, head_rank -| min_len));
         const weight = @max(edge_item.weight, 0.1);
         try appendRankEdge(allocator, &edge_list, auxiliary, edge_item.from, 0, weight * backwardRankPenalty, edge_item.id);
         try appendRankEdge(allocator, &edge_list, auxiliary, edge_item.to, min_len, weight, edge_item.id);
@@ -8608,7 +8608,7 @@ fn rankAssignmentFeasible(graph: *const Graph, ranks: []const usize, acyclic_edg
     for (graph.edges.items) |edge_item| {
         if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
         if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
-        const min_len = @max(edge_item.min_len, 1);
+        const min_len = edge_item.min_len;
         if (ranks[edge_item.to] < ranks[edge_item.from] + min_len) return false;
     }
     return true;
@@ -8692,7 +8692,7 @@ fn collectRankEdges(allocator: std.mem.Allocator, graph: *const Graph, acyclic_e
             .edge_id = edge_item.id,
             .from = edge_item.from,
             .to = edge_item.to,
-            .min_len = @max(edge_item.min_len, 1),
+            .min_len = edge_item.min_len,
             .weight = @max(edge_item.weight, 0.1),
         });
     }
@@ -29578,6 +29578,65 @@ test "DOT parser propagates edge constraint and minlen controls" {
     try std.testing.expectEqual(@as(f64, 5.0), graph.edges.items[1].weight);
     try std.testing.expectEqualStrings("false", attrValue(graph.edges.items[1].attrs.items, "labelfloat").?);
     try std.testing.expectEqualStrings("false", attrValue(graph.edges.items[1].attrs.items, "labelaligned").?);
+}
+
+test "DOT and typed API preserve Graphviz minlen zero" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  edge [minlen=0];
+        \\  a -> b;
+        \\  b -> c [minlen=1];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), graph.edges.items[0].min_len);
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.items[1].min_len);
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+
+    var typed = try Graph.init(allocator, .{ .directed = true });
+    defer typed.deinit();
+    try typed.setDefaultEdgeAttr(.{ .min_len = 0 });
+    const ta = try typed.addNode("a", .{});
+    const tb = try typed.addNode("b", .{});
+    const edge_id = try typed.addEdge(ta, tb, .{});
+    try std.testing.expectEqual(@as(usize, 0), typed.edges.items[edge_id].min_len);
+    try typed.setEdgeAttr(edge_id, .{ .min_len = 2 });
+    try std.testing.expectEqual(@as(usize, 2), typed.edges.items[edge_id].min_len);
+    try typed.setEdgeAttr(edge_id, .{ .min_len = 0 });
+    try std.testing.expectEqual(@as(usize, 0), typed.edges.items[edge_id].min_len);
+}
+
+test "Graphviz 162 minlen zero inter-subgraph edge renders once" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\strict digraph G {
+        \\  ordering=out;
+        \\  subgraph one { A; B; C; }
+        \\  subgraph two { D; }
+        \\  A -> B;
+        \\  A -> C;
+        \\  C -> D [minlen=0];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const c = nodeIdByLabel(&graph, "C");
+    const d = nodeIdByLabel(&graph, "D");
+    try std.testing.expectEqual(layout.ranks[c], layout.ranks[d]);
+    try std.testing.expectEqual(@as(usize, 0), graph.edges.items[2].min_len);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expectEqual(@as(usize, 1), countSubstrings(svg, "<title>C-&gt;D</title>"));
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-minlen=\"0\"") != null);
 }
 
 test "DOT parser accepts Graphviz boolean aliases" {
