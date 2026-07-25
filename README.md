@@ -249,6 +249,12 @@ for concurrent access. The scheduler allocator only owns the result array and
 worker handles. `cancel_flag` is an optional `std.atomic.Value(bool)` checked
 before and during every layout.
 
+For DOT streams with multiple top-level graphs, the CLI uses the same ordered
+batch layout path automatically. `--layout-workers N` caps workers (`1` forces
+serial layout); SVG documents are still rendered serially in input order, so
+worker count does not change output bytes. `--layout-work-budget` is applied
+independently to every graph.
+
 After editing a graph while keeping existing `NodeId` values stable:
 
 ```zig

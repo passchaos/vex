@@ -15,6 +15,7 @@ const usage =
     \\        [--max-input-bytes count]
     \\        [--layout-iterations count]
     \\        [--layout-work-budget count]
+    \\        [--layout-workers count]
     \\        [--crossing-passes count] [--coordinate-passes count]
     \\        [--input-format auto|dot|mermaid]
     \\        [--interactive-all]
@@ -39,6 +40,7 @@ const usage =
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps neato stress or force-layout iterations.
     \\--layout-work-budget cancels layout after deterministic work checkpoints.
+    \\--layout-workers caps parallel workers for multi-graph input (default: auto).
     \\--interactive-all enables all SVG-native controls and metadata.
     \\--interactive-layers adds an SVG-native toggle panel for graph layers.
     \\--interactive-collapse adds SVG-native subgraph collapse controls.
@@ -73,6 +75,7 @@ pub fn main(init: std.process.Init) !void {
     var max_input_bytes: usize = default_max_input_bytes;
     var layout_iterations: ?usize = null;
     var layout_work_budget: ?usize = null;
+    var layout_workers: usize = 0;
     var crossing_passes: ?usize = null;
     var coordinate_passes: ?usize = null;
     var input_format: vex.InputFormat = .auto;
@@ -169,6 +172,11 @@ pub fn main(init: std.process.Init) !void {
             if (i >= args.len) return error.MissingLayoutWorkBudget;
             layout_work_budget = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidLayoutWorkBudget;
             if (layout_work_budget.? == 0) return error.InvalidLayoutWorkBudget;
+        } else if (std.mem.eql(u8, arg, "--layout-workers")) {
+            i += 1;
+            if (i >= args.len) return error.MissingLayoutWorkers;
+            layout_workers = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidLayoutWorkers;
+            if (layout_workers == 0) return error.InvalidLayoutWorkers;
         } else if (std.mem.eql(u8, arg, "--crossing-passes")) {
             i += 1;
             if (i >= args.len) return error.MissingCrossingPasses;
@@ -234,12 +242,10 @@ pub fn main(init: std.process.Init) !void {
     var layered_options = vex.LayoutOptions{};
     if (crossing_passes) |value| layered_options.crossing_passes = value;
     if (coordinate_passes) |value| layered_options.coordinate_passes = value;
-    var work_budget = vex.LayoutWorkBudget{ .limit = layout_work_budget orelse std.math.maxInt(usize) };
     const layout_config = vex.LayoutConfig{
         .algorithm = layout_arg,
         .layered = layered_options,
         .force = if (layout_iterations) |iterations| .{ .iterations = iterations } else .{},
-        .control = if (layout_work_budget != null) work_budget.control() else .{},
     };
     const render_options = vex.RenderOptions{ .svg = .{ .interactive_all = interactive_all, .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
     if (output_path) |path| {
@@ -247,12 +253,12 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try layoutAndRenderGraphs(allocator, io, &file_writer.interface, graphs.items, format, render_options, layout_config, &work_budget);
+        try layoutAndRenderGraphs(allocator, io, &file_writer.interface, graphs.items, format, render_options, layout_config, layout_work_budget, layout_workers);
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try layoutAndRenderGraphs(allocator, io, &stdout_file_writer.interface, graphs.items, format, render_options, layout_config, &work_budget);
+        try layoutAndRenderGraphs(allocator, io, &stdout_file_writer.interface, graphs.items, format, render_options, layout_config, layout_work_budget, layout_workers);
         try stdout_file_writer.interface.flush();
     }
 }
@@ -265,12 +271,26 @@ fn layoutAndRenderGraphs(
     format: vex.OutputFormat,
     render_options: vex.RenderOptions,
     layout_config: vex.LayoutConfig,
-    work_budget: *vex.LayoutWorkBudget,
+    layout_work_budget: ?usize,
+    layout_workers: usize,
 ) !void {
-    for (graphs) |*graph| {
-        var layout = vex.layoutGraph(allocator, graph, layout_config) catch |err| {
+    const tasks = try allocator.alloc(vex.ParallelLayoutTask, graphs.len);
+    defer allocator.free(tasks);
+    const budgets = try allocator.alloc(vex.LayoutWorkBudget, graphs.len);
+    defer allocator.free(budgets);
+    for (graphs, 0..) |*graph, index| {
+        budgets[index] = .{ .limit = layout_work_budget orelse std.math.maxInt(usize) };
+        var config = layout_config;
+        if (layout_work_budget != null) config.control = budgets[index].control();
+        tasks[index] = .{ .allocator = allocator, .graph = graph, .config = config };
+    }
+
+    var layouts = try vex.layoutGraphsParallel(allocator, tasks, .{ .max_workers = layout_workers });
+    defer layouts.deinit();
+    for (layouts.items, 0..) |*item, index| switch (item.*) {
+        .failure => |err| {
             if (err == error.LayoutCanceled) {
-                try writeLayoutCanceled(io, work_budget);
+                try writeLayoutCanceled(io, &budgets[index]);
                 std.process.exit(2);
             }
             if (err == error.MissingNodePosition or err == error.InvalidNodePosition) {
@@ -278,10 +298,9 @@ fn layoutAndRenderGraphs(
                 std.process.exit(2);
             }
             return err;
-        };
-        defer layout.deinit();
-        try vex.render(writer, &layout, format, render_options);
-    }
+        },
+        .layout => |*layout| try vex.render(writer, layout, format, render_options),
+    };
 }
 
 fn readStdin(allocator: std.mem.Allocator, io: Io, max_input_bytes: usize) ![]u8 {
@@ -434,23 +453,44 @@ test "graph stream check summaries and SVG output preserve every graph" {
     try std.testing.expect(std.mem.indexOf(u8, summaries, "graph=First directed=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, summaries, "graph=Second directed=false") != null);
 
-    var svg_writer = Io.Writer.Allocating.init(allocator);
-    defer svg_writer.deinit();
-    var work_budget = vex.LayoutWorkBudget{ .limit = std.math.maxInt(usize) };
+    var serial_writer = Io.Writer.Allocating.init(allocator);
+    defer serial_writer.deinit();
     try layoutAndRenderGraphs(
         allocator,
         std.testing.io,
-        &svg_writer.writer,
+        &serial_writer.writer,
         graphs.items,
         .svg,
         .{},
         .{ .algorithm = .sugiyama },
-        &work_budget,
+        null,
+        1,
     );
-    const svg = try svg_writer.toOwnedSlice();
-    defer allocator.free(svg);
-    try std.testing.expectEqual(@as(usize, 2), countOccurrences(svg, "<svg "));
-    try std.testing.expectEqual(@as(usize, 2), countOccurrences(svg, "</svg>"));
+    const serial_svg = try serial_writer.toOwnedSlice();
+    defer allocator.free(serial_svg);
+
+    var parallel_writer = Io.Writer.Allocating.init(allocator);
+    defer parallel_writer.deinit();
+    try layoutAndRenderGraphs(
+        allocator,
+        std.testing.io,
+        &parallel_writer.writer,
+        graphs.items,
+        .svg,
+        .{},
+        .{ .algorithm = .sugiyama },
+        null,
+        4,
+    );
+    const parallel_svg = try parallel_writer.toOwnedSlice();
+    defer allocator.free(parallel_svg);
+
+    try std.testing.expectEqualStrings(serial_svg, parallel_svg);
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(parallel_svg, "<svg "));
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(parallel_svg, "</svg>"));
+    const first = std.mem.indexOf(u8, parallel_svg, "<title>First</title>") orelse return error.MissingFirstGraph;
+    const second = std.mem.indexOf(u8, parallel_svg, "<title>Second</title>") orelse return error.MissingSecondGraph;
+    try std.testing.expect(first < second);
 }
 
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
