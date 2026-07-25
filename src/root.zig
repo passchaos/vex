@@ -1703,7 +1703,7 @@ pub const Graph = struct {
         } else if (std.ascii.eqlIgnoreCase(name, "lhead")) {
             self.edges.items[id].lhead = subgraph_id;
         }
-        try self.setEdgeAttrRaw(id, name, self.subgraphs.items[subgraph_id].label);
+        removeAttrFromList(self.allocator, &self.edges.items[id].attrs, name);
     }
 
     fn setEdgeAttrFloat(self: *Graph, id: EdgeId, name: []const u8, value: f64) !void {
@@ -1957,6 +1957,16 @@ fn setAttrInList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name:
         .name = try allocator.dupe(u8, name),
         .value = try allocator.dupe(u8, value),
     });
+}
+
+fn removeAttrFromList(allocator: std.mem.Allocator, list: *std.ArrayList(Attr), name: []const u8) void {
+    for (list.items, 0..) |attr, index| {
+        if (!std.ascii.eqlIgnoreCase(attr.name, name)) continue;
+        allocator.free(attr.name);
+        allocator.free(attr.value);
+        _ = list.orderedRemove(index);
+        return;
+    }
 }
 
 fn parseShape(value: []const u8) Shape {
@@ -34105,8 +34115,8 @@ test "code API exposes typed compound edge ltail and lhead" {
     const edge_item = graph.edges.items[edge_id];
     try std.testing.expectEqual(tail, edge_item.ltail.?);
     try std.testing.expectEqual(head, edge_item.lhead.?);
-    try std.testing.expectEqualStrings("cluster_tail", attrValue(edge_item.attrs.items, "ltail").?);
-    try std.testing.expectEqualStrings("cluster_head", attrValue(edge_item.attrs.items, "lhead").?);
+    try std.testing.expect(attrValue(edge_item.attrs.items, "ltail") == null);
+    try std.testing.expect(attrValue(edge_item.attrs.items, "lhead") == null);
 
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
@@ -34115,6 +34125,15 @@ test "code API exposes typed compound edge ltail and lhead" {
     const head_rect = subgraphRect(&graph, &layout, head).?;
     try std.testing.expect(pointOnRectBoundary(tail_rect, route.start));
     try std.testing.expect(pointOnRectBoundary(head_rect, route.end));
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    const edge_fragment = svgGroupFragmentById(svg, "edge1") orelse return error.MissingCompoundEdge;
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "data-vex-object-ltail=\"0\" data-vex-object-lhead=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"1\" to=\"2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, " ltail=\"0\" lhead=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"edge\" id=\"0\" name=\"ltail\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:attr kind=\"edge\" id=\"0\" name=\"lhead\"") == null);
 }
 
 test "DOT samehead and sametail route edges through shared ports" {

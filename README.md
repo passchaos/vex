@@ -390,6 +390,10 @@ The parser currently supports a practical, mainstream DOT subset:
   subgraph or one of its descendants must contain the corresponding tail/head
   node and must not contain both endpoints. Invalid hints remain available as
   attributes/metadata but use ordinary node-boundary routing.
+- The typed Zig API stores compound endpoints only as `SubgraphId`; it does not
+  serialize a subgraph's display label into raw `ltail` / `lhead` attributes.
+  DOT textual values remain parser-local, while SVG metadata exposes stable
+  numeric endpoint IDs for both typed and parsed graphs.
 - In local cluster ranking, subgraph `compact=true` enables a strong-cluster
   rank objective: member rank span is minimized with nested strong envelopes,
   cross-subgraph edges use a soft directional penalty, and internal `minlen`
