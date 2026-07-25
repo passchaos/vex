@@ -362,6 +362,11 @@ The parser currently supports a practical, mainstream DOT subset:
   `parseInputGraphs` return an owned graph sequence, while the existing
   `parseDot` / `parseInput` APIs remain strict single-graph entry points. The
   CLI renders one complete SVG document per input graph in stream order.
+  `visitDotGraphs` / `visitInputGraphs` and their diagnostic variants instead
+  lend one completed graph to a callback, then immediately release it before
+  parsing the next graph; callback code must not retain graph-owned slices.
+  CLI `--check` uses this bounded-model path and keeps already-emitted summaries
+  before a precise diagnostic from a later graph.
 - Node statements: `A [label="Start", shape=box]`.
 - Edge chains: `A -> B -> C [label="flow"]` or `a -- b`.
 - Graphviz edge `key` is handled as parser-local edge identity: the same

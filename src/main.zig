@@ -222,6 +222,30 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    if (check_only) {
+        var stderr_buffer: [2048]u8 = undefined;
+        var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+        const CheckContext = struct {
+            writer: *Io.Writer,
+
+            fn visit(self: *@This(), graph: *const vex.Graph) !void {
+                try writeCheckSummaryWriter(self.writer, graph);
+                try self.writer.flush();
+            }
+        };
+        var context = CheckContext{ .writer = &stderr_file_writer.interface };
+        var result = try vex.visitInputGraphsDiagnostic(allocator, dot, input_format, &context, CheckContext.visit);
+        switch (result) {
+            .complete => return,
+            .diagnostic => |*diagnostic| {
+                defer diagnostic.deinit(allocator);
+                try writeParseDiagnosticWriter(&stderr_file_writer.interface, diagnostic.*);
+                try stderr_file_writer.interface.flush();
+                std.process.exit(1);
+            },
+        }
+    }
+
     const parse_result = try vex.parseInputGraphsDiagnostic(allocator, dot, input_format);
     var graphs = switch (parse_result) {
         .graphs => |graphs| graphs,
@@ -233,11 +257,6 @@ pub fn main(init: std.process.Init) !void {
         },
     };
     defer graphs.deinit();
-
-    if (check_only) {
-        try writeCheckSummaries(io, graphs.items);
-        return;
-    }
 
     var layered_options = vex.LayoutOptions{};
     if (crossing_passes) |value| layered_options.crossing_passes = value;
@@ -324,6 +343,11 @@ fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {
     var stderr_buffer: [2048]u8 = undefined;
     var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
     const writer = &stderr_file_writer.interface;
+    try writeParseDiagnosticWriter(writer, diagnostic);
+    try writer.flush();
+}
+
+fn writeParseDiagnosticWriter(writer: *Io.Writer, diagnostic: vex.ParseDiagnostic) Io.Writer.Error!void {
     try writer.print("DOT parse error: {s}\n", .{diagnostic.message});
     try writer.print("  at line {d}, column {d}\n", .{ diagnostic.line, diagnostic.column });
     if (diagnostic.source_line.len > 0) {
@@ -335,7 +359,6 @@ fn writeParseDiagnostic(io: Io, diagnostic: vex.ParseDiagnostic) !void {
     }
     if (diagnostic.token.len > 0) try writer.print("  token: {s}\n", .{diagnostic.token});
     if (diagnostic.hint.len > 0) try writer.print("  hint: {s}\n", .{diagnostic.hint});
-    try writer.flush();
 }
 
 fn writeParseDiagnostics(io: Io, diagnostics: []const vex.ParseDiagnostic) !void {
@@ -369,13 +392,6 @@ fn writeCheckSummary(io: Io, graph: *const vex.Graph) !void {
     var stderr_buffer: [512]u8 = undefined;
     var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
     try writeCheckSummaryWriter(&stderr_file_writer.interface, graph);
-    try stderr_file_writer.interface.flush();
-}
-
-fn writeCheckSummaries(io: Io, graphs: []const vex.Graph) !void {
-    var stderr_buffer: [2048]u8 = undefined;
-    var stderr_file_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
-    for (graphs) |*graph| try writeCheckSummaryWriter(&stderr_file_writer.interface, graph);
     try stderr_file_writer.interface.flush();
 }
 
@@ -491,6 +507,38 @@ test "graph stream check summaries and SVG output preserve every graph" {
     const first = std.mem.indexOf(u8, parallel_svg, "<title>First</title>") orelse return error.MissingFirstGraph;
     const second = std.mem.indexOf(u8, parallel_svg, "<title>Second</title>") orelse return error.MissingSecondGraph;
     try std.testing.expect(first < second);
+}
+
+test "streaming check output keeps consumed summaries before later diagnostic" {
+    const allocator = std.testing.allocator;
+    var writer = Io.Writer.Allocating.init(allocator);
+    defer writer.deinit();
+    const Context = struct {
+        writer: *Io.Writer,
+
+        fn visit(self: *@This(), graph: *const vex.Graph) !void {
+            try writeCheckSummaryWriter(self.writer, graph);
+        }
+    };
+    var context = Context{ .writer = &writer.writer };
+    var result = try vex.visitDotGraphsDiagnostic(
+        allocator,
+        "digraph First { a -> b; }\ndigraph Broken { c -> ; }",
+        &context,
+        Context.visit,
+    );
+    switch (result) {
+        .complete => return error.ExpectedGraphStreamDiagnostic,
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try writeParseDiagnosticWriter(&writer.writer, diagnostic.*);
+        },
+    }
+    const output = try writer.toOwnedSlice();
+    defer allocator.free(output);
+    const summary = std.mem.indexOf(u8, output, "input ok: graph=First") orelse return error.MissingConsumedGraphSummary;
+    const diagnostic = std.mem.indexOf(u8, output, "DOT parse error:") orelse return error.MissingLaterGraphDiagnostic;
+    try std.testing.expect(summary < diagnostic);
 }
 
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {

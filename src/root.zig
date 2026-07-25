@@ -145,6 +145,11 @@ pub const ParseGraphStreamResult = union(enum) {
     diagnostic: ParseDiagnostic,
 };
 
+pub const VisitGraphStreamResult = union(enum) {
+    complete: usize,
+    diagnostic: ParseDiagnostic,
+};
+
 pub const ParseDiagnostics = struct {
     allocator: std.mem.Allocator,
     items: []ParseDiagnostic,
@@ -3482,6 +3487,24 @@ pub fn parseDotGraphs(allocator: std.mem.Allocator, source: []const u8) !GraphSt
     return .{ .allocator = allocator, .items = try graphs.toOwnedSlice(allocator) };
 }
 
+pub fn visitDotGraphs(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    context: anytype,
+    comptime visit: anytype,
+) !usize {
+    var parser = try Parser.init(allocator, source);
+    defer parser.deinit();
+    var count: usize = 0;
+    while (parser.current.tag != .eof) {
+        var graph = try parser.parseGraph();
+        defer graph.deinit();
+        try visit(context, &graph);
+        count += 1;
+    }
+    return count;
+}
+
 pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
     var parser = Parser.init(allocator, source) catch |err| {
         return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
@@ -3513,6 +3536,28 @@ pub fn parseDotGraphsDiagnostic(allocator: std.mem.Allocator, source: []const u8
         graphs.appendAssumeCapacity(graph);
     }
     return .{ .graphs = .{ .allocator = allocator, .items = try graphs.toOwnedSlice(allocator) } };
+}
+
+pub fn visitDotGraphsDiagnostic(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    context: anytype,
+    comptime visit: anytype,
+) !VisitGraphStreamResult {
+    var parser = Parser.init(allocator, source) catch |err| {
+        return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
+    };
+    defer parser.deinit();
+    var count: usize = 0;
+    while (parser.current.tag != .eof) {
+        var graph = parser.parseGraph() catch |err| {
+            return .{ .diagnostic = try parseDiagnosticFromParser(allocator, source, &parser, err) };
+        };
+        defer graph.deinit();
+        try visit(context, &graph);
+        count += 1;
+    }
+    return .{ .complete = count };
 }
 
 pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max_diagnostics: usize) !ParseDiagnostics {
@@ -3716,6 +3761,25 @@ pub fn parseInputGraphs(allocator: std.mem.Allocator, source: []const u8, format
     };
 }
 
+pub fn visitInputGraphs(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    format: InputFormat,
+    context: anytype,
+    comptime visit: anytype,
+) !usize {
+    return switch (if (format == .auto) detectInputFormat(source) else format) {
+        .auto => unreachable,
+        .dot => visitDotGraphs(allocator, source, context, visit),
+        .mermaid => blk: {
+            var graph = try parseMermaid(allocator, source);
+            defer graph.deinit();
+            try visit(context, &graph);
+            break :blk 1;
+        },
+    };
+}
+
 pub fn parseInputDiagnostic(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !ParseResult {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
@@ -3733,6 +3797,25 @@ pub fn parseInputGraphsDiagnostic(allocator: std.mem.Allocator, source: []const 
             errdefer allocator.free(items);
             items[0] = try parseMermaid(allocator, source);
             break :blk .{ .graphs = .{ .allocator = allocator, .items = items } };
+        },
+    };
+}
+
+pub fn visitInputGraphsDiagnostic(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    format: InputFormat,
+    context: anytype,
+    comptime visit: anytype,
+) !VisitGraphStreamResult {
+    return switch (if (format == .auto) detectInputFormat(source) else format) {
+        .auto => unreachable,
+        .dot => visitDotGraphsDiagnostic(allocator, source, context, visit),
+        .mermaid => blk: {
+            var graph = try parseMermaid(allocator, source);
+            defer graph.deinit();
+            try visit(context, &graph);
+            break :blk .{ .complete = 1 };
         },
     };
 }
@@ -23142,6 +23225,66 @@ test "DOT graph stream parses independent directed and undirected graphs" {
     try std.testing.expectEqual(@as(usize, 4), stream.items[1].nodes.items.len);
     try std.testing.expectEqualStrings("api", stream.items[0].nodes.items[0].label);
     try std.testing.expectEqualStrings("start", stream.items[1].nodes.items[0].label);
+}
+
+test "graph stream visitor preserves order and releases each graph after callback" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph First { a -> b; }
+        \\graph Second { c -- d; }
+        \\digraph Third { e -> f; }
+    ;
+    const Context = struct {
+        names: [3][16]u8 = undefined,
+        name_lengths: [3]usize = undefined,
+        count: usize = 0,
+        live: usize = 0,
+        peak_live: usize = 0,
+
+        fn visit(self: *@This(), graph: *const Graph) !void {
+            self.live += 1;
+            defer self.live -= 1;
+            self.peak_live = @max(self.peak_live, self.live);
+            @memcpy(self.names[self.count][0..graph.name.len], graph.name);
+            self.name_lengths[self.count] = graph.name.len;
+            self.count += 1;
+        }
+    };
+    var context = Context{};
+    const count = try visitInputGraphs(allocator, source, .auto, &context, Context.visit);
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqual(@as(usize, 3), context.count);
+    try std.testing.expectEqual(@as(usize, 1), context.peak_live);
+    try std.testing.expectEqualStrings("First", context.names[0][0..context.name_lengths[0]]);
+    try std.testing.expectEqualStrings("Second", context.names[1][0..context.name_lengths[1]]);
+    try std.testing.expectEqualStrings("Third", context.names[2][0..context.name_lengths[2]]);
+}
+
+test "graph stream diagnostic visitor reports later errors after consumed graphs" {
+    const allocator = std.testing.allocator;
+    const Context = struct {
+        count: usize = 0,
+
+        fn visit(self: *@This(), graph: *const Graph) !void {
+            _ = graph;
+            self.count += 1;
+        }
+    };
+    var context = Context{};
+    var result = try visitDotGraphsDiagnostic(
+        allocator,
+        "digraph First { a -> b; }\ndigraph Broken { c -> ; }",
+        &context,
+        Context.visit,
+    );
+    switch (result) {
+        .complete => return error.ExpectedGraphStreamDiagnostic,
+        .diagnostic => |*diagnostic| {
+            defer diagnostic.deinit(allocator);
+            try std.testing.expectEqual(@as(usize, 1), context.count);
+            try std.testing.expectEqual(@as(usize, 2), diagnostic.line);
+        },
+    }
 }
 
 test "Graphviz 2835 empty clusters stay in metadata without layout boxes" {
