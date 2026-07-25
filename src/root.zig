@@ -6774,10 +6774,67 @@ const VirtualPositions = struct {
     }
 };
 
+const VirtualPositionSegment = struct {
+    upper: usize,
+    lower: usize,
+};
+
+const VirtualCrossingWorkspace = struct {
+    allocator: std.mem.Allocator,
+    upper_positions: []usize,
+    lower_positions: []usize,
+    segments: []VirtualPositionSegment,
+    fenwick: []usize,
+    left_neighbors: []usize,
+    right_neighbors: []usize,
+
+    fn init(allocator: std.mem.Allocator, graph: *const Graph) !VirtualCrossingWorkspace {
+        const position_count = graph.nodes.items.len +| graph.edges.items.len;
+        const upper_positions = try allocator.alloc(usize, position_count);
+        errdefer allocator.free(upper_positions);
+        const lower_positions = try allocator.alloc(usize, position_count);
+        errdefer allocator.free(lower_positions);
+        const segments = try allocator.alloc(VirtualPositionSegment, graph.edges.items.len);
+        errdefer allocator.free(segments);
+        const fenwick = try allocator.alloc(usize, position_count +| 1);
+        errdefer allocator.free(fenwick);
+        const left_neighbors = try allocator.alloc(usize, position_count);
+        errdefer allocator.free(left_neighbors);
+        const right_neighbors = try allocator.alloc(usize, position_count);
+        errdefer allocator.free(right_neighbors);
+        return .{
+            .allocator = allocator,
+            .upper_positions = upper_positions,
+            .lower_positions = lower_positions,
+            .segments = segments,
+            .fenwick = fenwick,
+            .left_neighbors = left_neighbors,
+            .right_neighbors = right_neighbors,
+        };
+    }
+
+    fn deinit(self: *VirtualCrossingWorkspace) void {
+        self.allocator.free(self.upper_positions);
+        self.allocator.free(self.lower_positions);
+        self.allocator.free(self.segments);
+        self.allocator.free(self.fenwick);
+        self.allocator.free(self.left_neighbors);
+        self.allocator.free(self.right_neighbors);
+        self.* = undefined;
+    }
+};
+
 fn virtualNodeKey(node: VirtualNode) usize {
     return switch (node) {
         .real => |id| id,
         .dummy => |edge_id| std.math.maxInt(usize) / 2 + edge_id,
+    };
+}
+
+fn virtualPositionKey(node: VirtualNode, real_node_count: usize) usize {
+    return switch (node) {
+        .real => |id| id,
+        .dummy => |edge_id| real_node_count +| edge_id,
     };
 }
 
@@ -6817,7 +6874,9 @@ fn reduceVirtualLevelCrossings(
 ) !usize {
     if (virtual_levels.levels.len <= 1 or passes == 0) return 0;
 
-    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, graph);
+    defer crossing_workspace.deinit();
+    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace);
     if (best_crossings == 0) return 0;
     var without_improvement: usize = 0;
     var completed: usize = 0;
@@ -6825,17 +6884,17 @@ fn reduceVirtualLevelCrossings(
         completed += 1;
         var rank: usize = 1;
         while (rank < virtual_levels.levels.len) : (rank += 1) {
-            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true);
-            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true);
+            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true, &crossing_workspace);
+            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank, true, &crossing_workspace);
         }
         rank = virtual_levels.levels.len - 1;
         while (rank > 0) : (rank -= 1) {
-            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false);
-            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false);
+            try orderVirtualLevelByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false, &crossing_workspace);
+            try orderVirtualLevelBlocksByMedianGuarded(allocator, graph, virtual_levels, ranks, rank - 1, false, &crossing_workspace);
         }
-        refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
+        refineVirtualAdjacentExchangesWithWorkspace(graph, virtual_levels, ranks, &crossing_workspace);
         if (crossingPassShouldQuit(
-            totalVirtualLayerCrossings(graph, virtual_levels, ranks),
+            totalVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace),
             &best_crossings,
             &without_improvement,
             min_quit,
@@ -6852,20 +6911,21 @@ fn reduceVirtualClusterBlockCrossings(
     passes: usize,
     min_quit: usize,
 ) !usize {
-    _ = allocator;
     if (virtual_levels.levels.len <= 1 or passes == 0) return 0;
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, graph);
+    defer crossing_workspace.deinit();
     for (virtual_levels.levels, 0..) |*level, rank| {
         stableGroupVirtualLevelByBlock(graph, ranks, rank, level);
     }
-    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    var best_crossings = totalVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace);
     if (best_crossings == 0) return 0;
     var without_improvement: usize = 0;
     var completed: usize = 0;
     for (0..passes) |_| {
         completed += 1;
-        refineVirtualAdjacentExchanges(graph, virtual_levels, ranks);
+        refineVirtualAdjacentExchangesWithWorkspace(graph, virtual_levels, ranks, &crossing_workspace);
         if (crossingPassShouldQuit(
-            totalVirtualLayerCrossings(graph, virtual_levels, ranks),
+            totalVirtualLayerCrossings(graph, virtual_levels, ranks, &crossing_workspace),
             &best_crossings,
             &without_improvement,
             min_quit,
@@ -6934,6 +6994,31 @@ const VirtualMedianOrder = struct {
     original: usize,
 };
 
+const VirtualPairCrossings = struct {
+    exact: usize = 0,
+    distinct: usize = 0,
+
+    fn add(self: *VirtualPairCrossings, other: VirtualPairCrossings) void {
+        self.exact +|= other.exact;
+        self.distinct +|= other.distinct;
+    }
+
+    fn betterThan(self: VirtualPairCrossings, other: VirtualPairCrossings) bool {
+        return self.exact < other.exact or
+            (self.exact == other.exact and self.distinct < other.distinct);
+    }
+};
+
+const VirtualPairComparison = struct {
+    before: VirtualPairCrossings = .{},
+    after: VirtualPairCrossings = .{},
+
+    fn add(self: *VirtualPairComparison, other: VirtualPairComparison) void {
+        self.before.add(other.before);
+        self.after.add(other.after);
+    }
+};
+
 fn orderVirtualLevelByMedian(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) void {
     if (rank >= virtual_levels.levels.len) return;
     if (use_parents and rank == 0) return;
@@ -6962,15 +7047,15 @@ fn lessThanVirtualMedianOrder(_: void, a: VirtualMedianOrder, b: VirtualMedianOr
     return a.median < b.median;
 }
 
-fn orderVirtualLevelByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) !void {
+fn orderVirtualLevelByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, crossing_workspace: *VirtualCrossingWorkspace) !void {
     if (rank >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
     if (level.items.len <= 1) return;
-    const before = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
     const backup = try allocator.dupe(VirtualNode, level.items);
     defer allocator.free(backup);
     orderVirtualLevelByMedian(graph, virtual_levels, ranks, rank, use_parents);
-    const after = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
     if (after > before) @memcpy(level.items, backup);
 }
 
@@ -7051,15 +7136,15 @@ fn lessThanVirtualBlockOrder(_: void, a: VirtualBlockOrder, b: VirtualBlockOrder
     return a_median < b_median;
 }
 
-fn orderVirtualLevelBlocksByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool) !void {
+fn orderVirtualLevelBlocksByMedianGuarded(allocator: std.mem.Allocator, graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, rank: usize, use_parents: bool, crossing_workspace: *VirtualCrossingWorkspace) !void {
     if (rank >= virtual_levels.levels.len) return;
     const level = &virtual_levels.levels[rank];
     if (level.items.len <= 1) return;
-    const before = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
     const backup = try allocator.dupe(VirtualNode, level.items);
     defer allocator.free(backup);
     orderVirtualLevelBlocksByMedian(graph, virtual_levels, ranks, rank, use_parents);
-    const after = totalVirtualLayerCrossings(graph, virtual_levels, ranks);
+    const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank, crossing_workspace);
     if (after > before) @memcpy(level.items, backup);
 }
 
@@ -7135,6 +7220,12 @@ fn positionInVirtualLevel(level: []const VirtualNode, needle: VirtualNode) ?usiz
 }
 
 fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize) void {
+    var crossing_workspace = VirtualCrossingWorkspace.init(graph.allocator, graph) catch return;
+    defer crossing_workspace.deinit();
+    refineVirtualAdjacentExchangesWithWorkspace(graph, virtual_levels, ranks, &crossing_workspace);
+}
+
+fn refineVirtualAdjacentExchangesWithWorkspace(graph: *const Graph, virtual_levels: *VirtualLevels, ranks: []const usize, crossing_workspace: *VirtualCrossingWorkspace) void {
     if (virtual_levels.levels.len < 2) return;
     for (0..2) |_| {
         var changed = false;
@@ -7147,12 +7238,9 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
                     i += 1;
                     continue;
                 }
-                const pair_before = adjacentVirtualPairCrossings(graph, virtual_levels, ranks, rank, i, i + 1);
-                const pair_after = adjacentVirtualPairCrossings(graph, virtual_levels, ranks, rank, i + 1, i);
-                const before = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
-                std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
-                const after = virtualCrossingScoreAroundLevel(graph, virtual_levels, ranks, rank);
-                if (after < before or (after == before and pair_after < pair_before)) {
+                const pair = adjacentVirtualPairComparison(graph, virtual_levels, ranks, rank, i, i + 1, crossing_workspace);
+                if (pair.after.betterThan(pair.before)) {
+                    std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
                     changed = true;
                     if (i > 0) {
                         i -= 1;
@@ -7160,7 +7248,6 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
                         i += 1;
                     }
                 } else {
-                    std.mem.swap(VirtualNode, &level.items[i], &level.items[i + 1]);
                     i += 1;
                 }
             }
@@ -7169,36 +7256,103 @@ fn refineVirtualAdjacentExchanges(graph: *const Graph, virtual_levels: *VirtualL
     }
 }
 
-fn adjacentVirtualPairCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize, left_index: usize, right_index: usize) usize {
-    if (rank >= virtual_levels.levels.len) return 0;
+fn adjacentVirtualPairComparison(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize, left_index: usize, right_index: usize, crossing_workspace: *VirtualCrossingWorkspace) VirtualPairComparison {
+    if (rank >= virtual_levels.levels.len) return .{};
     const level = virtual_levels.levels[rank].items;
-    if (left_index >= level.len or right_index >= level.len) return 0;
+    if (left_index >= level.len or right_index >= level.len) return .{};
     const left = level[left_index];
     const right = level[right_index];
-    var crossings: usize = 0;
-    if (rank > 0) crossings += adjacentVirtualPairCrossingsWithFixedLayer(graph, virtual_levels.levels[rank - 1].items, ranks, rank, left, right, true);
-    if (rank + 1 < virtual_levels.levels.len) crossings += adjacentVirtualPairCrossingsWithFixedLayer(graph, virtual_levels.levels[rank + 1].items, ranks, rank, left, right, false);
-    return crossings;
+    var comparison = VirtualPairComparison{};
+    if (rank > 0) {
+        const fixed_layer = virtual_levels.levels[rank - 1].items;
+        buildVirtualPositionMap(crossing_workspace.upper_positions, fixed_layer, graph.nodes.items.len);
+        comparison.add(adjacentVirtualPairComparisonWithFixedLayer(
+            graph,
+            ranks,
+            rank,
+            left,
+            right,
+            true,
+            crossing_workspace.upper_positions,
+            fixed_layer.len,
+            crossing_workspace,
+        ));
+    }
+    if (rank + 1 < virtual_levels.levels.len) {
+        const fixed_layer = virtual_levels.levels[rank + 1].items;
+        buildVirtualPositionMap(crossing_workspace.lower_positions, fixed_layer, graph.nodes.items.len);
+        comparison.add(adjacentVirtualPairComparisonWithFixedLayer(
+            graph,
+            ranks,
+            rank,
+            left,
+            right,
+            false,
+            crossing_workspace.lower_positions,
+            fixed_layer.len,
+            crossing_workspace,
+        ));
+    }
+    return comparison;
 }
 
-fn adjacentVirtualPairCrossingsWithFixedLayer(graph: *const Graph, fixed_layer: []const VirtualNode, ranks: []const usize, rank: usize, left: VirtualNode, right: VirtualNode, use_parents: bool) usize {
-    var crossings: usize = 0;
-    for (fixed_layer, 0..) |left_neighbor, left_pos| {
-        if (!virtualNodesAdjacentAcrossLayer(graph, ranks, left, rank, left_neighbor, use_parents)) continue;
-        for (fixed_layer, 0..) |right_neighbor, right_pos| {
-            if (!virtualNodesAdjacentAcrossLayer(graph, ranks, right, rank, right_neighbor, use_parents)) continue;
-            if (left_pos > right_pos) crossings += 1;
+fn adjacentVirtualPairComparisonWithFixedLayer(
+    graph: *const Graph,
+    ranks: []const usize,
+    rank: usize,
+    left: VirtualNode,
+    right: VirtualNode,
+    use_parents: bool,
+    fixed_positions: []const usize,
+    fixed_count: usize,
+    crossing_workspace: *VirtualCrossingWorkspace,
+) VirtualPairComparison {
+    const left_neighbors = crossing_workspace.left_neighbors[0..fixed_count];
+    const right_neighbors = crossing_workspace.right_neighbors[0..fixed_count];
+    @memset(left_neighbors, 0);
+    @memset(right_neighbors, 0);
+
+    for (graph.edges.items) |edge_item| {
+        if (virtualAdjacentNode(edge_item, left, ranks, rank, use_parents)) |neighbor| {
+            const key = virtualPositionKey(neighbor, graph.nodes.items.len);
+            if (key < fixed_positions.len) {
+                const position = fixed_positions[key];
+                if (position < fixed_count) left_neighbors[position] +|= 1;
+            }
+        }
+        if (virtualAdjacentNode(edge_item, right, ranks, rank, use_parents)) |neighbor| {
+            const key = virtualPositionKey(neighbor, graph.nodes.items.len);
+            if (key < fixed_positions.len) {
+                const position = fixed_positions[key];
+                if (position < fixed_count) right_neighbors[position] +|= 1;
+            }
         }
     }
-    return crossings;
-}
 
-fn virtualNodesAdjacentAcrossLayer(graph: *const Graph, ranks: []const usize, node: VirtualNode, rank: usize, neighbor: VirtualNode, use_parents: bool) bool {
-    for (graph.edges.items) |edge_item| {
-        const adjacent = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse continue;
-        if (std.meta.eql(adjacent, neighbor)) return true;
+    var comparison = VirtualPairComparison{};
+    var right_exact_before: usize = 0;
+    var right_distinct_before: usize = 0;
+    var left_exact_before: usize = 0;
+    var left_distinct_before: usize = 0;
+    for (left_neighbors, right_neighbors) |left_count, right_count| {
+        if (left_count > 0) {
+            comparison.before.exact +|= left_count *| right_exact_before;
+            comparison.before.distinct +|= right_distinct_before;
+        }
+        if (right_count > 0) {
+            comparison.after.exact +|= right_count *| left_exact_before;
+            comparison.after.distinct +|= left_distinct_before;
+        }
+        if (left_count > 0) {
+            left_exact_before +|= left_count;
+            left_distinct_before += 1;
+        }
+        if (right_count > 0) {
+            right_exact_before +|= right_count;
+            right_distinct_before += 1;
+        }
     }
-    return false;
+    return comparison;
 }
 
 fn virtualSwapCrossesClusterBlock(graph: *const Graph, ranks: []const usize, rank: usize, a: VirtualNode, b: VirtualNode) bool {
@@ -7212,27 +7366,71 @@ fn isClusterVirtualBlockKey(graph: *const Graph, key: usize) bool {
     return key < graph.subgraphs.items.len;
 }
 
-fn virtualCrossingScoreAroundLevel(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize) usize {
+fn virtualCrossingScoreAroundLevel(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, rank: usize, crossing_workspace: *VirtualCrossingWorkspace) usize {
     var score: usize = 0;
-    if (rank > 0) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank - 1);
-    if (rank + 1 < virtual_levels.levels.len) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank);
+    if (rank > 0) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank - 1, crossing_workspace);
+    if (rank + 1 < virtual_levels.levels.len) score += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank, crossing_workspace);
     return score;
 }
 
-fn totalVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize) usize {
+fn totalVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, crossing_workspace: *VirtualCrossingWorkspace) usize {
     var total: usize = 0;
     if (virtual_levels.levels.len < 2) return 0;
-    for (0..virtual_levels.levels.len - 1) |rank| total += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank);
+    for (0..virtual_levels.levels.len - 1) |rank| {
+        total += countVirtualLayerCrossings(graph, virtual_levels, ranks, rank, crossing_workspace);
+    }
     return total;
 }
 
-fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) usize {
+fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize, crossing_workspace: *VirtualCrossingWorkspace) usize {
+    if (upper_rank + 1 >= virtual_levels.levels.len) return 0;
+    buildVirtualPositionMap(crossing_workspace.upper_positions, virtual_levels.levels[upper_rank].items, graph.nodes.items.len);
+    buildVirtualPositionMap(crossing_workspace.lower_positions, virtual_levels.levels[upper_rank + 1].items, graph.nodes.items.len);
+
+    var segment_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        const segment = virtualEdgePositionSegment(
+            edge_item,
+            ranks,
+            upper_rank,
+            crossing_workspace.upper_positions,
+            crossing_workspace.lower_positions,
+            graph.nodes.items.len,
+        ) orelse continue;
+        crossing_workspace.segments[segment_count] = segment;
+        segment_count += 1;
+    }
+    const segments = crossing_workspace.segments[0..segment_count];
+    std.mem.sort(VirtualPositionSegment, segments, {}, lessThanVirtualPositionSegment);
+
+    const lower_count = virtual_levels.levels[upper_rank + 1].items.len;
+    const fenwick = crossing_workspace.fenwick[0 .. lower_count + 1];
+    @memset(fenwick, 0);
+    var crossings: usize = 0;
+    var inserted: usize = 0;
+    var group_start: usize = 0;
+    while (group_start < segments.len) {
+        var group_end = group_start + 1;
+        while (group_end < segments.len and segments[group_end].upper == segments[group_start].upper) : (group_end += 1) {}
+        for (segments[group_start..group_end]) |segment| {
+            crossings += inserted - fenwickPrefixSum(fenwick, segment.lower + 1);
+        }
+        for (segments[group_start..group_end]) |segment| {
+            fenwickAdd(fenwick, segment.lower);
+            inserted += 1;
+        }
+        group_start = group_end;
+    }
+    return crossings;
+}
+
+fn countVirtualLayerCrossingsPairwise(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) usize {
     if (upper_rank + 1 >= virtual_levels.levels.len) return 0;
     var crossings: usize = 0;
     for (graph.edges.items, 0..) |a, ai| {
-        const a_segment = virtualEdgeSegment(a, virtual_levels, ranks, upper_rank) orelse continue;
+        const a_segment = virtualEdgePositionSegmentPairwise(a, virtual_levels, ranks, upper_rank) orelse continue;
         for (graph.edges.items[ai + 1 ..]) |b| {
-            const b_segment = virtualEdgeSegment(b, virtual_levels, ranks, upper_rank) orelse continue;
+            const b_segment = virtualEdgePositionSegmentPairwise(b, virtual_levels, ranks, upper_rank) orelse continue;
             if ((a_segment.upper < b_segment.upper and a_segment.lower > b_segment.lower) or
                 (a_segment.upper > b_segment.upper and a_segment.lower < b_segment.lower))
             {
@@ -7243,7 +7441,7 @@ fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const Virtua
     return crossings;
 }
 
-fn virtualEdgeSegment(edge_item: Edge, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) ?LayerSegment {
+fn virtualEdgePositionSegmentPairwise(edge_item: Edge, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize) ?VirtualPositionSegment {
     if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
     const from_rank = ranks[edge_item.from];
     const to_rank = ranks[edge_item.to];
@@ -7251,9 +7449,51 @@ fn virtualEdgeSegment(edge_item: Edge, virtual_levels: *const VirtualLevels, ran
     if (upper_rank < from_rank or upper_rank + 1 > to_rank) return null;
     const upper_node: VirtualNode = if (upper_rank == from_rank) .{ .real = edge_item.from } else .{ .dummy = edge_item.id };
     const lower_node: VirtualNode = if (upper_rank + 1 == to_rank) .{ .real = edge_item.to } else .{ .dummy = edge_item.id };
-    const upper_pos = positionInVirtualLevel(virtual_levels.levels[upper_rank].items, upper_node) orelse return null;
-    const lower_pos = positionInVirtualLevel(virtual_levels.levels[upper_rank + 1].items, lower_node) orelse return null;
-    return .{ .upper = @floatFromInt(upper_pos), .lower = @floatFromInt(lower_pos) };
+    const upper = positionInVirtualLevel(virtual_levels.levels[upper_rank].items, upper_node) orelse return null;
+    const lower = positionInVirtualLevel(virtual_levels.levels[upper_rank + 1].items, lower_node) orelse return null;
+    return .{ .upper = upper, .lower = lower };
+}
+
+fn buildVirtualPositionMap(positions: []usize, level: []const VirtualNode, real_node_count: usize) void {
+    @memset(positions, std.math.maxInt(usize));
+    for (level, 0..) |node, index| {
+        const key = virtualPositionKey(node, real_node_count);
+        if (key < positions.len) positions[key] = index;
+    }
+}
+
+fn virtualEdgePositionSegment(edge_item: Edge, ranks: []const usize, upper_rank: usize, upper_positions: []const usize, lower_positions: []const usize, real_node_count: usize) ?VirtualPositionSegment {
+    if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
+    const from_rank = ranks[edge_item.from];
+    const to_rank = ranks[edge_item.to];
+    if (from_rank >= to_rank) return null;
+    if (upper_rank < from_rank or upper_rank + 1 > to_rank) return null;
+    const upper_node: VirtualNode = if (upper_rank == from_rank) .{ .real = edge_item.from } else .{ .dummy = edge_item.id };
+    const lower_node: VirtualNode = if (upper_rank + 1 == to_rank) .{ .real = edge_item.to } else .{ .dummy = edge_item.id };
+    const upper_key = virtualPositionKey(upper_node, real_node_count);
+    const lower_key = virtualPositionKey(lower_node, real_node_count);
+    if (upper_key >= upper_positions.len or lower_key >= lower_positions.len) return null;
+    const upper = upper_positions[upper_key];
+    const lower = lower_positions[lower_key];
+    if (upper == std.math.maxInt(usize) or lower == std.math.maxInt(usize)) return null;
+    return .{ .upper = upper, .lower = lower };
+}
+
+fn lessThanVirtualPositionSegment(_: void, a: VirtualPositionSegment, b: VirtualPositionSegment) bool {
+    if (a.upper == b.upper) return a.lower < b.lower;
+    return a.upper < b.upper;
+}
+
+fn fenwickPrefixSum(fenwick: []const usize, end: usize) usize {
+    var index = @min(end, fenwick.len -| 1);
+    var sum: usize = 0;
+    while (index > 0) : (index &= index - 1) sum += fenwick[index];
+    return sum;
+}
+
+fn fenwickAdd(fenwick: []usize, position: usize) void {
+    var index = position + 1;
+    while (index < fenwick.len) : (index += index & (~index +% 1)) fenwick[index] += 1;
 }
 
 fn virtualAdjacentNode(edge_item: Edge, node: VirtualNode, ranks: []const usize, rank: usize, use_parents: bool) ?VirtualNode {
@@ -24734,10 +24974,89 @@ test "virtual adjacent exchange reduces dummy crossings" {
 
     var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
     defer virtual_levels.deinit();
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph);
+    defer crossing_workspace.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1));
+    try std.testing.expectEqual(@as(usize, 1), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1, &crossing_workspace));
     refineVirtualAdjacentExchanges(&graph, &virtual_levels, ranks);
-    try std.testing.expectEqual(@as(usize, 0), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1));
+    try std.testing.expectEqual(@as(usize, 0), virtualCrossingScoreAroundLevel(&graph, &virtual_levels, ranks, 1, &crossing_workspace));
+}
+
+test "virtual crossing counter ignores shared endpoints" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const x = try graph.addNode("x", .{});
+    const y = try graph.addNode("y", .{});
+    _ = try graph.addEdge(a, y, .{});
+    _ = try graph.addEdge(a, x, .{});
+    _ = try graph.addEdge(b, x, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[x] = 1;
+    ranks[y] = 1;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph);
+    defer crossing_workspace.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), countVirtualLayerCrossings(&graph, &virtual_levels, ranks, 0, &crossing_workspace));
+    std.mem.swap(VirtualNode, &virtual_levels.levels[1].items[0], &virtual_levels.levels[1].items[1]);
+    try std.testing.expectEqual(@as(usize, 0), countVirtualLayerCrossings(&graph, &virtual_levels, ranks, 0, &crossing_workspace));
+}
+
+test "virtual Fenwick crossing counter matches pairwise definition" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const e = try graph.addNode("e", .{});
+    const f = try graph.addNode("f", .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(b, c, .{});
+    _ = try graph.addEdge(a, f, .{});
+    _ = try graph.addEdge(b, e, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[a] = 0;
+    ranks[b] = 0;
+    ranks[c] = 1;
+    ranks[d] = 1;
+    ranks[e] = 2;
+    ranks[f] = 2;
+
+    var virtual_levels = try buildVirtualLevels(allocator, &graph, ranks);
+    defer virtual_levels.deinit();
+    var crossing_workspace = try VirtualCrossingWorkspace.init(allocator, &graph);
+    defer crossing_workspace.deinit();
+
+    for (0..virtual_levels.levels.len - 1) |rank| {
+        try std.testing.expectEqual(
+            countVirtualLayerCrossingsPairwise(&graph, &virtual_levels, ranks, rank),
+            countVirtualLayerCrossings(&graph, &virtual_levels, ranks, rank, &crossing_workspace),
+        );
+    }
+    std.mem.reverse(VirtualNode, virtual_levels.levels[0].items);
+    std.mem.reverse(VirtualNode, virtual_levels.levels[1].items);
+    for (0..virtual_levels.levels.len - 1) |rank| {
+        try std.testing.expectEqual(
+            countVirtualLayerCrossingsPairwise(&graph, &virtual_levels, ranks, rank),
+            countVirtualLayerCrossings(&graph, &virtual_levels, ranks, rank, &crossing_workspace),
+        );
+    }
 }
 
 test "virtual reducer real-node order can be extracted" {
