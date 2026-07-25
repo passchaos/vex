@@ -233,6 +233,7 @@ pub const GraphAttr = union(enum) {
     nodesep: f64,
     ranksep: RankSep,
     mclimit: f64,
+    nslimit: f64,
     nslimit1: f64,
     splines: SplineMode,
     samplepoints: usize,
@@ -1034,6 +1035,7 @@ pub const Graph = struct {
                 },
             },
             .mclimit => |value| try self.setGraphAttrFloat("mclimit", value),
+            .nslimit => |value| try self.setGraphAttrFloat("nslimit", value),
             .nslimit1 => |value| try self.setGraphAttrFloat("nslimit1", value),
             .splines => |value| try self.setGraphAttrRaw("splines", value.name()),
             .samplepoints => |value| {
@@ -4347,7 +4349,13 @@ fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) Layo
 }
 
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
-    return layout_mod.options.withGraphAttrs(options, graph.attrs.items);
+    var result = layout_mod.options.withGraphAttrs(options, graph.attrs.items);
+    if (attrValue(graph.attrs.items, "vex_coordinate_passes") == null and
+        attrValue(graph.attrs.items, "coordinate_passes") == null)
+    {
+        result.coordinate_passes = coordinateRefinementLimit(graph, result.coordinate_passes);
+    }
+    return result;
 }
 
 fn clusterRankMode(graph: *const Graph) ClusterRankMode {
@@ -4368,7 +4376,15 @@ fn newrankEnabled(graph: *const Graph) bool {
 }
 
 fn rankSimplexPivotLimit(graph: *const Graph, fallback: usize) usize {
-    const value = attrValue(graph.attrs.items, "nslimit1") orelse return fallback;
+    return graphvizNodeScaledLimit(graph, "nslimit1", fallback);
+}
+
+fn coordinateRefinementLimit(graph: *const Graph, fallback: usize) usize {
+    return graphvizNodeScaledLimit(graph, "nslimit", fallback);
+}
+
+fn graphvizNodeScaledLimit(graph: *const Graph, name: []const u8, fallback: usize) usize {
+    const value = attrValue(graph.attrs.items, name) orelse return fallback;
     const scale = std.fmt.parseFloat(f64, value) catch return 0;
     if (!std.math.isFinite(scale) or scale <= 0) return 0;
     const scaled = @as(f64, @floatFromInt(graph.nodes.items.len)) * scale;
@@ -20366,6 +20382,83 @@ test "layered layout maps Graphviz nslimit1 to rank pivot effort" {
     try std.testing.expectEqual(@as(usize, 0), rankSimplexPivotLimit(&graph, 99));
 }
 
+test "layered layout maps Graphviz nslimit to coordinate effort" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  nslimit=0.5;
+        \\  a -> b -> c -> d;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), coordinateRefinementLimit(&graph, 99));
+    try graph.setGraphAttr(.{ .nslimit = 0 });
+    try std.testing.expectEqual(@as(usize, 0), coordinateRefinementLimit(&graph, 99));
+    try std.testing.expectEqualStrings("0", attrValue(graph.attrs.items, "nslimit").?);
+    try graph.setGraphAttr(.{ .nslimit = 1.75 });
+    try std.testing.expectEqual(@as(usize, 7), coordinateRefinementLimit(&graph, 99));
+
+    try graph.setGraphAttrRaw("nslimit", "invalid");
+    try std.testing.expectEqual(@as(usize, 0), coordinateRefinementLimit(&graph, 99));
+    try graph.setGraphAttrRaw("nslimit", "-1");
+    try std.testing.expectEqual(@as(usize, 0), coordinateRefinementLimit(&graph, 99));
+}
+
+test "explicit coordinate passes override nslimit maximum" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [nslimit=0, vex_coordinate_passes=3];
+        \\  a -> b;
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = layoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 3), options.coordinate_passes);
+}
+
+test "nslimit trades coordinate quality for coordinate effort" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  { rank=same; n0; n1; n2; n3; }
+        \\  { rank=same; n4; n5; n6; n7; }
+        \\  { rank=same; n8; n9; n10; n11; }
+        \\  n0 -> n4 [weight=2];
+        \\  n0 -> n5 [weight=1];
+        \\  n0 -> n7 [weight=6];
+        \\  n1 -> n4 [weight=6];
+        \\  n1 -> n6 [weight=6];
+        \\  n2 -> n7 [weight=5];
+        \\  n3 -> n4 [weight=5];
+        \\  n3 -> n6 [weight=1];
+        \\  n4 -> n8 [weight=6];
+        \\  n4 -> n9 [weight=2];
+        \\  n5 -> n8 [weight=4];
+        \\  n6 -> n8 [weight=3];
+        \\  n6 -> n9 [weight=2];
+        \\  n6 -> n10 [weight=8];
+        \\}
+    ;
+
+    var disabled_graph = try parseDot(allocator, source);
+    defer disabled_graph.deinit();
+    try disabled_graph.setGraphAttr(.{ .nslimit = 0 });
+    var disabled = try layoutLayered(allocator, &disabled_graph, .{});
+    defer disabled.deinit();
+
+    var default_graph = try parseDot(allocator, source);
+    defer default_graph.deinit();
+    var default_layout = try layoutLayered(allocator, &default_graph, .{});
+    defer default_layout.deinit();
+
+    const disabled_stress = layoutCoordinateStress(&disabled_graph, &disabled);
+    const default_stress = layoutCoordinateStress(&default_graph, &default_layout);
+    try std.testing.expect(default_stress * 2.0 < disabled_stress);
+}
+
 test "nslimit1 trades rank span quality for rank effort" {
     const allocator = std.testing.allocator;
     const source =
@@ -30673,6 +30766,22 @@ fn layoutRankSpanCost(graph: *const Graph, layout: *const Layout) f64 {
         );
     }
     return cost;
+}
+
+fn layoutCoordinateStress(graph: *const Graph, layout: *const Layout) f64 {
+    const axes = LayoutAxes.init(layout.rankdir);
+    var stress: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.from >= layout.ranks.len or edge_item.to >= layout.ranks.len) continue;
+        const from_rank = layout.ranks[edge_item.from];
+        const to_rank = layout.ranks[edge_item.to];
+        if (from_rank >= to_rank) continue;
+        const delta = axes.pointAlong(layout.nodes[edge_item.to].center) -
+            axes.pointAlong(layout.nodes[edge_item.from].center);
+        stress += @max(edge_item.weight, 0.1) * (delta * delta) /
+            @as(f64, @floatFromInt(@max(to_rank - from_rank, 1)));
+    }
+    return stress;
 }
 
 test "typed remincross serializes Graphviz crossing repeat control" {
