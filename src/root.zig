@@ -12056,7 +12056,29 @@ fn packLevelFromLeft(level: []const NodeId, sizes: []const NodeSize, gap: f64, c
 
 fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, sizes: []const NodeSize, centers: []f64, options: LayoutOptions) void {
     if (levels.len <= 1 or options.coordinate_passes == 0) return;
+    var edge_adjacency = EdgeAdjacency.init(graph.allocator, graph) catch {
+        refineLayerCoordinatesFallback(graph, levels, ranks, sizes, centers, options);
+        return;
+    };
+    defer edge_adjacency.deinit();
 
+    for (0..options.coordinate_passes) |_| {
+        var rank: usize = 1;
+        while (rank < levels.len) : (rank += 1) {
+            nudgeLevelTowardNeighborsIndexed(graph, ranks, levels[rank].items, centers, true, &edge_adjacency);
+            compactLevelCentersForGraph(graph, levels[rank].items, centers, sizes, options.node_gap);
+        }
+
+        rank = levels.len - 1;
+        while (rank > 0) : (rank -= 1) {
+            nudgeLevelTowardNeighborsIndexed(graph, ranks, levels[rank - 1].items, centers, false, &edge_adjacency);
+            centerLevelOnNeighborSpansIndexed(graph, ranks, levels[rank - 1].items, centers, sizes, false, 0.45, &edge_adjacency);
+            compactLevelCentersForGraph(graph, levels[rank - 1].items, centers, sizes, options.node_gap);
+        }
+    }
+}
+
+fn refineLayerCoordinatesFallback(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, sizes: []const NodeSize, centers: []f64, options: LayoutOptions) void {
     for (0..options.coordinate_passes) |_| {
         var rank: usize = 1;
         while (rank < levels.len) : (rank += 1) {
@@ -12070,6 +12092,21 @@ fn refineLayerCoordinates(graph: *const Graph, levels: []const std.ArrayList(Nod
             centerLevelOnNeighborSpans(graph, ranks, levels[rank - 1].items, centers, sizes, false, 0.45);
             compactLevelCentersForGraph(graph, levels[rank - 1].items, centers, sizes, options.node_gap);
         }
+    }
+}
+
+fn centerLevelOnNeighborSpansIndexed(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, sizes: []const NodeSize, use_parents: bool, blend: f64, edge_adjacency: *const EdgeAdjacency) void {
+    for (level) |node_id| {
+        const target = neighborSpanCenterIndexed(
+            graph,
+            ranks,
+            centers,
+            sizes,
+            node_id,
+            use_parents,
+            edge_adjacency.incident(node_id),
+        ) orelse continue;
+        centers[node_id] = centers[node_id] + (target - centers[node_id]) * blend;
     }
 }
 
@@ -12163,6 +12200,43 @@ fn neighborSpanCenter(graph: *const Graph, ranks: []const usize, centers: []cons
     return (min_left + max_right) / 2.0;
 }
 
+fn neighborSpanCenterIndexed(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+    sizes: []const NodeSize,
+    node_id: NodeId,
+    use_parents: bool,
+    incident_edges: []const EdgeId,
+) ?f64 {
+    if (node_id >= ranks.len or node_id >= centers.len or node_id >= sizes.len) return null;
+    var min_left = std.math.floatMax(f64);
+    var max_right: f64 = -std.math.floatMax(f64);
+    var count: usize = 0;
+    for (incident_edges) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
+        const neighbor = if (use_parents and edge_item.to == node_id)
+            edge_item.from
+        else if (!use_parents and edge_item.from == node_id)
+            edge_item.to
+        else
+            continue;
+        if (neighbor >= ranks.len or neighbor >= centers.len or neighbor >= sizes.len) continue;
+        const adjacent = if (use_parents)
+            ranks[neighbor] + 1 == ranks[node_id]
+        else
+            ranks[node_id] + 1 == ranks[neighbor];
+        if (!adjacent) continue;
+        min_left = @min(min_left, centers[neighbor] - sizes[neighbor].width / 2.0);
+        max_right = @max(max_right, centers[neighbor] + sizes[neighbor].width / 2.0);
+        count += 1;
+    }
+    if (count == 0) return null;
+    return (min_left + max_right) / 2.0;
+}
+
 fn incidentSpanCenter(graph: *const Graph, ranks: []const usize, centers: []const f64, sizes: []const NodeSize, node_id: NodeId) ?f64 {
     if (node_id >= ranks.len or node_id >= centers.len or node_id >= sizes.len) return null;
     var min_left = std.math.floatMax(f64);
@@ -12212,6 +12286,27 @@ fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.Array
 
 fn straightenSimpleAdjacentEdges(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64, passes: usize) void {
     if (levels.len <= 1 or passes == 0) return;
+    var simple_neighbors = SimpleAdjacentNeighbors.init(graph.allocator, graph, ranks) catch {
+        straightenSimpleAdjacentEdgesFallback(graph, levels, ranks, centers, sizes, gap, passes);
+        return;
+    };
+    defer simple_neighbors.deinit();
+    for (0..passes) |_| {
+        var rank: usize = 1;
+        while (rank < levels.len) : (rank += 1) {
+            straightenLevelTowardSimpleNeighborsIndexed(&simple_neighbors, levels[rank].items, centers, true);
+            compactLevelCentersForGraph(graph, levels[rank].items, centers, sizes, gap);
+        }
+
+        rank = levels.len - 1;
+        while (rank > 0) : (rank -= 1) {
+            straightenLevelTowardSimpleNeighborsIndexed(&simple_neighbors, levels[rank - 1].items, centers, false);
+            compactLevelCentersForGraph(graph, levels[rank - 1].items, centers, sizes, gap);
+        }
+    }
+}
+
+fn straightenSimpleAdjacentEdgesFallback(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64, passes: usize) void {
     for (0..passes) |_| {
         var rank: usize = 1;
         while (rank < levels.len) : (rank += 1) {
@@ -12224,6 +12319,64 @@ fn straightenSimpleAdjacentEdges(graph: *const Graph, levels: []const std.ArrayL
             straightenLevelTowardSimpleNeighbors(graph, ranks, levels[rank - 1].items, centers, false);
             compactLevelCentersForGraph(graph, levels[rank - 1].items, centers, sizes, gap);
         }
+    }
+}
+
+const SimpleAdjacentNeighborInfo = struct {
+    parent_count: u8 = 0,
+    child_count: u8 = 0,
+    parent: NodeId = 0,
+    child: NodeId = 0,
+};
+
+const SimpleAdjacentNeighbors = struct {
+    allocator: std.mem.Allocator,
+    info: []SimpleAdjacentNeighborInfo,
+
+    fn init(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize) !SimpleAdjacentNeighbors {
+        const info = try allocator.alloc(SimpleAdjacentNeighborInfo, graph.nodes.items.len);
+        errdefer allocator.free(info);
+        for (info) |*node_info| node_info.* = .{};
+        for (graph.edges.items) |edge_item| {
+            if (!edgeAffectsLayeredObjective(edge_item)) continue;
+            if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+            if (ranks[edge_item.from] + 1 != ranks[edge_item.to]) continue;
+            addSimpleAdjacentNeighbor(&info[edge_item.from].child_count, &info[edge_item.from].child, edge_item.to);
+            addSimpleAdjacentNeighbor(&info[edge_item.to].parent_count, &info[edge_item.to].parent, edge_item.from);
+        }
+        return .{
+            .allocator = allocator,
+            .info = info,
+        };
+    }
+
+    fn deinit(self: *SimpleAdjacentNeighbors) void {
+        self.allocator.free(self.info);
+        self.* = undefined;
+    }
+
+    fn target(self: *const SimpleAdjacentNeighbors, centers: []const f64, node_id: NodeId, use_parents: bool) ?f64 {
+        if (node_id >= self.info.len or node_id >= centers.len) return null;
+        const node_info = self.info[node_id];
+        const count = if (use_parents) node_info.parent_count else node_info.child_count;
+        if (count != 1) return null;
+        const neighbor = if (use_parents) node_info.parent else node_info.child;
+        if (neighbor >= self.info.len or neighbor >= centers.len) return null;
+        const neighbor_count = if (use_parents) self.info[neighbor].child_count else self.info[neighbor].parent_count;
+        if (neighbor_count != 1) return null;
+        return centers[neighbor];
+    }
+};
+
+fn addSimpleAdjacentNeighbor(count: *u8, neighbor: *NodeId, candidate: NodeId) void {
+    if (count.* == 0) neighbor.* = candidate;
+    if (count.* < 2) count.* += 1;
+}
+
+fn straightenLevelTowardSimpleNeighborsIndexed(simple_neighbors: *const SimpleAdjacentNeighbors, level: []const NodeId, centers: []f64, use_parents: bool) void {
+    for (level) |node_id| {
+        const target = simple_neighbors.target(centers, node_id, use_parents) orelse continue;
+        centers[node_id] = centers[node_id] + (target - centers[node_id]) * 0.85;
     }
 }
 
@@ -12367,6 +12520,32 @@ fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: [
         var weighted_sum: f64 = 0;
         var total_weight: f64 = 0;
         for (graph.edges.items) |edge_item| {
+            const neighbor = if (use_parents and edge_item.to == node_id and ranks[edge_item.from] < ranks[node_id])
+                edge_item.from
+            else if (!use_parents and edge_item.from == node_id and ranks[edge_item.to] > ranks[node_id])
+                edge_item.to
+            else
+                continue;
+            if (!edgeAffectsLayeredObjective(edge_item)) continue;
+            const weight = edge_item.weight;
+            weighted_sum += centers[neighbor] * weight;
+            total_weight += weight;
+        }
+        if (total_weight > 0) {
+            const target = weighted_sum / total_weight;
+            centers[node_id] = centers[node_id] + (target - centers[node_id]) * blend;
+        }
+    }
+}
+
+fn nudgeLevelTowardNeighborsIndexed(graph: *const Graph, ranks: []const usize, level: []const NodeId, centers: []f64, use_parents: bool, edge_adjacency: *const EdgeAdjacency) void {
+    const blend = 0.65;
+    for (level) |node_id| {
+        var weighted_sum: f64 = 0;
+        var total_weight: f64 = 0;
+        for (edge_adjacency.incident(node_id)) |edge_id| {
+            if (edge_id >= graph.edges.items.len) continue;
+            const edge_item = graph.edges.items[edge_id];
             const neighbor = if (use_parents and edge_item.to == node_id and ranks[edge_item.from] < ranks[node_id])
                 edge_item.from
             else if (!use_parents and edge_item.from == node_id and ranks[edge_item.to] > ranks[node_id])
@@ -25864,6 +26043,64 @@ test "simple adjacent edge straightening reduces chain wobble" {
     try std.testing.expect(centers[side] >= centers[b] + sizes[b].width / 2.0 + 10 + sizes[side].width / 2.0);
 }
 
+test "indexed simple adjacent straightening matches scan definition" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const p0 = try graph.addNode("p0", .{});
+    const p1 = try graph.addNode("p1", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c0 = try graph.addNode("c0", .{});
+    const c1 = try graph.addNode("c1", .{});
+    _ = try graph.addEdge(p0, a, .{});
+    _ = try graph.addEdge(p0, a, .{});
+    _ = try graph.addEdge(p1, b, .{});
+    _ = try graph.addEdge(a, c0, .{});
+    _ = try graph.addEdge(b, c1, .{});
+    _ = try graph.addEdge(p0, c1, .{});
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p0] = 0;
+    ranks[p1] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+    ranks[c0] = 2;
+    ranks[c1] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, p0);
+    try levels[0].append(allocator, p1);
+    try levels[1].append(allocator, a);
+    try levels[1].append(allocator, b);
+    try levels[2].append(allocator, c0);
+    try levels[2].append(allocator, c1);
+
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    const indexed_centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(indexed_centers);
+    indexed_centers[p0] = 10;
+    indexed_centers[p1] = 100;
+    indexed_centers[a] = 40;
+    indexed_centers[b] = 130;
+    indexed_centers[c0] = 70;
+    indexed_centers[c1] = 160;
+    const scan_centers = try allocator.dupe(f64, indexed_centers);
+    defer allocator.free(scan_centers);
+
+    straightenSimpleAdjacentEdges(&graph, levels, ranks, indexed_centers, sizes, 10, 2);
+    straightenSimpleAdjacentEdgesFallback(&graph, levels, ranks, scan_centers, sizes, 10, 2);
+    try std.testing.expectEqualSlices(f64, scan_centers, indexed_centers);
+}
+
 test "coordinate refinement centers nodes on adjacent neighbor spans" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
@@ -25897,6 +26134,67 @@ test "coordinate refinement centers nodes on adjacent neighbor spans" {
     try std.testing.expectEqual(@as(f64, 110), target);
     centerLevelOnNeighborSpans(&graph, ranks, &.{parent}, centers, sizes, false, 1.0);
     try std.testing.expectEqual(target, centers[parent]);
+}
+
+test "indexed layer coordinate refinement matches scan definition" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const p0 = try graph.addNode("p0", .{});
+    const p1 = try graph.addNode("p1", .{});
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c0 = try graph.addNode("c0", .{});
+    const c1 = try graph.addNode("c1", .{});
+    _ = try graph.addEdge(p0, a, .{ .weight = 2 });
+    _ = try graph.addEdge(p0, a, .{ .weight = 3 });
+    _ = try graph.addEdge(p1, b, .{ .weight = 4 });
+    _ = try graph.addEdge(a, c1, .{ .weight = 2 });
+    _ = try graph.addEdge(b, c0, .{ .weight = 5 });
+    _ = try graph.addEdge(p0, c1, .{ .weight = 6 });
+    _ = try graph.addEdge(c0, a, .{ .weight = 7 });
+    _ = try graph.addEdge(p1, c0, .{ .constraint = false, .weight = 8 });
+
+    const ranks = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(ranks);
+    ranks[p0] = 0;
+    ranks[p1] = 0;
+    ranks[a] = 1;
+    ranks[b] = 1;
+    ranks[c0] = 2;
+    ranks[c1] = 2;
+
+    var levels = try allocator.alloc(std.ArrayList(NodeId), 3);
+    defer allocator.free(levels);
+    for (levels) |*level| level.* = .empty;
+    defer for (levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, p0);
+    try levels[0].append(allocator, p1);
+    try levels[1].append(allocator, a);
+    try levels[1].append(allocator, b);
+    try levels[2].append(allocator, c0);
+    try levels[2].append(allocator, c1);
+
+    const sizes = try allocator.alloc(NodeSize, graph.nodes.items.len);
+    defer allocator.free(sizes);
+    for (sizes) |*size| size.* = .{ .width = 20, .height = 20 };
+
+    const indexed_centers = try allocator.alloc(f64, graph.nodes.items.len);
+    defer allocator.free(indexed_centers);
+    indexed_centers[p0] = 10;
+    indexed_centers[p1] = 90;
+    indexed_centers[a] = 45;
+    indexed_centers[b] = 130;
+    indexed_centers[c0] = 70;
+    indexed_centers[c1] = 170;
+    const scan_centers = try allocator.dupe(f64, indexed_centers);
+    defer allocator.free(scan_centers);
+    const options = LayoutOptions{ .coordinate_passes = 2, .node_gap = 10 };
+
+    refineLayerCoordinates(&graph, levels, ranks, sizes, indexed_centers, options);
+    refineLayerCoordinatesFallback(&graph, levels, ranks, sizes, scan_centers, options);
+    try std.testing.expectEqualSlices(f64, scan_centers, indexed_centers);
 }
 
 test "guarded span alignment accepts lower-stress layer move" {
