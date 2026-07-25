@@ -17,7 +17,7 @@ Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Gr
 - 支持有向边 `->` 和无向边 `--`。
 - 支持节点语句、边语句和图/节点/边属性。
 - 支持常见属性：`label`、`color`、`shape`、`rankdir`、`weight` 等。
-- 当前应覆盖实用 DOT 子集：`strict`、具名 subgraph 分组、subgraph 作为边操作数、ports、保留每项 port 的逗号 node-list fanout、无空格 `a->b` / `a--b`、Graphviz NAME/NUMBER 词法边界与 BOM、angle-bracket labels/IDs 文本化、Graphviz 常见字符串转义（`\n`/`\l`/`\r`、引号、反斜杠、续行）、quoted string `+` 拼接、UTF-8 ID、简单布尔属性；含连字符的 ID 必须引用；具名 subgraph 身份按父级作用域解析，同父重开会合并成员和属性，不同父级可使用同名 subgraph；后续再扩展完整 subgraph 布局和完整 DOT 语义。Graphviz HTML-like label 渲染明确不在项目范围内，angle-string 始终按纯文本处理。
+- 当前应覆盖实用 DOT 子集：`strict`、具名 subgraph 分组、subgraph 作为边操作数、ports、保留每项 port 的逗号 node-list fanout、无空格 `a->b` / `a--b`、Graphviz NAME/NUMBER 词法边界与 BOM、angle-bracket labels/IDs 文本化、Graphviz 常见字符串转义（`\n`/`\l`/`\r`、引号、反斜杠、续行）、quoted string `+` 拼接、UTF-8 ID、简单布尔属性；含连字符的 ID 必须引用；具名 subgraph 身份按父级作用域解析，同父重开会合并成员和属性，不同父级可使用同名 subgraph；subgraph textual ID 仅用于 parser 内重开和引用，不自动成为显示 `label`，未显式设置标签时不渲染文字或预留标题带；后续再扩展完整 subgraph 布局和完整 DOT 语义。Graphviz HTML-like label 渲染明确不在项目范围内，angle-string 始终按纯文本处理。
 
 ## 编码接口要求
 
@@ -25,7 +25,7 @@ Vex 需要兼容 Graphviz 的 DOT 风格 DSL。对“结果必须 100% 等于 Gr
 
 - 允许直接创建图对象。
 - 允许添加节点、添加边、设置属性。
-- 图模型中的节点身份由 `NodeId` 决定，显示文本使用 `label`；DOT/Mermaid 的 textual id 由解析器局部维护。
+- 图模型中的节点身份由 `NodeId` 决定，显示文本使用 `label`；DOT/Mermaid 的 node/subgraph textual id 由解析器局部维护，不泄漏为默认显示文本。
 - 布局和渲染逻辑应面向这个统一图模型，而不是只绑定 DOT 文本输入。
 - DOT 解析器应该只是把 DSL 转换为同一个图模型。
 - 渲染输出需要保留后端分发层；当前 CLI/API 只注册 SVG 输出，后续可以按需要增删输出后端。默认路径必须是 Vex 原生实现，Graphviz `dot` 只用于测试对照。后续应继续把 parser/model/layout/SVG 从 `src/root.zig` 分阶段拆出。

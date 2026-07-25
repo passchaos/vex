@@ -2991,7 +2991,7 @@ const Parser = struct {
     fn subgraphByTextId(self: *Parser, graph: *Graph, text_id: []const u8) !SubgraphId {
         const parent = if (self.subgraph_stack.items.len > 0) self.subgraph_stack.items[self.subgraph_stack.items.len - 1] else null;
         if (self.findSubgraphInParent(graph, parent, text_id)) |id| return id;
-        const id = try graph.addSubgraphRaw(text_id, parent, &.{}, &.{});
+        const id = try graph.addSubgraphRaw("", parent, &.{}, &.{});
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
         try self.subgraph_text_ids.append(self.allocator, owned_text_id);
@@ -7492,6 +7492,7 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
 }
 
 fn subgraphLabelBand(graph: *const Graph, cluster: Subgraph) f64 {
+    if (cluster.label.len == 0) return 0;
     const font_size = inheritedClusterFontSize(graph, cluster);
     const line_height = font_size * 1.25;
     const line_count = displayLabelLineCount(cluster.label);
@@ -15999,23 +16000,25 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
         }
         try writer.writeAll("/>\n");
     }
-    if (positionedAttrPoint(layout, cluster.attrs.items, "lp")) |position| {
-        try renderSvgTextBlockWithAnchor(writer, cluster.label, position.x, position.y, visual.font_size, visual.font_color, visual.font, false, false, "middle", noJustifyLineAnchorForCluster(graph, cluster, "middle"));
-    } else {
-        const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
-        const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
-        const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
-        const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
-        const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
-        if (plainSingleLineLabel(cluster.label)) {
-            try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
-            try writeSvgTextFill(writer, visual.font_color);
-            try writer.writeAll(">");
-            try writeXmlEscaped(writer, cluster.label);
-            try writer.writeAll("</text>\n");
+    if (cluster.label.len > 0) {
+        if (positionedAttrPoint(layout, cluster.attrs.items, "lp")) |position| {
+            try renderSvgTextBlockWithAnchor(writer, cluster.label, position.x, position.y, visual.font_size, visual.font_color, visual.font, false, false, "middle", noJustifyLineAnchorForCluster(graph, cluster, "middle"));
         } else {
-            const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
-            try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
+            const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
+            const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
+            const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
+            const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
+            const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
+            if (plainSingleLineLabel(cluster.label)) {
+                try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
+                try writeSvgTextFill(writer, visual.font_color);
+                try writer.writeAll(">");
+                try writeXmlEscaped(writer, cluster.label);
+                try writer.writeAll("</text>\n");
+            } else {
+                const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
+                try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
+            }
         }
     }
     if (collapse) try renderSvgCollapseButton(writer, cluster, rect);
@@ -22377,7 +22380,7 @@ test "SVG renderer emits opt-in metadata index" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph Meta {
-        \\  subgraph service { api; worker; }
+        \\  subgraph service { label="service"; api; worker; }
         \\  api -> worker [label=job];
         \\  api -> sink [minlen=2];
         \\}
@@ -22496,6 +22499,7 @@ test "SVG metadata index records layers" {
         \\digraph Meta {
         \\  graph [layers="base:detail", layerselect="base:detail"];
         \\  subgraph outer {
+        \\    label="outer";
         \\    layer="detail";
         \\    subgraph inner {
         \\      label="Inner";
@@ -24764,6 +24768,7 @@ test "SVG renderer treats solid as ordered line style" {
         \\  solid_node [style="dashed,solid", color="#16a34a"];
         \\  dashed_node [style="solid,dashed", color="#1d4ed8"];
         \\  subgraph cluster_solid {
+        \\    label="cluster_solid";
         \\    style="dotted,solid";
         \\    color="#f59e0b";
         \\    member;
@@ -26515,7 +26520,7 @@ test "SVG renderer emits opt-in Vex minimap controls" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  subgraph service { api; worker; }
+        \\  subgraph service { label="service"; api; worker; }
         \\  api -> worker -> db;
         \\}
     );
@@ -28418,7 +28423,8 @@ test "SVG renderer inherits subgraph concentrate from parents" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    const inner = subgraphIndexByLabel(&graph, "cluster_inner") orelse return error.MissingInnerCluster;
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items.len);
+    const inner: SubgraphId = 1;
     try std.testing.expect(attrValue(graph.subgraphs.items[inner].attrs.items, "concentrate") == null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "first") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "second") == null);
@@ -30432,7 +30438,8 @@ test "SVG renderer inherits subgraph splines from parents" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
-    const inner_id = subgraphIndexByLabel(&graph, "cluster_inner") orelse return error.MissingInnerCluster;
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items.len);
+    const inner_id: SubgraphId = 1;
     try std.testing.expect(attrValue(graph.subgraphs.items[inner_id].attrs.items, "splines") == null);
     const internal = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingInternalEdge;
     const external = svgGroupFragmentByTitle(svg, "b-&gt;c") orelse return error.MissingExternalEdge;
@@ -30938,6 +30945,40 @@ test "non HTML DOT subgraph scope corpus parses with expected semantics" {
     try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items[3].nodes.len);
     try std.testing.expectEqual(@as(SubgraphId, 1), graph.edges.items[0].ltail.?);
     try std.testing.expectEqual(@as(SubgraphId, 3), graph.edges.items[1].lhead.?);
+}
+
+test "DOT subgraph textual identity stays separate from display label" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_subgraph_identity.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items.len);
+    const left = graph.subgraphs.items[0];
+    const right = graph.subgraphs.items[1];
+    try std.testing.expectEqualStrings("", left.label);
+    try std.testing.expectEqualStrings("Visible", right.label);
+    try std.testing.expectEqual(@as(usize, 2), left.nodes.len);
+    try std.testing.expect(containsNode(left.nodes, nodeIdByLabel(&graph, "a")));
+    try std.testing.expect(containsNode(left.nodes, nodeIdByLabel(&graph, "b")));
+    try std.testing.expectEqual(left.id, graph.edges.items[0].ltail.?);
+    try std.testing.expectEqual(right.id, graph.edges.items[0].lhead.?);
+    try std.testing.expectEqualStrings("left group", attrValue(graph.edges.items[0].attrs.items, "ltail").?);
+    try std.testing.expectEqualStrings("right_group", attrValue(graph.edges.items[0].attrs.items, "lhead").?);
+    try std.testing.expectEqual(@as(f64, 0), subgraphLabelBand(&graph, left));
+    try std.testing.expect(subgraphLabelBand(&graph, right) > 0);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+
+    const left_fragment = svgGroupFragmentById(svg, "clust1") orelse return error.MissingLeftSubgraph;
+    const right_fragment = svgGroupFragmentById(svg, "clust2") orelse return error.MissingRightSubgraph;
+    try std.testing.expect(std.mem.indexOf(u8, left_fragment, "<text") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">left group<") == null);
+    try std.testing.expect(std.mem.indexOf(u8, right_fragment, ">Visible</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"\"") != null);
 }
 
 test "non HTML DOT lexical edge corpus parses operator adjacency and ports" {
@@ -32109,7 +32150,8 @@ test "newrank false preserves rank constraints within one subgraph" {
     );
     defer graph.deinit();
 
-    const service = subgraphIndexByLabel(&graph, "service") orelse return error.MissingServiceSubgraph;
+    try std.testing.expectEqual(@as(usize, 1), graph.subgraphs.items.len);
+    const service: SubgraphId = 0;
     try std.testing.expectEqual(service, graph.rank_constraints.items[0].scope.?);
     var layout = try layoutLayered(allocator, &graph, .{});
     defer layout.deinit();
@@ -32392,7 +32434,8 @@ test "compact strong subgraph minimizes rank span without name prefix" {
 
     var compact_graph = try parseDot(allocator, source);
     defer compact_graph.deinit();
-    const compact_id = subgraphIndexByLabel(&compact_graph, "ordinary_name") orelse return error.MissingCompactSubgraph;
+    try std.testing.expectEqual(@as(usize, 1), compact_graph.subgraphs.items.len);
+    const compact_id: SubgraphId = 0;
     try compact_graph.setSubgraphAttr(compact_id, .{ .compact = true });
     var compact = try layoutLayered(allocator, &compact_graph, .{});
     defer compact.deinit();
@@ -32990,7 +33033,8 @@ test "layered layout inherits subgraph ordering from parents" {
     const a = nodeIdByLabel(&graph, "a");
     const b = nodeIdByLabel(&graph, "b");
     const c = nodeIdByLabel(&graph, "c");
-    const inner = subgraphIndexByLabel(&graph, "cluster_inner") orelse return error.MissingInnerCluster;
+    try std.testing.expectEqual(@as(usize, 2), graph.subgraphs.items.len);
+    const inner: SubgraphId = 1;
     try std.testing.expect(attrValue(graph.subgraphs.items[inner].attrs.items, "ordering") == null);
     try std.testing.expectEqual(OrderingMode.out, subgraphOrderingModeForNode(&graph, a));
     try std.testing.expect(layout.nodes[c].center.x < layout.nodes[a].center.x);
@@ -33571,8 +33615,8 @@ test "DOT quoted subgraph names match compound edge attrs" {
     );
     defer graph.deinit();
 
-    try std.testing.expectEqualStrings("left \"cluster\"", graph.subgraphs.items[0].label);
-    try std.testing.expectEqualStrings("right \"cluster\"", graph.subgraphs.items[1].label);
+    try std.testing.expectEqualStrings("", graph.subgraphs.items[0].label);
+    try std.testing.expectEqualStrings("", graph.subgraphs.items[1].label);
     const edge_item = graph.edges.items[2];
     try std.testing.expectEqual(@as(SubgraphId, 0), edge_item.ltail.?);
     try std.testing.expectEqual(@as(SubgraphId, 1), edge_item.lhead.?);

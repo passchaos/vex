@@ -1,0 +1,16 @@
+digraph Identity {
+  compound=true;
+
+  subgraph "left group" {
+    a;
+  }
+  subgraph "left group" {
+    b;
+  }
+  subgraph right_group {
+    label="Visible";
+    c;
+  }
+
+  b -> c [ltail="left group", lhead=right_group];
+}
