@@ -318,11 +318,12 @@ as development corpus data; Vex never calls `dot`.
 
 The ReleaseFast `test-layout-render-scale` gate covers every native layout
 family: layered, neato, fdp, Fruchterman-Reingold, sfdp, twopi, circo,
-patchwork, and osage. Workloads range from 64-node iterative graphs through a
-192-node / 388-edge crossed layered graph, 256-node radial/circular graphs, and
-512-node packing graphs. All use fixed layout/render arenas, time and memory
-limits, SVG object-group counts, and output hashes without writing generated
-SVG to disk. The layered graph is rendered twice and must be byte-identical;
+patchwork, and osage. Workloads include 256-node / 512-edge iterative graphs, a
+192-node / 388-edge crossed layered graph, 2,048-node / 4,096-edge
+sfdp/radial/circular graphs, and 4,096-node packing graphs. All use the original
+fixed layout/render arenas, time and memory limits, SVG object-group counts,
+and output hashes without writing generated SVG to disk. The layered graph is
+rendered twice and must be byte-identical;
 the combined process enforces a normalized 96 MiB peak-RSS limit.
 
 ## Mainstream DOT support

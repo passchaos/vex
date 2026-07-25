@@ -7,8 +7,8 @@ const rank_width: usize = 16;
 const layered_node_count: usize = rank_count * rank_width;
 const layered_subgraph_count: usize = 4;
 const layered_edge_count: usize = 388;
-const force_node_count: usize = 256;
-const force_edge_count: usize = 512;
+const force_node_count: usize = 2048;
+const force_edge_count: usize = 4096;
 const layout_memory_limit: usize = 16 * 1024 * 1024;
 const render_memory_limit: usize = 8 * 1024 * 1024;
 const layout_arena_limit: usize = 8 * 1024 * 1024;
@@ -21,13 +21,13 @@ pub fn main(init: std.process.Init) !void {
     const layered = try runLayeredGate(init);
     const force = try runForceGate(init);
     const engine_cases = [_]EngineGateCase{
-        .{ .name = "neato", .algorithm = .stress_majorization, .node_count = 64, .edges = true, .iterations = 30 },
-        .{ .name = "fdp", .algorithm = .spring_electrical, .node_count = 64, .edges = true, .iterations = 30 },
-        .{ .name = "fr", .algorithm = .fruchterman_reingold, .node_count = 64, .edges = true, .iterations = 30 },
-        .{ .name = "twopi", .algorithm = .radial, .node_count = 256, .edges = true },
-        .{ .name = "circo", .algorithm = .circular, .node_count = 256, .edges = true },
-        .{ .name = "patchwork", .algorithm = .treemap, .node_count = 512, .edges = false },
-        .{ .name = "osage", .algorithm = .array_packing, .node_count = 512, .edges = false },
+        .{ .name = "neato", .algorithm = .stress_majorization, .node_count = 256, .edges = true, .iterations = 30 },
+        .{ .name = "fdp", .algorithm = .spring_electrical, .node_count = 256, .edges = true, .iterations = 30 },
+        .{ .name = "fr", .algorithm = .fruchterman_reingold, .node_count = 256, .edges = true, .iterations = 30 },
+        .{ .name = "twopi", .algorithm = .radial, .node_count = 2048, .edges = true },
+        .{ .name = "circo", .algorithm = .circular, .node_count = 2048, .edges = true },
+        .{ .name = "patchwork", .algorithm = .treemap, .node_count = 4096, .edges = false },
+        .{ .name = "osage", .algorithm = .array_packing, .node_count = 4096, .edges = false },
     };
     var engine_results: [engine_cases.len]LayoutRenderGateResult = undefined;
     for (engine_cases, 0..) |case, index| engine_results[index] = try runEngineGate(init, case);
