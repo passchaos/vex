@@ -6744,7 +6744,7 @@ fn virtualNodeNeighborMedian(graph: *const Graph, virtual_levels: *const Virtual
         const neighbor = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse continue;
         const adjacent_rank = if (use_parents) rank - 1 else rank + 1;
         const pos = positionInVirtualLevel(virtual_levels.levels[adjacent_rank].items, neighbor) orelse continue;
-        const weight = @max(edge_item.weight, 0.1);
+        const weight = if (edge_item.weight <= 0) 1.0 else edge_item.weight;
         weighted_sum += @as(f64, @floatFromInt(pos)) * weight;
         total_weight += weight;
     }
@@ -8261,7 +8261,7 @@ fn buildStrongRankProblem(
             edge_item.from,
             edge_item.to,
             edge_item.min_len,
-            @max(edge_item.weight, 0.1),
+            @max(edge_item.weight, 0),
             edge_item.id,
         );
     }
@@ -8273,7 +8273,7 @@ fn buildStrongRankProblem(
         const tail_rank = rank_list.items[edge_item.from];
         const head_rank = rank_list.items[edge_item.to];
         try rank_list.append(allocator, @min(tail_rank, head_rank -| min_len));
-        const weight = @max(edge_item.weight, 0.1);
+        const weight = @max(edge_item.weight, 0);
         try appendRankEdge(allocator, &edge_list, auxiliary, edge_item.from, 0, weight * backwardRankPenalty, edge_item.id);
         try appendRankEdge(allocator, &edge_list, auxiliary, edge_item.to, min_len, weight, edge_item.id);
     }
@@ -8618,6 +8618,10 @@ fn rankEdgeActive(edge_item: Edge, acyclic_edge: []const bool) bool {
     return edge_item.constraint and edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id];
 }
 
+fn edgeAffectsLayeredObjective(edge_item: Edge) bool {
+    return edge_item.constraint and edge_item.weight > 0;
+}
+
 const RankEdge = struct {
     edge_id: EdgeId,
     from: NodeId,
@@ -8693,7 +8697,7 @@ fn collectRankEdges(allocator: std.mem.Allocator, graph: *const Graph, acyclic_e
             .from = edge_item.from,
             .to = edge_item.to,
             .min_len = edge_item.min_len,
-            .weight = @max(edge_item.weight, 0.1),
+            .weight = @max(edge_item.weight, 0),
         });
     }
     return edges.toOwnedSlice(allocator);
@@ -9161,7 +9165,7 @@ fn augmentedRankEdgesCost(edges: []const RankEdge, ranks: []const usize) f64 {
 
 fn rankSpanCost(from_rank: usize, to_rank: usize, weight: f64) f64 {
     const span = if (from_rank > to_rank) from_rank - to_rank else to_rank - from_rank;
-    return @as(f64, @floatFromInt(span)) * @max(weight, 0.1);
+    return @as(f64, @floatFromInt(span)) * @max(weight, 0);
 }
 
 fn rankTighteningPinned(graph: *const Graph, node_id: NodeId) bool {
@@ -10295,7 +10299,7 @@ fn neighborSpanCenter(graph: *const Graph, ranks: []const usize, centers: []cons
     var max_right: f64 = -std.math.floatMax(f64);
     var count: usize = 0;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
         const neighbor = if (use_parents and edge_item.to == node_id)
             edge_item.from
         else if (!use_parents and edge_item.from == node_id)
@@ -10322,7 +10326,7 @@ fn incidentSpanCenter(graph: *const Graph, ranks: []const usize, centers: []cons
     var max_right: f64 = -std.math.floatMax(f64);
     var count: usize = 0;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
         const neighbor = if (edge_item.from == node_id)
             edge_item.to
         else if (edge_item.to == node_id)
@@ -10348,8 +10352,9 @@ fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.Array
             var total_weight: f64 = 0;
             for (graph.edges.items) |edge_item| {
                 const dummy = longEdgeDummyCenter(edge_item, ranks, centers, rank) orelse continue;
+                if (!edgeAffectsLayeredObjective(edge_item)) continue;
                 const influence = 1.0 / (1.0 + @abs(centers[node_id] - dummy));
-                const weight = @max(edge_item.weight, 1.0) * influence;
+                const weight = edge_item.weight * influence;
                 weighted_sum += dummy * weight;
                 total_weight += weight;
             }
@@ -10390,7 +10395,7 @@ fn simpleAdjacentEdgeTarget(graph: *const Graph, ranks: []const usize, centers: 
     if (node_id >= ranks.len or node_id >= centers.len) return null;
     var target: ?f64 = null;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
         const neighbor = if (use_parents and edge_item.to == node_id)
             edge_item.from
         else if (!use_parents and edge_item.from == node_id)
@@ -10417,7 +10422,7 @@ fn nodeHasSingleAdjacentNeighbor(graph: *const Graph, ranks: []const usize, node
     if (node_id >= ranks.len) return false;
     var count: usize = 0;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
         if (use_parents) {
             if (edge_item.to != node_id or edge_item.from >= ranks.len) continue;
             if (ranks[edge_item.from] + 1 == ranks[node_id]) count += 1;
@@ -10525,7 +10530,8 @@ fn nudgeLevelTowardNeighbors(graph: *const Graph, ranks: []const usize, level: [
                 edge_item.to
             else
                 continue;
-            const weight = @max(edge_item.weight, 0.1);
+            if (!edgeAffectsLayeredObjective(edge_item)) continue;
+            const weight = edge_item.weight;
             weighted_sum += centers[neighbor] * weight;
             total_weight += weight;
         }
@@ -10722,7 +10728,7 @@ fn levelExtent(level: []const NodeId, centers: []const f64, sizes: []const NodeS
 fn coordinateEdgeStress(graph: *const Graph, ranks: []const usize, centers: []const f64) f64 {
     var stress: f64 = 0;
     for (graph.edges.items) |edge_item| {
-        if (!edge_item.constraint) continue;
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
         if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
         if (edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
         const from_rank = ranks[edge_item.from];
@@ -10730,7 +10736,7 @@ fn coordinateEdgeStress(graph: *const Graph, ranks: []const usize, centers: []co
         if (from_rank >= to_rank) continue;
         const span = @max(to_rank - from_rank, 1);
         const delta = centers[edge_item.to] - centers[edge_item.from];
-        stress += @max(edge_item.weight, 0.1) * (delta * delta) / @as(f64, @floatFromInt(span));
+        stress += @max(edge_item.weight, 0) * (delta * delta) / @as(f64, @floatFromInt(span));
     }
     return stress;
 }
@@ -29580,6 +29586,72 @@ test "DOT parser propagates edge constraint and minlen controls" {
     try std.testing.expectEqualStrings("false", attrValue(graph.edges.items[1].attrs.items, "labelaligned").?);
 }
 
+test "Graphviz weight zero keeps minlen but leaves rank span unoptimized" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  a -> c -> d -> e;
+        \\  a -> b [weight=0,minlen=1];
+        \\  b -> e [weight=1,minlen=1];
+        \\}
+    ;
+
+    var zero_graph = try parseDot(allocator, source);
+    defer zero_graph.deinit();
+    var zero = try layoutLayered(allocator, &zero_graph, .{});
+    defer zero.deinit();
+
+    var heavy_graph = try parseDot(allocator, source);
+    defer heavy_graph.deinit();
+    try heavy_graph.setEdgeAttr(3, .{ .weight = 10 });
+    var heavy = try layoutLayered(allocator, &heavy_graph, .{});
+    defer heavy.deinit();
+
+    const zero_a = nodeIdByLabel(&zero_graph, "a");
+    const zero_b = nodeIdByLabel(&zero_graph, "b");
+    const zero_e = nodeIdByLabel(&zero_graph, "e");
+    const heavy_b = nodeIdByLabel(&heavy_graph, "b");
+    try std.testing.expectEqual(@as(f64, 0), zero_graph.edges.items[3].weight);
+    try std.testing.expectEqualStrings("0", attrValue(zero_graph.edges.items[3].attrs.items, "weight").?);
+    try std.testing.expect(zero.ranks[zero_b] >= zero.ranks[zero_a] + 1);
+    try std.testing.expect(zero.ranks[zero_e] >= zero.ranks[zero_b] + 1);
+    try std.testing.expectEqual(@as(usize, 2), zero.ranks[zero_b]);
+    try std.testing.expectEqual(@as(usize, 1), heavy.ranks[heavy_b]);
+
+    const svg = try renderSvgAlloc(allocator, &zero_graph, &zero, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-weight=\"0\"") != null);
+}
+
+test "weight zero is excluded from layered median and coordinate objectives" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const parent = try graph.addNode("parent", .{});
+    const ignored = try graph.addNode("ignored", .{});
+    const weighted = try graph.addNode("weighted", .{});
+    _ = try graph.addEdge(parent, ignored, .{ .weight = 0 });
+    _ = try graph.addEdge(parent, weighted, .{ .weight = 4 });
+    const ranks = [_]usize{ 0, 1, 1 };
+    const centers = [_]f64{ 100, 0, 100 };
+
+    try std.testing.expectEqual(@as(usize, 1), edgeWeightRepeat(0));
+    try std.testing.expectEqual(@as(f64, 0), coordinateEdgeStress(&graph, ranks[0..], &.{ 0, 100, 0 }));
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    const target = neighborSpanCenter(&graph, ranks[0..], centers[0..], sizes[0..], parent, false) orelse return error.MissingNeighborSpan;
+    try std.testing.expectEqual(@as(f64, 100), target);
+
+    var nudged = centers;
+    nudgeLevelTowardNeighbors(&graph, ranks[0..], &.{parent}, nudged[0..], false);
+    try std.testing.expectEqual(@as(f64, 100), nudged[parent]);
+    try std.testing.expectEqual(@as(f64, 0), rankSpanCost(0, 5, 0));
+}
+
 test "DOT and typed API preserve Graphviz minlen zero" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -31159,7 +31231,7 @@ fn layoutCoordinateStress(graph: *const Graph, layout: *const Layout) f64 {
         if (from_rank >= to_rank) continue;
         const delta = axes.pointAlong(layout.nodes[edge_item.to].center) -
             axes.pointAlong(layout.nodes[edge_item.from].center);
-        stress += @max(edge_item.weight, 0.1) * (delta * delta) /
+        stress += @max(edge_item.weight, 0) * (delta * delta) /
             @as(f64, @floatFromInt(@max(to_rank - from_rank, 1)));
     }
     return stress;

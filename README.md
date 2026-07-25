@@ -426,6 +426,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - Graphviz boolean parsing for edge `constraint` treats unknown explicit text,
   including legacy `constraint=none`, as false instead of retaining the
   inherited default.
+- In layered layout, edge `weight=0` keeps its hard `minlen` constraint but is
+  excluded from rank-span and coordinate attraction objectives. It still
+  participates in ordinary crossing avoidance, matching Graphviz `xpenalty`.
 - Graphviz arrow marker grammar including `normal`, `open`, `inv`, `curve`,
   `vee`, `dot`, `box`, `diamond`, `tee`, `crow`, open variants, `l` / `r`
   half-arrow modifiers, compatibility aliases, and compositions of up to four
