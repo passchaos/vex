@@ -307,11 +307,13 @@ limit and an independent 32 MiB parser-arena budget inside a reusable fixed
 64 MiB buffer. Both report source bytes, arena bytes, and elapsed milliseconds.
 Run them directly with `zig build test-parse-scale`.
 
-The ReleaseFast `test-layout-render-scale` gate builds a 192-node / 388-edge
-crossed layered graph with four named subgraphs, lays it out in a fixed arena,
-and renders SVG twice. It enforces layout/render time and arena limits, checks
-node/edge/subgraph group counts, and requires byte-identical output hashes
-without writing the generated SVG to disk.
+The ReleaseFast `test-layout-render-scale` gate covers two engines: a
+192-node / 388-edge crossed layered graph with four named subgraphs, and a
+256-node / 512-edge sfdp graph. Both use fixed layout/render arenas, enforce
+time and arena limits, and validate SVG object-group counts and hashes without
+writing generated SVG to disk. The layered graph is rendered twice and must
+produce byte-identical output; the combined process also enforces a normalized
+96 MiB peak-RSS limit through `getrusage`.
 
 ## Mainstream DOT support
 
