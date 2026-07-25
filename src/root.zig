@@ -157,6 +157,7 @@ pub const ParseDiagnostics = struct {
 pub const RankConstraint = struct {
     kind: RankKind,
     node_ids: []NodeId,
+    scope: ?SubgraphId = null,
 };
 
 pub const CompassPort = svg_mod.edge.CompassPort;
@@ -225,6 +226,7 @@ pub const GraphAttr = union(enum) {
     overlap: OverlapMode,
     separation: Separation,
     clusterrank: ClusterRankMode,
+    newrank: bool,
     remincross: bool,
     compound: bool,
     concentrate: bool,
@@ -882,10 +884,25 @@ pub const Graph = struct {
     }
 
     pub fn addRankConstraint(self: *Graph, kind: RankKind, node_ids: []const NodeId) !void {
+        return self.addRankConstraintInScope(kind, node_ids, null);
+    }
+
+    pub fn addSubgraphRankConstraint(self: *Graph, scope: SubgraphId, kind: RankKind, node_ids: []const NodeId) !void {
+        return self.addRankConstraintInScope(kind, node_ids, scope);
+    }
+
+    fn addRankConstraintInScope(self: *Graph, kind: RankKind, node_ids: []const NodeId, scope: ?SubgraphId) !void {
         if (node_ids.len == 0) return;
+        if (scope) |id| {
+            if (id >= self.subgraphs.items.len) return error.InvalidSubgraphId;
+        }
         const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
         errdefer self.allocator.free(owned_nodes);
-        try self.rank_constraints.append(self.allocator, .{ .kind = kind, .node_ids = owned_nodes });
+        try self.rank_constraints.append(self.allocator, .{
+            .kind = kind,
+            .node_ids = owned_nodes,
+            .scope = scope,
+        });
     }
 
     pub fn setRadialRoot(self: *Graph, id: NodeId) !void {
@@ -1001,6 +1018,7 @@ pub const Graph = struct {
                 try self.setGraphAttrRaw("sep", try separationAttrText(&buffer, value));
             },
             .clusterrank => |value| try self.setGraphAttrRaw("clusterrank", value.name()),
+            .newrank => |value| try self.setGraphAttrRaw("newrank", boolAttrValue(value)),
             .remincross => |value| try self.setGraphAttrRaw("remincross", boolAttrValue(value)),
             .compound => |value| try self.setGraphAttrRaw("compound", boolAttrValue(value)),
             .concentrate => |value| try self.setGraphAttrRaw("concentrate", boolAttrValue(value)),
@@ -2857,6 +2875,10 @@ const Parser = struct {
         defer freeAttrList(self.allocator, &subgraph_attrs);
         const is_subgraph = subgraph_id != null;
         const parent_subgraph = if (is_subgraph and self.subgraph_stack.items.len > 0) self.subgraph_stack.items[self.subgraph_stack.items.len - 1] else null;
+        const rank_constraint_scope = subgraph_id orelse if (self.subgraph_stack.items.len > 0)
+            self.subgraph_stack.items[self.subgraph_stack.items.len - 1]
+        else
+            null;
 
         var nodes = NodeSet.empty;
         errdefer nodes.deinit(self.allocator);
@@ -2881,11 +2903,11 @@ const Parser = struct {
         self.subgraph_scopes.items.len -= 1;
         if (stack_pushed) self.subgraph_stack.items.len -= 1;
         try self.expect(.rbrace);
-        if (rank_kind) |kind| try graph.addRankConstraint(kind, nodes.items);
         if (is_subgraph) {
             graph.subgraphs.items[subgraph_id.?].parent = parent_subgraph;
             try graph.mergeSubgraphContentRaw(subgraph_id.?, nodes.items, subgraph_attrs.items);
         }
+        if (rank_kind) |kind| try graph.addRankConstraintInScope(kind, nodes.items, rank_constraint_scope);
         defaults.restore(self.allocator, graph);
         return nodes;
     }
@@ -4240,6 +4262,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
         try result.rank_constraints.append(allocator, .{
             .kind = constraint.kind,
             .node_ids = try allocator.dupe(NodeId, constraint.node_ids),
+            .scope = constraint.scope,
         });
     }
 
@@ -4335,6 +4358,11 @@ fn remincrossEnabled(graph: *const Graph) bool {
     return parseBool(value) orelse true;
 }
 
+fn newrankEnabled(graph: *const Graph) bool {
+    const value = attrValue(graph.attrs.items, "newrank") orelse return true;
+    return parseBool(value) orelse false;
+}
+
 const strongClusterWeight: f64 = 1000.0;
 const backwardRankPenalty: f64 = 1000.0;
 
@@ -4365,6 +4393,28 @@ fn nodeInSubgraphHierarchy(graph: *const Graph, subgraph_id: SubgraphId, node_id
     return false;
 }
 
+fn rankConstraintActive(graph: *const Graph, constraint: RankConstraint) bool {
+    if (newrankEnabled(graph) or clusterRankMode(graph) != .local or constraint.node_ids.len <= 1) return true;
+    if (constraint.scope) |scope| {
+        for (constraint.node_ids) |node_id| {
+            if (!nodeInSubgraphHierarchy(graph, scope, node_id)) return false;
+        }
+        return true;
+    }
+    const scope = deepestSubgraphContainingNode(graph, constraint.node_ids[0]);
+    for (constraint.node_ids[1..]) |node_id| {
+        if (deepestSubgraphContainingNode(graph, node_id) != scope) return false;
+    }
+    return true;
+}
+
+fn hasActiveRankConstraints(graph: *const Graph) bool {
+    for (graph.rank_constraints.items) |constraint| {
+        if (rankConstraintActive(graph, constraint)) return true;
+    }
+    return false;
+}
+
 fn subgraphDepth(graph: *const Graph, subgraph_id: SubgraphId) usize {
     if (subgraph_id >= graph.subgraphs.items.len) return 0;
     var depth: usize = 1;
@@ -4380,6 +4430,7 @@ fn subgraphDepth(graph: *const Graph, subgraph_id: SubgraphId) usize {
 }
 
 fn deepestCompactSubgraphContainingNode(graph: *const Graph, node_id: NodeId) ?SubgraphId {
+    if (!newrankEnabled(graph)) return null;
     var best: ?SubgraphId = null;
     var best_depth: usize = 0;
     for (graph.subgraphs.items) |subgraph| {
@@ -7531,7 +7582,7 @@ fn clusterLayoutsAlongExtent(axes: LayoutAxes, clusters: []const SubgraphLayout,
 
 fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
     for (graph.rank_constraints.items) |constraint| {
-        if (constraint.kind != .same or constraint.node_ids.len == 0) continue;
+        if (!rankConstraintActive(graph, constraint) or constraint.kind != .same or constraint.node_ids.len == 0) continue;
         var target_rank: usize = 0;
         for (constraint.node_ids) |id| {
             if (id < ranks.len) target_rank = @max(target_rank, ranks[id]);
@@ -7542,6 +7593,7 @@ fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
     }
 
     for (graph.rank_constraints.items) |constraint| {
+        if (!rankConstraintActive(graph, constraint)) continue;
         switch (constraint.kind) {
             .min, .source => {
                 for (constraint.node_ids) |id| {
@@ -7556,6 +7608,7 @@ fn applyRankConstraints(graph: *const Graph, ranks: []usize) void {
     for (ranks) |rank| max_rank = @max(max_rank, rank);
 
     for (graph.rank_constraints.items) |constraint| {
+        if (!rankConstraintActive(graph, constraint)) continue;
         switch (constraint.kind) {
             .max, .sink => {
                 for (constraint.node_ids) |id| {
@@ -7596,14 +7649,14 @@ fn enforceExclusiveSourceSinkRanks(graph: *const Graph, ranks: []usize) void {
 
 fn hasRankConstraintKind(graph: *const Graph, kind: RankKind) bool {
     for (graph.rank_constraints.items) |constraint| {
-        if (constraint.kind == kind) return true;
+        if (constraint.kind == kind and rankConstraintActive(graph, constraint)) return true;
     }
     return false;
 }
 
 fn nodeInRankConstraintKind(graph: *const Graph, node_id: NodeId, kind: RankKind) bool {
     for (graph.rank_constraints.items) |constraint| {
-        if (constraint.kind != kind) continue;
+        if (constraint.kind != kind or !rankConstraintActive(graph, constraint)) continue;
         for (constraint.node_ids) |id| {
             if (id == node_id) return true;
         }
@@ -7615,6 +7668,7 @@ fn rankConstraintsSatisfied(graph: *const Graph, ranks: []const usize) bool {
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
     for (graph.rank_constraints.items) |constraint| {
+        if (!rankConstraintActive(graph, constraint)) continue;
         switch (constraint.kind) {
             .same => {
                 if (constraint.node_ids.len == 0) continue;
@@ -7654,7 +7708,7 @@ fn rankConstraintsSatisfied(graph: *const Graph, ranks: []const usize) bool {
 }
 
 fn rankConstraintsSatisfiedUpToTranslation(graph: *const Graph, ranks: []const usize) bool {
-    if (ranks.len == 0) return graph.rank_constraints.items.len == 0;
+    if (ranks.len == 0) return !hasActiveRankConstraints(graph);
     var min_rank = ranks[0];
     var max_rank = ranks[0];
     for (ranks[1..]) |rank| {
@@ -7662,6 +7716,7 @@ fn rankConstraintsSatisfiedUpToTranslation(graph: *const Graph, ranks: []const u
         max_rank = @max(max_rank, rank);
     }
     for (graph.rank_constraints.items) |constraint| {
+        if (!rankConstraintActive(graph, constraint)) continue;
         switch (constraint.kind) {
             .same => {
                 var target: ?usize = null;
@@ -7918,6 +7973,7 @@ fn rankAssignmentCost(graph: *const Graph, ranks: []const usize, acyclic_edge: [
 }
 
 fn graphHasStrongClusters(graph: *const Graph) bool {
+    if (!newrankEnabled(graph)) return false;
     for (graph.subgraphs.items) |subgraph| {
         if (subgraphCompact(subgraph)) return true;
     }
@@ -8285,7 +8341,7 @@ fn buildRankShiftClosure(
             }
         }
         for (graph.rank_constraints.items) |constraint| {
-            if (constraint.kind != .same) continue;
+            if (constraint.kind != .same or !rankConstraintActive(graph, constraint)) continue;
             var touches = false;
             for (constraint.node_ids) |node_id| {
                 if (node_id < real_node_count and node_id < closure.len and closure[node_id]) {
@@ -8914,6 +8970,7 @@ fn rankSpanCost(from_rank: usize, to_rank: usize, weight: f64) f64 {
 
 fn rankTighteningPinned(graph: *const Graph, node_id: NodeId) bool {
     for (graph.rank_constraints.items) |constraint| {
+        if (!rankConstraintActive(graph, constraint)) continue;
         switch (constraint.kind) {
             .same, .min, .source, .max, .sink => {
                 if (containsNode(constraint.node_ids, node_id)) return true;
@@ -11039,6 +11096,7 @@ fn writeSvgRankConstraintIndex(writer: *Io.Writer, graph: *const Graph) Io.Write
     for (graph.rank_constraints.items) |constraint| {
         try writer.writeAll("<vex:rank kind=\"");
         try writer.writeAll(@tagName(constraint.kind));
+        if (constraint.scope) |scope| try writer.print("\" scope=\"{d}", .{scope});
         try writer.writeAll("\" nodes=\"");
         for (constraint.node_ids, 0..) |node_id, index| {
             if (index > 0) try writer.writeByte(' ');
@@ -30060,6 +30118,169 @@ test "typed clusterrank serializes all Graphviz modes" {
     try std.testing.expectEqualStrings("global", attrValue(graph.attrs.items, "clusterrank").?);
     try graph.setGraphAttr(.{ .clusterrank = .none });
     try std.testing.expectEqualStrings("none", attrValue(graph.attrs.items, "clusterrank").?);
+}
+
+test "newrank controls Graphviz 705 rank constraints spanning sibling subgraphs" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph test {
+        \\  { rank=same; ab; ba; ca; }
+        \\  subgraph a { aa; ab; aa -> ab; }
+        \\  subgraph b { ba; bb; ba -> bb; }
+        \\  subgraph c { ca; cb; ca -> cb; }
+        \\}
+    ;
+
+    var integrated_graph = try parseDot(allocator, source);
+    defer integrated_graph.deinit();
+    try std.testing.expect(integrated_graph.rank_constraints.items[0].scope == null);
+    var integrated = try layoutLayered(allocator, &integrated_graph, .{});
+    defer integrated.deinit();
+
+    var enabled_graph = try parseDot(allocator, source);
+    defer enabled_graph.deinit();
+    try enabled_graph.setGraphAttr(.{ .newrank = true });
+    var enabled = try layoutLayered(allocator, &enabled_graph, .{});
+    defer enabled.deinit();
+
+    var legacy_graph = try parseDot(allocator, source);
+    defer legacy_graph.deinit();
+    try legacy_graph.setGraphAttr(.{ .newrank = false });
+    var legacy = try layoutLayered(allocator, &legacy_graph, .{});
+    defer legacy.deinit();
+
+    const integrated_ab = nodeIdByLabel(&integrated_graph, "ab");
+    const integrated_ba = nodeIdByLabel(&integrated_graph, "ba");
+    const integrated_ca = nodeIdByLabel(&integrated_graph, "ca");
+    try std.testing.expectEqual(integrated.ranks[integrated_ab], integrated.ranks[integrated_ba]);
+    try std.testing.expectEqual(integrated.ranks[integrated_ab], integrated.ranks[integrated_ca]);
+    try expectNodeCentersEqual(&integrated, &enabled);
+
+    const legacy_ab = nodeIdByLabel(&legacy_graph, "ab");
+    const legacy_ba = nodeIdByLabel(&legacy_graph, "ba");
+    const legacy_ca = nodeIdByLabel(&legacy_graph, "ca");
+    try std.testing.expect(
+        legacy.ranks[legacy_ab] != legacy.ranks[legacy_ba] or
+            legacy.ranks[legacy_ab] != legacy.ranks[legacy_ca],
+    );
+    try std.testing.expectEqualStrings("false", attrValue(legacy_graph.attrs.items, "newrank").?);
+}
+
+test "newrank false preserves rank constraints within one subgraph" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  newrank=false;
+        \\  subgraph service {
+        \\    a -> b;
+        \\    { rank=same; a; c; }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    const service = subgraphIndexByLabel(&graph, "service") orelse return error.MissingServiceSubgraph;
+    try std.testing.expectEqual(service, graph.rank_constraints.items[0].scope.?);
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[c]);
+}
+
+test "typed newrank follows Graphviz 2521 boolean reset semantics" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    try std.testing.expect(newrankEnabled(&graph));
+    try graph.setGraphAttr(.{ .newrank = false });
+    try std.testing.expectEqualStrings("false", attrValue(graph.attrs.items, "newrank").?);
+    try std.testing.expect(!newrankEnabled(&graph));
+    try graph.setGraphAttr(.{ .newrank = true });
+    try std.testing.expectEqualStrings("true", attrValue(graph.attrs.items, "newrank").?);
+    try std.testing.expect(newrankEnabled(&graph));
+    try graph.setGraphAttrRaw("newrank", "invalid");
+    try std.testing.expect(!newrankEnabled(&graph));
+}
+
+test "newrank false disables compact strong-cluster ranking" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  newrank=false;
+        \\  subgraph service { compact=true; a; b; }
+        \\  x -> a;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expect(layout.ranks[a] != layout.ranks[b]);
+}
+
+test "clusterrank global keeps cross-subgraph ranks when newrank is false" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  clusterrank=global;
+        \\  newrank=false;
+        \\  subgraph left { a; }
+        \\  subgraph right { b; }
+        \\  { rank=same; a; b; }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expectEqual(layout.ranks[a], layout.ranks[b]);
+}
+
+test "newrank handles Graphviz 1221 duplicate sibling-subgraph membership" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  newrank=true;
+        \\  subgraph one { shared; }
+        \\  subgraph two { shared; }
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const shared = nodeIdByLabel(&graph, "shared");
+    try std.testing.expect(containsNode(graph.subgraphs.items[0].nodes, shared));
+    try std.testing.expect(containsNode(graph.subgraphs.items[1].nodes, shared));
+    try std.testing.expectEqual(@as(usize, 1), layout.nodes.len);
+}
+
+test "typed subgraph rank constraints retain scope in metadata" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const service = try graph.addSubgraph("service", null, &.{ a, b }, .{});
+    try graph.addSubgraphRankConstraint(service, .same, &.{ a, b });
+    try std.testing.expectEqual(service, graph.rank_constraints.items[0].scope.?);
+    try graph.setGraphAttr(.{ .newrank = false });
+    try std.testing.expect(rankConstraintActive(&graph, graph.rank_constraints.items[0]));
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:rank kind=\"same\" scope=\"0\" nodes=\"0 1\"/>") != null);
+
+    try std.testing.expectError(error.InvalidSubgraphId, graph.addSubgraphRankConstraint(99, .same, &.{a}));
 }
 
 fn layoutEdgesCross(graph: *const Graph, layout: *const Layout, first: EdgeId, second: EdgeId) bool {
