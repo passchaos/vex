@@ -20,13 +20,25 @@ const peak_rss_limit: usize = 96 * 1024 * 1024;
 pub fn main(init: std.process.Init) !void {
     const layered = try runLayeredGate(init);
     const force = try runForceGate(init);
+    const engine_cases = [_]EngineGateCase{
+        .{ .name = "neato", .algorithm = .stress_majorization, .node_count = 64, .edges = true, .iterations = 30 },
+        .{ .name = "fdp", .algorithm = .spring_electrical, .node_count = 64, .edges = true, .iterations = 30 },
+        .{ .name = "fr", .algorithm = .fruchterman_reingold, .node_count = 64, .edges = true, .iterations = 30 },
+        .{ .name = "twopi", .algorithm = .radial, .node_count = 256, .edges = true },
+        .{ .name = "circo", .algorithm = .circular, .node_count = 256, .edges = true },
+        .{ .name = "patchwork", .algorithm = .treemap, .node_count = 512, .edges = false },
+        .{ .name = "osage", .algorithm = .array_packing, .node_count = 512, .edges = false },
+    };
+    var engine_results: [engine_cases.len]LayoutRenderGateResult = undefined;
+    for (engine_cases, 0..) |case, index| engine_results[index] = try runEngineGate(init, case);
     const peak_rss_bytes = processPeakRssBytes();
     if (peak_rss_bytes > peak_rss_limit) return error.ScalePeakRssLimitExceeded;
 
-    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_buffer: [4096]u8 = undefined;
     var stdout = std.Io.File.Writer.init(.stdout(), init.io, &stdout_buffer);
     try printGateResult(&stdout.interface, "layered", layered);
     try printGateResult(&stdout.interface, "sfdp", force);
+    for (engine_cases, engine_results) |case, result| try printGateResult(&stdout.interface, case.name, result);
     try stdout.interface.print("layout-render-scale peak_rss_bytes={d}\n", .{peak_rss_bytes});
     try stdout.interface.flush();
 }
@@ -224,6 +236,89 @@ fn buildForceGraph(allocator: std.mem.Allocator) !vex.Graph {
         _ = try graph.addEdge(node, (node + 17) % force_node_count, .{});
     }
     if (graph.edges.items.len != force_edge_count) return error.LayoutScaleEdgeCountMismatch;
+    return graph;
+}
+
+const EngineGateCase = struct {
+    name: []const u8,
+    algorithm: vex.LayoutAlgorithm,
+    node_count: usize,
+    edges: bool,
+    iterations: usize = 1,
+};
+
+fn runEngineGate(init: std.process.Init, case: EngineGateCase) !LayoutRenderGateResult {
+    const allocator = init.gpa;
+    var graph = try buildEngineGraph(allocator, case);
+    defer graph.deinit();
+
+    const layout_memory = try allocator.alloc(u8, layout_memory_limit);
+    defer allocator.free(layout_memory);
+    var layout_fixed = std.heap.FixedBufferAllocator.init(layout_memory);
+    const layout_start = std.Io.Clock.awake.now(init.io);
+    var layout = try vex.layoutGraph(layout_fixed.allocator(), &graph, .{
+        .algorithm = case.algorithm,
+        .force = .{
+            .width = 1200,
+            .height = 800,
+            .margin = 30,
+            .iterations = case.iterations,
+        },
+    });
+    const layout_elapsed_ns = layout_start.durationTo(std.Io.Clock.awake.now(init.io)).toNanoseconds();
+    const layout_arena_bytes = layout_fixed.end_index;
+    defer layout.deinit();
+
+    if (layout.nodes.len != case.node_count) return error.LayoutScaleNodeCountMismatch;
+    if (layout_elapsed_ns > layout_time_limit_ns) return error.LayoutScaleTimeLimitExceeded;
+    if (layout_arena_bytes > layout_arena_limit) return error.LayoutScaleMemoryLimitExceeded;
+
+    const render_memory = try allocator.alloc(u8, render_memory_limit);
+    defer allocator.free(render_memory);
+    const expected_edges = if (case.edges) case.node_count * 2 else 0;
+    const rendered = try renderGate(init, render_memory, &layout, .{
+        .nodes = case.node_count,
+        .edges = expected_edges,
+        .subgraphs = 0,
+    });
+
+    return .{
+        .nodes = graph.nodes.items.len,
+        .edges = graph.edges.items.len,
+        .subgraphs = graph.subgraphs.items.len,
+        .layout_arena_bytes = layout_arena_bytes,
+        .layout_elapsed_ns = layout_elapsed_ns,
+        .render_arena_bytes = rendered.arena_bytes,
+        .render_elapsed_ns = rendered.elapsed_ns,
+        .svg_bytes = rendered.bytes,
+        .svg_hash = rendered.hash,
+    };
+}
+
+fn buildEngineGraph(allocator: std.mem.Allocator, case: EngineGateCase) !vex.Graph {
+    var graph = try vex.Graph.init(allocator, .{
+        .directed = false,
+        .name = case.name,
+    });
+    errdefer graph.deinit();
+
+    for (0..case.node_count) |node| {
+        var label_buffer: [32]u8 = undefined;
+        _ = try graph.addNode(
+            try std.fmt.bufPrint(&label_buffer, "n{d}", .{node}),
+            .{
+                .shape = if (node % 11 == 0) .diamond else .ellipse,
+                .area = @floatFromInt(1 + node % 7),
+                .sortv = node,
+            },
+        );
+    }
+    if (case.edges) {
+        for (0..case.node_count) |node| {
+            _ = try graph.addEdge(node, (node + 1) % case.node_count, .{});
+            _ = try graph.addEdge(node, (node + 17) % case.node_count, .{});
+        }
+    }
     return graph;
 }
 

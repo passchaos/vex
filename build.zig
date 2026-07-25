@@ -116,7 +116,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_layout_render_scale = b.addRunArtifact(layout_render_scale);
-    const layout_render_scale_step = b.step("test-layout-render-scale", "Run layered and sfdp layout/SVG scale gates");
+    const layout_render_scale_step = b.step("test-layout-render-scale", "Run all native layout/SVG scale gates");
     layout_render_scale_step.dependOn(&run_layout_render_scale.step);
 
     // This creates a top level step. Top level steps have a name and can be
