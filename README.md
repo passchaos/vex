@@ -377,6 +377,10 @@ The parser currently supports a practical, mainstream DOT subset:
   Node and text dimensions remain unchanged. Vex still emits one complete SVG
   document; `page` guides layout aspect but does not split SVG into pages. The
   typed API exposes `GraphAttr.page` and `GraphAttr.ratio = .auto`.
+- Layered numeric ratios, `ratio=fill`, and `ratio=expand` also follow
+  Graphviz `set_aspect`: node centers, long-edge waypoints, and subgraph bounds
+  are stretched in layout space while node/text dimensions stay fixed.
+  Horizontal `rankdir` modes swap the internal aspect axes like Graphviz.
 - Layered ranking honors Graphviz `TBbalance=min|max`, moving unconstrained
   source/sink floaters to the selected boundary rank in every `rankdir`.
   Explicit `rank=source|sink` constraints remain exclusive and take precedence.
@@ -414,11 +418,10 @@ The parser currently supports a practical, mainstream DOT subset:
   diverging, and qualitative schemes.
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
 - SVG output honors Graphviz `size` for physical output dimensions while preserving layout coordinates in the `viewBox`.
-- SVG output honors Graphviz `ratio` for numeric aspect ratios, `ratio=fill` with `size`, and `ratio=expand` with `size` at the SVG canvas level.
-- Layered `ratio=compress` is resolved during layout rather than by scaling the
-  SVG canvas, so node and text sizes remain unchanged.
-- Layered `ratio=auto` resolves its integer page-grid aspect during layout and
-  exports that grid as the SVG physical size without re-scaling the viewBox.
+- SVG output honors Graphviz numeric, fill, compress, auto, and expand ratios.
+  Layered engines resolve their coordinate aspect before rendering; SVG then
+  applies only the final physical `size` / page-grid output without re-scaling
+  the viewBox. Node and text sizes remain unchanged by aspect stretching.
 - SVG output honors Graphviz `dpi` and `resolution` when converting graph points to SVG device units.
 - SVG output honors Graphviz `rotate=90`, `landscape=true`, and `orientation=landscape`.
 - SVG output honors Graphviz `center=true` by centering drawings in oversized SVG canvases.

@@ -4186,7 +4186,8 @@ pub const Layout = struct {
     edge_waypoints: []EdgeWaypoints,
     edge_splines: ?[]EdgeSpline = null,
     position_transform: ?Point = null,
-    auto_ratio_output: ?Point = null,
+    aspect_applied: bool = false,
+    aspect_output: ?Point = null,
     ranks: []usize,
     rank_depths: []f64,
     rank_heights: []f64,
@@ -4858,7 +4859,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         .width = axes.layoutWidth(base_along, base_depth),
         .height = axes.layoutHeight(base_along, base_depth),
     };
-    applyLayeredAutoRatio(layout_graph, &result);
+    applyLayeredAspect(layout_graph, &result);
     return result;
 }
 
@@ -4870,7 +4871,7 @@ pub fn layoutLayeredIncremental(allocator: std.mem.Allocator, graph: *const Grap
 fn layoutLayeredIncrementalWithControl(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: LayoutOptions, incremental: IncrementalLayoutOptions, work: *LayoutWorkTracker) !Layout {
     var result = try layoutLayeredWithControl(allocator, graph, options, work);
     errdefer result.deinit();
-    if (previous.rankdir != result.rankdir or result.auto_ratio_output != null) return result;
+    if (previous.rankdir != result.rankdir or result.aspect_applied) return result;
     var clusterless_view: Graph = undefined;
     const layout_graph = layeredGraphView(graph, &clusterless_view);
     const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
@@ -10066,23 +10067,60 @@ fn layeredCompressionTarget(graph: *const Graph, axes: LayoutAxes, options: Layo
     return if (std.math.isFinite(target_extent) and target_extent > 0) target_extent else null;
 }
 
-const AutoRatioPlan = struct {
+const LayeredAspectPlan = struct {
     x: f64,
     y: f64,
-    output: Point,
+    output: ?Point = null,
 };
 
-fn layeredAutoRatioPlan(graph: *const Graph, width: f64, height: f64) ?AutoRatioPlan {
-    const ratio = attrValue(graph.attrs.items, "ratio") orelse return null;
-    if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, ratio, " \t\r\n"), "auto")) return null;
-    const page = size_mod.namedAttr(graph.attrs.items, "page") orelse return null;
-    if (width <= 0 or height <= 0 or width <= page.width and height <= page.height) return null;
+fn layeredAspectPlan(graph: *const Graph, width: f64, height: f64, margin_x: f64, margin_y: f64) ?LayeredAspectPlan {
+    const content_width = width - margin_x * 2.0;
+    const content_height = height - margin_y * 2.0;
+    if (content_width <= 0 or content_height <= 0) return null;
+    const raw_ratio = attrValue(graph.attrs.items, "ratio") orelse return null;
+    const ratio = std.mem.trim(u8, raw_ratio, " \t\r\n");
+    if (std.ascii.eqlIgnoreCase(ratio, "compress")) return null;
 
-    const fit = @max(@min(page.width / width, page.height / height), 0.5);
-    const output_width = @ceil(fit * width / page.width) * page.width;
-    const output_height = @ceil(fit * height / page.height) * page.height;
-    var scale_x = output_width / width;
-    var scale_y = output_height / height;
+    const axes = LayoutAxes.init(graph.rankdir);
+    const internal_width = if (axes.horizontalRanks()) content_height else content_width;
+    const internal_height = if (axes.horizontalRanks()) content_width else content_height;
+    var scale_x: f64 = 1.0;
+    var scale_y: f64 = 1.0;
+    var output: ?Point = null;
+
+    if (std.ascii.eqlIgnoreCase(ratio, "auto")) {
+        const page = size_mod.namedAttr(graph.attrs.items, "page") orelse return null;
+        if (internal_width <= page.width and internal_height <= page.height) return null;
+        const fit = @max(@min(page.width / internal_width, page.height / internal_height), 0.5);
+        const output_width = @ceil(fit * internal_width / page.width) * page.width;
+        const output_height = @ceil(fit * internal_height / page.height) * page.height;
+        scale_x = output_width / internal_width;
+        scale_y = output_height / internal_height;
+        output = .{ .x = output_width, .y = output_height };
+    } else if (std.ascii.eqlIgnoreCase(ratio, "fill")) {
+        const requested = size_mod.attr(graph.attrs.items) orelse return null;
+        scale_x = requested.width / internal_width;
+        scale_y = requested.height / internal_height;
+        output = .{ .x = requested.width, .y = requested.height };
+    } else if (std.ascii.eqlIgnoreCase(ratio, "expand")) {
+        const requested = size_mod.attr(graph.attrs.items) orelse return null;
+        scale_x = requested.width / internal_width;
+        scale_y = requested.height / internal_height;
+        if (scale_x <= 1.0 or scale_y <= 1.0) return null;
+        const uniform = @min(scale_x, scale_y);
+        scale_x = uniform;
+        scale_y = uniform;
+    } else {
+        const desired = std.fmt.parseFloat(f64, ratio) catch return null;
+        if (!std.math.isFinite(desired) or desired <= 0) return null;
+        const actual = internal_height / internal_width;
+        if (actual < desired) {
+            scale_y = desired / actual;
+        } else {
+            scale_x = actual / desired;
+        }
+    }
+
     if (scale_x < 1.0 or scale_y < 1.0) {
         if (scale_x < scale_y) {
             scale_y /= scale_x;
@@ -10094,11 +10132,12 @@ fn layeredAutoRatioPlan(graph: *const Graph, width: f64, height: f64) ?AutoRatio
     }
     if (!std.math.isFinite(scale_x) or !std.math.isFinite(scale_y)) return null;
     if (scale_x <= 0 or scale_y <= 0) return null;
-    if (@abs(scale_x - 1.0) <= 0.0001 and @abs(scale_y - 1.0) <= 0.0001) return null;
+    if (axes.horizontalRanks()) std.mem.swap(f64, &scale_x, &scale_y);
+    if (@abs(scale_x - 1.0) <= 0.0001 and @abs(scale_y - 1.0) <= 0.0001 and output == null) return null;
     return .{
         .x = scale_x,
         .y = scale_y,
-        .output = .{ .x = output_width, .y = output_height },
+        .output = output,
     };
 }
 
@@ -10158,9 +10197,9 @@ fn compressVirtualLayerCoordinates(graph: *const Graph, virtual_levels: *const V
     }
 }
 
-fn applyLayeredAutoRatio(graph: *const Graph, layout: *Layout) void {
+fn applyLayeredAspect(graph: *const Graph, layout: *Layout) void {
     if (layout.rank_depths.len <= 1) return;
-    const plan = layeredAutoRatioPlan(graph, layout.width, layout.height) orelse return;
+    const plan = layeredAspectPlan(graph, layout.width, layout.height, layout.margin_x, layout.margin_y) orelse return;
 
     for (layout.nodes) |*node| {
         node.center.x = layout.margin_x + (node.center.x - layout.margin_x) * plan.x;
@@ -10184,7 +10223,8 @@ fn applyLayeredAutoRatio(graph: *const Graph, layout: *Layout) void {
     layout.width = layout.margin_x * 2.0 + (layout.width - layout.margin_x * 2.0) * plan.x;
     layout.height = layout.margin_y * 2.0 + (layout.height - layout.margin_y * 2.0) * plan.y;
     computeSubgraphLayouts(graph, axes, layout.nodes, layout.subgraphs);
-    layout.auto_ratio_output = plan.output;
+    layout.aspect_applied = true;
+    layout.aspect_output = plan.output;
 }
 
 fn compressionVirtualNodePairGap(graph: *const Graph, left: VirtualNode, right: VirtualNode, fallback: f64) f64 {
@@ -13065,11 +13105,11 @@ fn graphSvgCanvas(graph: *const Graph, natural: Point) GraphSvgCanvas {
 }
 
 fn graphSvgCanvasForLayout(graph: *const Graph, layout: *const Layout, natural: Point) GraphSvgCanvas {
-    const output = layout.auto_ratio_output orelse return graphSvgCanvas(graph, natural);
+    if (!layout.aspect_applied) return graphSvgCanvas(graph, natural);
     const computed = svg_mod.canvas.unscaled(graph.attrs.items, .{ .x = natural.x, .y = natural.y });
     return .{
         .view_box = .{ .x = computed.view_box.x, .y = computed.view_box.y },
-        .output = output,
+        .output = layout.aspect_output orelse .{ .x = computed.output.x, .y = computed.output.y },
         .scale = computed.scale,
     };
 }
@@ -21437,7 +21477,8 @@ test "layered ratio auto snaps oversized layouts to an integer page grid" {
     defer natural.deinit();
     try graph.setGraphAttr(.{ .page = "2,1" });
     try graph.setGraphAttr(.{ .ratio = .auto });
-    const plan = layeredAutoRatioPlan(&graph, natural.width, natural.height) orelse return error.MissingAutoRatioPlan;
+    const plan = layeredAspectPlan(&graph, natural.width, natural.height, natural.margin_x, natural.margin_y) orelse return error.MissingLayeredAspectPlan;
+    const output = plan.output orelse return error.MissingAutoRatioOutput;
 
     var automatic = try layoutLayered(allocator, &graph, .{});
     defer automatic.deinit();
@@ -21451,10 +21492,10 @@ test "layered ratio auto snaps oversized layouts to an integer page grid" {
         automatic.height,
         0.001,
     );
-    try std.testing.expectApproxEqAbs(plan.output.x, automatic.auto_ratio_output.?.x, 0.001);
-    try std.testing.expectApproxEqAbs(plan.output.y, automatic.auto_ratio_output.?.y, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f64, 0), @mod(plan.output.x, 144.0), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f64, 0), @mod(plan.output.y, 72.0), 0.001);
+    try std.testing.expectApproxEqAbs(output.x, automatic.aspect_output.?.x, 0.001);
+    try std.testing.expectApproxEqAbs(output.y, automatic.aspect_output.?.y, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0), @mod(output.x, 144.0), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0), @mod(output.y, 72.0), 0.001);
     for (natural.nodes, automatic.nodes) |natural_node, automatic_node| {
         try std.testing.expectEqual(natural_node.width, automatic_node.width);
         try std.testing.expectEqual(natural_node.height, automatic_node.height);
@@ -21476,9 +21517,9 @@ test "layered ratio auto snaps oversized layouts to an integer page grid" {
     try std.testing.expectApproxEqAbs(@ceil(automatic.width), view_box.width, 0.001);
     try std.testing.expectApproxEqAbs(@ceil(automatic.height), view_box.height, 0.001);
     var expected_width_buf: [64]u8 = undefined;
-    const expected_width = try std.fmt.bufPrint(&expected_width_buf, "width=\"{d:.0}pt\"", .{plan.output.x});
+    const expected_width = try std.fmt.bufPrint(&expected_width_buf, "width=\"{d:.0}pt\"", .{output.x});
     var expected_height_buf: [64]u8 = undefined;
-    const expected_height = try std.fmt.bufPrint(&expected_height_buf, "height=\"{d:.0}pt\"", .{plan.output.y});
+    const expected_height = try std.fmt.bufPrint(&expected_height_buf, "height=\"{d:.0}pt\"", .{output.y});
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_width) != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, expected_height) != null);
 }
@@ -21495,19 +21536,19 @@ test "layered ratio auto requires page and does not expand one-page layouts" {
 
     var natural = try layoutLayered(allocator, &graph, .{});
     defer natural.deinit();
-    try std.testing.expect(natural.auto_ratio_output == null);
+    try std.testing.expect(natural.aspect_output == null);
 
     try graph.setGraphAttr(.{ .page = "20,20" });
     var fitting = try layoutLayered(allocator, &graph, .{});
     defer fitting.deinit();
-    try std.testing.expect(fitting.auto_ratio_output == null);
+    try std.testing.expect(fitting.aspect_output == null);
     try std.testing.expectApproxEqAbs(natural.width, fitting.width, 0.001);
     try std.testing.expectApproxEqAbs(natural.height, fitting.height, 0.001);
 
     try graph.setGraphAttr(.{ .page = "invalid" });
     var invalid = try layoutLayered(allocator, &graph, .{});
     defer invalid.deinit();
-    try std.testing.expect(invalid.auto_ratio_output == null);
+    try std.testing.expect(invalid.aspect_output == null);
     try std.testing.expectApproxEqAbs(natural.width, invalid.width, 0.001);
     try std.testing.expectApproxEqAbs(natural.height, invalid.height, 0.001);
 }
@@ -21536,7 +21577,7 @@ test "layered ratio auto transforms LR waypoints and subgraph bounds" {
     var baseline = try layoutLayered(allocator, &baseline_graph, .{});
     defer baseline.deinit();
 
-    const plan = layeredAutoRatioPlan(&graph, baseline.width, baseline.height) orelse return error.MissingAutoRatioPlan;
+    const plan = layeredAspectPlan(&graph, baseline.width, baseline.height, baseline.margin_x, baseline.margin_y) orelse return error.MissingLayeredAspectPlan;
     var automatic = try layoutLayered(allocator, &graph, .{});
     defer automatic.deinit();
     try std.testing.expectEqual(RankDir.LR, automatic.rankdir);
@@ -21594,7 +21635,7 @@ test "layered ratio auto preserves rank progression in every rankdir" {
         defer natural.deinit();
         try graph.setGraphAttr(.{ .page = "1,1" });
         try graph.setGraphAttr(.{ .ratio = .auto });
-        const plan = layeredAutoRatioPlan(&graph, natural.width, natural.height) orelse return error.MissingAutoRatioPlan;
+        const plan = layeredAspectPlan(&graph, natural.width, natural.height, natural.margin_x, natural.margin_y) orelse return error.MissingLayeredAspectPlan;
 
         var automatic = try layoutLayered(allocator, &graph, .{});
         defer automatic.deinit();
@@ -21622,6 +21663,129 @@ test "layered ratio auto preserves rank progression in every rankdir" {
     }
 }
 
+test "layered numeric ratio stretches coordinates without scaling nodes" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  source -> { a b c d };
+        \\  { a b c d } -> sink;
+        \\}
+    );
+    defer graph.deinit();
+
+    var natural = try layoutLayered(allocator, &graph, .{});
+    defer natural.deinit();
+    try graph.setGraphAttr(.{ .ratio = .{ .value = 2.0 } });
+    const plan = layeredAspectPlan(&graph, natural.width, natural.height, natural.margin_x, natural.margin_y) orelse return error.MissingLayeredAspectPlan;
+    var stretched = try layoutLayered(allocator, &graph, .{});
+    defer stretched.deinit();
+
+    try std.testing.expect(stretched.aspect_applied);
+    try std.testing.expect(stretched.aspect_output == null);
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 2.0),
+        (stretched.height - stretched.margin_y * 2.0) / (stretched.width - stretched.margin_x * 2.0),
+        0.001,
+    );
+    for (natural.nodes, stretched.nodes) |natural_node, stretched_node| {
+        try std.testing.expectEqual(natural_node.width, stretched_node.width);
+        try std.testing.expectEqual(natural_node.height, stretched_node.height);
+        try std.testing.expectApproxEqAbs(
+            natural.margin_x + (natural_node.center.x - natural.margin_x) * plan.x,
+            stretched_node.center.x,
+            0.001,
+        );
+        try std.testing.expectApproxEqAbs(
+            natural.margin_y + (natural_node.center.y - natural.margin_y) * plan.y,
+            stretched_node.center.y,
+            0.001,
+        );
+    }
+}
+
+test "layered fill ratio stretches toward requested physical size" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c;
+        \\}
+    );
+    defer graph.deinit();
+    var natural = try layoutLayered(allocator, &graph, .{});
+    defer natural.deinit();
+
+    try graph.setGraphAttr(.{ .size = "4,2" });
+    try graph.setGraphAttr(.{ .ratio = .fill });
+    const plan = layeredAspectPlan(&graph, natural.width, natural.height, natural.margin_x, natural.margin_y) orelse return error.MissingLayeredAspectPlan;
+    var filled = try layoutLayered(allocator, &graph, .{});
+    defer filled.deinit();
+
+    try std.testing.expect(filled.aspect_applied);
+    try std.testing.expectApproxEqAbs(@as(f64, 288), filled.aspect_output.?.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 144), filled.aspect_output.?.y, 0.001);
+    try std.testing.expect(plan.x >= 1.0 and plan.y >= 1.0);
+    const svg = try renderSvgAlloc(allocator, &graph, &filled, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"288pt\" height=\"144pt\"") != null);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    try std.testing.expectApproxEqAbs(@ceil(filled.width), view_box.width, 0.001);
+    try std.testing.expectApproxEqAbs(@ceil(filled.height), view_box.height, 0.001);
+}
+
+test "layered expand ratio applies only uniform enlargement" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b -> c;
+        \\}
+    );
+    defer graph.deinit();
+    var natural = try layoutLayered(allocator, &graph, .{});
+    defer natural.deinit();
+
+    try graph.setGraphAttr(.{ .size = "20,20" });
+    try graph.setGraphAttr(.{ .ratio = .expand });
+    const plan = layeredAspectPlan(&graph, natural.width, natural.height, natural.margin_x, natural.margin_y) orelse return error.MissingLayeredAspectPlan;
+    try std.testing.expectApproxEqAbs(plan.x, plan.y, 0.0001);
+    var expanded = try layoutLayered(allocator, &graph, .{});
+    defer expanded.deinit();
+    try std.testing.expect(expanded.aspect_applied);
+    try std.testing.expect(expanded.aspect_output == null);
+    try std.testing.expect(expanded.width > natural.width);
+    try std.testing.expect(expanded.height > natural.height);
+
+    try graph.setGraphAttr(.{ .size = "0.5,0.5" });
+    var too_small = try layoutLayered(allocator, &graph, .{});
+    defer too_small.deinit();
+    try std.testing.expect(!too_small.aspect_applied);
+    try std.testing.expectApproxEqAbs(natural.width, too_small.width, 0.001);
+    try std.testing.expectApproxEqAbs(natural.height, too_small.height, 0.001);
+}
+
+test "layered aspect plan swaps internal axes for horizontal rankdirs" {
+    const allocator = std.testing.allocator;
+    var tb = try Graph.init(allocator, .{ .directed = true, .rankdir = .TB });
+    defer tb.deinit();
+    try tb.setGraphAttr(.{ .ratio = .{ .value = 2.0 } });
+    const tb_plan = layeredAspectPlan(&tb, 200, 100, 0, 0) orelse return error.MissingLayeredAspectPlan;
+
+    var lr = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer lr.deinit();
+    try lr.setGraphAttr(.{ .ratio = .{ .value = 2.0 } });
+    const lr_plan = layeredAspectPlan(&lr, 100, 200, 0, 0) orelse return error.MissingLayeredAspectPlan;
+    try std.testing.expectApproxEqAbs(tb_plan.x, lr_plan.y, 0.0001);
+    try std.testing.expectApproxEqAbs(tb_plan.y, lr_plan.x, 0.0001);
+
+    try tb.setGraphAttr(.{ .size = "4,2" });
+    try tb.setGraphAttr(.{ .ratio = .fill });
+    const tb_fill = layeredAspectPlan(&tb, 200, 100, 0, 0) orelse return error.MissingLayeredAspectPlan;
+    try lr.setGraphAttr(.{ .size = "4,2" });
+    try lr.setGraphAttr(.{ .ratio = .fill });
+    const lr_fill = layeredAspectPlan(&lr, 100, 200, 0, 0) orelse return error.MissingLayeredAspectPlan;
+    try std.testing.expectApproxEqAbs(tb_fill.x, lr_fill.y, 0.0001);
+    try std.testing.expectApproxEqAbs(tb_fill.y, lr_fill.x, 0.0001);
+}
+
 test "incremental layered ratio auto preserves full page-grid layout" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -21646,8 +21810,8 @@ test "incremental layered ratio auto preserves full page-grid layout" {
     var incremental = try layoutLayeredIncremental(allocator, &graph, &previous, .{}, .{ .stability = 0.95 });
     defer incremental.deinit();
 
-    try std.testing.expect(full.auto_ratio_output != null);
-    try std.testing.expect(incremental.auto_ratio_output != null);
+    try std.testing.expect(full.aspect_output != null);
+    try std.testing.expect(incremental.aspect_output != null);
     try expectNodeCentersEqual(&full, &incremental);
     try std.testing.expectApproxEqAbs(full.width, incremental.width, 0.001);
     try std.testing.expectApproxEqAbs(full.height, incremental.height, 0.001);
@@ -25234,10 +25398,15 @@ test "SVG renderer honors Graphviz graph ratio output attributes" {
     defer fill_layout.deinit();
     const fill_svg = try renderSvgAlloc(allocator, &fill, &fill_layout, .{});
     defer allocator.free(fill_svg);
-    const fill_view_box = svgViewBox(fill_svg) orelse return error.MissingViewBox;
+    _ = svgViewBox(fill_svg) orelse return error.MissingViewBox;
     try std.testing.expectEqualStrings("fill", attrValue(fill.attrs.items, "ratio").?);
     try std.testing.expect(std.mem.indexOf(u8, fill_svg, "width=\"144pt\" height=\"72pt\"") != null);
-    try std.testing.expectApproxEqAbs(@as(f64, 0.5), fill_view_box.height / fill_view_box.width, 0.001);
+    try std.testing.expect(fill_layout.aspect_applied);
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 0.5),
+        (fill_layout.height - fill_layout.margin_y * 2.0) / (fill_layout.width - fill_layout.margin_x * 2.0),
+        0.001,
+    );
 
     var numeric = try Graph.init(allocator, .{ .directed = true });
     defer numeric.deinit();
