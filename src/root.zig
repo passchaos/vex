@@ -23284,6 +23284,41 @@ test "SVG renderer resolves Graphviz bugn9 colorscheme colors" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#00441b\"") != null);
 }
 
+test "SVG renderer resolves the complete Graphviz ColorBrewer catalog" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [bgcolor="/blues9/1"];
+        \\  node [shape=box, style=filled];
+        \\  a [colorscheme=blues9, fillcolor=9, color=5, fontcolor=3];
+        \\  b [colorscheme=set312, fillcolor=12, color=1];
+        \\  c [fillcolor="/spectral11/6", color="/paired12/2"];
+        \\  a -> b [colorscheme=rdylgn11, color="1:11"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const expected = [_][]const u8{
+        "#f7fbff",
+        "#08306b",
+        "#6baed6",
+        "#c6dbef",
+        "#ffed6f",
+        "#8dd3c7",
+        "#ffffbf",
+        "#1f78b4",
+        "#a50026",
+        "#006837",
+    };
+    for (expected) |color| try std.testing.expect(std.mem.indexOf(u8, svg, color) != null);
+    try std.testing.expectEqual(@as(usize, 3), countSubstrings(svg, "#a50026"));
+}
+
 test "SVG renderer uses typed colorscheme attributes" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });

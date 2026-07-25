@@ -5,6 +5,7 @@
 //! independent from the graph model.
 
 const std = @import("std");
+const brewer = @import("brewer.zig");
 
 pub const Segment = struct {
     color: []const u8,
@@ -91,20 +92,7 @@ pub fn parseList(value: []const u8) ?List {
 }
 
 fn fromScheme(scheme: []const u8, name: []const u8) ?[]const u8 {
-    if (!std.ascii.eqlIgnoreCase(scheme, "bugn9")) return null;
-    const index = std.fmt.parseInt(usize, name, 10) catch return null;
-    return switch (index) {
-        1 => "#f7fcfd",
-        2 => "#e5f5f9",
-        3 => "#ccece6",
-        4 => "#99d8c9",
-        5 => "#66c2a4",
-        6 => "#41ae76",
-        7 => "#238b45",
-        8 => "#006d2c",
-        9 => "#00441b",
-        else => null,
-    };
+    return brewer.find(scheme, name);
 }
 
 fn attrValue(attrs: anytype, name: []const u8) ?[]const u8 {

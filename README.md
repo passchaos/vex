@@ -373,7 +373,9 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG group `id` attributes honor Graphviz object escapes and use the root graph `id` as a default prefix for child objects.
 - SVG interactive anchors are wrapped in Graphviz-style `a_*` groups, including edge label, head label, and tail label anchors.
 - SVG font output honors Graphviz `fontnames=svg|ps|gd` for standard PostScript font aliases, including family, weight, style, and stretch.
-- SVG color and color-list attributes resolve Graphviz `colorscheme=bugn9` numeric ColorBrewer colors.
+- SVG color and color-list attributes resolve all Graphviz ColorBrewer
+  namespaces: 265 palette variants and 1,689 indexed colors across sequential,
+  diverging, and qualitative schemes.
 - SVG color attributes map Graphviz `transparent` to non-painted SVG output.
 - SVG output honors Graphviz `size` for physical output dimensions while preserving layout coordinates in the `viewBox`.
 - SVG output honors Graphviz `ratio` for numeric aspect ratios, `ratio=fill` with `size`, and `ratio=expand` with `size` at the SVG canvas level.
@@ -415,3 +417,8 @@ Future work should expand remaining non-MVP DOT details—full cluster layout se
 `~/Work/graphviz/lib/cgraph/grammar.y` and `~/Work/graphviz/doc/infosrc/grammar`.
 Graphviz HTML-like label rendering is intentionally out of scope; angle-string
 IDs and labels remain plain text in Vex.
+
+## Acknowledgments
+
+This product includes color specifications and designs developed by Cynthia
+Brewer (`colorbrewer.org`).
