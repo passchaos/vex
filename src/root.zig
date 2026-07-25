@@ -2259,12 +2259,14 @@ const Lexer = struct {
             ':' => .{ .tag = .colon, .lexeme = self.source[start..self.index], .line = line, .column = column },
             '+' => .{ .tag = .plus, .lexeme = self.source[start..self.index], .line = line, .column = column },
             '<' => blk: {
+                var nesting: usize = 1;
                 while (self.index < self.source.len) {
                     const ch = self.advance();
-                    if (ch == '>') {
-                        var lookahead = self.index;
-                        while (lookahead < self.source.len and std.ascii.isWhitespace(self.source[lookahead])) : (lookahead += 1) {}
-                        if (lookahead >= self.source.len or isAngleStringTerminator(self.source[lookahead])) break;
+                    if (ch == '<') {
+                        nesting += 1;
+                    } else if (ch == '>') {
+                        nesting -= 1;
+                        if (nesting == 0) break;
                     }
                 } else return self.lexError(error.UnterminatedAngleString, line, column);
                 break :blk .{ .tag = .angle_string, .lexeme = self.source[start + 1 .. self.index - 1], .line = line, .column = column };
@@ -2280,8 +2282,7 @@ const Lexer = struct {
                     break :blk .{ .tag = .dashdash, .lexeme = self.source[start..self.index], .line = line, .column = column };
                 }
                 if (self.index < self.source.len and (std.ascii.isDigit(self.peek()) or self.peek() == '.')) {
-                    while (self.index < self.source.len and isNumberChar(self.peek())) _ = self.advance();
-                    try self.validateNumber(start, line, column);
+                    try self.scanNumber(start, line, column);
                     break :blk .{ .tag = .id, .lexeme = self.source[start..self.index], .line = line, .column = column };
                 }
                 return error.UnexpectedCharacter;
@@ -2301,8 +2302,7 @@ const Lexer = struct {
                 if (isNameStart(c)) {
                     while (self.index < self.source.len and isNameContinue(self.peek())) _ = self.advance();
                 } else if (std.ascii.isDigit(c) or c == '.') {
-                    while (self.index < self.source.len and isNumberChar(self.peek())) _ = self.advance();
-                    try self.validateNumber(start, line, column);
+                    try self.scanNumber(start, line, column);
                 } else {
                     return error.UnexpectedCharacter;
                 }
@@ -2315,18 +2315,31 @@ const Lexer = struct {
         return .{ .tag = tag, .lexeme = self.source[start..end], .line = self.line, .column = self.column };
     }
 
-    fn validateNumber(self: *Lexer, start: usize, line: usize, column: usize) !void {
-        const number_text = self.source[start..self.index];
-        var dot_count: usize = 0;
-        var digit_count: usize = 0;
-        for (number_text) |c| {
-            if (c == '.') dot_count += 1;
-            if (std.ascii.isDigit(c)) digit_count += 1;
+    fn scanNumber(self: *Lexer, start: usize, line: usize, column: usize) !void {
+        const negative = self.source[start] == '-';
+        const first_index = start + @intFromBool(negative);
+        if (first_index >= self.source.len) return self.lexError(error.BadNumber, line, column);
+
+        const first = self.source[first_index];
+        if (std.ascii.isDigit(first)) {
+            while (self.index < self.source.len and std.ascii.isDigit(self.peek())) _ = self.advance();
+            if (self.index < self.source.len and self.peek() == '.') {
+                _ = self.advance();
+                while (self.index < self.source.len and std.ascii.isDigit(self.peek())) _ = self.advance();
+            }
+            return;
         }
-        if (dot_count > 1 or digit_count == 0) return self.lexError(error.BadNumber, line, column);
-        if (self.index < self.source.len and isNameStart(self.peek())) {
-            return self.lexError(error.BadNumber, line, column);
+
+        if (first == '.') {
+            if (negative) _ = self.advance();
+            if (self.index >= self.source.len or !std.ascii.isDigit(self.peek())) {
+                return self.lexError(error.BadNumber, line, column);
+            }
+            while (self.index < self.source.len and std.ascii.isDigit(self.peek())) _ = self.advance();
+            return;
         }
+
+        return self.lexError(error.BadNumber, line, column);
     }
 
     fn skipIgnored(self: *Lexer) !void {
@@ -2397,17 +2410,6 @@ fn isNameStart(c: u8) bool {
 
 fn isNameContinue(c: u8) bool {
     return isNameStart(c) or std.ascii.isDigit(c);
-}
-
-fn isNumberChar(c: u8) bool {
-    return std.ascii.isDigit(c) or c == '.';
-}
-
-fn isAngleStringTerminator(c: u8) bool {
-    return switch (c) {
-        ']', ',', ';', '{', '}', '-' => true,
-        else => false,
-    };
 }
 
 const AttrList = std.ArrayList(Attr);
@@ -30248,7 +30250,7 @@ test "non HTML DOT lexical edge corpus parses operator adjacency and ports" {
     try std.testing.expect(nodeIdByLabel(&graph, "节点") < graph.nodes.items.len);
 }
 
-test "DOT lexer rejects bare hyphen ids and malformed numbers with diagnostics" {
+test "DOT lexer splits ambiguous numbers like Graphviz and diagnoses invalid numbers" {
     const allocator = std.testing.allocator;
     var hyphen = try parseDotDiagnostic(allocator, "digraph G { foo-bar; }");
     switch (hyphen) {
@@ -30263,18 +30265,16 @@ test "DOT lexer rejects bare hyphen ids and malformed numbers with diagnostics" 
         },
     }
 
-    var malformed = try parseDotDiagnostic(allocator, "digraph G { 1.2.3 -> node; }");
-    switch (malformed) {
-        .graph => |*graph| {
-            graph.deinit();
-            return error.ExpectedParseDiagnostic;
-        },
-        .diagnostic => |*diagnostic| {
-            defer diagnostic.deinit(allocator);
-            try std.testing.expectEqualStrings("badly delimited DOT number", diagnostic.message);
-            try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "Separate the number") != null);
-        },
-    }
+    var split = try parseDot(allocator, "digraph G { 1.2.3 -> node; }");
+    defer split.deinit();
+    try std.testing.expectEqual(@as(usize, 3), split.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 1), split.edges.items.len);
+    const decimal = nodeIdByLabel(&split, "1.2");
+    const fractional = nodeIdByLabel(&split, ".3");
+    const node = nodeIdByLabel(&split, "node");
+    try std.testing.expect(decimal != fractional);
+    try std.testing.expectEqual(fractional, split.edges.items[0].from);
+    try std.testing.expectEqual(node, split.edges.items[0].to);
 
     var joined = try parseDotDiagnostic(allocator, "digraph G { 12node -> b; }");
     switch (joined) {
@@ -30284,9 +30284,44 @@ test "DOT lexer rejects bare hyphen ids and malformed numbers with diagnostics" 
         },
         .diagnostic => |*diagnostic| {
             defer diagnostic.deinit(allocator);
-            try std.testing.expectEqualStrings("badly delimited DOT number", diagnostic.message);
+            try std.testing.expectEqualStrings("expected DOT identifier, string, or angle-string", diagnostic.message);
         },
     }
+
+    for ([_][]const u8{
+        "digraph G { .; }",
+        "digraph G { -.; }",
+    }) |source| {
+        var malformed = try parseDotDiagnostic(allocator, source);
+        switch (malformed) {
+            .graph => |*graph| {
+                graph.deinit();
+                return error.ExpectedParseDiagnostic;
+            },
+            .diagnostic => |*diagnostic| {
+                defer diagnostic.deinit(allocator);
+                try std.testing.expectEqualStrings("badly delimited DOT number", diagnostic.message);
+                try std.testing.expect(std.mem.indexOf(u8, diagnostic.hint, "Separate the number") != null);
+            },
+        }
+    }
+}
+
+test "Graphviz 2743 ambiguous number corpus parses by splitting tokens" {
+    const allocator = std.testing.allocator;
+    const source = @embedFile("testdata/dot_non_html_ambiguous_numbers.dot");
+    var graph = try parseDot(allocator, source);
+    defer graph.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 1), graph.edges.items.len);
+    const zero = nodeIdByLabel(&graph, "0");
+    const two = nodeIdByLabel(&graph, "2");
+    try std.testing.expectEqual(zero, graph.edges.items[0].from);
+    try std.testing.expectEqual(two, graph.edges.items[0].to);
+    try std.testing.expectEqual(@as(usize, 60_000), graph.edges.items[0].min_len);
+    try std.testing.expectEqualStrings("", attrValue(graph.edges.items[0].attrs.items, "0").?);
+    try std.testing.expectEqualStrings("", attrValue(graph.edges.items[0].attrs.items, "l").?);
 }
 
 test "cluster layout boxes contain member nodes and render to SVG" {
