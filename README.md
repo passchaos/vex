@@ -376,6 +376,9 @@ The parser currently supports a practical, mainstream DOT subset:
   a cluster label band. Within an explicit subgraph label, Graphviz object
   escape `\G` expands to that subgraph's textual ID rather than the root graph;
   node-only `\N` remains literal.
+- Empty named subgraphs remain available in the graph model and SVG metadata,
+  including their attributes, but produce no layout box or visible cluster
+  group. This preserves inspectability without inventing zero-content geometry.
 - Anonymous subgraph blocks keep graph attributes local without becoming
   rendered cluster objects.
 - Layered layout honors `clusterrank=local|global|none`: `local` enables

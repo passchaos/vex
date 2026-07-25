@@ -23130,6 +23130,41 @@ test "DOT graph stream parses independent directed and undirected graphs" {
     try std.testing.expectEqualStrings("start", stream.items[1].nodes.items[0].label);
 }
 
+test "Graphviz 2835 empty clusters stay in metadata without layout boxes" {
+    const allocator = std.testing.allocator;
+    var stream = try parseDotGraphs(allocator, @embedFile("testdata/dot_non_html_empty_clusters.dot"));
+    defer stream.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), stream.items.len);
+    const empty_graph = &stream.items[0];
+    try std.testing.expectEqual(@as(usize, 0), empty_graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 2), empty_graph.subgraphs.items.len);
+    try std.testing.expectEqualStrings("dashed,rounded", attrValue(empty_graph.subgraphs.items[0].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("22", attrValue(empty_graph.subgraphs.items[1].attrs.items, "margin").?);
+
+    var empty_layout = try layoutGraph(allocator, empty_graph, .{});
+    defer empty_layout.deinit();
+    try std.testing.expectEqual(@as(usize, 2), empty_layout.subgraphs.len);
+    for (empty_layout.subgraphs) |box| {
+        try std.testing.expectApproxEqAbs(@as(f64, 0), box.width, 0.001);
+        try std.testing.expectApproxEqAbs(@as(f64, 0), box.height, 0.001);
+    }
+    const empty_svg = try renderSvgAlloc(allocator, empty_graph, &empty_layout, .{ .metadata = true });
+    defer allocator.free(empty_svg);
+    try std.testing.expect(std.mem.indexOf(u8, empty_svg, " class=\"cluster\"") == null);
+    try std.testing.expectEqual(@as(usize, 2), countSubstrings(empty_svg, "<vex:subgraph "));
+    try std.testing.expect(std.mem.indexOf(u8, empty_svg, "name=\"color\" value=\"purple\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, empty_svg, "name=\"margin\" value=\"22\"") != null);
+
+    const populated_graph = &stream.items[1];
+    var populated_layout = try layoutGraph(allocator, populated_graph, .{});
+    defer populated_layout.deinit();
+    const populated_svg = try renderSvgAlloc(allocator, populated_graph, &populated_layout, .{});
+    defer allocator.free(populated_svg);
+    try std.testing.expectEqual(@as(usize, 1), countSubstrings(populated_svg, " class=\"cluster\""));
+    try std.testing.expect(std.mem.indexOf(u8, populated_svg, ">192.168.135.101</text>") != null);
+}
+
 test "DOT graph stream reports diagnostics in later graphs" {
     const allocator = std.testing.allocator;
     var result = try parseDotGraphsDiagnostic(allocator,
