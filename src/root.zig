@@ -5564,7 +5564,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
 
     assignRanksForCyclicComponentsIndexed(layout_graph, ranks, acyclic_edge, strong_edge, &rank_edge_adjacency);
     if (graphHasStrongClusters(layout_graph)) {
-        settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
+        settleRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
@@ -5581,7 +5581,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         rankSimplexSearchSize(layout_graph),
     );
     if (graphHasStrongClusters(layout_graph)) {
-        settleStrongRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
+        settleRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
         _ = try improveStrongClusterRanks(
             allocator,
             layout_graph,
@@ -5604,7 +5604,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
     }
     applyTopBottomBalance(layout_graph, ranks);
-    applyRankConstraints(layout_graph, ranks);
+    settleRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
 
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -5711,6 +5711,15 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
     refineSmallDirectedCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes);
     refineContinuousCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 4);
+    const explicit_rank_compacted = refineExplicitRankCoordinateStress(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        @min(20, effective_options.coordinate_passes *| 5),
+    );
+    if (explicit_rank_compacted) normalizeCenters(centers, axis_sizes);
     refineClusterOwnerGroupCrossings(
         layout_graph,
         ranks,
@@ -10111,7 +10120,7 @@ fn graphHasStrongClusters(graph: *const Graph) bool {
     return false;
 }
 
-fn settleStrongRanksWithExplicitConstraints(
+fn settleRanksWithExplicitConstraints(
     graph: *const Graph,
     ranks: []usize,
     acyclic_edge: []const bool,
@@ -13300,6 +13309,129 @@ fn appendContinuousCandidate(
     if (count.* >= candidates.len) return;
     candidates[count.*] = candidate;
     count.* += 1;
+}
+
+fn refineExplicitRankCoordinateStress(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    passes: usize,
+) bool {
+    if (passes == 0 or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
+        !allNodesHaveActiveSameRankConstraint(graph)) return false;
+    var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
+    const crossing_limit = current_crossings +| @max(current_crossings / 12, 2);
+    var current_stress = coordinateEdgeStress(graph, ranks, centers);
+    var any_changed = false;
+    var edge_adjacency = EdgeAdjacency.init(graph.allocator, graph) catch return false;
+    defer edge_adjacency.deinit();
+
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            if (level.items.len == 0 or level.items.len > 128) continue;
+            var ordered: [128]NodeId = undefined;
+            @memcpy(ordered[0..level.items.len], level.items);
+            std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+                fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                    if (left >= node_centers.len or right >= node_centers.len) return left < right;
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan);
+
+            for (ordered[0..level.items.len], 0..) |node_id, index| {
+                if (node_id >= centers.len or node_id >= sizes.len) continue;
+                const original = centers[node_id];
+                const lower = if (index == 0)
+                    sizes[node_id].width / 2.0
+                else lower: {
+                    const previous = ordered[index - 1];
+                    break :lower centers[previous] + sizes[previous].width / 2.0 +
+                        sizes[node_id].width / 2.0;
+                };
+                const upper = if (index + 1 == level.items.len)
+                    original
+                else upper: {
+                    const next = ordered[index + 1];
+                    break :upper centers[next] - sizes[next].width / 2.0 -
+                        sizes[node_id].width / 2.0;
+                };
+                if (lower > upper + 0.0001) continue;
+
+                var candidates: [16]f64 = undefined;
+                var candidate_count: usize = 0;
+                appendContinuousCandidate(&candidates, &candidate_count, original);
+                appendContinuousCandidate(&candidates, &candidate_count, lower);
+                appendContinuousCandidate(&candidates, &candidate_count, upper);
+                appendContinuousCandidate(
+                    &candidates,
+                    &candidate_count,
+                    (lower + upper) / 2.0,
+                );
+                for (edge_adjacency.incident(node_id)) |edge_id| {
+                    if (edge_id >= graph.edges.items.len or
+                        candidate_count >= candidates.len) break;
+                    const edge_item = graph.edges.items[edge_id];
+                    const neighbor = if (edge_item.from == node_id)
+                        edge_item.to
+                    else
+                        edge_item.from;
+                    if (neighbor >= centers.len) continue;
+                    appendContinuousCandidate(
+                        &candidates,
+                        &candidate_count,
+                        std.math.clamp(centers[neighbor], lower, upper),
+                    );
+                }
+
+                var best_center = original;
+                var best_stress = current_stress;
+                var best_crossings = current_crossings;
+                for (candidates[0..candidate_count]) |candidate| {
+                    centers[node_id] = candidate;
+                    const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                    if (after_stress + 0.0001 >= best_stress) continue;
+                    const after_crossings = countDirectCenterCrossings(
+                        graph,
+                        ranks,
+                        centers,
+                    );
+                    if (after_crossings > crossing_limit) continue;
+                    best_center = candidate;
+                    best_stress = after_stress;
+                    best_crossings = after_crossings;
+                }
+                centers[node_id] = best_center;
+                if (best_stress + 0.0001 < current_stress) {
+                    current_stress = best_stress;
+                    current_crossings = best_crossings;
+                    changed = true;
+                    any_changed = true;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+    return any_changed;
+}
+
+fn allNodesHaveActiveSameRankConstraint(graph: *const Graph) bool {
+    for (graph.nodes.items) |node_item| {
+        var found = false;
+        for (graph.rank_constraints.items) |constraint| {
+            if (constraint.kind != .same or !rankConstraintActive(graph, constraint)) continue;
+            if (containsNode(constraint.node_ids, node_item.id)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return graph.nodes.items.len > 0;
 }
 
 const OwnerGroupAlongBounds = struct {
@@ -33373,6 +33505,30 @@ test "layered layout applies rank same and boundary constraints" {
     try std.testing.expect(layout.nodes[source].center.y < layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[archive].center.y > layout.nodes[review].center.y);
     try std.testing.expect(layout.nodes[source].center.y <= layout.nodes[free].center.y);
+}
+
+test "same-rank chains settle with hard minlen edges" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  { rank=same; a; b; }
+        \\  { rank=same; c; d; }
+        \\  { rank=same; e; f; }
+        \\  a -> c -> e;
+        \\  b -> d -> f;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    for (graph.edges.items) |edge_item| {
+        try std.testing.expect(
+            layout.ranks[edge_item.to] >=
+                layout.ranks[edge_item.from] + edge_item.min_len,
+        );
+    }
+    try std.testing.expect(rankConstraintsSatisfied(&graph, layout.ranks));
 }
 
 test "layered layout keeps source and sink ranks exclusive" {
