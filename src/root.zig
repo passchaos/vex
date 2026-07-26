@@ -5882,6 +5882,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
     try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, work);
     fitStressPositionsToCanvas(positions, sizes, options);
+    if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
 
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
@@ -5903,6 +5904,25 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
         .width = options.width,
         .height = options.height,
     };
+}
+
+fn removeForceNodeOverlaps(
+    allocator: std.mem.Allocator,
+    positions: []Point,
+    sizes: []const NodeSize,
+) !void {
+    const overlap_sizes = try allocator.alloc(layout_mod.nop.Size, sizes.len);
+    defer allocator.free(overlap_sizes);
+    for (sizes, overlap_sizes) |size, *overlap_size| {
+        overlap_size.* = .{ .width = size.width, .height = size.height };
+    }
+    _ = try layout_mod.nop.adjustOverlaps(
+        allocator,
+        positions,
+        overlap_sizes,
+        .remove,
+        .{ .add = .{ .x = 0.5, .y = 0.5 } },
+    );
 }
 
 const StressGraphDistances = struct {
@@ -22511,6 +22531,26 @@ test "neato stress majorization lowers graph stress" {
     try majorizeStressPositions(&positions, &scratch, distances, 60, &.{}, 0, null);
     const after = stressLayoutEnergy(&positions, distances);
     try std.testing.expect(after < before * 0.25);
+}
+
+test "neato removes final node overlaps" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{ .width = 1.2, .height = 0.8 });
+    const b = try graph.addNode("b", .{ .width = 1.2, .height = 0.8 });
+    _ = try graph.addEdge(a, b, .{});
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .stress_majorization,
+        .force = .{ .width = 240, .height = 180, .margin = 20, .iterations = 1 },
+    });
+    defer layout.deinit();
+
+    try std.testing.expect(!rectsOverlap(
+        nodeRect(layout.nodes[a]),
+        nodeRect(layout.nodes[b]),
+    ));
 }
 
 test "neato is distinct from Fruchterman-Reingold" {

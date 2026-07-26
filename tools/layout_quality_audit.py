@@ -31,11 +31,21 @@ def xml_attrs(raw: bytes) -> dict[str, str]:
 
 
 def vex_geometry(
-    vex: Path, fixture: Path
+    vex: Path, fixture: Path, layout: str | None = None
 ) -> tuple[dict[str, tuple[float, float, float, float]], list[tuple[str, str]], tuple[float, float]]:
     with tempfile.NamedTemporaryFile(suffix=".svg") as output:
+        command = [
+            str(vex),
+            "--input",
+            str(fixture),
+            "--output",
+            output.name,
+            "--svg-metadata",
+        ]
+        if layout is not None:
+            command.extend(("--layout", layout))
         result = subprocess.run(
-            [str(vex), "--input", str(fixture), "--output", output.name, "--svg-metadata"],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=10,
@@ -68,10 +78,10 @@ def vex_geometry(
 
 
 def graphviz_geometry(
-    fixture: Path,
+    fixture: Path, engine: str = "dot",
 ) -> tuple[dict[str, tuple[float, float, float, float]], list[tuple[str, str]], tuple[float, float]]:
     result = subprocess.run(
-        ["dot", "-Tplain", str(fixture)],
+        [engine, "-Tplain", str(fixture)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=10,
@@ -98,6 +108,71 @@ def graphviz_geometry(
         elif fields[0] == "edge":
             edges.append((fields[1], fields[2]))
     return nodes, edges, canvas
+
+
+def force_quality(
+    nodes: dict[str, tuple[float, float, float, float]],
+    edges: list[tuple[str, str]],
+) -> tuple[float, float]:
+    lengths = [
+        math.dist(nodes[source][:2], nodes[target][:2])
+        for source, target in edges
+        if source != target and source in nodes and target in nodes
+    ]
+    mean_length = sum(lengths) / max(len(lengths), 1)
+    coefficient_of_variation = (
+        math.sqrt(
+            sum((length - mean_length) ** 2 for length in lengths)
+            / max(len(lengths), 1)
+        )
+        / max(mean_length, 1e-9)
+    )
+
+    node_ids = list(nodes)
+    node_index = {node_id: index for index, node_id in enumerate(node_ids)}
+    node_count = len(node_ids)
+    distances = [[node_count + 1] * node_count for _ in range(node_count)]
+    for node_id in range(node_count):
+        distances[node_id][node_id] = 0
+    for source, target in edges:
+        if source not in node_index or target not in node_index:
+            continue
+        left = node_index[source]
+        right = node_index[target]
+        distances[left][right] = 1
+        distances[right][left] = 1
+    for middle in range(node_count):
+        for left in range(node_count):
+            for right in range(node_count):
+                distances[left][right] = min(
+                    distances[left][right],
+                    distances[left][middle] + distances[middle][right],
+                )
+    pairs: list[tuple[float, float]] = []
+    for left in range(node_count):
+        for right in range(left + 1, node_count):
+            graph_distance = distances[left][right]
+            if graph_distance > node_count:
+                continue
+            geometric_distance = math.dist(
+                nodes[node_ids[left]][:2], nodes[node_ids[right]][:2]
+            )
+            pairs.append((float(graph_distance), geometric_distance))
+    scale = sum(
+        graph_distance * geometric_distance
+        for graph_distance, geometric_distance in pairs
+    ) / max(
+        sum(graph_distance * graph_distance for graph_distance, _ in pairs), 1e-9
+    )
+    stress = sum(
+        (
+            (geometric_distance - scale * graph_distance)
+            / max(scale * graph_distance, 1e-9)
+        )
+        ** 2
+        for graph_distance, geometric_distance in pairs
+    ) / max(len(pairs), 1)
+    return coefficient_of_variation, stress
 
 
 def quality(
@@ -223,6 +298,34 @@ def main() -> int:
         f"vex_crossings={aggregate_vex_crossings} "
         f"graphviz_crossings={aggregate_graphviz_crossings}"
     )
+
+    force_fixture = args.graphviz_root / "tests" / "windows" / "Petersen.gv"
+    vex_force_geometry = vex_geometry(args.vex, force_fixture, "neato")
+    graphviz_force_geometry = graphviz_geometry(force_fixture, "neato")
+    vex_force_score = quality(*vex_force_geometry)
+    graphviz_force_score = quality(*graphviz_force_geometry)
+    vex_cv, vex_stress = force_quality(
+        vex_force_geometry[0], vex_force_geometry[1]
+    )
+    graphviz_cv, graphviz_stress = force_quality(
+        graphviz_force_geometry[0], graphviz_force_geometry[1]
+    )
+    print(
+        "layout-quality-audit petersen-neato "
+        f"vex_overlap={vex_force_score[0]} vex_crossings={vex_force_score[1]} "
+        f"vex_edge_cv={vex_cv:.3f} vex_stress={vex_stress:.3f} "
+        f"graphviz_overlap={graphviz_force_score[0]} "
+        f"graphviz_crossings={graphviz_force_score[1]} "
+        f"graphviz_edge_cv={graphviz_cv:.3f} graphviz_stress={graphviz_stress:.3f}"
+    )
+    if vex_force_score[0] != 0:
+        raise SystemExit("petersen-neato: Vex introduced node overlaps")
+    if vex_force_score[1] > graphviz_force_score[1]:
+        raise SystemExit("petersen-neato: Vex crossing count exceeds Graphviz")
+    if vex_cv > graphviz_cv:
+        raise SystemExit("petersen-neato: Vex edge-length CV exceeds Graphviz")
+    if vex_stress > graphviz_stress:
+        raise SystemExit("petersen-neato: Vex stress exceeds Graphviz")
     return 0
 
 
