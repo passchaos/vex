@@ -34,9 +34,7 @@ KNOWN_MALFORMED = {
 }
 KNOWN_PLAIN_OUTPUT = {Path("share/b545.gv")}
 KNOWN_SLOW_SVG: set[Path] = set()
-KNOWN_LARGE_SLOW_SVG = {
-    Path("2593.dot"),
-}
+KNOWN_LARGE_SLOW_SVG: set[Path] = set()
 LARGE_SVG_MIN_BYTES = 256 * 1024
 BASELINE = {
     "candidates": 808,
@@ -68,9 +66,9 @@ SVG_BASELINE = {
 }
 LARGE_SVG_BASELINE = {
     "candidates": 16,
-    "ok": 14,
+    "ok": 15,
     "malformed": 1,
-    "slow": 1,
+    "slow": 0,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,

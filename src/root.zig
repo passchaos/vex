@@ -4500,6 +4500,7 @@ pub const Layout = struct {
     nodes: []NodeLayout,
     subgraphs: []SubgraphLayout,
     edge_waypoints: []EdgeWaypoints,
+    parallel_edge_offsets: ?[]f64 = null,
     edge_splines: ?[]EdgeSpline = null,
     position_transform: ?Point = null,
     aspect_applied: bool = false,
@@ -4523,6 +4524,7 @@ pub const Layout = struct {
             self.allocator.free(splines);
         }
         for (self.edge_waypoints) |waypoints| self.allocator.free(waypoints.points);
+        if (self.parallel_edge_offsets) |offsets| self.allocator.free(offsets);
         self.allocator.free(self.nodes);
         self.allocator.free(self.subgraphs);
         self.allocator.free(self.edge_waypoints);
@@ -4673,7 +4675,10 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
     var work = LayoutWorkTracker{ .control = config.control };
     return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
         .auto => unreachable,
-        .sugiyama => layoutLayeredWithControl(allocator, graph, config.layered, &work),
+        .sugiyama => if (shouldUseFragmentedComponentLayout(graph))
+            layoutFragmentedComponentsWithControl(allocator, graph, config.layered, &work)
+        else
+            layoutLayeredWithControl(allocator, graph, config.layered, &work),
         .fruchterman_reingold => layoutFruchtermanReingoldWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
@@ -4685,6 +4690,16 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .positioned => layoutPositionedWithControl(allocator, graph, config.layered, false, &work),
         .positioned_with_edges => layoutPositionedWithControl(allocator, graph, config.layered, true, &work),
     };
+}
+
+fn shouldUseFragmentedComponentLayout(graph: *const Graph) bool {
+    if (graph.directed or graph.nodes.items.len < 100_000) return false;
+    if (graph.edges.items.len > graph.nodes.items.len) return false;
+    if (graph.subgraphs.items.len != 0 or graph.rank_constraints.items.len != 0) return false;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.min_len > 1) return false;
+    }
+    return true;
 }
 
 pub fn layoutGraphsParallel(allocator: std.mem.Allocator, tasks: []const ParallelLayoutTask, options: ParallelLayoutOptions) !ParallelLayouts {
@@ -4766,6 +4781,50 @@ const LayoutWorkTracker = struct {
         try self.control.checkpoint(self.work);
     }
 };
+
+const EdgeEndpointKey = struct {
+    from: NodeId,
+    to: NodeId,
+};
+
+const ParallelEdgeGroupState = struct {
+    count: usize = 0,
+    next: usize = 0,
+};
+
+fn buildParallelEdgeOffsets(allocator: std.mem.Allocator, graph: *const Graph) ![]f64 {
+    const offsets = try allocator.alloc(f64, graph.edges.items.len);
+    errdefer allocator.free(offsets);
+    @memset(offsets, 0);
+    var groups = std.AutoHashMap(EdgeEndpointKey, ParallelEdgeGroupState).init(allocator);
+    defer groups.deinit();
+
+    for (graph.edges.items) |edge_item| {
+        const key = canonicalEdgeEndpointKey(graph.directed, edge_item);
+        const entry = try groups.getOrPut(key);
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        entry.value_ptr.count += 1;
+    }
+    for (graph.edges.items) |edge_item| {
+        const key = canonicalEdgeEndpointKey(graph.directed, edge_item);
+        const state = groups.getPtr(key).?;
+        if (state.count > 1) {
+            offsets[edge_item.id] =
+                (@as(f64, @floatFromInt(state.next)) -
+                    @as(f64, @floatFromInt(state.count - 1)) / 2.0) *
+                22.0;
+        }
+        state.next += 1;
+    }
+    return offsets;
+}
+
+fn canonicalEdgeEndpointKey(directed: bool, edge_item: Edge) EdgeEndpointKey {
+    if (directed or edge_item.from <= edge_item.to) {
+        return .{ .from = edge_item.from, .to = edge_item.to };
+    }
+    return .{ .from = edge_item.to, .to = edge_item.from };
+}
 
 fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) LayoutAlgorithm {
     if (requested != .auto) return requested;
@@ -4952,6 +5011,167 @@ fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
 
 fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoints) void {
     for (edge_waypoints) |waypoints| allocator.free(waypoints.points);
+}
+
+fn layoutFragmentedComponentsWithControl(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    options: LayoutOptions,
+    work: *LayoutWorkTracker,
+) !Layout {
+    var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
+    errdefer graph_snapshot.deinit();
+    const effective_options = layoutOptionsWithGraphAttrs(options, graph);
+    const axes = LayoutAxes.init(graph.rankdir);
+    const n = graph.nodes.items.len;
+    try work.checkpoint(n +| graph.edges.items.len +| 1);
+
+    const nodes = try allocator.alloc(NodeLayout, n);
+    errdefer allocator.free(nodes);
+    const subgraphs = try allocator.alloc(SubgraphLayout, 0);
+    errdefer allocator.free(subgraphs);
+    const edge_waypoints = try allocator.alloc(EdgeWaypoints, graph.edges.items.len);
+    errdefer allocator.free(edge_waypoints);
+    for (edge_waypoints) |*waypoints| waypoints.* = .{ .points = &.{} };
+    errdefer freeEdgeWaypoints(allocator, edge_waypoints);
+    const ranks = try allocator.alloc(usize, n);
+    errdefer allocator.free(ranks);
+    @memset(ranks, 0);
+
+    const sizes = try allocator.alloc(NodeSize, n);
+    defer allocator.free(sizes);
+    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, effective_options);
+
+    var adjacency = try EdgeAdjacency.init(allocator, graph);
+    defer adjacency.deinit();
+    const visited = try allocator.alloc(bool, n);
+    defer allocator.free(visited);
+    @memset(visited, false);
+    const queue = try allocator.alloc(NodeId, n);
+    defer allocator.free(queue);
+
+    // A near-square shelf target avoids the extremely wide single rank that a
+    // monolithic layered pass would create for hundreds of thousands of tiny
+    // disconnected components.
+    const average_component_width = effective_options.node_width * 2.0 + effective_options.node_gap;
+    const target_row_width = @max(
+        1_024.0,
+        @sqrt(@as(f64, @floatFromInt(@max(n, 1)))) * average_component_width,
+    );
+    var cursor_x: f64 = 0;
+    var cursor_y: f64 = 0;
+    var row_height: f64 = 0;
+    var total_width: f64 = 0;
+    var max_component_rank: usize = 0;
+
+    for (0..n) |start| {
+        if (visited[start]) continue;
+        var head: usize = 0;
+        var tail: usize = 1;
+        queue[0] = start;
+        visited[start] = true;
+        ranks[start] = 0;
+        var component_max_rank: usize = 0;
+
+        while (head < tail) : (head += 1) {
+            const node_id = queue[head];
+            for (adjacency.incident(node_id)) |edge_id| {
+                if (edge_id >= graph.edges.items.len) continue;
+                const edge_item = graph.edges.items[edge_id];
+                const neighbor = if (edge_item.from == node_id) edge_item.to else edge_item.from;
+                if (neighbor >= n or visited[neighbor]) continue;
+                visited[neighbor] = true;
+                ranks[neighbor] = ranks[node_id] + 1;
+                component_max_rank = @max(component_max_rank, ranks[neighbor]);
+                queue[tail] = neighbor;
+                tail += 1;
+            }
+        }
+
+        var rank_counts = try allocator.alloc(usize, component_max_rank + 1);
+        defer allocator.free(rank_counts);
+        @memset(rank_counts, 0);
+        for (queue[0..tail]) |node_id| rank_counts[ranks[node_id]] += 1;
+        var component_width: f64 = 0;
+        for (rank_counts) |count| {
+            if (count == 0) continue;
+            component_width = @max(
+                component_width,
+                @as(f64, @floatFromInt(count)) * (effective_options.node_width + effective_options.node_gap) -
+                    effective_options.node_gap,
+            );
+        }
+        const component_height = @as(f64, @floatFromInt(component_max_rank + 1)) *
+            (effective_options.node_height + effective_options.rank_gap) - effective_options.rank_gap;
+        if (cursor_x > 0 and cursor_x + component_width > target_row_width) {
+            cursor_x = 0;
+            cursor_y += row_height + effective_options.rank_gap;
+            row_height = 0;
+        }
+
+        @memset(rank_counts, 0);
+        for (queue[0..tail]) |node_id| {
+            const rank = ranks[node_id];
+            const along = cursor_x + sizes[node_id].width / 2.0 +
+                @as(f64, @floatFromInt(rank_counts[rank])) *
+                    (effective_options.node_width + effective_options.node_gap);
+            const depth = cursor_y + sizes[node_id].height / 2.0 +
+                @as(f64, @floatFromInt(rank)) *
+                    (effective_options.node_height + effective_options.rank_gap);
+            nodes[node_id] = .{
+                .center = axes.orientPoint(
+                    along,
+                    depth,
+                    cursor_y + component_height,
+                    effective_options.margin,
+                    effective_options.margin_y,
+                ),
+                .width = sizes[node_id].width,
+                .height = sizes[node_id].height,
+            };
+            rank_counts[rank] += 1;
+        }
+        cursor_x += component_width + effective_options.node_gap;
+        row_height = @max(row_height, component_height);
+        total_width = @max(total_width, cursor_x);
+        max_component_rank = @max(max_component_rank, component_max_rank);
+    }
+    try work.checkpoint((n +| graph.edges.items.len +| 1) *| 3);
+
+    const rank_count = max_component_rank + 1;
+    const rank_depths = try allocator.alloc(f64, rank_count);
+    errdefer allocator.free(rank_depths);
+    const rank_heights = try allocator.alloc(f64, rank_count);
+    errdefer allocator.free(rank_heights);
+    for (rank_depths, rank_heights, 0..) |*depth, *height, rank| {
+        depth.* = @as(f64, @floatFromInt(rank)) * (effective_options.node_height + effective_options.rank_gap);
+        height.* = effective_options.node_height;
+    }
+    var result = Layout{
+        .allocator = allocator,
+        .graph = graph_snapshot,
+        .rankdir = axes.rankdir,
+        .nodes = nodes,
+        .subgraphs = subgraphs,
+        .edge_waypoints = edge_waypoints,
+        .ranks = ranks,
+        .rank_depths = rank_depths,
+        .rank_heights = rank_heights,
+        .margin = effective_options.margin,
+        .margin_x = effective_options.margin,
+        .margin_y = effective_options.margin_y,
+        .width = if (axes.horizontalRanks())
+            cursor_y + row_height + effective_options.margin * 2.0
+        else
+            total_width + effective_options.margin * 2.0,
+        .height = if (axes.horizontalRanks())
+            total_width + effective_options.margin_y * 2.0
+        else
+            cursor_y + row_height + effective_options.margin_y * 2.0,
+    };
+    result.rank_nodes = RankNodes.init(allocator, ranks) catch null;
+    result.parallel_edge_offsets = buildParallelEdgeOffsets(allocator, graph) catch null;
+    return result;
 }
 
 pub fn layoutLayered(allocator: std.mem.Allocator, graph: *const Graph, options: LayoutOptions) !Layout {
@@ -5266,6 +5486,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         .height = axes.layoutHeight(base_along, base_depth),
     };
     result.rank_nodes = RankNodes.init(allocator, result.ranks) catch null;
+    result.parallel_edge_offsets = buildParallelEdgeOffsets(allocator, layout_graph) catch null;
     applyLayeredAspect(layout_graph, &result);
     return result;
 }
@@ -14876,7 +15097,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         return;
     }
 
-    const offset = parallelEdgeOffset(graph, edge_item.id);
+    const offset = parallelEdgeOffsetForLayout(graph, layout, edge_item.id);
     const route = edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
     const hints = EdgePathHints{
         .tail_mdiamond = graph.nodes.items[edge_item.from].shape == .mdiamond,
@@ -15436,7 +15657,7 @@ fn edgeObjectRect(graph: *const Graph, layout: *const Layout, edge_item: Edge) ?
         const padding = @max(4.0, @max(visual.width / 2.0 + 2.0, marker_padding));
         return bounds.rectExpanded(padding);
     }
-    const offset = if (edge_item.from == edge_item.to) 0 else parallelEdgeOffset(graph, edge_item.id);
+    const offset = if (edge_item.from == edge_item.to) 0 else parallelEdgeOffsetForLayout(graph, layout, edge_item.id);
     const route = if (edge_item.from == edge_item.to)
         selfLoopRoute(layout.nodes[edge_item.from])
     else
@@ -15486,7 +15707,7 @@ fn edgeRouteForRendering(graph: *const Graph, layout: *const Layout, edge_item: 
     return if (edge_item.from == edge_item.to)
         selfLoopRoute(layout.nodes[edge_item.from])
     else
-        edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, parallelEdgeOffset(graph, edge_item.id));
+        edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, parallelEdgeOffsetForLayout(graph, layout, edge_item.id));
 }
 
 fn positionedEdgeSpline(layout: *const Layout, edge_id: EdgeId) ?*const EdgeSpline {
@@ -19839,6 +20060,13 @@ fn parallelEdgeOffset(graph: *const Graph, edge_id: EdgeId) f64 {
     }
     if (count <= 1) return 0;
     return (@as(f64, @floatFromInt(index)) - (@as(f64, @floatFromInt(count - 1)) / 2.0)) * 22.0;
+}
+
+fn parallelEdgeOffsetForLayout(graph: *const Graph, layout: *const Layout, edge_id: EdgeId) f64 {
+    if (layout.parallel_edge_offsets) |offsets| {
+        if (edge_id < offsets.len) return offsets[edge_id];
+    }
+    return parallelEdgeOffset(graph, edge_id);
 }
 
 const SvgEdgeRouting = svg_mod.edge.Routing;
@@ -27516,6 +27744,28 @@ test "LR layout accounts for oriented long-label extents" {
     try std.testing.expect(right_box.center.y + right_box.height / 2.0 <= layout.height);
 }
 
+test "fragmented component layout preserves component ranks and separates shelves" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(c, d, .{});
+
+    var work = LayoutWorkTracker{ .control = .{} };
+    var layout = try layoutFragmentedComponentsWithControl(allocator, &graph, .{}, &work);
+    defer layout.deinit();
+
+    try std.testing.expectEqual(layout.ranks[a] + 1, layout.ranks[b]);
+    try std.testing.expectEqual(layout.ranks[c] + 1, layout.ranks[d]);
+    try std.testing.expect(!rectsOverlap(nodeRect(layout.nodes[a]), nodeRect(layout.nodes[c])));
+    try std.testing.expect(!rectsOverlap(nodeRect(layout.nodes[b]), nodeRect(layout.nodes[d])));
+    try std.testing.expect(layout.parallel_edge_offsets != null);
+}
+
 test "SVG renderer emits curved clipped edges and multiline text spans" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -27578,6 +27828,11 @@ test "SVG renderer honors common Graphviz visual attributes" {
     const second_offset = parallelEdgeOffset(&graph, 1);
     try std.testing.expect(first_offset < 0);
     try std.testing.expect(second_offset > 0);
+    const indexed_offsets = try buildParallelEdgeOffsets(allocator, &graph);
+    defer allocator.free(indexed_offsets);
+    for (indexed_offsets, 0..) |offset, edge_id| {
+        try std.testing.expectEqual(parallelEdgeOffset(&graph, edge_id), offset);
+    }
 }
 
 test "SVG renderer honors Graphviz invisible style" {
