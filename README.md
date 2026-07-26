@@ -382,6 +382,13 @@ and output hashes without writing generated SVG to disk. The layered graph is
 rendered twice and must be byte-identical;
 the combined process enforces a normalized 96 MiB peak-RSS limit.
 
+`zig build test-layered-tall-scale` separately protects the virtual-layer
+crossing path with a 5,002-node / 7,330-edge graph spanning 1,002 narrow ranks
+and many long edges. Its ReleaseFast gate requires the default 24 crossing
+passes to finish within three seconds and a 40 MiB layout arena. This catches
+full-graph work accidentally repeated once per narrow rank, which the wider
+crossing-grid workload cannot expose.
+
 ## Mainstream DOT support
 
 The parser currently supports a practical, mainstream DOT subset:

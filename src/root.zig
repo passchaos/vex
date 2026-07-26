@@ -6831,6 +6831,59 @@ const VirtualPositionSegment = struct {
     lower: usize,
 };
 
+const VirtualPositionMap = struct {
+    positions: []usize,
+    generations: []u32,
+    // Generation zero marks never-written slots. Keeping the active epoch
+    // nonzero also makes lookup safe before the first rebuild.
+    generation: u32 = 1,
+
+    fn init(allocator: std.mem.Allocator, len: usize) !VirtualPositionMap {
+        const positions = try allocator.alloc(usize, len);
+        errdefer allocator.free(positions);
+        const generations = try allocator.alloc(u32, len);
+        errdefer allocator.free(generations);
+        @memset(generations, 0);
+        return .{
+            .positions = positions,
+            .generations = generations,
+        };
+    }
+
+    fn deinit(self: *VirtualPositionMap, allocator: std.mem.Allocator) void {
+        allocator.free(self.positions);
+        allocator.free(self.generations);
+        self.* = undefined;
+    }
+
+    fn rebuild(self: *VirtualPositionMap, level: []const VirtualNode, real_node_count: usize) void {
+        // Crossing reduction rebuilds these maps for one narrow rank at a
+        // time. An epoch avoids clearing O(nodes + edges) storage for every
+        // rank while retaining constant-time lookup for real and dummy nodes.
+        if (self.generation == std.math.maxInt(u32)) {
+            @memset(self.generations, 0);
+            self.generation = 1;
+        } else {
+            self.generation += 1;
+        }
+        for (level, 0..) |node, index| {
+            const key = virtualPositionKey(node, real_node_count);
+            if (key >= self.positions.len) continue;
+            self.positions[key] = index;
+            self.generations[key] = self.generation;
+        }
+    }
+
+    fn getKey(self: *const VirtualPositionMap, key: usize) ?usize {
+        if (key >= self.positions.len or self.generations[key] != self.generation) return null;
+        return self.positions[key];
+    }
+
+    fn get(self: *const VirtualPositionMap, node: VirtualNode, real_node_count: usize) ?usize {
+        return self.getKey(virtualPositionKey(node, real_node_count));
+    }
+};
+
 const RankLayerEdges = struct {
     allocator: std.mem.Allocator,
     offsets: []usize,
@@ -6896,8 +6949,8 @@ const VirtualCrossingWorkspace = struct {
     allocator: std.mem.Allocator,
     edge_adjacency: EdgeAdjacency,
     rank_layer_edges: RankLayerEdges,
-    upper_positions: []usize,
-    lower_positions: []usize,
+    upper_positions: VirtualPositionMap,
+    lower_positions: VirtualPositionMap,
     segments: []VirtualPositionSegment,
     fenwick: []usize,
     left_neighbors: []usize,
@@ -6910,10 +6963,10 @@ const VirtualCrossingWorkspace = struct {
         var rank_layer_edges = try RankLayerEdges.init(allocator, graph, ranks, level_count);
         errdefer rank_layer_edges.deinit();
         const position_count = graph.nodes.items.len +| graph.edges.items.len;
-        const upper_positions = try allocator.alloc(usize, position_count);
-        errdefer allocator.free(upper_positions);
-        const lower_positions = try allocator.alloc(usize, position_count);
-        errdefer allocator.free(lower_positions);
+        var upper_positions = try VirtualPositionMap.init(allocator, position_count);
+        errdefer upper_positions.deinit(allocator);
+        var lower_positions = try VirtualPositionMap.init(allocator, position_count);
+        errdefer lower_positions.deinit(allocator);
         const segments = try allocator.alloc(VirtualPositionSegment, graph.edges.items.len);
         errdefer allocator.free(segments);
         const fenwick = try allocator.alloc(usize, position_count +| 1);
@@ -6941,8 +6994,8 @@ const VirtualCrossingWorkspace = struct {
     fn deinit(self: *VirtualCrossingWorkspace) void {
         self.edge_adjacency.deinit();
         self.rank_layer_edges.deinit();
-        self.allocator.free(self.upper_positions);
-        self.allocator.free(self.lower_positions);
+        self.upper_positions.deinit(self.allocator);
+        self.lower_positions.deinit(self.allocator);
         self.allocator.free(self.segments);
         self.allocator.free(self.fenwick);
         self.allocator.free(self.left_neighbors);
@@ -7472,7 +7525,7 @@ fn adjacentVirtualPairComparison(graph: *const Graph, virtual_levels: *const Vir
     var comparison = PairCrossingComparison{};
     if (rank > 0) {
         const fixed_layer = virtual_levels.levels[rank - 1].items;
-        buildVirtualPositionMap(crossing_workspace.upper_positions, fixed_layer, graph.nodes.items.len);
+        crossing_workspace.upper_positions.rebuild(fixed_layer, graph.nodes.items.len);
         comparison.add(adjacentVirtualPairComparisonWithFixedLayer(
             graph,
             ranks,
@@ -7480,14 +7533,14 @@ fn adjacentVirtualPairComparison(graph: *const Graph, virtual_levels: *const Vir
             left,
             right,
             true,
-            crossing_workspace.upper_positions,
+            &crossing_workspace.upper_positions,
             fixed_layer.len,
             crossing_workspace,
         ));
     }
     if (rank + 1 < virtual_levels.levels.len) {
         const fixed_layer = virtual_levels.levels[rank + 1].items;
-        buildVirtualPositionMap(crossing_workspace.lower_positions, fixed_layer, graph.nodes.items.len);
+        crossing_workspace.lower_positions.rebuild(fixed_layer, graph.nodes.items.len);
         comparison.add(adjacentVirtualPairComparisonWithFixedLayer(
             graph,
             ranks,
@@ -7495,7 +7548,7 @@ fn adjacentVirtualPairComparison(graph: *const Graph, virtual_levels: *const Vir
             left,
             right,
             false,
-            crossing_workspace.lower_positions,
+            &crossing_workspace.lower_positions,
             fixed_layer.len,
             crossing_workspace,
         ));
@@ -7510,7 +7563,7 @@ fn adjacentVirtualPairComparisonWithFixedLayer(
     left: VirtualNode,
     right: VirtualNode,
     use_parents: bool,
-    fixed_positions: []const usize,
+    fixed_positions: *const VirtualPositionMap,
     fixed_count: usize,
     crossing_workspace: *VirtualCrossingWorkspace,
 ) PairCrossingComparison {
@@ -7574,7 +7627,7 @@ fn accumulateVirtualNeighborCounts(
     rank: usize,
     node: VirtualNode,
     use_parents: bool,
-    fixed_positions: []const usize,
+    fixed_positions: *const VirtualPositionMap,
     fixed_count: usize,
     counts: []usize,
     edge_adjacency: *const EdgeAdjacency,
@@ -7620,14 +7673,13 @@ fn accumulateVirtualNeighborCount(
     rank: usize,
     node: VirtualNode,
     use_parents: bool,
-    fixed_positions: []const usize,
+    fixed_positions: *const VirtualPositionMap,
     fixed_count: usize,
     counts: []usize,
 ) void {
     const neighbor = virtualAdjacentNode(edge_item, node, ranks, rank, use_parents) orelse return;
     const key = virtualPositionKey(neighbor, real_node_count);
-    if (key >= fixed_positions.len) return;
-    const position = fixed_positions[key];
+    const position = fixed_positions.getKey(key) orelse return;
     if (position < fixed_count and position < counts.len) counts[position] +|= 1;
 }
 
@@ -7701,8 +7753,8 @@ fn totalVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const Virtua
 
 fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const VirtualLevels, ranks: []const usize, upper_rank: usize, crossing_workspace: *VirtualCrossingWorkspace) usize {
     if (upper_rank + 1 >= virtual_levels.levels.len) return 0;
-    buildVirtualPositionMap(crossing_workspace.upper_positions, virtual_levels.levels[upper_rank].items, graph.nodes.items.len);
-    buildVirtualPositionMap(crossing_workspace.lower_positions, virtual_levels.levels[upper_rank + 1].items, graph.nodes.items.len);
+    crossing_workspace.upper_positions.rebuild(virtual_levels.levels[upper_rank].items, graph.nodes.items.len);
+    crossing_workspace.lower_positions.rebuild(virtual_levels.levels[upper_rank + 1].items, graph.nodes.items.len);
 
     var segment_count: usize = 0;
     for (crossing_workspace.rank_layer_edges.at(upper_rank)) |edge_id| {
@@ -7712,8 +7764,8 @@ fn countVirtualLayerCrossings(graph: *const Graph, virtual_levels: *const Virtua
             edge_item,
             ranks,
             upper_rank,
-            crossing_workspace.upper_positions,
-            crossing_workspace.lower_positions,
+            &crossing_workspace.upper_positions,
+            &crossing_workspace.lower_positions,
             graph.nodes.items.len,
         ) orelse continue;
         crossing_workspace.segments[segment_count] = segment;
@@ -7773,15 +7825,7 @@ fn virtualEdgePositionSegmentPairwise(edge_item: Edge, virtual_levels: *const Vi
     return .{ .upper = upper, .lower = lower };
 }
 
-fn buildVirtualPositionMap(positions: []usize, level: []const VirtualNode, real_node_count: usize) void {
-    @memset(positions, std.math.maxInt(usize));
-    for (level, 0..) |node, index| {
-        const key = virtualPositionKey(node, real_node_count);
-        if (key < positions.len) positions[key] = index;
-    }
-}
-
-fn virtualEdgePositionSegment(edge_item: Edge, ranks: []const usize, upper_rank: usize, upper_positions: []const usize, lower_positions: []const usize, real_node_count: usize) ?VirtualPositionSegment {
+fn virtualEdgePositionSegment(edge_item: Edge, ranks: []const usize, upper_rank: usize, upper_positions: *const VirtualPositionMap, lower_positions: *const VirtualPositionMap, real_node_count: usize) ?VirtualPositionSegment {
     if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) return null;
     const from_rank = ranks[edge_item.from];
     const to_rank = ranks[edge_item.to];
@@ -7789,12 +7833,8 @@ fn virtualEdgePositionSegment(edge_item: Edge, ranks: []const usize, upper_rank:
     if (upper_rank < from_rank or upper_rank + 1 > to_rank) return null;
     const upper_node: VirtualNode = if (upper_rank == from_rank) .{ .real = edge_item.from } else .{ .dummy = edge_item.id };
     const lower_node: VirtualNode = if (upper_rank + 1 == to_rank) .{ .real = edge_item.to } else .{ .dummy = edge_item.id };
-    const upper_key = virtualPositionKey(upper_node, real_node_count);
-    const lower_key = virtualPositionKey(lower_node, real_node_count);
-    if (upper_key >= upper_positions.len or lower_key >= lower_positions.len) return null;
-    const upper = upper_positions[upper_key];
-    const lower = lower_positions[lower_key];
-    if (upper == std.math.maxInt(usize) or lower == std.math.maxInt(usize)) return null;
+    const upper = upper_positions.get(upper_node, real_node_count) orelse return null;
+    const lower = lower_positions.get(lower_node, real_node_count) orelse return null;
     return .{ .upper = upper, .lower = lower };
 }
 
@@ -17042,13 +17082,16 @@ fn imagePathListSeparator() u8 {
 }
 
 fn imagePathReadable(path: []const u8) bool {
-    return switch (builtin.os.tag) {
-        .windows, .wasi, .freestanding => false,
-        else => blk: {
-            const terminated = std.posix.toPosixPath(path) catch break :blk false;
-            break :blk std.c.access(&terminated, std.c.R_OK) == 0;
-        },
-    };
+    // Rendering does not otherwise require libc, so use Zig's native Io
+    // backend rather than making every Vex consumer link libc just to probe an
+    // optional image search path. The global single-threaded backend performs
+    // this synchronous operation without allocating or starting workers.
+    std.Io.Dir.cwd().access(
+        std.Io.Threaded.global_single_threaded.io(),
+        path,
+        .{ .read = true },
+    ) catch return false;
+    return true;
 }
 
 fn nodeImageRect(node_item: Node, layout: NodeLayout) RectF {
@@ -26455,6 +26498,34 @@ test "virtual levels can extract real node levels" {
     try std.testing.expectEqual(c, real_levels[1].items[0]);
     try std.testing.expectEqual(@as(usize, 0), real_levels[2].items.len);
     try std.testing.expectEqual(d, real_levels[3].items[0]);
+}
+
+test "virtual position map rebuild hides stale ranks and survives epoch wrap" {
+    const allocator = std.testing.allocator;
+    const real_node_count: usize = 2;
+    var positions = try VirtualPositionMap.init(allocator, real_node_count + 2);
+    defer positions.deinit(allocator);
+    try std.testing.expectEqual(@as(?usize, null), positions.get(.{ .real = 0 }, real_node_count));
+
+    const first = [_]VirtualNode{
+        .{ .real = 0 },
+        .{ .dummy = 1 },
+    };
+    positions.rebuild(&first, real_node_count);
+    try std.testing.expectEqual(@as(?usize, 0), positions.get(.{ .real = 0 }, real_node_count));
+    try std.testing.expectEqual(@as(?usize, 1), positions.get(.{ .dummy = 1 }, real_node_count));
+
+    const second = [_]VirtualNode{.{ .real = 1 }};
+    positions.rebuild(&second, real_node_count);
+    try std.testing.expectEqual(@as(?usize, null), positions.get(.{ .real = 0 }, real_node_count));
+    try std.testing.expectEqual(@as(?usize, null), positions.get(.{ .dummy = 1 }, real_node_count));
+    try std.testing.expectEqual(@as(?usize, 0), positions.get(.{ .real = 1 }, real_node_count));
+
+    positions.generation = std.math.maxInt(u32);
+    positions.rebuild(&first, real_node_count);
+    try std.testing.expectEqual(@as(u32, 1), positions.generation);
+    try std.testing.expectEqual(@as(?usize, 0), positions.get(.{ .real = 0 }, real_node_count));
+    try std.testing.expectEqual(@as(?usize, null), positions.get(.{ .real = 1 }, real_node_count));
 }
 
 test "virtual level median orders dummy nodes" {

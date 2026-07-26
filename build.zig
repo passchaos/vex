@@ -119,6 +119,21 @@ pub fn build(b: *std.Build) void {
     const layout_render_scale_step = b.step("test-layout-render-scale", "Run all native layout/SVG scale gates");
     layout_render_scale_step.dependOn(&run_layout_render_scale.step);
 
+    const layered_tall_scale = b.addExecutable(.{
+        .name = "vex-layered-tall-scale",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/layered_tall_scale.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "vex", .module = mod },
+            },
+        }),
+    });
+    const run_layered_tall_scale = b.addRunArtifact(layered_tall_scale);
+    const layered_tall_scale_step = b.step("test-layered-tall-scale", "Run tall narrow layered crossing scale gate");
+    layered_tall_scale_step.dependOn(&run_layered_tall_scale.step);
+
     const parallel_layout_scale = b.addExecutable(.{
         .name = "vex-parallel-layout-scale",
         .root_module = b.createModule(.{
@@ -358,6 +373,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_parse_scale.step);
     test_step.dependOn(&run_layout_render_scale.step);
+    test_step.dependOn(&run_layered_tall_scale.step);
     test_step.dependOn(&run_parallel_layout_scale.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
