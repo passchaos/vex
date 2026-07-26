@@ -5112,6 +5112,34 @@ fn orientReciprocalLayeredEdges(
     return storage;
 }
 
+fn normalizeSameRankEdgeMinlen(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    storage: *Graph,
+) !*const Graph {
+    var has_same_rank_edge = false;
+    for (graph.edges.items) |edge_item| {
+        if (edgeEndpointsShareActiveSameRank(graph, edge_item.from, edge_item.to)) {
+            has_same_rank_edge = true;
+            break;
+        }
+    }
+    if (!has_same_rank_edge) return graph;
+    storage.* = graph.*;
+    storage.edges = .empty;
+    try storage.edges.appendSlice(allocator, graph.edges.items);
+    errdefer storage.edges.deinit(allocator);
+    for (storage.edges.items) |*edge_item| {
+        if (edgeEndpointsShareActiveSameRank(graph, edge_item.from, edge_item.to)) {
+            // Graphviz rank=same overrides minlen for rank feasibility. Keep
+            // the edge in all weighted/crossing objectives, but make its hard
+            // rank separation zero in this private layout view.
+            edge_item.min_len = 0;
+        }
+    }
+    return storage;
+}
+
 const UndirectedNeighborOrderContext = struct {
     graph: *const Graph,
     degrees: []const usize,
@@ -5341,8 +5369,11 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     const undirected_view = try orientUndirectedLayeredGraph(allocator, cluster_view, &oriented_view);
     defer if (undirected_view == &oriented_view) oriented_view.edges.deinit(allocator);
     var reciprocal_view: Graph = undefined;
-    const layout_graph = try orientReciprocalLayeredEdges(allocator, undirected_view, &reciprocal_view);
-    defer if (layout_graph == &reciprocal_view) reciprocal_view.edges.deinit(allocator);
+    const reciprocal_graph = try orientReciprocalLayeredEdges(allocator, undirected_view, &reciprocal_view);
+    defer if (reciprocal_graph == &reciprocal_view) reciprocal_view.edges.deinit(allocator);
+    var same_rank_view: Graph = undefined;
+    const layout_graph = try normalizeSameRankEdgeMinlen(allocator, reciprocal_graph, &same_rank_view);
+    defer if (layout_graph == &same_rank_view) same_rank_view.edges.deinit(allocator);
     const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
     const axes = LayoutAxes.init(layout_graph.rankdir);
     const n = layout_graph.nodes.items.len;
@@ -9270,6 +9301,24 @@ fn nodeInRankConstraintKind(graph: *const Graph, node_id: NodeId, kind: RankKind
         for (constraint.node_ids) |id| {
             if (id == node_id) return true;
         }
+    }
+    return false;
+}
+
+fn edgeEndpointsShareActiveSameRank(
+    graph: *const Graph,
+    left: NodeId,
+    right: NodeId,
+) bool {
+    for (graph.rank_constraints.items) |constraint| {
+        if (!rankConstraintActive(graph, constraint) or constraint.kind != .same) continue;
+        var has_left = false;
+        var has_right = false;
+        for (constraint.node_ids) |node_id| {
+            if (node_id == left) has_left = true;
+            if (node_id == right) has_right = true;
+        }
+        if (has_left and has_right) return true;
     }
     return false;
 }
@@ -32153,6 +32202,23 @@ test "DOT parser records Graphviz rank subgraph constraints" {
     const c = nodeIdByLabel(&graph, "c");
     try std.testing.expect(containsNode(graph.rank_constraints.items[0].node_ids, b));
     try std.testing.expect(containsNode(graph.rank_constraints.items[0].node_ids, c));
+}
+
+test "same-rank edge minlen is zero only in the private layout view" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const edge_id = try graph.addEdge(a, b, .{ .min_len = 10 });
+    try graph.addRankConstraint(.same, &.{ a, b });
+
+    var storage: Graph = undefined;
+    const normalized = try normalizeSameRankEdgeMinlen(allocator, &graph, &storage);
+    defer if (normalized == &storage) storage.edges.deinit(allocator);
+    try std.testing.expect(normalized == &storage);
+    try std.testing.expectEqual(@as(usize, 0), normalized.edges.items[edge_id].min_len);
+    try std.testing.expectEqual(@as(usize, 10), graph.edges.items[edge_id].min_len);
 }
 
 test "layered layout applies rank same and boundary constraints" {

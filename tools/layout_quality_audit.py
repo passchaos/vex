@@ -266,6 +266,13 @@ def main() -> int:
             1.05,
             1.30,
         ),
+        (
+            "proc3d",
+            args.graphviz_root / "tests" / "graphs" / "proc3d.gv",
+            0,
+            1.30,
+            1.00,
+        ),
     )
     aggregate_vex_crossings = 0
     aggregate_graphviz_crossings = 0
