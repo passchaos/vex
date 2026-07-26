@@ -5797,8 +5797,59 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_limit);
     refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
     refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
-    refineSmallDirectedCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes);
+    var width_aware_start: [64]f64 = undefined;
+    const can_search_width_aware =
+        centers.len <= width_aware_start.len and
+        !hasActiveRankConstraints(layout_graph);
+    if (can_search_width_aware) {
+        @memcpy(width_aware_start[0..centers.len], centers);
+    }
+    _ = refineSmallDirectedCenterCrossings(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        false,
+    );
+    var width_aware_candidate: [64]f64 = undefined;
+    var has_width_aware_candidate = false;
+    if (can_search_width_aware) {
+        var continuous_start: [64]f64 = undefined;
+        @memcpy(continuous_start[0..centers.len], centers);
+        @memcpy(centers, width_aware_start[0..centers.len]);
+        if (refineSmallDirectedCenterCrossings(
+            layout_graph,
+            levels,
+            ranks,
+            centers,
+            axis_sizes,
+            true,
+        )) {
+            refineContinuousCenterCrossings(
+                layout_graph,
+                levels,
+                ranks,
+                centers,
+                axis_sizes,
+                4,
+            );
+            @memcpy(width_aware_candidate[0..centers.len], centers);
+            has_width_aware_candidate = true;
+        }
+        @memcpy(centers, continuous_start[0..centers.len]);
+    }
     refineContinuousCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 4);
+    if (has_width_aware_candidate) {
+        adoptSmallDirectedCandidateIfBetter(
+            layout_graph,
+            ranks,
+            centers,
+            width_aware_candidate[0..centers.len],
+            axis_sizes,
+            effective_options,
+        );
+    }
     refineClusterOwnerGroupCrossings(
         layout_graph,
         ranks,
@@ -13205,13 +13256,14 @@ fn refineSmallDirectedCenterCrossings(
     ranks: []const usize,
     centers: []f64,
     sizes: []const NodeSize,
-) void {
+    adjacent_width_aware: bool,
+) bool {
     if (!graph.directed or graph.subgraphs.items.len != 0 or
         graph.nodes.items.len > 64 or graph.edges.items.len > 128 or
-        graph.edges.items.len *| 2 > graph.nodes.items.len *| 3) return;
+        graph.edges.items.len *| 2 > graph.nodes.items.len *| 3) return false;
     for (graph.nodes.items) |node_item| {
         if (nodeGroupName(node_item) != null or
-            orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return;
+            orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
     }
 
     var eligible_levels: [64]usize = undefined;
@@ -13221,16 +13273,21 @@ fn refineSmallDirectedCenterCrossings(
         eligible_levels[eligible_count] = rank;
         eligible_count += 1;
     }
-    if (eligible_count == 0) return;
+    if (eligible_count == 0) return false;
 
     const baseline_crossings = countDirectCenterCrossings(graph, ranks, centers);
-    if (baseline_crossings < 16) return;
+    if (baseline_crossings < 16 and !adjacent_width_aware) return false;
     const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
     var best_crossings = baseline_crossings;
     var best_centers: [64]f64 = undefined;
     @memcpy(best_centers[0..centers.len], centers);
-    var search = SmallDirectedCrossingSearch{};
 
+    // Arbitrary-slot swaps can jump across local minima when similarly-sized
+    // nodes fit each other's slots. The independent candidate branch uses
+    // width-aware adjacent transpositions, adding legal moves for
+    // heterogeneous labels without changing the original search trajectory.
+    if (adjacent_width_aware and hasActiveRankConstraints(graph)) return false;
+    var search = SmallDirectedCrossingSearch{};
     for (0..SmallDirectedCrossingSearch.restart_count) |_| {
         @memcpy(centers, best_centers[0..centers.len]);
         for (0..SmallDirectedCrossingSearch.perturbation_moves) |_| {
@@ -13240,6 +13297,7 @@ fn refineSmallDirectedCenterCrossings(
                 centers,
                 sizes,
                 eligible_levels[0..eligible_count],
+                adjacent_width_aware,
             );
         }
 
@@ -13251,8 +13309,9 @@ fn refineSmallDirectedCenterCrossings(
                 centers,
                 sizes,
                 eligible_levels[0..eligible_count],
+                adjacent_width_aware,
             ) orelse continue;
-            std.mem.swap(f64, &centers[swapped.left], &centers[swapped.right]);
+            applySmallDirectedCenterSwap(centers, swapped, false);
             const before_affected = countDirectCenterCrossingsTouching(
                 graph,
                 ranks,
@@ -13260,7 +13319,7 @@ fn refineSmallDirectedCenterCrossings(
                 swapped.left,
                 swapped.right,
             );
-            std.mem.swap(f64, &centers[swapped.left], &centers[swapped.right]);
+            applySmallDirectedCenterSwap(centers, swapped, true);
             const after_affected = countDirectCenterCrossingsTouching(
                 graph,
                 ranks,
@@ -13268,7 +13327,8 @@ fn refineSmallDirectedCenterCrossings(
                 swapped.left,
                 swapped.right,
             );
-            const after_crossings = current_crossings -| before_affected +| after_affected;
+            const after_crossings =
+                current_crossings -| before_affected +| after_affected;
             const remaining = SmallDirectedCrossingSearch.search_moves - step;
             const delta = after_crossings -| current_crossings;
             const accept_uphill = smallDirectedAcceptUphill(&search, delta, remaining);
@@ -13281,11 +13341,45 @@ fn refineSmallDirectedCenterCrossings(
                     @memcpy(best_centers[0..centers.len], centers);
                 }
             } else {
-                std.mem.swap(f64, &centers[swapped.left], &centers[swapped.right]);
+                applySmallDirectedCenterSwap(centers, swapped, false);
             }
         }
     }
     @memcpy(centers, best_centers[0..centers.len]);
+    return best_crossings < baseline_crossings;
+}
+
+fn adoptSmallDirectedCandidateIfBetter(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []f64,
+    candidate: []const f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+) void {
+    if (candidate.len != centers.len or centers.len > 64) return;
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    const current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const candidate_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        candidate,
+        physical_depths,
+    );
+    if (candidate_crossings < current_crossings) @memcpy(centers, candidate);
 }
 
 fn smallDirectedAcceptUphill(
@@ -13307,6 +13401,10 @@ fn smallDirectedAcceptUphill(
 const SmallDirectedCenterSwap = struct {
     left: NodeId,
     right: NodeId,
+    left_before: f64,
+    right_before: f64,
+    left_after: f64,
+    right_after: f64,
 };
 
 fn trySmallDirectedCenterSwap(
@@ -13315,25 +13413,90 @@ fn trySmallDirectedCenterSwap(
     centers: []f64,
     sizes: []const NodeSize,
     eligible_levels: []const usize,
+    adjacent_width_aware: bool,
 ) ?SmallDirectedCenterSwap {
     for (0..8) |_| {
         const rank = eligible_levels[search.index(eligible_levels.len)];
         if (rank >= levels.len) continue;
         const level = levels[rank].items;
-        const left_index = search.index(level.len);
-        var right_index = search.index(level.len - 1);
-        if (right_index >= left_index) right_index += 1;
-        const left = level[left_index];
-        const right = level[right_index];
+        if (level.len <= 1 or level.len > 64) continue;
+        const left: NodeId, const right: NodeId = if (adjacent_width_aware) blk: {
+            var ordered: [64]NodeId = undefined;
+            @memcpy(ordered[0..level.len], level);
+            std.mem.sort(NodeId, ordered[0..level.len], centers, struct {
+                fn lessThan(node_centers: []const f64, a: NodeId, b: NodeId) bool {
+                    if (a >= node_centers.len or b >= node_centers.len) return a < b;
+                    if (node_centers[a] == node_centers[b]) return a < b;
+                    return node_centers[a] < node_centers[b];
+                }
+            }.lessThan);
+            const left_index = search.index(level.len - 1);
+            break :blk .{ ordered[left_index], ordered[left_index + 1] };
+        } else blk: {
+            const left_index = search.index(level.len);
+            var right_index = search.index(level.len - 1);
+            if (right_index >= left_index) right_index += 1;
+            break :blk .{ level[left_index], level[right_index] };
+        };
         if (left >= centers.len or right >= centers.len or
             left >= sizes.len or right >= sizes.len) continue;
-        std.mem.swap(f64, &centers[left], &centers[right]);
-        if (centerLevelHasClearance(level, centers, sizes)) {
-            return .{ .left = left, .right = right };
-        }
-        std.mem.swap(f64, &centers[left], &centers[right]);
+        const move = makeSmallDirectedCenterSwap(
+            left,
+            right,
+            centers,
+            sizes,
+            adjacent_width_aware,
+        ) orelse continue;
+        // Keeping the pair's outer boundaries fixed preserves its clearance
+        // to all other nodes and never increases the level or canvas extent.
+        applySmallDirectedCenterSwap(centers, move, true);
+        if (centerLevelHasClearance(level, centers, sizes)) return move;
+        applySmallDirectedCenterSwap(centers, move, false);
     }
     return null;
+}
+
+fn makeSmallDirectedCenterSwap(
+    left: NodeId,
+    right: NodeId,
+    centers: []const f64,
+    sizes: []const NodeSize,
+    adjacent_width_aware: bool,
+) ?SmallDirectedCenterSwap {
+    if (left >= centers.len or right >= centers.len or
+        left >= sizes.len or right >= sizes.len) return null;
+    const outer_left = @min(
+        centers[left] - sizes[left].width / 2.0,
+        centers[right] - sizes[right].width / 2.0,
+    );
+    const outer_right = @max(
+        centers[left] + sizes[left].width / 2.0,
+        centers[right] + sizes[right].width / 2.0,
+    );
+    return .{
+        .left = left,
+        .right = right,
+        .left_before = centers[left],
+        .right_before = centers[right],
+        .left_after = if (adjacent_width_aware)
+            outer_right - sizes[left].width / 2.0
+        else
+            centers[right],
+        .right_after = if (adjacent_width_aware)
+            outer_left + sizes[right].width / 2.0
+        else
+            centers[left],
+    };
+}
+
+fn applySmallDirectedCenterSwap(
+    centers: []f64,
+    move: SmallDirectedCenterSwap,
+    after: bool,
+) void {
+    if (move.left >= centers.len or move.right >= centers.len) return;
+    centers[move.left] = if (after) move.left_after else move.left_before;
+    centers[move.right] = if (after) move.right_after else move.right_before;
 }
 
 fn refineContinuousCenterCrossings(
@@ -35034,6 +35197,42 @@ test "direct center transpose reduces crossings without moving ranks" {
         (centers[a] < centers[b] and centers[d] < centers[c]) or
             (centers[b] < centers[a] and centers[c] < centers[d]),
     );
+}
+
+test "width-aware center transpose preserves heterogeneous pair boundaries" {
+    var centers = [_]f64{ 20, 70 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 10 },
+        .{ .width = 60, .height = 10 },
+    };
+    const before_left = centers[0] - sizes[0].width / 2.0;
+    const before_right = centers[1] + sizes[1].width / 2.0;
+    const move = makeSmallDirectedCenterSwap(
+        0,
+        1,
+        &centers,
+        &sizes,
+        true,
+    ).?;
+
+    applySmallDirectedCenterSwap(&centers, move, true);
+    try std.testing.expectApproxEqAbs(
+        before_left,
+        centers[1] - sizes[1].width / 2.0,
+        0.0001,
+    );
+    try std.testing.expectApproxEqAbs(
+        before_right,
+        centers[0] + sizes[0].width / 2.0,
+        0.0001,
+    );
+    try std.testing.expect(
+        centers[1] + sizes[1].width / 2.0 <=
+            centers[0] - sizes[0].width / 2.0 + 0.0001,
+    );
+
+    applySmallDirectedCenterSwap(&centers, move, false);
+    try std.testing.expectEqualSlices(f64, &.{ 20, 70 }, &centers);
 }
 
 test "post-spacing transpose accepts unequal-size slots with clearance" {
