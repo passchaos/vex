@@ -321,7 +321,7 @@ fixtures: compare parsed semantics, layout coordinates, and rendered output for
 representative graphs, then close gaps in the native implementation. Runtime CLI
 rendering should stay on Vex's native parser/layout/renderers.
 
-For invariant layout-quality work, `zig build audit-layout-quality -Dgraphviz-root=/path/to/graphviz` compares Vex and Graphviz on real sparse-undirected `ngk10_4.gv` and directed-DAG `fig6.gv` fixtures. Both must have zero node overlaps and bounded center-line crossings, edge length, and normalized canvas area; the aggregate crossing gate is 335. Current Vex scores are 234/80 crossings versus Graphviz's 206/62 (314 versus 268 aggregate). Vex uses substantially shorter edges and about half the normalized area on `ngk10_4`; `fig6` stays within 15% edge length and 10% area of Graphviz.
+For invariant layout-quality work, `zig build audit-layout-quality -Dgraphviz-root=/path/to/graphviz` compares Vex and Graphviz on real sparse-undirected `ngk10_4.gv`, directed-DAG `fig6.gv`, and reciprocal cluster/rank `dfa.gv` fixtures. All must have zero node overlaps and bounded center-line crossings, edge length, and normalized canvas area; the aggregate crossing gate is 335. Current Vex crossing scores are 234/80/0 versus Graphviz's 206/62/0 (314 versus 268 aggregate). Vex uses substantially shorter edges and about half the normalized area on `ngk10_4`; `fig6` stays within 15% edge length and 10% area; `dfa` matches Graphviz's zero crossings and slightly improves normalized edge length.
 
 For SVG parity work, `tools/svg_residual.py generated.svg graphviz.svg` reports
 screen-space point residuals for ordered `polygon`, `polyline`, and `path`

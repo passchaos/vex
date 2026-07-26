@@ -5078,6 +5078,40 @@ fn orientUndirectedLayeredGraph(
     return storage;
 }
 
+fn orientReciprocalLayeredEdges(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    storage: *Graph,
+) !*const Graph {
+    if (!graph.directed or graph.edges.items.len < 2) return graph;
+    var first_by_endpoints = std.AutoHashMap(EdgeEndpointKey, EdgeId).init(allocator);
+    defer first_by_endpoints.deinit();
+    var reciprocal_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        const reverse = EdgeEndpointKey{ .from = edge_item.to, .to = edge_item.from };
+        if (first_by_endpoints.contains(reverse)) reciprocal_count += 1;
+        const key = EdgeEndpointKey{ .from = edge_item.from, .to = edge_item.to };
+        const entry = try first_by_endpoints.getOrPut(key);
+        if (!entry.found_existing) entry.value_ptr.* = edge_item.id;
+    }
+    if (reciprocal_count == 0) return graph;
+
+    storage.* = graph.*;
+    storage.edges = .empty;
+    try storage.edges.appendSlice(allocator, graph.edges.items);
+    errdefer storage.edges.deinit(allocator);
+    for (storage.edges.items) |*edge_item| {
+        const reverse = EdgeEndpointKey{ .from = edge_item.to, .to = edge_item.from };
+        const first_reverse = first_by_endpoints.get(reverse) orelse continue;
+        if (first_reverse >= edge_item.id) continue;
+        // Rank both directions along the first-declared transition. The owned
+        // graph snapshot retains original endpoints, so SVG arrows and public
+        // model semantics are unchanged.
+        std.mem.swap(NodeId, &edge_item.from, &edge_item.to);
+    }
+    return storage;
+}
+
 const UndirectedNeighborOrderContext = struct {
     graph: *const Graph,
     degrees: []const usize,
@@ -5286,8 +5320,11 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var clusterless_view: Graph = undefined;
     const cluster_view = layeredGraphView(graph, &clusterless_view);
     var oriented_view: Graph = undefined;
-    const layout_graph = try orientUndirectedLayeredGraph(allocator, cluster_view, &oriented_view);
-    defer if (layout_graph == &oriented_view) oriented_view.edges.deinit(allocator);
+    const undirected_view = try orientUndirectedLayeredGraph(allocator, cluster_view, &oriented_view);
+    defer if (undirected_view == &oriented_view) oriented_view.edges.deinit(allocator);
+    var reciprocal_view: Graph = undefined;
+    const layout_graph = try orientReciprocalLayeredEdges(allocator, undirected_view, &reciprocal_view);
+    defer if (layout_graph == &reciprocal_view) reciprocal_view.edges.deinit(allocator);
     const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
     const axes = LayoutAxes.init(layout_graph.rankdir);
     const n = layout_graph.nodes.items.len;
@@ -28104,6 +28141,27 @@ test "sparse undirected layered orientation is acyclic and density bounded" {
     }
     var dense_storage: Graph = undefined;
     try std.testing.expectEqual(&dense, try orientUndirectedLayeredGraph(allocator, &dense, &dense_storage));
+}
+
+test "reciprocal rank orientation follows first declaration without mutating graph" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(b, a, .{});
+
+    var storage: Graph = undefined;
+    const oriented = try orientReciprocalLayeredEdges(allocator, &graph, &storage);
+    defer if (oriented == &storage) storage.edges.deinit(allocator);
+    try std.testing.expect(oriented == &storage);
+    try std.testing.expectEqual(a, oriented.edges.items[0].from);
+    try std.testing.expectEqual(b, oriented.edges.items[0].to);
+    try std.testing.expectEqual(a, oriented.edges.items[1].from);
+    try std.testing.expectEqual(b, oriented.edges.items[1].to);
+    try std.testing.expectEqual(b, graph.edges.items[1].from);
+    try std.testing.expectEqual(a, graph.edges.items[1].to);
 }
 
 test "SVG renderer emits curved clipped edges and multiline text spans" {

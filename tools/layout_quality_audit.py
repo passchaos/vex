@@ -170,12 +170,31 @@ def main() -> int:
     parser.add_argument("--vex", type=Path, required=True)
     args = parser.parse_args()
     cases = (
-        ("ngk10_4", args.graphviz_root / "tests" / "graphs" / "ngk10_4.gv", 260),
-        ("fig6", args.graphviz_root / "tests" / "graphs" / "fig6.gv", 85),
+        (
+            "ngk10_4",
+            args.graphviz_root / "tests" / "graphs" / "ngk10_4.gv",
+            260,
+            0.75,
+            1.10,
+        ),
+        (
+            "fig6",
+            args.graphviz_root / "tests" / "graphs" / "fig6.gv",
+            85,
+            1.15,
+            1.10,
+        ),
+        (
+            "dfa",
+            args.graphviz_root / "tests" / "graphs" / "dfa.gv",
+            0,
+            1.05,
+            1.30,
+        ),
     )
     aggregate_vex_crossings = 0
     aggregate_graphviz_crossings = 0
-    for name, fixture, crossing_limit in cases:
+    for name, fixture, crossing_limit, edge_length_limit, area_limit in cases:
         vex_score = quality(*vex_geometry(args.vex, fixture))
         graphviz_score = quality(*graphviz_geometry(fixture))
         print(
@@ -191,11 +210,10 @@ def main() -> int:
             raise SystemExit(
                 f"{name}: Vex crossing count regressed above {crossing_limit}"
             )
-        edge_length_limit = 0.75 if name == "ngk10_4" else 1.15
         if vex_score[2] > graphviz_score[2] * edge_length_limit:
             raise SystemExit(f"{name}: Vex normalized mean edge length regressed")
-        if vex_score[3] > graphviz_score[3] * 1.10:
-            raise SystemExit(f"{name}: Vex normalized canvas area is over 10% larger")
+        if vex_score[3] > graphviz_score[3] * area_limit:
+            raise SystemExit(f"{name}: Vex normalized canvas area regressed")
         aggregate_vex_crossings += vex_score[1]
         aggregate_graphviz_crossings += graphviz_score[1]
     if aggregate_vex_crossings > 335:
