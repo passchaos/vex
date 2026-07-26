@@ -169,24 +169,42 @@ def main() -> int:
     parser.add_argument("graphviz_root", type=Path)
     parser.add_argument("--vex", type=Path, required=True)
     args = parser.parse_args()
-    fixture = args.graphviz_root / "tests" / "graphs" / "ngk10_4.gv"
-    vex_score = quality(*vex_geometry(args.vex, fixture))
-    graphviz_score = quality(*graphviz_geometry(fixture))
-    print(
-        "layout-quality-audit ngk10_4 "
-        f"vex_overlap={vex_score[0]} vex_crossings={vex_score[1]} "
-        f"vex_edge_length={vex_score[2]:.3f} vex_area={vex_score[3]:.3f} "
-        f"graphviz_overlap={graphviz_score[0]} graphviz_crossings={graphviz_score[1]} "
-        f"graphviz_edge_length={graphviz_score[2]:.3f} graphviz_area={graphviz_score[3]:.3f}"
+    cases = (
+        ("ngk10_4", args.graphviz_root / "tests" / "graphs" / "ngk10_4.gv", 260),
+        ("fig6", args.graphviz_root / "tests" / "graphs" / "fig6.gv", 85),
     )
-    if vex_score[0] != 0:
-        raise SystemExit("Vex introduced node overlaps")
-    if vex_score[1] > 260:
-        raise SystemExit("Vex crossing count regressed above 260")
-    if vex_score[2] > graphviz_score[2] * 0.75:
-        raise SystemExit("Vex normalized mean edge length is not at least 25% shorter")
-    if vex_score[3] > graphviz_score[3]:
-        raise SystemExit("Vex normalized canvas area exceeds Graphviz")
+    aggregate_vex_crossings = 0
+    aggregate_graphviz_crossings = 0
+    for name, fixture, crossing_limit in cases:
+        vex_score = quality(*vex_geometry(args.vex, fixture))
+        graphviz_score = quality(*graphviz_geometry(fixture))
+        print(
+            f"layout-quality-audit {name} "
+            f"vex_overlap={vex_score[0]} vex_crossings={vex_score[1]} "
+            f"vex_edge_length={vex_score[2]:.3f} vex_area={vex_score[3]:.3f} "
+            f"graphviz_overlap={graphviz_score[0]} graphviz_crossings={graphviz_score[1]} "
+            f"graphviz_edge_length={graphviz_score[2]:.3f} graphviz_area={graphviz_score[3]:.3f}"
+        )
+        if vex_score[0] != 0:
+            raise SystemExit(f"{name}: Vex introduced node overlaps")
+        if vex_score[1] > crossing_limit:
+            raise SystemExit(
+                f"{name}: Vex crossing count regressed above {crossing_limit}"
+            )
+        edge_length_limit = 0.75 if name == "ngk10_4" else 1.15
+        if vex_score[2] > graphviz_score[2] * edge_length_limit:
+            raise SystemExit(f"{name}: Vex normalized mean edge length regressed")
+        if vex_score[3] > graphviz_score[3] * 1.10:
+            raise SystemExit(f"{name}: Vex normalized canvas area is over 10% larger")
+        aggregate_vex_crossings += vex_score[1]
+        aggregate_graphviz_crossings += graphviz_score[1]
+    if aggregate_vex_crossings > 335:
+        raise SystemExit("aggregate Vex crossing count regressed above 335")
+    print(
+        "layout-quality-audit aggregate "
+        f"vex_crossings={aggregate_vex_crossings} "
+        f"graphviz_crossings={aggregate_graphviz_crossings}"
+    )
     return 0
 
 

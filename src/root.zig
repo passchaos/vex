@@ -5402,6 +5402,9 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
+    if (graph.directed) {
+        balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
+    }
     applyTopBottomBalance(layout_graph, ranks);
     applyRankConstraints(layout_graph, ranks);
 
@@ -5500,6 +5503,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
     }
     applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_budget);
+    refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -9645,6 +9649,84 @@ fn improveRanksByLocalSearchImpl(graph: *const Graph, ranks: []usize, acyclic_ed
     }
 }
 
+fn balanceEqualCostRanks(
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    edge_adjacency: *const EdgeAdjacency,
+) void {
+    if (ranks.len <= 1 or ranks.len > 4_096) return;
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    const counts = graph.allocator.alloc(usize, max_rank + 1) catch return;
+    defer graph.allocator.free(counts);
+    @memset(counts, 0);
+    for (ranks) |rank| counts[rank] += 1;
+
+    // Network simplex optimizes weighted span but intentionally leaves many
+    // equal-cost solutions. Prefer the one with less crowded ranks; this gives
+    // crossing reduction a more even set of layers without changing the rank
+    // objective or any hard minlen/rank constraint.
+    for (0..4) |_| {
+        var changed = false;
+        for (ranks, 0..) |current_rank, node_id| {
+            if (rankTighteningPinned(graph, node_id)) continue;
+            const incident_edges = edge_adjacency.incident(node_id);
+            const bounds = feasibleRankBoundsForNodeIndexed(
+                graph,
+                ranks,
+                acyclic_edge,
+                node_id,
+                incident_edges,
+            ) orelse continue;
+            if (bounds.max -| bounds.min > 128) continue;
+            const current_cost = incidentRankSpanCostIndexed(
+                graph,
+                ranks,
+                acyclic_edge,
+                node_id,
+                current_rank,
+                incident_edges,
+            );
+            var best_rank = current_rank;
+            var candidate = bounds.min;
+            while (candidate <= bounds.max) : (candidate += 1) {
+                if (candidate == current_rank) continue;
+                const candidate_cost = incidentRankSpanCostIndexed(
+                    graph,
+                    ranks,
+                    acyclic_edge,
+                    node_id,
+                    candidate,
+                    incident_edges,
+                );
+                if (@abs(candidate_cost - current_cost) > 0.0001) continue;
+                if (counts[candidate] < counts[best_rank] or
+                    (counts[candidate] == counts[best_rank] and
+                        rankBalanceDistance(candidate, max_rank) <
+                            rankBalanceDistance(best_rank, max_rank)))
+                {
+                    best_rank = candidate;
+                }
+            }
+            if (best_rank == current_rank or counts[current_rank] <= counts[best_rank] + 1) continue;
+            ranks[node_id] = best_rank;
+            if (!rankConstraintsSatisfied(graph, ranks)) {
+                ranks[node_id] = current_rank;
+                continue;
+            }
+            counts[current_rank] -= 1;
+            counts[best_rank] += 1;
+            changed = true;
+        }
+        if (!changed) break;
+    }
+}
+
+fn rankBalanceDistance(rank: usize, max_rank: usize) usize {
+    return if (rank * 2 > max_rank) rank * 2 - max_rank else max_rank - rank * 2;
+}
+
 fn improveRanksByNetworkSimplex(
     allocator: std.mem.Allocator,
     graph: *const Graph,
@@ -12473,6 +12555,101 @@ fn applyCrossClusterDiagonalNudges(graph: *const Graph, ranks: []const usize, ce
         centers[edge_item.from] += shift;
         nudgeSameClusterPredecessors(graph, ranks, centers, edge_item.from, from_cluster, shift * 0.7);
     }
+}
+
+fn refineDirectEdgeCenterCrossings(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    passes: usize,
+) void {
+    if (passes == 0 or graph.subgraphs.items.len != 0) return;
+    if (graph.nodes.items.len > 128 or graph.edges.items.len > 256) return;
+    var current = countDirectCenterCrossings(graph, ranks, centers);
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            var index: usize = 0;
+            while (index + 1 < level.items.len) {
+                const left = level.items[index];
+                const right = level.items[index + 1];
+                if (left >= centers.len or right >= centers.len or left >= sizes.len or right >= sizes.len) {
+                    index += 1;
+                    continue;
+                }
+                if (left >= graph.nodes.items.len or right >= graph.nodes.items.len or
+                    nodeGroupName(graph.nodes.items[left]) != null or
+                    nodeGroupName(graph.nodes.items[right]) != null)
+                {
+                    index += 1;
+                    continue;
+                }
+                // Swapping unequal widths can invalidate the packed rank's
+                // clearance. Equal-size nodes preserve every spacing bound.
+                if (@abs(sizes[left].width - sizes[right].width) > 0.0001) {
+                    index += 1;
+                    continue;
+                }
+                std.mem.swap(f64, &centers[left], &centers[right]);
+                const after = countDirectCenterCrossings(graph, ranks, centers);
+                if (after < current) {
+                    current = after;
+                    changed = true;
+                    if (index > 0) {
+                        index -= 1;
+                    } else {
+                        index += 1;
+                    }
+                } else {
+                    std.mem.swap(f64, &centers[left], &centers[right]);
+                    index += 1;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |left, left_index| {
+        if (left.from >= ranks.len or left.to >= ranks.len) continue;
+        if (left.from >= centers.len or left.to >= centers.len) continue;
+        for (graph.edges.items[left_index + 1 ..]) |right| {
+            if (right.from >= ranks.len or right.to >= ranks.len) continue;
+            if (right.from >= centers.len or right.to >= centers.len) continue;
+            if (left.from == right.from or left.from == right.to or
+                left.to == right.from or left.to == right.to)
+            {
+                continue;
+            }
+            if (directCenterSegmentsCross(left, right, ranks, centers)) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn directCenterSegmentsCross(left: Edge, right: Edge, ranks: []const usize, centers: []const f64) bool {
+    const a = Point{ .x = centers[left.from], .y = @floatFromInt(ranks[left.from]) };
+    const b = Point{ .x = centers[left.to], .y = @floatFromInt(ranks[left.to]) };
+    const c = Point{ .x = centers[right.from], .y = @floatFromInt(ranks[right.from]) };
+    const d = Point{ .x = centers[right.to], .y = @floatFromInt(ranks[right.to]) };
+    const ab_c = pointOrientation(a, b, c);
+    const ab_d = pointOrientation(a, b, d);
+    const cd_a = pointOrientation(c, d, a);
+    const cd_b = pointOrientation(c, d, b);
+    return oppositeFloatSigns(ab_c, ab_d) and oppositeFloatSigns(cd_a, cd_b);
+}
+
+fn pointOrientation(a: Point, b: Point, c: Point) f64 {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+fn oppositeFloatSigns(left: f64, right: f64) bool {
+    return (left < -0.0000001 and right > 0.0000001) or
+        (left > 0.0000001 and right < -0.0000001);
 }
 
 fn nudgeSameClusterPredecessors(graph: *const Graph, ranks: []const usize, centers: []f64, node_id: NodeId, cluster_index: usize, shift: f64) void {
@@ -32926,6 +33103,66 @@ test "bounded rank local search rejects equal-cost moves" {
     try std.testing.expectEqual(@as(usize, 2), bestFeasibleRankForNode(&graph, ranks, acyclic_edge, x).?);
     improveRanksByLocalSearch(&graph, ranks, acyclic_edge, 4);
     try std.testing.expectEqual(@as(usize, 1), ranks[x]);
+}
+
+test "equal-cost rank balance reduces peak layer width" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const sink = try graph.addNode("sink", .{});
+    const movable = try graph.addNode("movable", .{});
+    const crowded_a = try graph.addNode("crowded_a", .{});
+    const crowded_b = try graph.addNode("crowded_b", .{});
+    _ = try graph.addEdge(source, movable, .{});
+    _ = try graph.addEdge(movable, sink, .{});
+
+    var ranks = [_]usize{ 0, 3, 1, 1, 1 };
+    var acyclic_edge = [_]bool{ true, true };
+    var adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer adjacency.deinit();
+    const before_cost = rankAssignmentCost(&graph, &ranks, &acyclic_edge);
+    balanceEqualCostRanks(&graph, &ranks, &acyclic_edge, &adjacency);
+
+    try std.testing.expectEqual(@as(usize, 2), ranks[movable]);
+    try std.testing.expectEqual(@as(usize, 1), ranks[crowded_a]);
+    try std.testing.expectEqual(@as(usize, 1), ranks[crowded_b]);
+    try std.testing.expectEqual(before_cost, rankAssignmentCost(&graph, &ranks, &acyclic_edge));
+    try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
+}
+
+test "direct center transpose reduces crossings without moving ranks" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(b, c, .{});
+
+    const ranks = [_]usize{ 0, 0, 1, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ a, b });
+    try levels[1].appendSlice(allocator, &.{ c, d });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 40, 10, 40 };
+    const before = countDirectCenterCrossings(&graph, &ranks, &centers);
+    refineDirectEdgeCenterCrossings(&graph, &levels, &ranks, &centers, &sizes, 2);
+    const after = countDirectCenterCrossings(&graph, &ranks, &centers);
+    try std.testing.expectEqual(@as(usize, 1), before);
+    try std.testing.expectEqual(@as(usize, 0), after);
+    try std.testing.expect(
+        (centers[a] < centers[b] and centers[d] < centers[c]) or
+            (centers[b] < centers[a] and centers[c] < centers[d]),
+    );
 }
 
 test "rank slack tightening reduces whole graph weighted span cost" {
