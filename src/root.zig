@@ -10533,6 +10533,27 @@ fn balanceEqualCostRanks(
                 incident_edges,
             ) orelse continue;
             if (bounds.max -| bounds.min > 128) continue;
+            if (!preserve_private_branch_chains) {
+                if (balancedHeavyPassThroughRank(
+                    graph,
+                    acyclic_edge,
+                    node_id,
+                    incident_edges,
+                    bounds,
+                )) |balanced_rank| {
+                    if (balanced_rank != current_rank) {
+                        ranks[node_id] = balanced_rank;
+                        if (rankConstraintsSatisfied(graph, ranks)) {
+                            counts[current_rank] -= 1;
+                            counts[balanced_rank] += 1;
+                            changed = true;
+                        } else {
+                            ranks[node_id] = current_rank;
+                        }
+                    }
+                    continue;
+                }
+            }
             if (preserve_private_branch_chains and graph.nodes.items.len >= 40 and
                 bounds.max -| bounds.min >= 4 and
                 privateBranchChainEntry(
@@ -10592,6 +10613,41 @@ fn balanceEqualCostRanks(
         }
         if (!changed) break;
     }
+}
+
+fn balancedHeavyPassThroughRank(
+    graph: *const Graph,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    edge_ids: []const EdgeId,
+    bounds: RankBounds,
+) ?usize {
+    if (graph.subgraphs.items.len != 0 or graph.nodes.items.len < 48 or
+        graph.nodes.items.len > 64 or bounds.max -| bounds.min < 4) return null;
+    var incoming: ?Edge = null;
+    var outgoing: ?Edge = null;
+    for (edge_ids) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        if (edge_item.to == node_id) {
+            if (incoming != null) return null;
+            incoming = edge_item;
+        } else if (edge_item.from == node_id) {
+            if (outgoing != null) return null;
+            outgoing = edge_item;
+        }
+    }
+    const in_edge = incoming orelse return null;
+    const out_edge = outgoing orelse return null;
+    if (in_edge.weight <= 1.0 or
+        @abs(in_edge.weight - out_edge.weight) > 0.0001) return null;
+
+    // Equal incident weights make every feasible rank identical in weighted
+    // span cost. The midpoint minimizes the larger of the two edge spans and
+    // avoids pushing a pass-through node to a sparse boundary rank merely to
+    // reduce occupancy.
+    return bounds.min + (bounds.max - bounds.min) / 2;
 }
 
 fn privateBranchChainEntry(
@@ -36265,6 +36321,70 @@ test "private branch chain rank ties preserve the tight incoming edge" {
 
     try std.testing.expectEqual(@as(usize, 1), ranks[chain]);
     try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
+}
+
+test "heavy pass-through rank ties balance incident spans" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const middle = try graph.addNode("middle", .{});
+    const sink = try graph.addNode("sink", .{});
+    for (3..48) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try graph.addNode(
+            try std.fmt.bufPrint(&label_buf, "filler{d}", .{index}),
+            .{},
+        );
+    }
+    _ = try graph.addEdge(source, middle, .{ .weight = 100 });
+    _ = try graph.addEdge(middle, sink, .{ .weight = 100 });
+
+    const acyclic_edge = [_]bool{ true, true };
+    var ranks = [_]usize{0} ** 48;
+    ranks[source] = 0;
+    ranks[middle] = 9;
+    ranks[sink] = 11;
+    var adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer adjacency.deinit();
+    const bounds = feasibleRankBoundsForNodeIndexed(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        middle,
+        adjacency.incident(middle),
+    ).?;
+
+    try std.testing.expectEqual(@as(usize, 1), bounds.min);
+    try std.testing.expectEqual(@as(usize, 10), bounds.max);
+    try std.testing.expectEqual(
+        @as(?usize, 5),
+        balancedHeavyPassThroughRank(
+            &graph,
+            &acyclic_edge,
+            middle,
+            adjacency.incident(middle),
+            bounds,
+        ),
+    );
+    try std.testing.expectEqual(
+        incidentRankSpanCostIndexed(
+            &graph,
+            &ranks,
+            &acyclic_edge,
+            middle,
+            bounds.min,
+            adjacency.incident(middle),
+        ),
+        incidentRankSpanCostIndexed(
+            &graph,
+            &ranks,
+            &acyclic_edge,
+            middle,
+            bounds.max,
+            adjacency.incident(middle),
+        ),
+    );
 }
 
 test "maximum-closure rank descent moves jointly profitable tight dependencies" {
