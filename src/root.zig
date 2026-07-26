@@ -5007,11 +5007,10 @@ fn orientUndirectedLayeredGraph(
     storage: *Graph,
 ) !*const Graph {
     if (graph.directed or graph.nodes.items.len == 0) return graph;
-    // Dense undirected graphs are better served by the existing coordinate
-    // heuristics. Sparse graph-like networks benefit from an explicit DAG
-    // orientation, while forcing dense meshes into many ranks increases both
-    // crossings and edge length.
-    if (graph.edges.items.len *| 10 > graph.nodes.items.len *| 22) return graph;
+    // Tiny dense meshes are better served by the cyclic coordinate path; a
+    // hierarchy adds arbitrary depth without enough structure to recover it.
+    if (graph.nodes.items.len < 32 and
+        graph.edges.items.len *| 10 > graph.nodes.items.len *| 22) return graph;
 
     storage.* = graph.*;
     storage.directed = true;
@@ -5034,13 +5033,14 @@ fn orientUndirectedLayeredGraph(
     var next_discovery: usize = 0;
     for (0..graph.nodes.items.len) |seed| {
         if (discovery[seed] != undiscovered) continue;
-        const root = selectUndirectedOrientationRoot(
+        const selection = selectUndirectedOrientationRoot(
             graph,
             &adjacency,
             seed,
             component_distance,
             queue,
         );
+        const root = selection.root;
         discovery[root] = next_discovery;
         next_discovery += 1;
         var head: usize = 0;
@@ -5054,7 +5054,9 @@ fn orientUndirectedLayeredGraph(
                 incident,
                 UndirectedNeighborOrderContext{
                     .graph = graph,
+                    .adjacency = &adjacency,
                     .node_id = node_id,
+                    .dense = selection.dense,
                 },
                 lessThanUndirectedNeighbor,
             );
@@ -5084,14 +5086,21 @@ fn orientUndirectedLayeredGraph(
     return storage;
 }
 
+const UndirectedOrientationSelection = struct {
+    root: NodeId,
+    dense: bool,
+};
+
 fn selectUndirectedOrientationRoot(
     graph: *const Graph,
     adjacency: *const EdgeAdjacency,
     seed: NodeId,
     distance: []usize,
     queue: []NodeId,
-) NodeId {
-    if (seed >= distance.len or queue.len < distance.len) return seed;
+) UndirectedOrientationSelection {
+    if (seed >= distance.len or queue.len < distance.len) {
+        return .{ .root = seed, .dense = false };
+    }
     const undiscovered = std.math.maxInt(usize);
     distance[seed] = 0;
     var head: usize = 0;
@@ -5120,11 +5129,15 @@ fn selectUndirectedOrientationRoot(
 
     const component_size = tail;
     const component_edges = degree_sum / 2;
+    const dense = component_edges *| 10 > component_size *| 22;
+    if (dense) {
+        return .{ .root = seed, .dense = true };
+    }
     const use_midpoint_shell =
         component_size >= 32 and component_size <= 128 and
         min_degree >= 2 and
         component_edges *| 10 <= component_size *| 22;
-    if (!use_midpoint_shell) return seed;
+    if (!use_midpoint_shell) return .{ .root = seed, .dense = false };
 
     // A boundary root creates a needlessly deep, narrow hierarchy, while a
     // graph center can over-compress hubs. The lower median of the halfway
@@ -5136,15 +5149,17 @@ fn selectUndirectedOrientationRoot(
     for (distance) |node_distance| {
         if (node_distance == target_distance) shell_count += 1;
     }
-    if (shell_count == 0) return seed;
+    if (shell_count == 0) return .{ .root = seed, .dense = false };
     const target_index = (shell_count - 1) / 2;
     var shell_index: usize = 0;
     for (distance, 0..) |node_distance, node_id| {
         if (node_distance != target_distance) continue;
-        if (shell_index == target_index) return node_id;
+        if (shell_index == target_index) {
+            return .{ .root = node_id, .dense = false };
+        }
         shell_index += 1;
     }
-    return seed;
+    return .{ .root = seed, .dense = false };
 }
 
 fn orientReciprocalLayeredEdges(
@@ -5211,12 +5226,19 @@ fn normalizeSameRankEdgeMinlen(
 
 const UndirectedNeighborOrderContext = struct {
     graph: *const Graph,
+    adjacency: *const EdgeAdjacency,
     node_id: NodeId,
+    dense: bool,
 };
 
 fn lessThanUndirectedNeighbor(context: UndirectedNeighborOrderContext, left_edge: EdgeId, right_edge: EdgeId) bool {
     const left = undirectedEdgeNeighbor(context.graph, left_edge, context.node_id) orelse return false;
     const right = undirectedEdgeNeighbor(context.graph, right_edge, context.node_id) orelse return true;
+    if (context.dense) {
+        const left_degree = context.adjacency.incident(left).len;
+        const right_degree = context.adjacency.incident(right).len;
+        if (left_degree != right_degree) return left_degree > right_degree;
+    }
     // NodeId order follows first declaration and is therefore the stable
     // undirected analogue of DOT statement order. Degree-first discovery can
     // over-focus hubs and gives crossing reduction a much poorer initial DAG.
