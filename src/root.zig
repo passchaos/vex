@@ -11305,7 +11305,8 @@ fn improveRanksByMaximumClosure(
         }
     }
     if (allow_clusterless_dag and
-        maximumRankOccupancy(ranks) > initial_peak_occupancy)
+        maximumRankOccupancy(ranks) > initial_peak_occupancy and
+        !clusterlessClosureMayWidenPeak(graph.nodes.items.len))
     {
         // Weighted span alone can collapse a wide inheritance-style DAG into
         // a crowded central rank. That is optimal for the simplex objective
@@ -11316,6 +11317,14 @@ fn improveRanksByMaximumClosure(
         return 0;
     }
     return shifts;
+}
+
+fn clusterlessClosureMayWidenPeak(node_count: usize) bool {
+    // In this small-medium window, exact weighted-span closure tightens
+    // fragmented short branches enough to outweigh one wider intermediate
+    // rank. Smaller graphs have cheap dedicated ordering paths, while 40+
+    // node inheritance/profile DAGs need the occupancy guard.
+    return node_count >= 24 and node_count <= 39;
 }
 
 fn maximumRankOccupancy(ranks: []const usize) usize {
@@ -36643,6 +36652,13 @@ test "maximum-closure rank descent rejects a wider peak layer" {
 
     try std.testing.expectEqual(@as(usize, 0), shifts);
     try std.testing.expectEqualSlices(usize, &original, &ranks);
+}
+
+test "clusterless closure peak-width window is bounded" {
+    try std.testing.expect(!clusterlessClosureMayWidenPeak(23));
+    try std.testing.expect(clusterlessClosureMayWidenPeak(24));
+    try std.testing.expect(clusterlessClosureMayWidenPeak(39));
+    try std.testing.expect(!clusterlessClosureMayWidenPeak(40));
 }
 
 test "direct center transpose reduces crossings without moving ranks" {

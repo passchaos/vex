@@ -326,6 +326,13 @@ def main() -> int:
             1.06,
         ),
         (
+            "mike",
+            args.graphviz_root / "tests" / "graphs" / "mike.gv",
+            6,
+            1.12,
+            1.52,
+        ),
+        (
             "NaN",
             args.graphviz_root / "tests" / "graphs" / "NaN.gv",
             82,
@@ -406,8 +413,8 @@ def main() -> int:
             raise SystemExit(f"{name}: Vex normalized canvas area regressed")
         aggregate_vex_crossings += vex_score[1]
         aggregate_graphviz_crossings += graphviz_score[1]
-    if aggregate_vex_crossings > 806:
-        raise SystemExit("aggregate Vex crossing count regressed above 806")
+    if aggregate_vex_crossings > 812:
+        raise SystemExit("aggregate Vex crossing count regressed above 812")
     print(
         "layout-quality-audit aggregate "
         f"vex_crossings={aggregate_vex_crossings} "
