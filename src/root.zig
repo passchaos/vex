@@ -15748,7 +15748,11 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
             interactiveTarget(node_item.attrs.items, .default),
             node_context,
         );
-        try writer.print(" rank=\"{d}\" x=\"{d:.2}\" y=\"{d:.2}\" width=\"{d:.2}\" height=\"{d:.2}\"/>\n", .{
+        // Metadata is a machine-readable geometry contract, not a visual
+        // coordinate string. Two-decimal rounding can turn exactly touching
+        // rectangles into apparent 0.005pt overlaps when consumers reconstruct
+        // bounds from center and size independently.
+        try writer.print(" rank=\"{d}\" x=\"{d:.9}\" y=\"{d:.9}\" width=\"{d:.9}\" height=\"{d:.9}\"/>\n", .{
             node_rank,
             node_layout.center.x,
             node_layout.center.y,
@@ -27059,7 +27063,9 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" rank=\"0\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "width=\"54.00\" height=\"36.00\"") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, svg, "width=\"54.000000000\" height=\"36.000000000\"") != null,
+    );
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:edge id=\"0\" from=\"0\" to=\"1\" from-label=\"api\" to-label=\"worker\" label=\"job\" weight=\"1\" constraint=\"true\" minlen=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:waypoint rank=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:subgraph id=\"0\" label=\"service\" nodes=\"0 1\" x=\"") != null);
