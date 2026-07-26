@@ -13762,6 +13762,7 @@ fn centerLevelHasClearance(
 
 const SmallDirectedCrossingSearch = struct {
     const restart_count: usize = 13;
+    const medium_restart_count: usize = 64;
     const perturbation_moves: usize = 160;
     const search_moves: usize = 1_000;
 
@@ -13782,6 +13783,21 @@ const SmallDirectedCrossingSearch = struct {
         return @intCast(self.next() % upper_bound);
     }
 };
+
+fn smallDirectedCrossingRestartCount(
+    node_count: usize,
+    baseline_crossings: usize,
+) usize {
+    // Medium sparse graphs have enough legal permutations that the default
+    // 13 streams can miss a materially better basin. Keep the extra cost
+    // isolated to already-crossed 48–64 node candidates; small and nearly
+    // planar inputs retain the original deterministic budget.
+    return if (node_count >= 48 and node_count <= 64 and
+        baseline_crossings >= 10)
+        SmallDirectedCrossingSearch.medium_restart_count
+    else
+        SmallDirectedCrossingSearch.restart_count;
+}
 
 fn refineSmallDirectedCenterCrossings(
     graph: *const Graph,
@@ -13814,6 +13830,10 @@ fn refineSmallDirectedCenterCrossings(
     var best_crossings = baseline_crossings;
     var best_centers: [64]f64 = undefined;
     @memcpy(best_centers[0..centers.len], centers);
+    const restart_count = smallDirectedCrossingRestartCount(
+        graph.nodes.items.len,
+        baseline_crossings,
+    );
 
     // Arbitrary-slot swaps can jump across local minima when similarly-sized
     // nodes fit each other's slots. The independent candidate branch uses
@@ -13821,7 +13841,7 @@ fn refineSmallDirectedCenterCrossings(
     // heterogeneous labels without changing the original search trajectory.
     if (adjacent_width_aware and hasActiveRankConstraints(graph)) return false;
     var search = SmallDirectedCrossingSearch{};
-    for (0..SmallDirectedCrossingSearch.restart_count) |_| {
+    for (0..restart_count) |_| {
         @memcpy(centers, best_centers[0..centers.len]);
         for (0..SmallDirectedCrossingSearch.perturbation_moves) |_| {
             _ = trySmallDirectedCenterSwap(
@@ -36410,6 +36430,29 @@ test "width-aware center transpose preserves heterogeneous pair boundaries" {
 
     applySmallDirectedCenterSwap(&centers, move, false);
     try std.testing.expectEqualSlices(f64, &.{ 20, 70 }, &centers);
+}
+
+test "medium crossed directed graphs receive deeper deterministic restarts" {
+    try std.testing.expectEqual(
+        SmallDirectedCrossingSearch.restart_count,
+        smallDirectedCrossingRestartCount(47, 20),
+    );
+    try std.testing.expectEqual(
+        SmallDirectedCrossingSearch.restart_count,
+        smallDirectedCrossingRestartCount(58, 9),
+    );
+    try std.testing.expectEqual(
+        SmallDirectedCrossingSearch.medium_restart_count,
+        smallDirectedCrossingRestartCount(58, 10),
+    );
+    try std.testing.expectEqual(
+        SmallDirectedCrossingSearch.medium_restart_count,
+        smallDirectedCrossingRestartCount(64, 20),
+    );
+    try std.testing.expectEqual(
+        SmallDirectedCrossingSearch.restart_count,
+        smallDirectedCrossingRestartCount(65, 20),
+    );
 }
 
 test "explicit rank slot sifting checks every legal insertion slot" {
