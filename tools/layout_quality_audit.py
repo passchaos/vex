@@ -343,8 +343,8 @@ def main() -> int:
             "pgram",
             args.graphviz_root / "tests" / "graphs" / "pgram.gv",
             0,
-            1.65,
-            1.65,
+            1.57,
+            1.45,
         ),
         (
             "dfa",

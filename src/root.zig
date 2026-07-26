@@ -9050,7 +9050,57 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
                 height = side;
             }
         },
-        .parallelogram, .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .octagon, .doubleoctagon, .tripleoctagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .fivepoverhang, .threepoverhang, .noverhang, .assembly, .signature, .insulator, .ribosite, .rnastab, .proteasesite, .proteinstab, .rpromoter, .lpromoter, .larrow, .rarrow => {
+        .parallelogram => {
+            if (graphvizDefaultSerifFont(node_item.attrs.items) and
+                (line_count > 1 or
+                    displayLabelEstimatedWidth(node_item.label, font_size) + 16.0 >
+                        options.node_width))
+            {
+                const fitted = fitGraphvizPolygonLabel(
+                    graphvizSerifLabelWidth(node_item.label, font_size),
+                    @as(f64, @floatFromInt(line_count)) * font_size * (15.0 / 14.0),
+                    options.node_width,
+                    options.node_height,
+                    4,
+                    0.6,
+                );
+                width = @max(width, fitted.width);
+                height = @max(height, fitted.height);
+            } else {
+                width = @max(width, text_width + options.node_padding_x * 3.0);
+            }
+        },
+        .octagon, .doubleoctagon, .tripleoctagon => {
+            const fitted_label =
+                graphvizDefaultSerifFont(node_item.attrs.items) and
+                (line_count > 1 or
+                    displayLabelEstimatedWidth(node_item.label, font_size) + 16.0 >
+                        options.node_width);
+            if (fitted_label) {
+                const fitted = fitGraphvizPolygonLabel(
+                    graphvizSerifLabelWidth(node_item.label, font_size),
+                    @as(f64, @floatFromInt(line_count)) * font_size * (15.0 / 14.0),
+                    options.node_width,
+                    options.node_height,
+                    8,
+                    0,
+                );
+                width = @max(width, fitted.width);
+                height = @max(height, fitted.height);
+            } else {
+                width = @max(width, text_width + options.node_padding_x * 3.0);
+            }
+            if (fitted_label) {
+                const additional_peripheries: f64 = switch (node_item.shape) {
+                    .doubleoctagon => 8.0,
+                    .tripleoctagon => 16.0,
+                    else => 0,
+                };
+                width += additional_peripheries;
+                height += additional_peripheries;
+            }
+        },
+        .trapezium, .invtrapezium, .house, .invhouse, .pentagon, .hexagon, .septagon, .star, .note, .tab, .folder, .box3d, .component, .promoter, .cds, .terminator, .utr, .primersite, .restrictionsite, .fivepoverhang, .threepoverhang, .noverhang, .assembly, .signature, .insulator, .ribosite, .rnastab, .proteasesite, .proteinstab, .rpromoter, .lpromoter, .larrow, .rarrow => {
             width = @max(width, text_width + options.node_padding_x * 3.0);
         },
         .egg => {
@@ -9078,6 +9128,111 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     }
     applyNodeSizeAttrs(node_item, &width, &height);
     return .{ .width = width, .height = height };
+}
+
+fn graphvizDefaultSerifFont(attrs: []const Attr) bool {
+    const font_name = attrValue(attrs, "fontname") orelse return true;
+    return std.ascii.eqlIgnoreCase(font_name, "Times") or
+        std.ascii.eqlIgnoreCase(font_name, "Times-Roman") or
+        std.ascii.eqlIgnoreCase(font_name, "DejaVu Serif") or
+        std.ascii.eqlIgnoreCase(font_name, "serif");
+}
+
+fn graphvizSerifLabelWidth(text: []const u8, font_size: f64) f64 {
+    var line_width: f64 = 0;
+    var max_width: f64 = 0;
+    for (text) |c| {
+        if (isLabelLineBreak(c)) {
+            max_width = @max(max_width, line_width);
+            line_width = 0;
+            continue;
+        }
+        if (c == '\t') {
+            line_width += graphvizSerifAdvance(' ', font_size) * 4.0;
+        } else if ((c & 0xc0) != 0x80) {
+            line_width += graphvizSerifAdvance(c, font_size);
+        }
+    }
+    return @max(max_width, line_width);
+}
+
+fn graphvizSerifAdvance(c: u8, font_size: f64) f64 {
+    if (c >= graphviz_serif_ascii_advances.len) return font_size;
+    const advance = graphviz_serif_ascii_advances[c];
+    if (advance < 0) return 0;
+    return @as(f64, @floatFromInt(advance)) * font_size / 2048.0;
+}
+
+// DejaVu Serif is Graphviz's first available Times-Roman Pango fallback on
+// common Linux installations and the browser fallback for Vex's SVG `serif`.
+// Embedding only ASCII advances keeps layout deterministic and avoids a
+// runtime dependency on host font discovery.
+const graphviz_serif_ascii_advances = [_]i16{
+    -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+    -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+    651,  823,  942,  1716, 1303, 1946, 1823, 563,  799,  799,  1024, 1716, 651,  692,  651,  690,
+    1303, 1303, 1303, 1303, 1303, 1303, 1303, 1303, 1303, 1303, 690,  690,  1716, 1716, 1716, 1098,
+    2048, 1479, 1505, 1567, 1642, 1495, 1421, 1636, 1786, 809,  821,  1530, 1360, 2097, 1792, 1679,
+    1378, 1679, 1542, 1403, 1366, 1726, 1479, 2105, 1458, 1352, 1423, 799,  690,  799,  1716, 1024,
+    1024, 1221, 1311, 1147, 1311, 1212, 758,  1311, 1319, 655,  635,  1241, 655,  1942, 1319, 1233,
+    1311, 1311, 979,  1051, 823,  1319, 1157, 1753, 1155, 1157, 1079, 1303, 690,  1303, 1716, -1,
+};
+
+fn fitGraphvizPolygonLabel(
+    label_width: f64,
+    label_height: f64,
+    minimum_width: f64,
+    minimum_height: f64,
+    sides: usize,
+    skew: f64,
+) NodeSize {
+    if (sides < 3) return .{ .width = label_width, .height = label_height };
+    // Graphviz poly_init pads by 4pt horizontally and 2pt vertically on each
+    // side, fits the rectangle in a centered ellipse, and then scales by the
+    // polygon side angle. Spare minimum height is reused for single-line
+    // labels instead of expanding both dimensions.
+    var width = label_width + 16.0;
+    var height = label_height + 8.0;
+    const ellipse_height = height * std.math.sqrt2;
+    if (minimum_height > ellipse_height) {
+        const ratio = height / minimum_height;
+        width *= @sqrt(1.0 / @max(1.0 - ratio * ratio, 0.0001));
+    } else {
+        width *= std.math.sqrt2;
+        height = ellipse_height;
+    }
+    const side_scale = 1.0 / @cos(std.math.pi / @as(f64, @floatFromInt(sides)));
+    width *= side_scale;
+    height *= side_scale;
+    const vertex_scale = graphvizPolygonVertexBboxScale(sides, skew);
+    return .{
+        // The fitted ellipse/side box is already the minimum node box.
+        // Transformed vertices may enlarge it (skewed parallelograms), but a
+        // regular polygon's inscribed vertices must never shrink it.
+        .width = @max(minimum_width, @max(width, width * vertex_scale.width)),
+        .height = @max(minimum_height, @max(height, height * vertex_scale.height)),
+    };
+}
+
+fn graphvizPolygonVertexBboxScale(sides: usize, skew: f64) NodeSize {
+    const sector = 2.0 * std.math.pi / @as(f64, @floatFromInt(sides));
+    const side_length = @sin(sector / 2.0);
+    const skew_distance = std.math.hypot(@abs(skew), 1.0);
+    var angle = (sector - std.math.pi) / 2.0;
+    var x = 0.5 * @cos(angle);
+    var y = 0.5 * @sin(angle);
+    var max_x: f64 = 0;
+    var max_y: f64 = 0;
+    angle += (std.math.pi - sector) / 2.0;
+    for (0..sides) |_| {
+        angle += sector;
+        x += side_length * @cos(angle);
+        y += side_length * @sin(angle);
+        const transformed_x = x * skew_distance + y * skew / 2.0;
+        max_x = @max(max_x, @abs(transformed_x));
+        max_y = @max(max_y, @abs(y));
+    }
+    return .{ .width = max_x * 2.0, .height = max_y * 2.0 };
 }
 
 fn applyNodeSizeAttrs(node_item: Node, width: *f64, height: *f64) void {
@@ -23990,6 +24145,33 @@ fn maybeNodeIdByLabel(graph: *const Graph, label: []const u8) ?NodeId {
 
 fn nodeIdByLabel(graph: *const Graph, label: []const u8) NodeId {
     return maybeNodeIdByLabel(graph, label) orelse @panic("missing node label");
+}
+
+test "Graphviz polygon fitting matches standard serif shapes" {
+    const parallelogram = fitGraphvizPolygonLabel(
+        189.0615234375,
+        75,
+        54,
+        36,
+        4,
+        0.6,
+    );
+    const octagon = fitGraphvizPolygonLabel(
+        145.9404296875,
+        75,
+        54,
+        36,
+        8,
+        0,
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 425.2), parallelogram.width, 0.2);
+    try std.testing.expectApproxEqAbs(@as(f64, 166.0), parallelogram.height, 0.1);
+    try std.testing.expectApproxEqAbs(@as(f64, 247.9), octagon.width, 0.2);
+    try std.testing.expectApproxEqAbs(@as(f64, 127.05), octagon.height, 0.1);
+
+    const thin = fitGraphvizPolygonLabel(208.591796875, 15, 54, 36, 4, 0.6);
+    try std.testing.expectApproxEqAbs(@as(f64, 428.0), thin.width, 0.2);
+    try std.testing.expectApproxEqAbs(@as(f64, 36.0), thin.height, 0.1);
 }
 
 test "code API builds graph and layered layout" {
