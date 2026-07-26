@@ -5021,9 +5021,6 @@ fn orientUndirectedLayeredGraph(
 
     var adjacency = try EdgeAdjacency.init(allocator, graph);
     defer adjacency.deinit();
-    const degrees = try allocator.alloc(usize, graph.nodes.items.len);
-    defer allocator.free(degrees);
-    for (degrees, 0..) |*degree, node_id| degree.* = adjacency.incident(node_id).len;
     const undiscovered = std.math.maxInt(usize);
     const discovery = try allocator.alloc(usize, graph.nodes.items.len);
     defer allocator.free(discovery);
@@ -5047,7 +5044,6 @@ fn orientUndirectedLayeredGraph(
                 incident,
                 UndirectedNeighborOrderContext{
                     .graph = graph,
-                    .degrees = degrees,
                     .node_id = node_id,
                 },
                 lessThanUndirectedNeighbor,
@@ -5142,17 +5138,16 @@ fn normalizeSameRankEdgeMinlen(
 
 const UndirectedNeighborOrderContext = struct {
     graph: *const Graph,
-    degrees: []const usize,
     node_id: NodeId,
 };
 
 fn lessThanUndirectedNeighbor(context: UndirectedNeighborOrderContext, left_edge: EdgeId, right_edge: EdgeId) bool {
     const left = undirectedEdgeNeighbor(context.graph, left_edge, context.node_id) orelse return false;
     const right = undirectedEdgeNeighbor(context.graph, right_edge, context.node_id) orelse return true;
-    const left_degree = if (left < context.degrees.len) context.degrees[left] else 0;
-    const right_degree = if (right < context.degrees.len) context.degrees[right] else 0;
-    if (left_degree != right_degree) return left_degree > right_degree;
-    if (left != right) return left > right;
+    // NodeId order follows first declaration and is therefore the stable
+    // undirected analogue of DOT statement order. Degree-first discovery can
+    // over-focus hubs and gives crossing reduction a much poorer initial DAG.
+    if (left != right) return left < right;
     return left_edge < right_edge;
 }
 
@@ -5510,7 +5505,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         acyclic_edge,
         rank_pivot_limit,
     );
-    if (graph.directed) {
+    if (layout_graph.directed) {
         balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
     }
     applyTopBottomBalance(layout_graph, ranks);
@@ -28641,6 +28636,10 @@ test "sparse undirected layered orientation is acyclic and density bounded" {
     defer if (oriented == &oriented_storage) oriented_storage.edges.deinit(allocator);
     try std.testing.expect(oriented == &oriented_storage);
     try std.testing.expect(oriented.directed);
+    try std.testing.expectEqual(a, oriented.edges.items[0].from);
+    try std.testing.expectEqual(c, oriented.edges.items[0].to);
+    try std.testing.expectEqual(b, oriented.edges.items[1].from);
+    try std.testing.expectEqual(d, oriented.edges.items[1].to);
     var indegree = [_]usize{0} ** 4;
     for (oriented.edges.items) |edge_item| indegree[edge_item.to] += 1;
     var visited: usize = 0;
