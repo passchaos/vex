@@ -5689,6 +5689,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
     refineSmallDirectedCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes);
     refineContinuousCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 4);
+    refineClusterOwnerGroupCrossings(layout_graph, ranks, centers, axis_sizes, 3);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -13270,6 +13271,197 @@ fn appendContinuousCandidate(
     if (count.* >= candidates.len) return;
     candidates[count.*] = candidate;
     count.* += 1;
+}
+
+const OwnerGroupAlongBounds = struct {
+    owner: SubgraphId,
+    min: f64,
+    max: f64,
+};
+
+fn refineClusterOwnerGroupCrossings(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    passes: usize,
+) void {
+    if (passes == 0 or graph.subgraphs.items.len == 0 or
+        graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
+        graph.subgraphs.items.len > 128 or !remincrossEnabled(graph)) return;
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+    var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
+
+    var owner_by_node: [128]?SubgraphId = undefined;
+    for (owner_by_node[0..graph.nodes.items.len], 0..) |*owner, node_id| {
+        owner.* = deepestSubgraphContainingNode(graph, node_id);
+    }
+
+    for (0..passes) |_| {
+        var changed = false;
+        var bounds: [128]OwnerGroupAlongBounds = undefined;
+        const bound_count = collectOwnerGroupAlongBounds(
+            graph,
+            owner_by_node[0..graph.nodes.items.len],
+            centers,
+            sizes,
+            &bounds,
+        );
+        for (bounds[0..bound_count]) |group| {
+            const original_min = group.min;
+            const original_max = group.max;
+            const original_center = (group.min + group.max) / 2.0;
+            var candidates: [128 * 3]f64 = undefined;
+            var candidate_count: usize = 0;
+            appendOwnerGroupCandidate(&candidates, &candidate_count, 0);
+            for (bounds[0..bound_count]) |other| {
+                if (other.owner == group.owner) continue;
+                const other_center = (other.min + other.max) / 2.0;
+                appendOwnerGroupCandidate(
+                    &candidates,
+                    &candidate_count,
+                    other.min - original_max - 24.0,
+                );
+                appendOwnerGroupCandidate(
+                    &candidates,
+                    &candidate_count,
+                    other.max - original_min + 24.0,
+                );
+                appendOwnerGroupCandidate(
+                    &candidates,
+                    &candidate_count,
+                    other_center - original_center,
+                );
+            }
+
+            var best_delta: f64 = 0;
+            var best_crossings = current_crossings;
+            for (candidates[0..candidate_count]) |delta| {
+                if (@abs(delta) <= 0.0001) continue;
+                shiftOwnerGroup(
+                    owner_by_node[0..graph.nodes.items.len],
+                    group.owner,
+                    centers,
+                    delta,
+                );
+                const legal =
+                    centersExtent(centers, sizes) <= baseline_extent + 0.0001 and
+                    allRankCentersHaveClearance(ranks, centers, sizes);
+                if (legal) {
+                    const after_crossings = countDirectCenterCrossings(
+                        graph,
+                        ranks,
+                        centers,
+                    );
+                    const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                    if (after_crossings < best_crossings and
+                        after_stress <= baseline_stress * 1.04 + 0.0001)
+                    {
+                        best_crossings = after_crossings;
+                        best_delta = delta;
+                    }
+                }
+                shiftOwnerGroup(
+                    owner_by_node[0..graph.nodes.items.len],
+                    group.owner,
+                    centers,
+                    -delta,
+                );
+            }
+            if (@abs(best_delta) > 0.0001) {
+                shiftOwnerGroup(
+                    owner_by_node[0..graph.nodes.items.len],
+                    group.owner,
+                    centers,
+                    best_delta,
+                );
+                current_crossings = best_crossings;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn collectOwnerGroupAlongBounds(
+    graph: *const Graph,
+    owner_by_node: []const ?SubgraphId,
+    centers: []const f64,
+    sizes: []const NodeSize,
+    bounds: *[128]OwnerGroupAlongBounds,
+) usize {
+    var count: usize = 0;
+    for (graph.subgraphs.items) |subgraph| {
+        var min_along = std.math.floatMax(f64);
+        var max_along = -std.math.floatMax(f64);
+        for (owner_by_node, 0..) |owner, node_id| {
+            if (owner == null or owner.? != subgraph.id or
+                node_id >= centers.len or node_id >= sizes.len) continue;
+            min_along = @min(
+                min_along,
+                centers[node_id] - sizes[node_id].width / 2.0,
+            );
+            max_along = @max(
+                max_along,
+                centers[node_id] + sizes[node_id].width / 2.0,
+            );
+        }
+        if (min_along == std.math.floatMax(f64)) continue;
+        bounds[count] = .{
+            .owner = subgraph.id,
+            .min = min_along,
+            .max = max_along,
+        };
+        count += 1;
+    }
+    return count;
+}
+
+fn appendOwnerGroupCandidate(
+    candidates: *[128 * 3]f64,
+    count: *usize,
+    candidate: f64,
+) void {
+    for (candidates[0..count.*]) |existing| {
+        if (@abs(existing - candidate) <= 0.0001) return;
+    }
+    if (count.* >= candidates.len) return;
+    candidates[count.*] = candidate;
+    count.* += 1;
+}
+
+fn shiftOwnerGroup(
+    owner_by_node: []const ?SubgraphId,
+    owner: SubgraphId,
+    centers: []f64,
+    delta: f64,
+) void {
+    for (owner_by_node, 0..) |node_owner, node_id| {
+        if (node_owner != null and node_owner.? == owner and node_id < centers.len) {
+            centers[node_id] += delta;
+        }
+    }
+}
+
+fn allRankCentersHaveClearance(
+    ranks: []const usize,
+    centers: []const f64,
+    sizes: []const NodeSize,
+) bool {
+    for (ranks, 0..) |left_rank, left| {
+        if (left >= centers.len or left >= sizes.len) return false;
+        for (ranks[left + 1 ..], left + 1..) |right_rank, right| {
+            if (left_rank != right_rank) continue;
+            if (right >= centers.len or right >= sizes.len) return false;
+            if (@abs(centers[left] - centers[right]) + 0.0001 <
+                sizes[left].width / 2.0 + sizes[right].width / 2.0)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
@@ -34097,6 +34289,50 @@ test "continuous center sifting removes crossings without expanding extent" {
     for (levels) |level| {
         try std.testing.expect(centerLevelHasClearance(level.items, &centers, &sizes));
     }
+}
+
+test "cluster owner group sifting moves members together" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    const group = try graph.addSubgraph("group", null, &.{ a, b }, .{});
+    _ = try graph.addSubgraph("c-owner", null, &.{c}, .{});
+    _ = try graph.addSubgraph("d-owner", null, &.{d}, .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(c, b, .{});
+
+    const ranks = [_]usize{ 0, 1, 0, 1 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 10, 70, 70 };
+    const original_delta = centers[b] - centers[a];
+    const before = countDirectCenterCrossings(&graph, &ranks, &centers);
+    refineClusterOwnerGroupCrossings(
+        &graph,
+        &ranks,
+        &centers,
+        &sizes,
+        3,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), before);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expectEqual(original_delta, centers[b] - centers[a]);
+    try std.testing.expect(
+        deepestSubgraphContainingNode(&graph, a).? == group,
+    );
+    try std.testing.expect(allRankCentersHaveClearance(&ranks, &centers, &sizes));
 }
 
 test "touched-edge crossing score matches full swap delta" {
