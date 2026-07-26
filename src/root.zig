@@ -5688,6 +5688,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
     refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
     refineSmallDirectedCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes);
+    refineContinuousCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 4);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -13160,6 +13161,115 @@ fn trySmallDirectedCenterSwap(
         std.mem.swap(f64, &centers[left], &centers[right]);
     }
     return null;
+}
+
+fn refineContinuousCenterCrossings(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    passes: usize,
+) void {
+    if (passes == 0 or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len > 128 or graph.edges.items.len > 256) return;
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+    var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
+    var edge_adjacency = EdgeAdjacency.init(graph.allocator, graph) catch return;
+    defer edge_adjacency.deinit();
+
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            if (level.items.len == 0) continue;
+            var ordered: [128]NodeId = undefined;
+            if (level.items.len > ordered.len) continue;
+            @memcpy(ordered[0..level.items.len], level.items);
+            std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+                fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                    if (left >= node_centers.len or right >= node_centers.len) return left < right;
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan);
+
+            for (ordered[0..level.items.len], 0..) |node_id, index| {
+                if (node_id >= centers.len or node_id >= sizes.len or
+                    node_id >= graph.nodes.items.len) continue;
+                if (nodeGroupName(graph.nodes.items[node_id]) != null) continue;
+                const original = centers[node_id];
+                const lower = if (index == 0)
+                    @max(sizes[node_id].width / 2.0, original - 150.0)
+                else lower: {
+                    const previous = ordered[index - 1];
+                    break :lower centers[previous] + sizes[previous].width / 2.0 +
+                        sizes[node_id].width / 2.0;
+                };
+                const upper = if (index + 1 == level.items.len)
+                    @min(baseline_extent - sizes[node_id].width / 2.0, original + 150.0)
+                else upper: {
+                    const next = ordered[index + 1];
+                    break :upper centers[next] - sizes[next].width / 2.0 -
+                        sizes[node_id].width / 2.0;
+                };
+                if (lower > upper + 0.0001) continue;
+
+                var candidates: [16]f64 = undefined;
+                var candidate_count: usize = 0;
+                appendContinuousCandidate(
+                    &candidates,
+                    &candidate_count,
+                    std.math.clamp(original, lower, upper),
+                );
+                appendContinuousCandidate(&candidates, &candidate_count, lower);
+                appendContinuousCandidate(&candidates, &candidate_count, upper);
+                appendContinuousCandidate(&candidates, &candidate_count, (lower + upper) / 2.0);
+                for (edge_adjacency.incident(node_id)) |edge_id| {
+                    if (edge_id >= graph.edges.items.len or candidate_count >= candidates.len) break;
+                    const edge_item = graph.edges.items[edge_id];
+                    const neighbor = if (edge_item.from == node_id) edge_item.to else edge_item.from;
+                    if (neighbor >= centers.len) continue;
+                    appendContinuousCandidate(
+                        &candidates,
+                        &candidate_count,
+                        std.math.clamp(centers[neighbor], lower, upper),
+                    );
+                }
+
+                var best_center = original;
+                var best_crossings = current_crossings;
+                for (candidates[0..candidate_count]) |candidate| {
+                    centers[node_id] = candidate;
+                    const after_crossings = countDirectCenterCrossings(graph, ranks, centers);
+                    if (after_crossings >= best_crossings) continue;
+                    const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                    if (after_stress > baseline_stress * 1.04 + 0.0001) continue;
+                    best_center = candidate;
+                    best_crossings = after_crossings;
+                }
+                centers[node_id] = best_center;
+                if (best_crossings < current_crossings) {
+                    current_crossings = best_crossings;
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn appendContinuousCandidate(
+    candidates: *[16]f64,
+    count: *usize,
+    candidate: f64,
+) void {
+    for (candidates[0..count.*]) |existing| {
+        if (@abs(existing - candidate) <= 0.0001) return;
+    }
+    if (count.* >= candidates.len) return;
+    candidates[count.*] = candidate;
+    count.* += 1;
 }
 
 fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
@@ -33940,6 +34050,53 @@ test "post-spacing transpose accepts unequal-size slots with clearance" {
     try std.testing.expectEqual(@as(usize, 1), before);
     try std.testing.expectEqual(@as(usize, 0), after);
     try std.testing.expect(centerLevelHasClearance(levels[1].items, &centers, &sizes));
+}
+
+test "continuous center sifting removes crossings without expanding extent" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(c, d, .{});
+
+    const ranks = [_]usize{ 0, 2, 1, 3 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty, .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, a);
+    try levels[1].append(allocator, c);
+    try levels[2].append(allocator, b);
+    try levels[3].append(allocator, d);
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 70, 70, 10 };
+    const before_crossings = countDirectCenterCrossings(&graph, &ranks, &centers);
+    const before_extent = centersExtent(&centers, &sizes);
+    refineContinuousCenterCrossings(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        4,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), before_crossings);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expect(centersExtent(&centers, &sizes) <= before_extent + 0.0001);
+    for (levels) |level| {
+        try std.testing.expect(centerLevelHasClearance(level.items, &centers, &sizes));
+    }
 }
 
 test "touched-edge crossing score matches full swap delta" {
