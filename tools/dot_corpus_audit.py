@@ -37,9 +37,7 @@ KNOWN_SLOW_SVG: set[Path] = set()
 KNOWN_LARGE_SLOW_SVG = {
     Path("2064.dot"),
     Path("2108.dot"),
-    Path("2371.dot"),
     Path("2593.dot"),
-    Path("2646.dot"),
 }
 LARGE_SVG_MIN_BYTES = 256 * 1024
 BASELINE = {
@@ -72,9 +70,9 @@ SVG_BASELINE = {
 }
 LARGE_SVG_BASELINE = {
     "candidates": 16,
-    "ok": 10,
+    "ok": 12,
     "malformed": 1,
-    "slow": 5,
+    "slow": 3,
     "timeout": 0,
     "failed": 0,
     "nonfinite": 0,

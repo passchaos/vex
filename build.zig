@@ -134,6 +134,21 @@ pub fn build(b: *std.Build) void {
     const layered_tall_scale_step = b.step("test-layered-tall-scale", "Run tall narrow layered crossing scale gate");
     layered_tall_scale_step.dependOn(&run_layered_tall_scale.step);
 
+    const waypoint_scale = b.addExecutable(.{
+        .name = "vex-waypoint-scale",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/waypoint_scale.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "vex", .module = mod },
+            },
+        }),
+    });
+    const run_waypoint_scale = b.addRunArtifact(waypoint_scale);
+    const waypoint_scale_step = b.step("test-waypoint-scale", "Run high-minlen waypoint layout/SVG scale gate");
+    waypoint_scale_step.dependOn(&run_waypoint_scale.step);
+
     const parallel_layout_scale = b.addExecutable(.{
         .name = "vex-parallel-layout-scale",
         .root_module = b.createModule(.{
@@ -374,6 +389,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_parse_scale.step);
     test_step.dependOn(&run_layout_render_scale.step);
     test_step.dependOn(&run_layered_tall_scale.step);
+    test_step.dependOn(&run_waypoint_scale.step);
     test_step.dependOn(&run_parallel_layout_scale.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.

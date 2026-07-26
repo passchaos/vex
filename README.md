@@ -366,9 +366,9 @@ Any new timeout, renderer failure, non-finite numeric attribute, or invalid XML
 fails the audit.
 
 `zig build audit-large-svg-corpus -Dgraphviz-root=/path/to/graphviz` covers
-the 16 non-HTML fixtures from 256 KiB through 16 MiB. Ten complete as valid XML
+the 16 non-HTML fixtures from 256 KiB through 16 MiB. Twelve complete as valid XML
 SVG under an eight-second per-fixture gate, one trailing-binary fixture is
-tracked as malformed, and five very large native-layout fixtures form the
+tracked as malformed, and three very large native-layout fixtures form the
 explicit optimization queue. New timeouts, failures, non-finite attributes, or
 invalid XML fail the audit.
 
@@ -388,6 +388,13 @@ and many long edges. Its ReleaseFast gate requires the default 24 crossing
 passes to finish within three seconds and a 40 MiB layout arena. This catches
 full-graph work accidentally repeated once per narrow rank, which the wider
 crossing-grid workload cannot expose.
+
+`zig build test-waypoint-scale` protects long-edge routing with an
+18,432-node / 16,896-edge graph containing 152,064 waypoints. It requires
+ReleaseFast layout and SVG rendering to stay within two seconds each and fixed
+48 MiB arenas. The renderer indexes nodes by rank, so waypoint obstacle checks
+visit only the relevant rank while preserving NodeId candidate order and exact
+SVG bytes.
 
 ## Mainstream DOT support
 

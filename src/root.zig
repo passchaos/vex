@@ -4427,6 +4427,48 @@ pub const EdgeWaypoints = layout_mod.result.EdgeWaypoints;
 pub const EdgeSplineSegment = layout_mod.result.EdgeSplineSegment;
 pub const EdgeSpline = layout_mod.result.EdgeSpline;
 
+const RankNodes = struct {
+    offsets: []usize,
+    node_ids: []NodeId,
+
+    fn init(allocator: std.mem.Allocator, ranks: []const usize) !RankNodes {
+        var max_rank: usize = 0;
+        for (ranks) |rank| max_rank = @max(max_rank, rank);
+        const rank_count = if (ranks.len == 0) 0 else max_rank + 1;
+        const offsets = try allocator.alloc(usize, rank_count + 1);
+        errdefer allocator.free(offsets);
+        @memset(offsets, 0);
+        for (ranks) |rank| offsets[rank + 1] += 1;
+        for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
+
+        const node_ids = try allocator.alloc(NodeId, ranks.len);
+        errdefer allocator.free(node_ids);
+        const cursors = try allocator.dupe(usize, offsets[0..rank_count]);
+        defer allocator.free(cursors);
+        // Iterating NodeId order preserves the exact candidate order of the
+        // previous full-node scan, so indexing changes cost rather than route.
+        for (ranks, 0..) |rank, node_id| {
+            node_ids[cursors[rank]] = node_id;
+            cursors[rank] += 1;
+        }
+        return .{
+            .offsets = offsets,
+            .node_ids = node_ids,
+        };
+    }
+
+    fn deinit(self: *RankNodes, allocator: std.mem.Allocator) void {
+        allocator.free(self.offsets);
+        allocator.free(self.node_ids);
+        self.* = undefined;
+    }
+
+    fn at(self: *const RankNodes, rank: usize) []const NodeId {
+        if (rank +| 1 >= self.offsets.len) return &.{};
+        return self.node_ids[self.offsets[rank]..self.offsets[rank + 1]];
+    }
+};
+
 pub const Layout = struct {
     allocator: std.mem.Allocator,
     graph: Graph,
@@ -4439,6 +4481,7 @@ pub const Layout = struct {
     aspect_applied: bool = false,
     aspect_output: ?Point = null,
     ranks: []usize,
+    rank_nodes: ?RankNodes = null,
     rank_depths: []f64,
     rank_heights: []f64,
     margin: f64,
@@ -4460,6 +4503,7 @@ pub const Layout = struct {
         self.allocator.free(self.subgraphs);
         self.allocator.free(self.edge_waypoints);
         self.allocator.free(self.ranks);
+        if (self.rank_nodes) |*rank_nodes| rank_nodes.deinit(self.allocator);
         self.allocator.free(self.rank_depths);
         self.allocator.free(self.rank_heights);
         self.graph.deinit();
@@ -5195,6 +5239,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         .width = axes.layoutWidth(base_along, base_depth),
         .height = axes.layoutHeight(base_along, base_depth),
     };
+    result.rank_nodes = RankNodes.init(allocator, result.ranks) catch null;
     applyLayeredAspect(layout_graph, &result);
     return result;
 }
@@ -20274,14 +20319,26 @@ fn pointInsideCluster(point: Point, cluster_box: SubgraphLayout) bool {
 fn avoidNodeAtRankForWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, rank: usize, point: Point) Point {
     var result = point;
     const clearance = 12.0;
-    for (layout.nodes, 0..) |node, node_id| {
-        if (node_id == edge_item.from or node_id == edge_item.to) continue;
+    if (layout.rank_nodes) |*rank_nodes| {
+        for (rank_nodes.at(rank)) |node_id| {
+            avoidNodeForWaypoint(layout, edge_item, rankdir, clearance, node_id, &result);
+        }
+        return result;
+    }
+    for (layout.nodes, 0..) |_, node_id| {
         if (node_id >= layout.ranks.len or layout.ranks[node_id] != rank) continue;
-        if (!pointInsideNodeWithPadding(result, node, clearance)) continue;
-        const push_negative = pointAlongAxis(layout.nodes[edge_item.from].center, rankdir) <= pointAlongAxis(node.center, rankdir);
-        result = pushWaypointOutsideNode(result, node, rankdir, clearance, push_negative);
+        avoidNodeForWaypoint(layout, edge_item, rankdir, clearance, node_id, &result);
     }
     return result;
+}
+
+fn avoidNodeForWaypoint(layout: *const Layout, edge_item: Edge, rankdir: RankDir, clearance: f64, node_id: NodeId, result: *Point) void {
+    if (node_id >= layout.nodes.len) return;
+    if (node_id == edge_item.from or node_id == edge_item.to) return;
+    const node = layout.nodes[node_id];
+    if (!pointInsideNodeWithPadding(result.*, node, clearance)) return;
+    const push_negative = pointAlongAxis(layout.nodes[edge_item.from].center, rankdir) <= pointAlongAxis(node.center, rankdir);
+    result.* = pushWaypointOutsideNode(result.*, node, rankdir, clearance, push_negative);
 }
 
 fn pointInsideNodeWithPadding(point: Point, node: NodeLayout, padding: f64) bool {
@@ -32411,6 +32468,7 @@ test "long-edge waypoints avoid same-rank node boxes" {
     layout.ranks[0] = 0;
     layout.ranks[1] = 1;
     layout.ranks[2] = 2;
+    layout.rank_nodes = try RankNodes.init(allocator, layout.ranks);
     layout.rank_depths[0] = 0;
     layout.rank_depths[1] = 70;
     layout.rank_depths[2] = 140;
@@ -32424,8 +32482,13 @@ test "long-edge waypoints avoid same-rank node boxes" {
         .to = 2,
     };
     const waypoint = longEdgeWaypoint(&layout, edge_item, .TB, 0, 0, 1);
+    const rank_nodes = layout.rank_nodes.?;
+    layout.rank_nodes = null;
+    const fallback_waypoint = longEdgeWaypoint(&layout, edge_item, .TB, 0, 0, 1);
+    layout.rank_nodes = rank_nodes;
     try std.testing.expect(!pointInsideNodeWithPadding(waypoint, layout.nodes[1], 0));
     try std.testing.expect(waypoint.x < layout.nodes[1].center.x - layout.nodes[1].width / 2.0);
+    try std.testing.expectEqual(fallback_waypoint, waypoint);
 }
 
 test "SVG routes skip-rank edges through intermediate waypoints" {
