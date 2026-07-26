@@ -5886,6 +5886,15 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         @min(20, effective_options.coordinate_passes *| 5),
     );
     if (explicit_rank_compacted) normalizeCenters(centers, axis_sizes);
+    refineExplicitRankSlotSifting(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        3,
+    );
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -13911,6 +13920,123 @@ fn allNodesHaveActiveSameRankConstraint(graph: *const Graph) bool {
         if (!found) return false;
     }
     return graph.nodes.items.len > 0;
+}
+
+fn refineExplicitRankSlotSifting(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    passes: usize,
+) void {
+    if (passes == 0 or !allNodesHaveActiveSameRankConstraint(graph) or
+        graph.subgraphs.items.len != 0 or graph.nodes.items.len > 128 or
+        graph.edges.items.len > 256) return;
+    if (orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return;
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    var current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    var current_stress = baseline_stress;
+    var slots: [128]f64 = undefined;
+    var order: [128]NodeId = undefined;
+    var candidate_order: [128]NodeId = undefined;
+    var backup: [128]f64 = undefined;
+
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            if (level.items.len <= 1 or level.items.len > order.len) continue;
+            const first = level.items[0];
+            if (first >= sizes.len) continue;
+            var equal_widths = true;
+            for (level.items) |node_id| {
+                if (node_id >= centers.len or node_id >= sizes.len or
+                    @abs(sizes[node_id].width - sizes[first].width) > 0.0001)
+                {
+                    equal_widths = false;
+                    break;
+                }
+            }
+            if (!equal_widths) continue;
+
+            @memcpy(order[0..level.items.len], level.items);
+            std.mem.sort(NodeId, order[0..level.items.len], centers, struct {
+                fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan);
+            for (order[0..level.items.len], 0..) |node_id, index| {
+                slots[index] = centers[node_id];
+            }
+
+            var source_index: usize = 0;
+            while (source_index < level.items.len) : (source_index += 1) {
+                var best_target = source_index;
+                var best_crossings = current_crossings;
+                var best_stress = current_stress;
+                var target_index: usize = 0;
+                while (target_index < level.items.len) : (target_index += 1) {
+                    if (target_index == source_index) continue;
+                    @memcpy(candidate_order[0..level.items.len], order[0..level.items.len]);
+                    moveLevelItem(
+                        candidate_order[0..level.items.len],
+                        source_index,
+                        target_index,
+                    );
+                    for (candidate_order[0..level.items.len], slots[0..level.items.len]) |candidate, slot| {
+                        backup[candidate] = centers[candidate];
+                        centers[candidate] = slot;
+                    }
+                    const after_crossings = countPhysicalCenterCrossings(
+                        graph,
+                        ranks,
+                        centers,
+                        physical_depths,
+                    );
+                    const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                    for (candidate_order[0..level.items.len]) |candidate| {
+                        centers[candidate] = backup[candidate];
+                    }
+                    if (after_stress > baseline_stress * 1.04 + 0.0001) continue;
+                    if (after_crossings < best_crossings or
+                        (after_crossings == best_crossings and
+                            after_stress + 0.0001 < best_stress))
+                    {
+                        best_target = target_index;
+                        best_crossings = after_crossings;
+                        best_stress = after_stress;
+                    }
+                }
+                if (best_target == source_index) continue;
+                moveLevelItem(order[0..level.items.len], source_index, best_target);
+                for (order[0..level.items.len], slots[0..level.items.len]) |candidate, slot| {
+                    centers[candidate] = slot;
+                }
+                current_crossings = best_crossings;
+                current_stress = best_stress;
+                changed = true;
+                source_index = 0;
+            }
+        }
+        if (!changed) break;
+    }
 }
 
 fn projectOutgoingDfsOrder(
@@ -35389,6 +35515,8 @@ test "direct center transpose reduces crossings without moving ranks" {
         .{ .width = 20, .height = 20 },
         .{ .width = 20, .height = 20 },
         .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
     };
     var centers = [_]f64{ 10, 40, 10, 40 };
     const before = countDirectCenterCrossings(&graph, &ranks, &centers);
@@ -35436,6 +35564,57 @@ test "width-aware center transpose preserves heterogeneous pair boundaries" {
 
     applySmallDirectedCenterSwap(&centers, move, false);
     try std.testing.expectEqualSlices(f64, &.{ 20, 70 }, &centers);
+}
+
+test "explicit rank slot sifting checks every legal insertion slot" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper_0 = try graph.addNode("u0", .{});
+    const upper_1 = try graph.addNode("u1", .{});
+    const upper_2 = try graph.addNode("u2", .{});
+    const upper_3 = try graph.addNode("u3", .{});
+    const lower_0 = try graph.addNode("v0", .{});
+    const lower_1 = try graph.addNode("v1", .{});
+    const lower_2 = try graph.addNode("v2", .{});
+    const lower_3 = try graph.addNode("v3", .{});
+    _ = try graph.addEdge(upper_0, lower_3, .{});
+    _ = try graph.addEdge(upper_1, lower_2, .{});
+    _ = try graph.addEdge(upper_2, lower_1, .{});
+    _ = try graph.addEdge(upper_3, lower_0, .{});
+    try graph.addRankConstraint(.same, &.{ upper_0, upper_1, upper_2, upper_3 });
+    try graph.addRankConstraint(.same, &.{ lower_0, lower_1, lower_2, lower_3 });
+
+    const ranks = [_]usize{ 0, 0, 0, 0, 1, 1, 1, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ upper_0, upper_1, upper_2, upper_3 });
+    try levels[1].appendSlice(allocator, &.{ lower_0, lower_1, lower_2, lower_3 });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 30, 50, 70, 10, 30, 50, 70 };
+    const before = countDirectCenterCrossings(&graph, &ranks, &centers);
+    refineExplicitRankSlotSifting(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        3,
+    );
+    const after = countDirectCenterCrossings(&graph, &ranks, &centers);
+    try std.testing.expectEqual(@as(usize, 6), before);
+    try std.testing.expectEqual(@as(usize, 0), after);
+    try std.testing.expect(allRankCentersHaveClearance(&ranks, &centers, &sizes));
 }
 
 test "post-spacing transpose accepts unequal-size slots with clearance" {
