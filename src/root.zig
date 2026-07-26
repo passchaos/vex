@@ -728,6 +728,7 @@ pub const Graph = struct {
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
     subgraphs: std.ArrayList(Subgraph) = .empty,
+    first_subgraph_by_node: std.ArrayList(?SubgraphId) = .empty,
     rank_constraints: std.ArrayList(RankConstraint) = .empty,
     attrs: std.ArrayList(Attr) = .empty,
     node_default_attrs: std.ArrayList(Attr) = .empty,
@@ -783,6 +784,7 @@ pub const Graph = struct {
             self.allocator.free(cluster.nodes);
             freeAttrList(self.allocator, &cluster.attrs);
         }
+        self.first_subgraph_by_node.deinit(self.allocator);
         for (self.rank_constraints.items) |constraint| {
             self.allocator.free(constraint.node_ids);
         }
@@ -827,6 +829,8 @@ pub const Graph = struct {
         };
         try self.nodes.append(self.allocator, n);
         errdefer _ = self.removeLastNode(id);
+        try self.first_subgraph_by_node.append(self.allocator, null);
+        errdefer _ = self.first_subgraph_by_node.pop();
         try self.applyNodeOptions(id, options);
         return id;
     }
@@ -837,6 +841,7 @@ pub const Graph = struct {
         self.allocator.free(node.label);
         self.allocator.free(node.color);
         freeAttrList(self.allocator, &node.attrs);
+        if (self.first_subgraph_by_node.items.len > id) _ = self.first_subgraph_by_node.pop();
         return true;
     }
 
@@ -958,6 +963,7 @@ pub const Graph = struct {
             .nodes = owned_nodes,
             .attrs = owned_attrs,
         });
+        for (owned_nodes) |node_id| self.recordFirstSubgraphMembership(node_id, id);
         return id;
     }
 
@@ -967,6 +973,7 @@ pub const Graph = struct {
         self.allocator.free(subgraph.label);
         self.allocator.free(subgraph.nodes);
         freeAttrList(self.allocator, &subgraph.attrs);
+        self.rebuildFirstSubgraphMembership();
         return true;
     }
 
@@ -992,6 +999,7 @@ pub const Graph = struct {
         subgraph.label = owned_label;
         subgraph.nodes = owned_nodes;
         subgraph.attrs = owned_attrs;
+        self.rebuildFirstSubgraphMembership();
     }
 
     fn mergeSubgraphContentRaw(self: *Graph, id: SubgraphId, node_ids: []const NodeId, attrs: []const Attr) !void {
@@ -1021,6 +1029,22 @@ pub const Graph = struct {
         subgraph.label = owned_label;
         subgraph.nodes = owned_nodes;
         subgraph.attrs = merged_attrs;
+        for (owned_nodes) |node_id| self.recordFirstSubgraphMembership(node_id, id);
+    }
+
+    fn recordFirstSubgraphMembership(self: *Graph, node_id: NodeId, subgraph_id: SubgraphId) void {
+        if (node_id >= self.first_subgraph_by_node.items.len) return;
+        const current = self.first_subgraph_by_node.items[node_id];
+        if (current == null or subgraph_id < current.?) {
+            self.first_subgraph_by_node.items[node_id] = subgraph_id;
+        }
+    }
+
+    fn rebuildFirstSubgraphMembership(self: *Graph) void {
+        @memset(self.first_subgraph_by_node.items, null);
+        for (self.subgraphs.items) |subgraph| {
+            for (subgraph.nodes) |node_id| self.recordFirstSubgraphMembership(node_id, subgraph.id);
+        }
     }
 
     pub fn setGraphAttr(self: *Graph, attr: GraphAttr) !void {
@@ -4549,6 +4573,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
             .shape = node_item.shape,
             .attrs = attrs,
         });
+        try result.first_subgraph_by_node.append(allocator, null);
     }
 
     for (source.edges.items) |edge_item| {
@@ -4584,6 +4609,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
             .attrs = attrs,
         });
     }
+    result.rebuildFirstSubgraphMembership();
 
     for (source.rank_constraints.items) |constraint| {
         try result.rank_constraints.append(allocator, .{
@@ -7503,6 +7529,9 @@ fn virtualNodeNeighborMedianAllEdges(graph: *const Graph, virtual_levels: *const
 }
 
 fn clusterIndexContainingNode(graph: *const Graph, node_id: NodeId) ?usize {
+    if (node_id < graph.first_subgraph_by_node.items.len) {
+        return graph.first_subgraph_by_node.items[node_id];
+    }
     for (graph.subgraphs.items, 0..) |cluster, index| {
         if (containsNode(cluster.nodes, node_id)) return index;
     }
@@ -12479,6 +12508,19 @@ fn incidentSpanCenter(graph: *const Graph, ranks: []const usize, centers: []cons
 
 fn refineLongEdgeDummyCoordinates(graph: *const Graph, levels: []const std.ArrayList(NodeId), ranks: []const usize, centers: []f64, sizes: []const NodeSize, gap: f64) void {
     if (levels.len <= 2) return;
+    // Wide, shallow graphs commonly have no dummy nodes at all. Avoid the
+    // node-by-edge refinement scan unless at least one objective edge really
+    // spans an intermediate rank.
+    var has_long_edge = false;
+    for (graph.edges.items) |edge_item| {
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        if (ranks[edge_item.from] +| 1 < ranks[edge_item.to]) {
+            has_long_edge = true;
+            break;
+        }
+    }
+    if (!has_long_edge) return;
     for (levels, 0..) |level, rank| {
         if (rank == 0 or rank + 1 >= levels.len or level.items.len == 0) continue;
         for (level.items) |node_id| {
@@ -15347,13 +15389,16 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
     defer if (node_rect_index) |*index| index.deinit();
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) continue;
+        const spline = positionedEdgeSpline(layout, edge_item.id);
+        const main_label = edge_item.label;
+        const x_label = attrValue(edge_item.attrs.items, "xlabel");
+        if (spline == null and main_label == null and x_label == null) continue;
         const visual = resolveEdgeVisual(graph, edge_item);
         if (visual.hidden) continue;
-        if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
-            includeEdgeSplineBounds(&bounds, spline);
-        }
+        if (spline) |positioned_spline| includeEdgeSplineBounds(&bounds, positioned_spline);
+        if (main_label == null and x_label == null) continue;
         const route = edgeRouteForRendering(graph, layout, edge_item);
-        if (edge_item.label) |label| {
+        if (main_label) |label| {
             const center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse
                 if (edge_item.from == edge_item.to)
                     route.label
@@ -15367,7 +15412,7 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
                     edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
             bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
         }
-        if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
+        if (x_label) |label| {
             const font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
             const center = if (node_rect_index) |*index|
                 edgeXLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, label, font_size, index)
@@ -33788,8 +33833,27 @@ test "DOT parser reopens named subgraphs by parent scope" {
     try std.testing.expectEqualStrings("3", attrValue(team.attrs.items, "penwidth").?);
     try std.testing.expectEqualStrings("Second", attrValue(team.attrs.items, "label").?);
     try std.testing.expectEqual(@as(usize, 2), team.nodes.len);
-    try std.testing.expect(containsNode(team.nodes, nodeIdByLabel(&graph, "a")));
-    try std.testing.expect(containsNode(team.nodes, nodeIdByLabel(&graph, "b")));
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expect(containsNode(team.nodes, a));
+    try std.testing.expect(containsNode(team.nodes, b));
+    try std.testing.expectEqual(team.id, clusterIndexContainingNode(&graph, a).?);
+    try std.testing.expectEqual(team.id, clusterIndexContainingNode(&graph, b).?);
+}
+
+test "subgraph membership index preserves first declaration after replacement" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const first = try graph.addSubgraph("first", null, &.{ a, b }, .{});
+    const second = try graph.addSubgraph("second", null, &.{b}, .{});
+
+    try std.testing.expectEqual(first, clusterIndexContainingNode(&graph, b).?);
+    try graph.setSubgraphContent(first, &.{a}, .{});
+    try std.testing.expectEqual(first, clusterIndexContainingNode(&graph, a).?);
+    try std.testing.expectEqual(second, clusterIndexContainingNode(&graph, b).?);
 }
 
 test "DOT parser isolates same subgraph names under different parents" {

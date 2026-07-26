@@ -366,9 +366,9 @@ Any new timeout, renderer failure, non-finite numeric attribute, or invalid XML
 fails the audit.
 
 `zig build audit-large-svg-corpus -Dgraphviz-root=/path/to/graphviz` covers
-the 16 non-HTML fixtures from 256 KiB through 16 MiB. Thirteen complete as valid XML
+the 16 non-HTML fixtures from 256 KiB through 16 MiB. Fourteen complete as valid XML
 SVG under an eight-second per-fixture gate, one trailing-binary fixture is
-tracked as malformed, and two very large native-layout fixtures form the
+tracked as malformed, and one very large native-layout fixture form the
 explicit optimization queue. New timeouts, failures, non-finite attributes, or
 invalid XML fail the audit.
 
