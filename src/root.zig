@@ -4682,7 +4682,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .fruchterman_reingold => layoutFruchtermanReingoldWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
-        .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, forceLayoutOptionsWithGraphAttrs(config.force, graph), .{}, &work),
+        .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, null, forceOptionsForAlgorithm(config.force, graph, .multilevel_spring_electrical), .{}, &work),
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
@@ -4762,7 +4762,7 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .fruchterman_reingold => layoutFruchtermanReingoldWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .stress_majorization => layoutStressMajorizationWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
         .spring_electrical => layoutSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
-        .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
+        .multilevel_spring_electrical => layoutMultilevelSpringElectricalWithPrevious(allocator, graph, previous, forceOptionsForAlgorithm(config.force, graph, .multilevel_spring_electrical), options, &work),
         .radial => layoutRadialWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .circular => layoutCircularWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
         .treemap => layoutTreemapWithControl(allocator, graph, forceLayoutOptionsWithGraphAttrs(config.force, graph), &work),
@@ -5138,6 +5138,24 @@ fn undirectedEdgeNeighbor(graph: *const Graph, edge_id: EdgeId, node_id: NodeId)
 
 fn forceLayoutOptionsWithGraphAttrs(options: ForceLayoutOptions, graph: *const Graph) ForceLayoutOptions {
     return layout_mod.options.withForceGraphAttrs(options, graph.attrs.items);
+}
+
+fn forceOptionsForAlgorithm(
+    options: ForceLayoutOptions,
+    graph: *const Graph,
+    algorithm: LayoutAlgorithm,
+) ForceLayoutOptions {
+    var result = forceLayoutOptionsWithGraphAttrs(options, graph);
+    const explicit_iterations =
+        attrValue(graph.attrs.items, "vex_layout_iterations") != null or
+        attrValue(graph.attrs.items, "layout_iterations") != null;
+    if (algorithm == .multilevel_spring_electrical and
+        !explicit_iterations and
+        options.iterations == (ForceLayoutOptions{}).iterations)
+    {
+        result.iterations = 240;
+    }
+    return result;
 }
 
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
@@ -5911,6 +5929,10 @@ fn removeForceNodeOverlaps(
     positions: []Point,
     sizes: []const NodeSize,
 ) !void {
+    // The exact minimum-axis solver is pairwise. Large force layouts already
+    // have repulsion and dedicated scale gates; do not reintroduce quadratic
+    // post-processing after Barnes-Hut sfdp.
+    if (positions.len > 512) return;
     const overlap_sizes = try allocator.alloc(layout_mod.nop.Size, sizes.len);
     defer allocator.free(overlap_sizes);
     for (sizes, overlap_sizes) |size, *overlap_size| {
@@ -6153,6 +6175,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
     try springElectricalRelax(graph, positions, displacements, options, anchors, stability, work);
     fitStressPositionsToCanvas(positions, sizes, options);
+    if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
 
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
@@ -6367,6 +6390,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     }, initial);
     defer result.deinit();
     work.work = result.work;
+    if (previous == null) try removeForceNodeOverlaps(allocator, result.positions, sizes);
 
     for (nodes, 0..) |*node, id| {
         var center = result.positions[id];
@@ -22695,6 +22719,34 @@ test "sfdp coarsens and refines large graphs" {
         displacement += distanceBetween(multi, single);
     }
     try std.testing.expect(displacement > 10);
+}
+
+test "sfdp default quality budget exceeds the shared force default" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+
+    const defaults = ForceLayoutOptions{};
+    const automatic = forceOptionsForAlgorithm(
+        defaults,
+        &graph,
+        .multilevel_spring_electrical,
+    );
+    try std.testing.expectEqual(@as(usize, 240), automatic.iterations);
+
+    const explicit = forceOptionsForAlgorithm(
+        .{ .iterations = 17 },
+        &graph,
+        .multilevel_spring_electrical,
+    );
+    try std.testing.expectEqual(@as(usize, 17), explicit.iterations);
+    try graph.setGraphAttr(.{ .vex_layout_iterations = 19 });
+    const dot_explicit = forceOptionsForAlgorithm(
+        defaults,
+        &graph,
+        .multilevel_spring_electrical,
+    );
+    try std.testing.expectEqual(@as(usize, 19), dot_explicit.iterations);
 }
 
 test "sfdp is distinct from fdp and neato on a larger graph" {

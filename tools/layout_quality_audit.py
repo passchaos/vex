@@ -299,7 +299,7 @@ def main() -> int:
         f"graphviz_crossings={aggregate_graphviz_crossings}"
     )
 
-    force_fixture = args.graphviz_root / "tests" / "windows" / "Petersen.gv"
+    force_fixture = args.graphviz_root / "tests" / "graphs" / "Petersen.gv"
     vex_force_geometry = vex_geometry(args.vex, force_fixture, "neato")
     graphviz_force_geometry = graphviz_geometry(force_fixture, "neato")
     vex_force_score = quality(*vex_force_geometry)
@@ -326,6 +326,63 @@ def main() -> int:
         raise SystemExit("petersen-neato: Vex edge-length CV exceeds Graphviz")
     if vex_stress > graphviz_stress:
         raise SystemExit("petersen-neato: Vex stress exceeds Graphviz")
+
+    vex_sfdp_geometry = vex_geometry(args.vex, force_fixture, "sfdp")
+    graphviz_sfdp_geometry = graphviz_geometry(force_fixture, "sfdp")
+    vex_sfdp_score = quality(*vex_sfdp_geometry)
+    graphviz_sfdp_score = quality(*graphviz_sfdp_geometry)
+    vex_sfdp_cv, vex_sfdp_stress = force_quality(
+        vex_sfdp_geometry[0], vex_sfdp_geometry[1]
+    )
+    graphviz_sfdp_cv, graphviz_sfdp_stress = force_quality(
+        graphviz_sfdp_geometry[0], graphviz_sfdp_geometry[1]
+    )
+    print(
+        "layout-quality-audit petersen-sfdp "
+        f"vex_overlap={vex_sfdp_score[0]} vex_crossings={vex_sfdp_score[1]} "
+        f"vex_edge_cv={vex_sfdp_cv:.3f} vex_stress={vex_sfdp_stress:.3f} "
+        f"graphviz_overlap={graphviz_sfdp_score[0]} "
+        f"graphviz_crossings={graphviz_sfdp_score[1]} "
+        f"graphviz_edge_cv={graphviz_sfdp_cv:.3f} "
+        f"graphviz_stress={graphviz_sfdp_stress:.3f}"
+    )
+    if vex_sfdp_score[0] != 0:
+        raise SystemExit("petersen-sfdp: Vex introduced node overlaps")
+    if vex_sfdp_score[1] > graphviz_sfdp_score[1]:
+        raise SystemExit("petersen-sfdp: Vex crossing count exceeds Graphviz")
+    if vex_sfdp_cv > graphviz_sfdp_cv * 1.20:
+        raise SystemExit("petersen-sfdp: Vex edge-length CV is over 20% worse")
+    if vex_sfdp_stress > graphviz_sfdp_stress:
+        raise SystemExit("petersen-sfdp: Vex stress exceeds Graphviz")
+
+    fdp_fixture = args.graphviz_root / "tests" / "graphs" / "p2.gv"
+    vex_fdp_geometry = vex_geometry(args.vex, fdp_fixture, "fdp")
+    graphviz_fdp_geometry = graphviz_geometry(fdp_fixture, "fdp")
+    vex_fdp_score = quality(*vex_fdp_geometry)
+    graphviz_fdp_score = quality(*graphviz_fdp_geometry)
+    vex_fdp_cv, vex_fdp_stress = force_quality(
+        vex_fdp_geometry[0], vex_fdp_geometry[1]
+    )
+    graphviz_fdp_cv, graphviz_fdp_stress = force_quality(
+        graphviz_fdp_geometry[0], graphviz_fdp_geometry[1]
+    )
+    print(
+        "layout-quality-audit p2-fdp "
+        f"vex_overlap={vex_fdp_score[0]} vex_crossings={vex_fdp_score[1]} "
+        f"vex_edge_cv={vex_fdp_cv:.3f} vex_stress={vex_fdp_stress:.3f} "
+        f"graphviz_overlap={graphviz_fdp_score[0]} "
+        f"graphviz_crossings={graphviz_fdp_score[1]} "
+        f"graphviz_edge_cv={graphviz_fdp_cv:.3f} "
+        f"graphviz_stress={graphviz_fdp_stress:.3f}"
+    )
+    if vex_fdp_score[0] != 0:
+        raise SystemExit("p2-fdp: Vex introduced node overlaps")
+    if vex_fdp_score[1] > graphviz_fdp_score[1]:
+        raise SystemExit("p2-fdp: Vex crossing count exceeds Graphviz")
+    if vex_fdp_cv > graphviz_fdp_cv:
+        raise SystemExit("p2-fdp: Vex edge-length CV exceeds Graphviz")
+    if vex_fdp_stress > graphviz_fdp_stress:
+        raise SystemExit("p2-fdp: Vex stress exceeds Graphviz")
     return 0
 
 
