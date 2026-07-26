@@ -5767,7 +5767,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         allow_clusterless_closure,
     );
     if (layout_graph.directed) {
-        balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
+        balanceEqualCostRanks(
+            layout_graph,
+            ranks,
+            acyclic_edge,
+            &rank_edge_adjacency,
+            acyclic_graph == reciprocal_graph and
+                layout_graph.subgraphs.items.len == 0,
+        );
     }
     applyTopBottomBalance(layout_graph, ranks);
     settleRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
@@ -10175,6 +10182,7 @@ fn balanceEqualCostRanks(
     ranks: []usize,
     acyclic_edge: []const bool,
     edge_adjacency: *const EdgeAdjacency,
+    preserve_private_branch_chains: bool,
 ) void {
     if (ranks.len <= 1 or ranks.len > 4_096) return;
     var max_rank: usize = 0;
@@ -10201,6 +10209,24 @@ fn balanceEqualCostRanks(
                 incident_edges,
             ) orelse continue;
             if (bounds.max -| bounds.min > 128) continue;
+            if (preserve_private_branch_chains and graph.nodes.items.len >= 40 and
+                bounds.max -| bounds.min >= 4 and
+                privateBranchChainEntry(
+                    graph,
+                    acyclic_edge,
+                    node_id,
+                    incident_edges,
+                    edge_adjacency,
+                ))
+            {
+                if (bounds.min < current_rank) {
+                    ranks[node_id] = bounds.min;
+                    if (!rankConstraintsSatisfied(graph, ranks)) {
+                        ranks[node_id] = current_rank;
+                    }
+                }
+                continue;
+            }
             const current_cost = incidentRankSpanCostIndexed(
                 graph,
                 ranks,
@@ -10242,6 +10268,88 @@ fn balanceEqualCostRanks(
         }
         if (!changed) break;
     }
+}
+
+fn privateBranchChainEntry(
+    graph: *const Graph,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    edge_ids: []const EdgeId,
+    edge_adjacency: *const EdgeAdjacency,
+) bool {
+    var incoming_edge: ?Edge = null;
+    var outgoing_edge: ?Edge = null;
+    for (edge_ids) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!rankEdgeActive(edge_item, acyclic_edge)) continue;
+        if (edge_item.to == node_id) {
+            if (incoming_edge != null) return false;
+            incoming_edge = edge_item;
+        } else if (edge_item.from == node_id) {
+            if (outgoing_edge != null) return false;
+            outgoing_edge = edge_item;
+        }
+    }
+    const incoming = incoming_edge orelse return false;
+    const outgoing = outgoing_edge orelse return false;
+    if (node_id >= graph.nodes.items.len or
+        !simpleRankTieShape(graph.nodes.items[node_id].shape)) return false;
+    if (@abs(@max(incoming.weight, 0) - @max(outgoing.weight, 0)) > 0.0001) {
+        return false;
+    }
+    return activeRankOutdegree(
+        graph,
+        acyclic_edge,
+        incoming.from,
+        edge_adjacency,
+    ) > 1 and activeRankIndegree(
+        graph,
+        acyclic_edge,
+        outgoing.to,
+        edge_adjacency,
+    ) == 1;
+}
+
+fn simpleRankTieShape(shape: Shape) bool {
+    return switch (shape) {
+        .ellipse, .box, .square, .circle => true,
+        else => false,
+    };
+}
+
+fn activeRankOutdegree(
+    graph: *const Graph,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    edge_adjacency: *const EdgeAdjacency,
+) usize {
+    var count: usize = 0;
+    for (edge_adjacency.incident(node_id)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (rankEdgeActive(edge_item, acyclic_edge) and edge_item.from == node_id) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn activeRankIndegree(
+    graph: *const Graph,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    edge_adjacency: *const EdgeAdjacency,
+) usize {
+    var count: usize = 0;
+    for (edge_adjacency.incident(node_id)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (rankEdgeActive(edge_item, acyclic_edge) and edge_item.to == node_id) {
+            count += 1;
+        }
+    }
+    return count;
 }
 
 fn rankBalanceDistance(rank: usize, max_rank: usize) usize {
@@ -35532,12 +35640,55 @@ test "equal-cost rank balance reduces peak layer width" {
     var adjacency = try EdgeAdjacency.init(allocator, &graph);
     defer adjacency.deinit();
     const before_cost = rankAssignmentCost(&graph, &ranks, &acyclic_edge);
-    balanceEqualCostRanks(&graph, &ranks, &acyclic_edge, &adjacency);
+    balanceEqualCostRanks(&graph, &ranks, &acyclic_edge, &adjacency, false);
 
     try std.testing.expectEqual(@as(usize, 2), ranks[movable]);
     try std.testing.expectEqual(@as(usize, 1), ranks[crowded_a]);
     try std.testing.expectEqual(@as(usize, 1), ranks[crowded_b]);
     try std.testing.expectEqual(before_cost, rankAssignmentCost(&graph, &ranks, &acyclic_edge));
+    try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
+}
+
+test "private branch chain rank ties preserve the tight incoming edge" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const chain = try graph.addNode("chain", .{});
+    const sink = try graph.addNode("sink", .{});
+    const sibling_a = try graph.addNode("sibling-a", .{});
+    const sibling_b = try graph.addNode("sibling-b", .{});
+    for (5..40) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try graph.addNode(
+            try std.fmt.bufPrint(&label_buf, "filler{d}", .{index}),
+            .{},
+        );
+    }
+    _ = try graph.addEdge(source, chain, .{});
+    _ = try graph.addEdge(chain, sink, .{});
+    _ = try graph.addEdge(source, sibling_a, .{});
+    _ = try graph.addEdge(source, sibling_b, .{});
+
+    var ranks = [_]usize{0} ** 40;
+    ranks[source] = 0;
+    ranks[chain] = 5;
+    ranks[sink] = 6;
+    ranks[sibling_a] = 1;
+    ranks[sibling_b] = 1;
+    for (5..40) |node_id| ranks[node_id] = 1;
+    const acyclic_edge = [_]bool{ true, true, true, true };
+    var adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer adjacency.deinit();
+    balanceEqualCostRanks(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        &adjacency,
+        true,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), ranks[chain]);
     try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
 }
 
