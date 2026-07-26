@@ -5196,6 +5196,87 @@ fn orientReciprocalLayeredEdges(
     return storage;
 }
 
+fn orientCyclicLayeredEdges(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    storage: *Graph,
+) !*const Graph {
+    // Clustered cycles already participate in compound-edge channel geometry;
+    // reversing one there changes more than the ranking objective. For an
+    // ordinary directed graph, however, a declaration-order DFS gives the
+    // ranker a deterministic DAG view while routing and arrowheads continue
+    // to use the untouched caller-owned graph.
+    if (!graph.directed or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len == 0 or graph.edges.items.len == 0)
+    {
+        return graph;
+    }
+    var adjacency = try EdgeAdjacency.init(allocator, graph);
+    defer adjacency.deinit();
+    const state = try allocator.alloc(u8, graph.nodes.items.len);
+    defer allocator.free(state);
+    @memset(state, 0);
+    const reverse_edge = try allocator.alloc(bool, graph.edges.items.len);
+    defer allocator.free(reverse_edge);
+    @memset(reverse_edge, false);
+    for (0..graph.nodes.items.len) |node_id| {
+        markLayeredBackEdgesDepthFirst(
+            graph,
+            &adjacency,
+            node_id,
+            state,
+            reverse_edge,
+        );
+    }
+    var reverse_count: usize = 0;
+    for (reverse_edge) |reverse| {
+        if (reverse) reverse_count += 1;
+    }
+    if (reverse_count == 0) return graph;
+
+    storage.* = graph.*;
+    storage.edges = .empty;
+    try storage.edges.appendSlice(allocator, graph.edges.items);
+    errdefer storage.edges.deinit(allocator);
+    for (storage.edges.items) |*edge_item| {
+        if (edge_item.id < reverse_edge.len and reverse_edge[edge_item.id]) {
+            std.mem.swap(NodeId, &edge_item.from, &edge_item.to);
+        }
+    }
+    return storage;
+}
+
+fn markLayeredBackEdgesDepthFirst(
+    graph: *const Graph,
+    adjacency: *const EdgeAdjacency,
+    node_id: NodeId,
+    state: []u8,
+    reverse_edge: []bool,
+) void {
+    if (node_id >= state.len or state[node_id] != 0) return;
+    state[node_id] = 1;
+    for (adjacency.incident(node_id)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!edge_item.constraint or edge_item.from != node_id or
+            edge_item.to >= state.len) continue;
+        if (state[edge_item.to] == 1) {
+            if (edge_id < reverse_edge.len) reverse_edge[edge_id] = true;
+            continue;
+        }
+        if (state[edge_item.to] == 0) {
+            markLayeredBackEdgesDepthFirst(
+                graph,
+                adjacency,
+                edge_item.to,
+                state,
+                reverse_edge,
+            );
+        }
+    }
+    state[node_id] = 2;
+}
+
 fn normalizeSameRankEdgeMinlen(
     allocator: std.mem.Allocator,
     graph: *const Graph,
@@ -5476,8 +5557,11 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var reciprocal_view: Graph = undefined;
     const reciprocal_graph = try orientReciprocalLayeredEdges(allocator, undirected_view, &reciprocal_view);
     defer if (reciprocal_graph == &reciprocal_view) reciprocal_view.edges.deinit(allocator);
+    var cyclic_view: Graph = undefined;
+    const acyclic_graph = try orientCyclicLayeredEdges(allocator, reciprocal_graph, &cyclic_view);
+    defer if (acyclic_graph == &cyclic_view) cyclic_view.edges.deinit(allocator);
     var same_rank_view: Graph = undefined;
-    const layout_graph = try normalizeSameRankEdgeMinlen(allocator, reciprocal_graph, &same_rank_view);
+    const layout_graph = try normalizeSameRankEdgeMinlen(allocator, acyclic_graph, &same_rank_view);
     defer if (layout_graph == &same_rank_view) same_rank_view.edges.deinit(allocator);
     const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
     const axes = LayoutAxes.init(layout_graph.rankdir);
@@ -29685,6 +29769,31 @@ test "reciprocal rank orientation follows first declaration without mutating gra
     try std.testing.expectEqual(b, oriented.edges.items[1].to);
     try std.testing.expectEqual(b, graph.edges.items[1].from);
     try std.testing.expectEqual(a, graph.edges.items[1].to);
+}
+
+test "directed cycle orientation reverses only private DFS back edges" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(b, c, .{});
+    _ = try graph.addEdge(c, a, .{});
+
+    var storage: Graph = undefined;
+    const oriented = try orientCyclicLayeredEdges(allocator, &graph, &storage);
+    defer if (oriented == &storage) storage.edges.deinit(allocator);
+    try std.testing.expect(oriented == &storage);
+    try std.testing.expectEqual(a, oriented.edges.items[0].from);
+    try std.testing.expectEqual(b, oriented.edges.items[0].to);
+    try std.testing.expectEqual(b, oriented.edges.items[1].from);
+    try std.testing.expectEqual(c, oriented.edges.items[1].to);
+    try std.testing.expectEqual(a, oriented.edges.items[2].from);
+    try std.testing.expectEqual(c, oriented.edges.items[2].to);
+    try std.testing.expectEqual(c, graph.edges.items[2].from);
+    try std.testing.expectEqual(a, graph.edges.items[2].to);
 }
 
 test "SVG renderer emits curved clipped edges and multiline text spans" {

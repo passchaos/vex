@@ -284,6 +284,13 @@ def main() -> int:
             1.20,
         ),
         (
+            "b57",
+            args.graphviz_root / "tests" / "graphs" / "b57.gv",
+            1,
+            1.00,
+            1.00,
+        ),
+        (
             "dfa",
             args.graphviz_root / "tests" / "graphs" / "dfa.gv",
             0,
