@@ -340,6 +340,13 @@ def main() -> int:
             1.25,
         ),
         (
+            "pgram",
+            args.graphviz_root / "tests" / "graphs" / "pgram.gv",
+            0,
+            1.65,
+            1.65,
+        ),
+        (
             "dfa",
             args.graphviz_root / "tests" / "graphs" / "dfa.gv",
             0,
