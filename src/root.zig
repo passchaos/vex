@@ -5190,6 +5190,21 @@ fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
     return layout_mod.options.clusterAlongBudget(axes.alongMargin(options));
 }
 
+fn clusterSpacingAlongLimit(
+    graph: *const Graph,
+    centers: []const f64,
+    sizes: []const NodeSize,
+    budget: f64,
+) f64 {
+    if (graph.subgraphs.items.len *| 2 <= graph.nodes.items.len) return budget;
+    // The public budget is an absolute compactness cap for ordinary cluster
+    // graphs. Generated nested graphs can already be wider than that before
+    // cluster padding; give those graphs one fixed amount of additional room
+    // instead of disabling spacing altogether. Callers reuse this one limit
+    // across all refinement passes, so the allowance never compounds.
+    return centersExtent(centers, sizes) + budget;
+}
+
 fn freeEdgeWaypoints(allocator: std.mem.Allocator, edge_waypoints: []EdgeWaypoints) void {
     for (edge_waypoints) |waypoints| allocator.free(waypoints.points);
 }
@@ -5579,7 +5594,13 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     alignGroupedCenters(layout_graph, levels, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
     const cluster_along_budget = clusterSpacingAlongBudget(axes, effective_options);
-    applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    const cluster_along_limit = clusterSpacingAlongLimit(
+        layout_graph,
+        centers,
+        axis_sizes,
+        cluster_along_budget,
+    );
+    applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_limit);
     var final_virtual_positions = try computeVirtualPositions(allocator, &virtual_levels, layout_graph, ranks, axis_sizes, effective_options.node_gap, centers);
     defer final_virtual_positions.deinit();
     applyVirtualRealPositionsExceptGroups(layout_graph, &virtual_levels, &final_virtual_positions, centers);
@@ -5588,14 +5609,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     }
     applySymmetricCompactionIfHelpful(layout_graph, levels, ranks, centers, axis_sizes, effective_options.node_gap);
     normalizeCenters(centers, axis_sizes);
-    applyBackEdgeChannelCenterConstraints(layout_graph, ranks, centers, axis_sizes, cluster_along_budget);
-    shiftCentersRightWithinBudget(centers, axis_sizes, defaultClusterAlongShift, cluster_along_budget);
-    applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+    applyBackEdgeChannelCenterConstraints(layout_graph, ranks, centers, axis_sizes, cluster_along_limit);
+    shiftCentersRightWithinBudget(centers, axis_sizes, defaultClusterAlongShift, cluster_along_limit);
+    applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_limit);
     if (!graphHasExplicitEdgeWeight(layout_graph)) {
         alignBoundarySingletonsToIncidentSpan(layout_graph, levels, ranks, centers, axis_sizes);
-        applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_budget);
+        applyInterClusterSpacingWithBudget(layout_graph, levels, centers, axis_sizes, defaultInterClusterGap, cluster_along_limit);
     }
-    applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_budget);
+    applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_limit);
     refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
@@ -12505,8 +12526,8 @@ fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(N
         while (i < level.items.len) : (i += 1) {
             const left = level.items[i - 1];
             const right = level.items[i];
-            const left_cluster = clusterIndexContainingNode(graph, left);
-            const right_cluster = clusterIndexContainingNode(graph, right);
+            const left_cluster = deepestSubgraphContainingNode(graph, left);
+            const right_cluster = deepestSubgraphContainingNode(graph, right);
             if (left_cluster == null and right_cluster == null) continue;
             if (left_cluster != null and right_cluster != null and left_cluster.? == right_cluster.?) continue;
             const left_pad = if (left_cluster != null) cluster_pad_x else 0.0;
@@ -12531,8 +12552,8 @@ fn applyInterClusterSpacingFallback(graph: *const Graph, level: []const NodeId, 
     while (i < level.len) : (i += 1) {
         const left = level[i - 1];
         const right = level[i];
-        const left_cluster = clusterIndexContainingNode(graph, left);
-        const right_cluster = clusterIndexContainingNode(graph, right);
+        const left_cluster = deepestSubgraphContainingNode(graph, left);
+        const right_cluster = deepestSubgraphContainingNode(graph, right);
         if (left_cluster == null and right_cluster == null) continue;
         if (left_cluster != null and right_cluster != null and left_cluster.? == right_cluster.?) continue;
         const left_pad = if (left_cluster != null) cluster_pad_x else 0.0;
@@ -36913,6 +36934,28 @@ test "inter-cluster spacing respects extent budget" {
     try std.testing.expectEqual(@as(f64, 80), centers[b]);
     applyInterClusterSpacingWithBudget(&graph, levels, centers, sizes, 15, 200);
     try std.testing.expect(centers[b] > 80);
+}
+
+test "dense nested clusters receive one bounded spacing allowance" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const outer = try graph.addSubgraph("outer", null, &.{ a, b }, .{});
+    _ = try graph.addSubgraph("left", outer, &.{a}, .{});
+    _ = try graph.addSubgraph("right", outer, &.{b}, .{});
+
+    const centers = [_]f64{ 540, 580 };
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    const budget: f64 = 192;
+    const limit = clusterSpacingAlongLimit(&graph, &centers, &sizes, budget);
+
+    try std.testing.expectEqual(centersExtent(&centers, &sizes) + budget, limit);
+    try std.testing.expect(limit > budget);
 }
 
 test "coordinate constraints propagate minimum gaps" {
