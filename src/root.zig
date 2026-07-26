@@ -5811,6 +5811,26 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             effective_options.crossing_min_quit,
         );
     }
+    var stable_explicit_rank_restart_adopted = false;
+    if (stableExplicitRankCrossingRestartEligible(
+        layout_graph,
+        ranks,
+        effective_options.crossing_passes,
+    )) {
+        try work.checkpoint(
+            (n +| layout_graph.edges.items.len +| 1) *|
+                (effective_options.crossing_passes +| 1),
+        );
+        stable_explicit_rank_restart_adopted =
+            try adoptStableExplicitRankCrossingRestart(
+                allocator,
+                layout_graph,
+                &virtual_levels,
+                ranks,
+                effective_options.crossing_passes,
+                effective_options.crossing_min_quit,
+            );
+    }
     replaceLevelsFromVirtual(allocator, levels, &virtual_levels) catch {
         _ = try reduceLayerCrossings(
             allocator,
@@ -5959,6 +5979,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         centers,
         axis_sizes,
         @min(20, effective_options.coordinate_passes *| 5),
+        true,
     );
     if (explicit_rank_compacted) normalizeCenters(centers, axis_sizes);
     refineExplicitRankSlotSifting(
@@ -5970,6 +5991,18 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         effective_options,
         3,
     );
+    const explicit_rank_recompacted =
+        stable_explicit_rank_restart_adopted and
+        refineExplicitRankCoordinateStress(
+            layout_graph,
+            levels,
+            ranks,
+            centers,
+            axis_sizes,
+            @min(8, effective_options.coordinate_passes *| 2),
+            false,
+        );
+    if (explicit_rank_recompacted) normalizeCenters(centers, axis_sizes);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -7958,6 +7991,142 @@ fn buildVirtualLevels(allocator: std.mem.Allocator, graph: *const Graph, ranks: 
     }
 
     return .{ .allocator = allocator, .levels = levels };
+}
+
+fn stableExplicitRankEdgePriority(edge_item: Edge) u64 {
+    // SplitMix64 turns the semantic endpoint pair into a well-distributed,
+    // declaration-order-independent priority. This is a deterministic second
+    // basin, not randomness in the public layout result.
+    const alternate_basin_index: u64 = 42;
+    const restart_seed =
+        alternate_basin_index *% @as(u64, 0x9e3779b97f4a7c15);
+    const endpoint_key =
+        (@as(u64, @intCast(edge_item.from)) << 32) |
+        @as(u64, @intCast(edge_item.to));
+    var value = endpoint_key ^ restart_seed;
+    value +%= 0x9e3779b97f4a7c15;
+    value = (value ^ (value >> 30)) *% 0xbf58476d1ce4e5b9;
+    value = (value ^ (value >> 27)) *% 0x94d049bb133111eb;
+    return value ^ (value >> 31);
+}
+
+fn sortVirtualDummiesByStableEndpointHash(
+    graph: *const Graph,
+    virtual_levels: *VirtualLevels,
+) void {
+    for (virtual_levels.levels) |*level| {
+        var first_dummy: usize = 0;
+        while (first_dummy < level.items.len) : (first_dummy += 1) {
+            switch (level.items[first_dummy]) {
+                .real => {},
+                .dummy => break,
+            }
+        }
+        std.mem.sort(VirtualNode, level.items[first_dummy..], graph, struct {
+            fn lessThan(g: *const Graph, left: VirtualNode, right: VirtualNode) bool {
+                const left_edge_id = switch (left) {
+                    .real => unreachable,
+                    .dummy => |edge_id| edge_id,
+                };
+                const right_edge_id = switch (right) {
+                    .real => unreachable,
+                    .dummy => |edge_id| edge_id,
+                };
+                if (left_edge_id >= g.edges.items.len or
+                    right_edge_id >= g.edges.items.len)
+                {
+                    return left_edge_id < right_edge_id;
+                }
+                const left_priority =
+                    stableExplicitRankEdgePriority(g.edges.items[left_edge_id]);
+                const right_priority =
+                    stableExplicitRankEdgePriority(g.edges.items[right_edge_id]);
+                if (left_priority != right_priority) {
+                    return left_priority < right_priority;
+                }
+                return left_edge_id < right_edge_id;
+            }
+        }.lessThan);
+    }
+}
+
+fn adoptStableExplicitRankCrossingRestart(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    virtual_levels: *VirtualLevels,
+    ranks: []const usize,
+    passes: usize,
+    min_quit: usize,
+) !bool {
+    if (!stableExplicitRankCrossingRestartEligible(graph, ranks, passes)) {
+        return false;
+    }
+
+    var candidate = try buildVirtualLevels(allocator, graph, ranks);
+    var candidate_owned = true;
+    defer if (candidate_owned) candidate.deinit();
+    // Long-edge dummy insertion normally inherits edge declaration order.
+    // Round-tripped DOT can reorder equivalent fanout statements, trapping
+    // median sweeps in a different local minimum. Search one endpoint-stable
+    // basin and adopt it only when the exact virtual crossing objective wins;
+    // the original declaration-order candidate remains available unchanged.
+    sortVirtualDummiesByStableEndpointHash(graph, &candidate);
+    _ = try reduceVirtualLevelCrossings(
+        allocator,
+        graph,
+        &candidate,
+        ranks,
+        passes,
+        min_quit,
+    );
+
+    var crossing_workspace = try VirtualCrossingWorkspace.init(
+        allocator,
+        graph,
+        ranks,
+        virtual_levels.levels.len,
+    );
+    defer crossing_workspace.deinit();
+    const current_crossings = totalVirtualLayerCrossings(
+        graph,
+        virtual_levels,
+        ranks,
+        &crossing_workspace,
+    );
+    const candidate_crossings = totalVirtualLayerCrossings(
+        graph,
+        &candidate,
+        ranks,
+        &crossing_workspace,
+    );
+    if (candidate_crossings >= current_crossings) return false;
+
+    virtual_levels.deinit();
+    virtual_levels.* = candidate;
+    candidate_owned = false;
+    return true;
+}
+
+fn stableExplicitRankCrossingRestartEligible(
+    graph: *const Graph,
+    ranks: []const usize,
+    passes: usize,
+) bool {
+    if (passes == 0 or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len == 0 or graph.nodes.items.len > 128 or
+        graph.edges.items.len > 256 or
+        orderingMode(attrValue(graph.attrs.items, "ordering")) != .none or
+        !allNodesHaveActiveSameRankConstraint(graph)) return false;
+    for (graph.nodes.items) |node_item| {
+        if (orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) {
+            return false;
+        }
+    }
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        if (ranks[edge_item.from] +| 1 < ranks[edge_item.to]) return true;
+    }
+    return false;
 }
 
 fn reduceVirtualLevelCrossings(
@@ -14128,6 +14297,7 @@ fn refineExplicitRankCoordinateStress(
     centers: []f64,
     sizes: []const NodeSize,
     passes: usize,
+    allow_crossing_slack: bool,
 ) bool {
     const ordered_graph =
         orderingMode(attrValue(graph.attrs.items, "ordering")) == .out;
@@ -14153,7 +14323,8 @@ fn refineExplicitRankCoordinateStress(
     // Fully explicit-rank graphs retain the historical small crossing budget
     // used to escape a compactness basin. A partially constrained graph has no
     // such whole-graph contract, so compaction must be crossing-nonincreasing.
-    const crossing_limit = if (ordered_graph or !every_node_covered)
+    const crossing_limit = if (ordered_graph or !every_node_covered or
+        !allow_crossing_slack)
         current_crossings
     else
         current_crossings +| @max(current_crossings / 12, 2);
@@ -14276,6 +14447,19 @@ fn levelFullyCoveredBySameRankConstraint(
     if (level.len == 0) return false;
     for (level) |node_id| {
         if (node_id >= covered.len or !covered[node_id]) return false;
+    }
+    return true;
+}
+
+fn allNodesHaveActiveSameRankConstraint(graph: *const Graph) bool {
+    if (graph.nodes.items.len == 0 or graph.nodes.items.len > 128) return false;
+    var covered: [128]bool = undefined;
+    markNodesWithActiveSameRankConstraint(
+        graph,
+        covered[0..graph.nodes.items.len],
+    );
+    for (covered[0..graph.nodes.items.len]) |node_covered| {
+        if (!node_covered) return false;
     }
     return true;
 }
@@ -29835,6 +30019,111 @@ test "virtual levels include dummy nodes for skip-rank edges" {
     try std.testing.expect(virtualLevelContains(virtual_levels.levels[3].items, .{ .real = d }));
 }
 
+test "stable explicit-rank restart ignores equivalent edge declaration order" {
+    const allocator = std.testing.allocator;
+    const rank_groups =
+        \\  { rank=same; n0_0; n0_1; n0_2; n0_3; }
+        \\  { rank=same; n1_0; n1_1; n1_2; n1_3; }
+        \\  { rank=same; n2_0; n2_1; n2_2; n2_3; }
+        \\  { rank=same; n3_0; n3_1; n3_2; n3_3; }
+    ;
+    const edges_a =
+        \\  n0_1 -> n1_2; n1_1 -> n3_3; n0_0 -> n1_2;
+        \\  n0_2 -> n3_2; n0_0 -> n3_2; n1_2 -> n3_3;
+        \\  n0_2 -> n1_1; n1_1 -> n2_1; n2_0 -> n3_0;
+        \\  n2_1 -> n3_0; n2_1 -> n3_3; n2_0 -> n3_1;
+        \\  n1_3 -> n3_3; n1_2 -> n3_2; n1_2 -> n3_1;
+        \\  n1_0 -> n3_2; n2_3 -> n3_2; n2_2 -> n3_1;
+    ;
+    const edges_b =
+        \\  n0_1 -> n1_2; n1_1 -> n2_1; n2_3 -> n3_2;
+        \\  n2_0 -> n3_1; n1_3 -> n3_3; n1_2 -> n3_1;
+        \\  n0_0 -> n1_2; n1_2 -> n3_3; n0_2 -> n3_2;
+        \\  n1_2 -> n3_2; n1_1 -> n3_3; n2_1 -> n3_3;
+        \\  n0_2 -> n1_1; n0_0 -> n3_2; n1_0 -> n3_2;
+        \\  n2_2 -> n3_1; n2_1 -> n3_0; n2_0 -> n3_0;
+    ;
+    const source_a = try std.mem.concat(
+        allocator,
+        u8,
+        &.{ "digraph G {\n", rank_groups, "\n", edges_a, "\n}" },
+    );
+    defer allocator.free(source_a);
+    const source_b = try std.mem.concat(
+        allocator,
+        u8,
+        &.{ "digraph G {\n", rank_groups, "\n", edges_b, "\n}" },
+    );
+    defer allocator.free(source_b);
+    var graph_a = try parseDot(allocator, source_a);
+    defer graph_a.deinit();
+    var graph_b = try parseDot(allocator, source_b);
+    defer graph_b.deinit();
+
+    var layout_a = try layoutLayered(allocator, &graph_a, .{});
+    defer layout_a.deinit();
+    var layout_b = try layoutLayered(allocator, &graph_b, .{});
+    defer layout_b.deinit();
+
+    try expectNodeCentersEqual(&layout_a, &layout_b);
+    var baseline_a = try parseDot(allocator, source_a);
+    defer baseline_a.deinit();
+    var baseline_b = try parseDot(allocator, source_b);
+    defer baseline_b.deinit();
+    var baseline_levels_a = try buildVirtualLevels(
+        allocator,
+        &baseline_a,
+        layout_a.ranks,
+    );
+    defer baseline_levels_a.deinit();
+    var baseline_levels_b = try buildVirtualLevels(
+        allocator,
+        &baseline_b,
+        layout_b.ranks,
+    );
+    defer baseline_levels_b.deinit();
+    _ = try reduceVirtualLevelCrossings(
+        allocator,
+        &baseline_a,
+        &baseline_levels_a,
+        layout_a.ranks,
+        24,
+        8,
+    );
+    _ = try reduceVirtualLevelCrossings(
+        allocator,
+        &baseline_b,
+        &baseline_levels_b,
+        layout_b.ranks,
+        24,
+        8,
+    );
+    const baseline_real_a = try extractRealLevelsFromVirtual(
+        allocator,
+        &baseline_levels_a,
+    );
+    defer {
+        for (baseline_real_a) |*level| level.deinit(allocator);
+        allocator.free(baseline_real_a);
+    }
+    const baseline_real_b = try extractRealLevelsFromVirtual(
+        allocator,
+        &baseline_levels_b,
+    );
+    defer {
+        for (baseline_real_b) |*level| level.deinit(allocator);
+        allocator.free(baseline_real_b);
+    }
+    var declaration_order_differs = false;
+    for (baseline_real_a, baseline_real_b) |left, right| {
+        if (!std.mem.eql(NodeId, left.items, right.items)) {
+            declaration_order_differs = true;
+            break;
+        }
+    }
+    try std.testing.expect(declaration_order_differs);
+}
+
 test "virtual levels can extract real node levels" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
@@ -36274,6 +36563,7 @@ test "explicit rank stress compaction skips unconstrained levels" {
         &centers,
         &sizes,
         20,
+        true,
     ));
 
     try std.testing.expect(
