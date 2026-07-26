@@ -10948,17 +10948,33 @@ fn refineAdjacentExchanges(graph: *const Graph, levels: []std.ArrayList(NodeId),
                 const before = upper_crossings + lower_crossings;
                 const left = levels[rank].items[i];
                 const right = levels[rank].items[i + 1];
+                const upper_comparison = if (rank > 0)
+                    changedLayerCrossingComparison(
+                        graph,
+                        ranks,
+                        rank - 1,
+                        &crossing_workspace,
+                        &edge_adjacency,
+                        &.{ left, right },
+                    )
+                else
+                    CrossingComparison{};
+                const lower_comparison = if (rank + 1 < levels.len)
+                    changedLayerCrossingComparison(
+                        graph,
+                        ranks,
+                        rank,
+                        &crossing_workspace,
+                        &edge_adjacency,
+                        &.{ left, right },
+                    )
+                else
+                    CrossingComparison{};
                 std.mem.swap(NodeId, &levels[rank].items[i], &levels[rank].items[i + 1]);
                 if (left < crossing_workspace.node_positions.len) crossing_workspace.node_positions[left] = i + 1;
                 if (right < crossing_workspace.node_positions.len) crossing_workspace.node_positions[right] = i;
-                const upper_after = if (rank > 0)
-                    countLayerCrossingsWithPreparedWorkspace(graph, levels.len, ranks, rank - 1, &crossing_workspace)
-                else
-                    0;
-                const lower_after = if (rank + 1 < levels.len)
-                    countLayerCrossingsWithPreparedWorkspace(graph, levels.len, ranks, rank, &crossing_workspace)
-                else
-                    0;
+                const upper_after = adjustedCrossingCount(upper_crossings, upper_comparison);
+                const lower_after = adjustedCrossingCount(lower_crossings, lower_comparison);
                 const after = upper_after + lower_after;
                 const tie_improves = if (after == before) blk: {
                     const pair_before = adjacentPairCrossingsIndexed(
@@ -11050,6 +11066,111 @@ fn addLayerCrossingDirtyRange(dirty_delta: []i64, start: usize, end: usize) void
     if (start >= end or end >= dirty_delta.len) return;
     dirty_delta[start] += 1;
     dirty_delta[end] -= 1;
+}
+
+const CrossingComparison = struct {
+    before: usize = 0,
+    after: usize = 0,
+};
+
+fn adjustedCrossingCount(current: usize, comparison: CrossingComparison) usize {
+    return current -| comparison.before +| comparison.after;
+}
+
+fn changedLayerCrossingComparison(
+    graph: *const Graph,
+    ranks: []const usize,
+    upper_rank: usize,
+    crossing_workspace: *LayerCrossingWorkspace,
+    edge_adjacency: *const EdgeAdjacency,
+    moved_nodes: []const NodeId,
+) CrossingComparison {
+    const layer_edges = crossing_workspace.rank_layer_edges.at(upper_rank);
+    if (layer_edges.len < 2) return .{};
+
+    var changed_count: usize = 0;
+    for (moved_nodes) |node_id| {
+        for (edge_adjacency.incident(node_id)) |edge_id| {
+            if (edge_id >= graph.edges.items.len or edge_id >= crossing_workspace.changed_segment_marks.len) continue;
+            if (rankLayerEdgeSpan(graph.edges.items[edge_id], ranks, crossing_workspace.rank_layer_edges.offsets.len -| 1)) |span| {
+                if (upper_rank < span.start or upper_rank >= span.end) continue;
+            } else continue;
+            if (crossing_workspace.changed_segment_marks[edge_id]) continue;
+            crossing_workspace.changed_segment_marks[edge_id] = true;
+            crossing_workspace.changed_segment_indices[changed_count] = edge_id;
+            changed_count += 1;
+        }
+    }
+    defer for (crossing_workspace.changed_segment_indices[0..changed_count]) |edge_id| {
+        crossing_workspace.changed_segment_marks[edge_id] = false;
+    };
+    if (changed_count == 0) return .{};
+
+    const before = countChangedLayerCrossings(
+        graph,
+        ranks,
+        upper_rank,
+        crossing_workspace,
+        layer_edges,
+        changed_count,
+    );
+    if (moved_nodes.len != 2) return .{ .before = before, .after = before };
+    const left = moved_nodes[0];
+    const right = moved_nodes[1];
+    if (left >= crossing_workspace.node_positions.len or right >= crossing_workspace.node_positions.len) {
+        return .{ .before = before, .after = before };
+    }
+    std.mem.swap(usize, &crossing_workspace.node_positions[left], &crossing_workspace.node_positions[right]);
+    defer std.mem.swap(usize, &crossing_workspace.node_positions[left], &crossing_workspace.node_positions[right]);
+    return .{
+        .before = before,
+        .after = countChangedLayerCrossings(
+            graph,
+            ranks,
+            upper_rank,
+            crossing_workspace,
+            layer_edges,
+            changed_count,
+        ),
+    };
+}
+
+fn countChangedLayerCrossings(
+    graph: *const Graph,
+    ranks: []const usize,
+    upper_rank: usize,
+    crossing_workspace: *const LayerCrossingWorkspace,
+    layer_edges: []const EdgeId,
+    changed_count: usize,
+) usize {
+    var crossings: usize = 0;
+    for (crossing_workspace.changed_segment_indices[0..changed_count]) |changed_edge_id| {
+        const changed = edgeVirtualSegmentFromPositions(
+            graph.edges.items[changed_edge_id],
+            crossing_workspace.rank_layer_edges.offsets.len,
+            ranks,
+            upper_rank,
+            crossing_workspace.node_positions,
+        ) orelse continue;
+        for (layer_edges) |other_edge_id| {
+            if (other_edge_id >= graph.edges.items.len or other_edge_id == changed_edge_id) continue;
+            if (crossing_workspace.changed_segment_marks[other_edge_id] and other_edge_id < changed_edge_id) continue;
+            const other = edgeVirtualSegmentFromPositions(
+                graph.edges.items[other_edge_id],
+                crossing_workspace.rank_layer_edges.offsets.len,
+                ranks,
+                upper_rank,
+                crossing_workspace.node_positions,
+            ) orelse continue;
+            if (layerSegmentsCross(changed, other)) crossings +|= 1;
+        }
+    }
+    return crossings;
+}
+
+fn layerSegmentsCross(a: LayerSegment, b: LayerSegment) bool {
+    return (a.upper < b.upper and a.lower > b.lower) or
+        (a.upper > b.upper and a.lower < b.lower);
 }
 
 fn adjacentPairCrossingsIndexed(
@@ -11262,6 +11383,8 @@ const LayerCrossingWorkspace = struct {
     segments: []LayerSegment,
     lower_values: []f64,
     fenwick: []usize,
+    changed_segment_indices: []usize,
+    changed_segment_marks: []bool,
 
     fn init(allocator: std.mem.Allocator, graph: *const Graph, ranks: []const usize, level_count: usize) !LayerCrossingWorkspace {
         var rank_layer_edges = try RankLayerEdges.init(allocator, graph, ranks, level_count);
@@ -11274,6 +11397,11 @@ const LayerCrossingWorkspace = struct {
         errdefer allocator.free(lower_values);
         const fenwick = try allocator.alloc(usize, graph.edges.items.len +| 1);
         errdefer allocator.free(fenwick);
+        const changed_segment_indices = try allocator.alloc(usize, graph.edges.items.len);
+        errdefer allocator.free(changed_segment_indices);
+        const changed_segment_marks = try allocator.alloc(bool, graph.edges.items.len);
+        errdefer allocator.free(changed_segment_marks);
+        @memset(changed_segment_marks, false);
         return .{
             .allocator = allocator,
             .rank_layer_edges = rank_layer_edges,
@@ -11281,6 +11409,8 @@ const LayerCrossingWorkspace = struct {
             .segments = segments,
             .lower_values = lower_values,
             .fenwick = fenwick,
+            .changed_segment_indices = changed_segment_indices,
+            .changed_segment_marks = changed_segment_marks,
         };
     }
 
@@ -11290,6 +11420,8 @@ const LayerCrossingWorkspace = struct {
         self.allocator.free(self.segments);
         self.allocator.free(self.lower_values);
         self.allocator.free(self.fenwick);
+        self.allocator.free(self.changed_segment_indices);
+        self.allocator.free(self.changed_segment_marks);
         self.* = undefined;
     }
 };
@@ -25799,6 +25931,54 @@ test "indexed adjacent pair crossings match scan definition" {
             left_positions,
             &neighbor_stamp,
         ),
+    );
+}
+
+test "adjacent exchange delta score matches full layer recount" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const x = try graph.addNode("x", .{});
+    const y = try graph.addNode("y", .{});
+    const z = try graph.addNode("z", .{});
+    const end = try graph.addNode("end", .{});
+    _ = try graph.addEdge(a, z, .{});
+    _ = try graph.addEdge(b, y, .{});
+    _ = try graph.addEdge(c, x, .{});
+    _ = try graph.addEdge(a, end, .{});
+    _ = try graph.addEdge(b, end, .{});
+
+    const ranks = [_]usize{ 0, 0, 0, 1, 1, 1, 3 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty, .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ a, b, c });
+    try levels[1].appendSlice(allocator, &.{ x, y, z });
+    try levels[3].append(allocator, end);
+
+    var workspace = try LayerCrossingWorkspace.init(allocator, &graph, &ranks, levels.len);
+    defer workspace.deinit();
+    var adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer adjacency.deinit();
+    buildAllLayerPositionMap(workspace.node_positions, &levels);
+    const before_upper = countLayerCrossingsWithPreparedWorkspace(&graph, levels.len, &ranks, 0, &workspace);
+    const before_lower = countLayerCrossingsWithPreparedWorkspace(&graph, levels.len, &ranks, 1, &workspace);
+    const upper_delta = changedLayerCrossingComparison(&graph, &ranks, 0, &workspace, &adjacency, &.{ x, y });
+    const lower_delta = changedLayerCrossingComparison(&graph, &ranks, 1, &workspace, &adjacency, &.{ x, y });
+
+    std.mem.swap(NodeId, &levels[1].items[0], &levels[1].items[1]);
+    workspace.node_positions[x] = 1;
+    workspace.node_positions[y] = 0;
+    try std.testing.expectEqual(
+        countLayerCrossingsWithPreparedWorkspace(&graph, levels.len, &ranks, 0, &workspace),
+        adjustedCrossingCount(before_upper, upper_delta),
+    );
+    try std.testing.expectEqual(
+        countLayerCrossingsWithPreparedWorkspace(&graph, levels.len, &ranks, 1, &workspace),
+        adjustedCrossingCount(before_lower, lower_delta),
     );
 }
 
