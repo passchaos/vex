@@ -5025,12 +5025,22 @@ fn orientUndirectedLayeredGraph(
     const discovery = try allocator.alloc(usize, graph.nodes.items.len);
     defer allocator.free(discovery);
     @memset(discovery, undiscovered);
+    const component_distance = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(component_distance);
+    @memset(component_distance, undiscovered);
     const queue = try allocator.alloc(NodeId, graph.nodes.items.len);
     defer allocator.free(queue);
 
     var next_discovery: usize = 0;
-    for (0..graph.nodes.items.len) |root| {
-        if (discovery[root] != undiscovered) continue;
+    for (0..graph.nodes.items.len) |seed| {
+        if (discovery[seed] != undiscovered) continue;
+        const root = selectUndirectedOrientationRoot(
+            graph,
+            &adjacency,
+            seed,
+            component_distance,
+            queue,
+        );
         discovery[root] = next_discovery;
         next_discovery += 1;
         var head: usize = 0;
@@ -5072,6 +5082,69 @@ fn orientUndirectedLayeredGraph(
         }
     }
     return storage;
+}
+
+fn selectUndirectedOrientationRoot(
+    graph: *const Graph,
+    adjacency: *const EdgeAdjacency,
+    seed: NodeId,
+    distance: []usize,
+    queue: []NodeId,
+) NodeId {
+    if (seed >= distance.len or queue.len < distance.len) return seed;
+    const undiscovered = std.math.maxInt(usize);
+    distance[seed] = 0;
+    var head: usize = 0;
+    var tail: usize = 1;
+    var max_distance: usize = 0;
+    var degree_sum: usize = 0;
+    var min_degree: usize = std.math.maxInt(usize);
+    queue[0] = seed;
+    while (head < tail) : (head += 1) {
+        const node_id = queue[head];
+        const incident = adjacency.incident(node_id);
+        degree_sum +|= incident.len;
+        min_degree = @min(min_degree, incident.len);
+        for (incident) |edge_id| {
+            const neighbor = undirectedEdgeNeighbor(graph, edge_id, node_id) orelse continue;
+            if (neighbor >= distance.len or distance[neighbor] != undiscovered) continue;
+            distance[neighbor] = distance[node_id] + 1;
+            max_distance = @max(max_distance, distance[neighbor]);
+            queue[tail] = neighbor;
+            tail += 1;
+        }
+    }
+    defer {
+        for (queue[0..tail]) |node_id| distance[node_id] = undiscovered;
+    }
+
+    const component_size = tail;
+    const component_edges = degree_sum / 2;
+    const use_midpoint_shell =
+        component_size >= 32 and component_size <= 128 and
+        min_degree >= 2 and
+        component_edges *| 10 <= component_size *| 22;
+    if (!use_midpoint_shell) return seed;
+
+    // A boundary root creates a needlessly deep, narrow hierarchy, while a
+    // graph center can over-compress hubs. The lower median of the halfway
+    // shell is a deterministic pseudo-central compromise. NodeId order is
+    // declaration order, so the selection remains stable across hash/layout
+    // implementation details.
+    const target_distance = max_distance / 2;
+    var shell_count: usize = 0;
+    for (distance) |node_distance| {
+        if (node_distance == target_distance) shell_count += 1;
+    }
+    if (shell_count == 0) return seed;
+    const target_index = (shell_count - 1) / 2;
+    var shell_index: usize = 0;
+    for (distance, 0..) |node_distance, node_id| {
+        if (node_distance != target_distance) continue;
+        if (shell_index == target_index) return node_id;
+        shell_index += 1;
+    }
+    return seed;
 }
 
 fn orientReciprocalLayeredEdges(
@@ -28674,6 +28747,30 @@ test "sparse undirected layered orientation is acyclic and density bounded" {
     }
     var dense_storage: Graph = undefined;
     try std.testing.expectEqual(&dense, try orientUndirectedLayeredGraph(allocator, &dense, &dense_storage));
+}
+
+test "medium leafless undirected orientation uses a midpoint-shell root" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+    for (0..32) |_| _ = try graph.addNode("n", .{});
+    for (0..32) |node_id| {
+        _ = try graph.addEdge(node_id, (node_id + 1) % 32, .{});
+    }
+
+    var storage: Graph = undefined;
+    const oriented = try orientUndirectedLayeredGraph(allocator, &graph, &storage);
+    defer if (oriented == &storage) storage.edges.deinit(allocator);
+    try std.testing.expect(oriented == &storage);
+
+    // From seed 0, a 32-cycle's halfway shell contains nodes 8 and 24; the
+    // lower declaration-order median is node 8. Its incident edges therefore
+    // point outward from the pseudo-central orientation root.
+    var out_degree: usize = 0;
+    for (oriented.edges.items) |edge_item| {
+        if (edge_item.from == 8) out_degree += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), out_degree);
 }
 
 test "reciprocal rank orientation follows first declaration without mutating graph" {
