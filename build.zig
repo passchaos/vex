@@ -219,6 +219,16 @@ pub fn build(b: *std.Build) void {
     const large_svg_corpus_audit_step = b.step("audit-large-svg-corpus", "Audit large non-HTML Graphviz SVG corpus (requires -Dgraphviz-root=...)");
     large_svg_corpus_audit_step.dependOn(&run_large_svg_corpus_audit.step);
 
+    const run_layout_quality_audit = b.addSystemCommand(&.{
+        "python3",
+        "tools/layout_quality_audit.py",
+        graphviz_root,
+        "--vex",
+    });
+    run_layout_quality_audit.addArtifactArg(corpus_audit_vex);
+    const layout_quality_audit_step = b.step("audit-layout-quality", "Compare Vex and Graphviz invariant layout quality (requires -Dgraphviz-root=...)");
+    layout_quality_audit_step.dependOn(&run_layout_quality_audit.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.

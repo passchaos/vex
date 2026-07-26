@@ -5001,6 +5001,107 @@ fn layeredGraphView(graph: *const Graph, clusterless_storage: *Graph) *const Gra
     return clusterless_storage;
 }
 
+fn orientUndirectedLayeredGraph(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    storage: *Graph,
+) !*const Graph {
+    if (graph.directed or graph.nodes.items.len == 0) return graph;
+    // Dense undirected graphs are better served by the existing coordinate
+    // heuristics. Sparse graph-like networks benefit from an explicit DAG
+    // orientation, while forcing dense meshes into many ranks increases both
+    // crossings and edge length.
+    if (graph.edges.items.len *| 10 > graph.nodes.items.len *| 22) return graph;
+
+    storage.* = graph.*;
+    storage.directed = true;
+    storage.edges = .empty;
+    try storage.edges.appendSlice(allocator, graph.edges.items);
+    errdefer storage.edges.deinit(allocator);
+
+    var adjacency = try EdgeAdjacency.init(allocator, graph);
+    defer adjacency.deinit();
+    const degrees = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(degrees);
+    for (degrees, 0..) |*degree, node_id| degree.* = adjacency.incident(node_id).len;
+    const undiscovered = std.math.maxInt(usize);
+    const discovery = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(discovery);
+    @memset(discovery, undiscovered);
+    const queue = try allocator.alloc(NodeId, graph.nodes.items.len);
+    defer allocator.free(queue);
+
+    var next_discovery: usize = 0;
+    for (0..graph.nodes.items.len) |root| {
+        if (discovery[root] != undiscovered) continue;
+        discovery[root] = next_discovery;
+        next_discovery += 1;
+        var head: usize = 0;
+        var tail: usize = 1;
+        queue[0] = root;
+        while (head < tail) : (head += 1) {
+            const node_id = queue[head];
+            const incident = adjacency.incidentMut(node_id);
+            std.mem.sort(
+                EdgeId,
+                incident,
+                UndirectedNeighborOrderContext{
+                    .graph = graph,
+                    .degrees = degrees,
+                    .node_id = node_id,
+                },
+                lessThanUndirectedNeighbor,
+            );
+            for (incident) |edge_id| {
+                if (edge_id >= graph.edges.items.len) continue;
+                const edge_item = graph.edges.items[edge_id];
+                const neighbor = if (edge_item.from == node_id) edge_item.to else edge_item.from;
+                if (neighbor >= discovery.len or discovery[neighbor] != undiscovered) continue;
+                discovery[neighbor] = next_discovery;
+                next_discovery += 1;
+                queue[tail] = neighbor;
+                tail += 1;
+            }
+        }
+    }
+
+    // Every edge points from an earlier BFS discovery to a later one. This is
+    // acyclic by construction and, unlike treating DOT's textual endpoint
+    // order as direction, gives undirected graphs a stable hierarchy that the
+    // normal rank/crossing pipeline can optimize.
+    for (storage.edges.items) |*edge_item| {
+        if (edge_item.from >= discovery.len or edge_item.to >= discovery.len) continue;
+        if (discovery[edge_item.from] > discovery[edge_item.to]) {
+            std.mem.swap(NodeId, &edge_item.from, &edge_item.to);
+        }
+    }
+    return storage;
+}
+
+const UndirectedNeighborOrderContext = struct {
+    graph: *const Graph,
+    degrees: []const usize,
+    node_id: NodeId,
+};
+
+fn lessThanUndirectedNeighbor(context: UndirectedNeighborOrderContext, left_edge: EdgeId, right_edge: EdgeId) bool {
+    const left = undirectedEdgeNeighbor(context.graph, left_edge, context.node_id) orelse return false;
+    const right = undirectedEdgeNeighbor(context.graph, right_edge, context.node_id) orelse return true;
+    const left_degree = if (left < context.degrees.len) context.degrees[left] else 0;
+    const right_degree = if (right < context.degrees.len) context.degrees[right] else 0;
+    if (left_degree != right_degree) return left_degree > right_degree;
+    if (left != right) return left > right;
+    return left_edge < right_edge;
+}
+
+fn undirectedEdgeNeighbor(graph: *const Graph, edge_id: EdgeId, node_id: NodeId) ?NodeId {
+    if (edge_id >= graph.edges.items.len) return null;
+    const edge_item = graph.edges.items[edge_id];
+    if (edge_item.from == node_id) return edge_item.to;
+    if (edge_item.to == node_id) return edge_item.from;
+    return null;
+}
+
 fn forceLayoutOptionsWithGraphAttrs(options: ForceLayoutOptions, graph: *const Graph) ForceLayoutOptions {
     return layout_mod.options.withForceGraphAttrs(options, graph.attrs.items);
 }
@@ -5183,7 +5284,10 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var graph_snapshot = try snapshotGraphForLayout(allocator, graph);
     errdefer graph_snapshot.deinit();
     var clusterless_view: Graph = undefined;
-    const layout_graph = layeredGraphView(graph, &clusterless_view);
+    const cluster_view = layeredGraphView(graph, &clusterless_view);
+    var oriented_view: Graph = undefined;
+    const layout_graph = try orientUndirectedLayeredGraph(allocator, cluster_view, &oriented_view);
+    defer if (layout_graph == &oriented_view) oriented_view.edges.deinit(allocator);
     const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
     const axes = LayoutAxes.init(layout_graph.rankdir);
     const n = layout_graph.nodes.items.len;
@@ -7091,6 +7195,11 @@ const EdgeAdjacency = struct {
     }
 
     fn incident(self: *const EdgeAdjacency, node_id: NodeId) []const EdgeId {
+        if (node_id +| 1 >= self.offsets.len) return &.{};
+        return self.edge_ids[self.offsets[node_id]..self.offsets[node_id + 1]];
+    }
+
+    fn incidentMut(self: *EdgeAdjacency, node_id: NodeId) []EdgeId {
         if (node_id +| 1 >= self.offsets.len) return &.{};
         return self.edge_ids[self.offsets[node_id]..self.offsets[node_id + 1]];
     }
@@ -27764,6 +27873,60 @@ test "fragmented component layout preserves component ranks and separates shelve
     try std.testing.expect(!rectsOverlap(nodeRect(layout.nodes[a]), nodeRect(layout.nodes[c])));
     try std.testing.expect(!rectsOverlap(nodeRect(layout.nodes[b]), nodeRect(layout.nodes[d])));
     try std.testing.expect(layout.parallel_edge_offsets != null);
+}
+
+test "sparse undirected layered orientation is acyclic and density bounded" {
+    const allocator = std.testing.allocator;
+    var sparse = try Graph.init(allocator, .{ .directed = false });
+    defer sparse.deinit();
+    const a = try sparse.addNode("a", .{});
+    const b = try sparse.addNode("b", .{});
+    const c = try sparse.addNode("c", .{});
+    const d = try sparse.addNode("d", .{});
+    _ = try sparse.addEdge(c, a, .{});
+    _ = try sparse.addEdge(b, d, .{});
+    _ = try sparse.addEdge(a, b, .{});
+    _ = try sparse.addEdge(d, a, .{});
+
+    var oriented_storage: Graph = undefined;
+    const oriented = try orientUndirectedLayeredGraph(allocator, &sparse, &oriented_storage);
+    defer if (oriented == &oriented_storage) oriented_storage.edges.deinit(allocator);
+    try std.testing.expect(oriented == &oriented_storage);
+    try std.testing.expect(oriented.directed);
+    var indegree = [_]usize{0} ** 4;
+    for (oriented.edges.items) |edge_item| indegree[edge_item.to] += 1;
+    var visited: usize = 0;
+    var queue: [4]NodeId = undefined;
+    var head: usize = 0;
+    var tail: usize = 0;
+    for (indegree, 0..) |degree, node_id| {
+        if (degree == 0) {
+            queue[tail] = node_id;
+            tail += 1;
+        }
+    }
+    while (head < tail) : (head += 1) {
+        const node_id = queue[head];
+        visited += 1;
+        for (oriented.edges.items) |edge_item| {
+            if (edge_item.from != node_id) continue;
+            indegree[edge_item.to] -= 1;
+            if (indegree[edge_item.to] == 0) {
+                queue[tail] = edge_item.to;
+                tail += 1;
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 4), visited);
+
+    var dense = try Graph.init(allocator, .{ .directed = false });
+    defer dense.deinit();
+    for (0..6) |_| _ = try dense.addNode("n", .{});
+    for (0..6) |left| {
+        for (left + 1..6) |right| _ = try dense.addEdge(left, right, .{});
+    }
+    var dense_storage: Graph = undefined;
+    try std.testing.expectEqual(&dense, try orientUndirectedLayeredGraph(allocator, &dense, &dense_storage));
 }
 
 test "SVG renderer emits curved clipped edges and multiline text spans" {
