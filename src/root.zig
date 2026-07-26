@@ -5947,6 +5947,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
                 axis_sizes,
                 effective_options,
                 4,
+                false,
             );
             @memcpy(width_aware_candidate[0..centers.len], centers);
             has_width_aware_candidate = true;
@@ -6012,6 +6013,15 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             false,
         );
     if (explicit_rank_recompacted) normalizeCenters(centers, axis_sizes);
+    try refineJointExplicitRankOrderCoordinates(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        work,
+    );
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -14414,7 +14424,27 @@ fn incidentCoordinateStressTarget(
     if (node_id >= ranks.len or node_id >= centers.len) return null;
     var weighted_sum: f64 = 0;
     var total_weight: f64 = 0;
-    for (edge_adjacency.incident(node_id)) |edge_id| {
+    const incident_edges = edge_adjacency.incident(node_id);
+    var canonical: [128]EdgeId = undefined;
+    if (incident_edges.len > canonical.len) return null;
+    @memcpy(canonical[0..incident_edges.len], incident_edges);
+    std.mem.sort(EdgeId, canonical[0..incident_edges.len], graph, struct {
+        fn lessThan(g: *const Graph, left_id: EdgeId, right_id: EdgeId) bool {
+            if (left_id >= g.edges.items.len or right_id >= g.edges.items.len) {
+                return left_id < right_id;
+            }
+            const left = g.edges.items[left_id];
+            const right = g.edges.items[right_id];
+            if (left.from != right.from) return left.from < right.from;
+            if (left.to != right.to) return left.to < right.to;
+            if (left.min_len != right.min_len) return left.min_len < right.min_len;
+            const left_weight: u64 = @bitCast(left.weight);
+            const right_weight: u64 = @bitCast(right.weight);
+            if (left_weight != right_weight) return left_weight < right_weight;
+            return left_id < right_id;
+        }
+    }.lessThan);
+    for (canonical[0..incident_edges.len]) |edge_id| {
         if (edge_id >= graph.edges.items.len) continue;
         const edge_item = graph.edges.items[edge_id];
         if (!edgeAffectsLayeredObjective(edge_item)) continue;
@@ -14451,6 +14481,7 @@ fn refineContinuousCenterStressPlateau(
     sizes: []const NodeSize,
     options: LayoutOptions,
     passes: usize,
+    enforce_physical_length: bool,
 ) void {
     if (passes == 0 or graph.subgraphs.items.len != 0 or
         graph.nodes.items.len > 64 or graph.edges.items.len > 128) return;
@@ -14465,6 +14496,12 @@ fn refineContinuousCenterStressPlateau(
     const physical_depths = rank_depths[0..rank_count];
     const baseline_extent = centersExtent(centers, sizes);
     var current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    var current_length = physicalCenterEdgeLength(
         graph,
         ranks,
         centers,
@@ -14524,11 +14561,20 @@ fn refineContinuousCenterStressPlateau(
                     physical_depths,
                 );
                 const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                const after_length = physicalCenterEdgeLength(
+                    graph,
+                    ranks,
+                    centers,
+                    physical_depths,
+                );
                 if (after_crossings <= current_crossings and
                     after_stress + 0.0001 < current_stress and
+                    (!enforce_physical_length or
+                        after_length <= current_length + 0.0001) and
                     centersExtent(centers, sizes) <= baseline_extent + 0.0001)
                 {
                     current_crossings = after_crossings;
+                    current_length = after_length;
                     current_stress = after_stress;
                     changed = true;
                 } else {
@@ -14538,6 +14584,336 @@ fn refineContinuousCenterStressPlateau(
         }
         if (!changed) break;
     }
+}
+
+const JointExplicitRankLevel = struct {
+    start: usize,
+    len: usize,
+};
+
+const JointExplicitRankSearch = struct {
+    graph: *const Graph,
+    ranks: []const usize,
+    sizes: []const NodeSize,
+    levels: []const JointExplicitRankLevel,
+    order: []NodeId,
+    baseline: []const f64,
+    candidate: []f64,
+    best: []f64,
+    edge_adjacency: *const EdgeAdjacency,
+    physical_depths: []const f64,
+    node_gap: f64,
+    baseline_extent: f64,
+    baseline_crossings: usize,
+    baseline_length: f64,
+    baseline_stress: f64,
+    best_crossings: usize,
+    best_length: f64,
+    best_stress: f64,
+
+    fn enumerate(self: *JointExplicitRankSearch, level_index: usize) void {
+        if (level_index == self.levels.len) {
+            self.evaluate();
+            return;
+        }
+        self.permuteLevel(level_index, 1);
+    }
+
+    fn permuteLevel(
+        self: *JointExplicitRankSearch,
+        level_index: usize,
+        suffix_index: usize,
+    ) void {
+        const level = self.levels[level_index];
+        if (suffix_index >= level.len) {
+            self.enumerate(level_index + 1);
+            return;
+        }
+        const begin = level.start + suffix_index;
+        const end = level.start + level.len;
+        for (begin..end) |candidate_index| {
+            std.mem.swap(
+                NodeId,
+                &self.order[begin],
+                &self.order[candidate_index],
+            );
+            self.permuteLevel(level_index, suffix_index + 1);
+            std.mem.swap(
+                NodeId,
+                &self.order[begin],
+                &self.order[candidate_index],
+            );
+        }
+    }
+
+    fn evaluate(self: *JointExplicitRankSearch) void {
+        @memcpy(self.candidate, self.baseline);
+        for (self.levels) |level| {
+            const ordered = self.order[level.start .. level.start + level.len];
+            var minimum_width: f64 =
+                self.node_gap * @as(f64, @floatFromInt(level.len -| 1));
+            var center_sum: f64 = 0;
+            for (ordered) |node_id| {
+                if (node_id >= self.sizes.len or node_id >= self.baseline.len) return;
+                minimum_width += self.sizes[node_id].width;
+                center_sum += self.baseline[node_id];
+            }
+            if (minimum_width > self.baseline_extent + 0.0001) return;
+            const mean_center =
+                center_sum / @as(f64, @floatFromInt(ordered.len));
+            const max_left = @max(0.0, self.baseline_extent - minimum_width);
+            var cursor = std.math.clamp(
+                mean_center - minimum_width / 2.0,
+                0.0,
+                max_left,
+            );
+            for (ordered, 0..) |node_id, index| {
+                cursor += self.sizes[node_id].width / 2.0;
+                self.candidate[node_id] = cursor;
+                cursor += self.sizes[node_id].width / 2.0;
+                if (index + 1 < ordered.len) cursor += self.node_gap;
+            }
+        }
+
+        // With order fixed, coordinateEdgeStress is a convex quadratic.
+        // Cyclic coordinate descent to each node's exact incident optimum,
+        // projected onto its clearance interval, converges deterministically.
+        for (0..128) |_| {
+            var max_movement: f64 = 0;
+            for (0..2) |direction| {
+                var level_offset: usize = 0;
+                while (level_offset < self.levels.len) : (level_offset += 1) {
+                    const level_index = if (direction == 0)
+                        level_offset
+                    else
+                        self.levels.len - 1 - level_offset;
+                    const level = self.levels[level_index];
+                    const ordered =
+                        self.order[level.start .. level.start + level.len];
+                    var node_offset: usize = 0;
+                    while (node_offset < ordered.len) : (node_offset += 1) {
+                        const index = if (direction == 0)
+                            node_offset
+                        else
+                            ordered.len - 1 - node_offset;
+                        const node_id = ordered[index];
+                        const target = incidentCoordinateStressTarget(
+                            self.graph,
+                            self.ranks,
+                            self.candidate,
+                            node_id,
+                            self.edge_adjacency,
+                        ) orelse continue;
+                        const lower = if (index == 0)
+                            self.sizes[node_id].width / 2.0
+                        else lower: {
+                            const previous = ordered[index - 1];
+                            break :lower self.candidate[previous] +
+                                self.sizes[previous].width / 2.0 +
+                                self.sizes[node_id].width / 2.0 +
+                                self.node_gap;
+                        };
+                        const upper = if (index + 1 == ordered.len)
+                            self.baseline_extent -
+                                self.sizes[node_id].width / 2.0
+                        else upper: {
+                            const next = ordered[index + 1];
+                            break :upper self.candidate[next] -
+                                self.sizes[next].width / 2.0 -
+                                self.sizes[node_id].width / 2.0 -
+                                self.node_gap;
+                        };
+                        if (lower > upper + 0.0001) continue;
+                        const projected = std.math.clamp(target, lower, upper);
+                        max_movement = @max(
+                            max_movement,
+                            @abs(projected - self.candidate[node_id]),
+                        );
+                        self.candidate[node_id] = projected;
+                    }
+                }
+            }
+            if (max_movement <= 0.0001) break;
+        }
+
+        if (!allRankCentersHaveClearance(
+            self.ranks,
+            self.candidate,
+            self.sizes,
+        ) or !centersHaveNonnegativeBounds(self.candidate, self.sizes) or
+            centersExtent(self.candidate, self.sizes) >
+                self.baseline_extent + 0.0001) return;
+        const crossings = countPhysicalCenterCrossings(
+            self.graph,
+            self.ranks,
+            self.candidate,
+            self.physical_depths,
+        );
+        if (crossings > self.baseline_crossings) return;
+        const length = physicalCenterEdgeLength(
+            self.graph,
+            self.ranks,
+            self.candidate,
+            self.physical_depths,
+        );
+        const stress = coordinateEdgeStress(
+            self.graph,
+            self.ranks,
+            self.candidate,
+        );
+        if (length > self.baseline_length + 0.0001) return;
+        // coordinateEdgeStress ignores physical rank depths and same-rank
+        // edges, so it is only a tie-break here. A joint reorder may increase
+        // that proxy while strictly improving the physical crossing count and
+        // total center-edge length that the final layout actually exposes.
+        if (crossings < self.best_crossings or
+            (crossings == self.best_crossings and
+                (length + 0.0001 < self.best_length or
+                    (@abs(length - self.best_length) <= 0.0001 and
+                        stress + 0.0001 < self.best_stress))))
+        {
+            self.best_crossings = crossings;
+            self.best_length = length;
+            self.best_stress = stress;
+            @memcpy(self.best, self.candidate);
+        }
+    }
+};
+
+fn refineJointExplicitRankOrderCoordinates(
+    graph: *const Graph,
+    graph_levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    work: *LayoutWorkTracker,
+) !void {
+    const max_nodes: usize = 40;
+    const max_combinations: usize = 4_096;
+    if (options.coordinate_passes == 0 or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len == 0 or
+        graph.nodes.items.len > max_nodes or graph.edges.items.len > 80 or
+        centers.len < graph.nodes.items.len or sizes.len < graph.nodes.items.len or
+        orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return;
+
+    var covered: [max_nodes]bool = undefined;
+    markNodesWithActiveSameRankConstraint(
+        graph,
+        covered[0..graph.nodes.items.len],
+    );
+    var any_covered = false;
+    var every_covered = true;
+    for (covered[0..graph.nodes.items.len]) |node_covered| {
+        any_covered = any_covered or node_covered;
+        every_covered = every_covered and node_covered;
+    }
+    if (!any_covered or every_covered) return;
+
+    var search_levels: [max_nodes]JointExplicitRankLevel = undefined;
+    var level_count: usize = 0;
+    var order: [max_nodes]NodeId = undefined;
+    var order_count: usize = 0;
+    var combination_count: usize = 1;
+    var has_permutation = false;
+    for (graph_levels) |level| {
+        if (!levelFullyCoveredBySameRankConstraint(
+            level.items,
+            covered[0..graph.nodes.items.len],
+        )) continue;
+        if (level.items.len == 0 or
+            order_count + level.items.len > order.len) return;
+        search_levels[level_count] = .{
+            .start = order_count,
+            .len = level.items.len,
+        };
+        @memcpy(
+            order[order_count .. order_count + level.items.len],
+            level.items,
+        );
+        std.mem.sort(
+            NodeId,
+            order[order_count .. order_count + level.items.len],
+            centers,
+            struct {
+                fn lessThan(
+                    node_centers: []const f64,
+                    left: NodeId,
+                    right: NodeId,
+                ) bool {
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan,
+        );
+        var factor: usize = 1;
+        if (level.items.len > 2) {
+            for (2..level.items.len) |value| {
+                factor *|= value;
+                if (factor > max_combinations) return;
+            }
+        }
+        if (factor > 1) has_permutation = true;
+        combination_count *|= factor;
+        if (combination_count > max_combinations) return;
+        order_count += level.items.len;
+        level_count += 1;
+    }
+    if (!has_permutation or level_count == 0) return;
+    try work.checkpoint(
+        combination_count *| 128 *|
+            (graph.nodes.items.len +| graph.edges.items.len +| 1),
+    );
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    var candidate: [max_nodes]f64 = undefined;
+    var best: [max_nodes]f64 = undefined;
+    @memcpy(best[0..centers.len], centers);
+    var edge_adjacency = EdgeAdjacency.init(graph.allocator, graph) catch return;
+    defer edge_adjacency.deinit();
+    const baseline_extent = centersExtent(centers, sizes);
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        rank_depths[0..rank_count],
+    );
+    const baseline_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        rank_depths[0..rank_count],
+    );
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    var search = JointExplicitRankSearch{
+        .graph = graph,
+        .ranks = ranks,
+        .sizes = sizes,
+        .levels = search_levels[0..level_count],
+        .order = order[0..order_count],
+        .baseline = centers,
+        .candidate = candidate[0..centers.len],
+        .best = best[0..centers.len],
+        .edge_adjacency = &edge_adjacency,
+        .physical_depths = rank_depths[0..rank_count],
+        .node_gap = options.node_gap,
+        .baseline_extent = baseline_extent,
+        .baseline_crossings = baseline_crossings,
+        .baseline_length = baseline_length,
+        .baseline_stress = baseline_stress,
+        .best_crossings = baseline_crossings,
+        .best_length = baseline_length,
+        .best_stress = baseline_stress,
+    };
+    search.enumerate(0);
+    if (search.best_crossings < baseline_crossings) @memcpy(centers, search.best);
 }
 
 fn refineExplicitRankCoordinateStress(
@@ -15484,6 +15860,28 @@ fn countPhysicalCenterCrossings(
         }
     }
     return crossings;
+}
+
+fn physicalCenterEdgeLength(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+    rank_depths: []const f64,
+) f64 {
+    var total: f64 = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from == edge_item.to or
+            edge_item.from >= ranks.len or edge_item.to >= ranks.len or
+            edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
+        const from_rank = ranks[edge_item.from];
+        const to_rank = ranks[edge_item.to];
+        if (from_rank >= rank_depths.len or to_rank >= rank_depths.len) continue;
+        total += std.math.hypot(
+            centers[edge_item.to] - centers[edge_item.from],
+            rank_depths[to_rank] - rank_depths[from_rank],
+        );
+    }
+    return total;
 }
 
 fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
@@ -36789,6 +37187,7 @@ test "continuous stress plateau preserves crossings and lowers stress" {
         &sizes,
         .{},
         4,
+        true,
     );
 
     try std.testing.expectEqual(
@@ -36973,6 +37372,71 @@ test "explicit rank stress compaction skips unconstrained levels" {
         &free_before,
         centers[free_0..][0..2],
     );
+}
+
+test "joint explicit-rank search leaves uncovered levels unchanged" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const free_0 = try graph.addNode("free0", .{});
+    const free_1 = try graph.addNode("free1", .{});
+    const upper_0 = try graph.addNode("u0", .{});
+    const upper_1 = try graph.addNode("u1", .{});
+    const upper_2 = try graph.addNode("u2", .{});
+    const lower_0 = try graph.addNode("v0", .{});
+    const lower_1 = try graph.addNode("v1", .{});
+    const lower_2 = try graph.addNode("v2", .{});
+    _ = try graph.addEdge(upper_0, lower_0, .{});
+    _ = try graph.addEdge(upper_1, lower_2, .{});
+    _ = try graph.addEdge(upper_2, lower_1, .{});
+    try graph.addRankConstraint(.same, &.{ upper_0, upper_1, upper_2 });
+    try graph.addRankConstraint(.same, &.{ lower_0, lower_1, lower_2 });
+
+    const ranks = [_]usize{ 0, 0, 1, 1, 1, 2, 2, 2 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ free_0, free_1 });
+    try levels[1].appendSlice(allocator, &.{ upper_0, upper_1, upper_2 });
+    try levels[2].appendSlice(allocator, &.{ lower_0, lower_1, lower_2 });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 122, 10, 66, 122, 10, 66, 122 };
+    const free_before = [_]f64{ centers[free_0], centers[free_1] };
+    const crossings_before = countDirectCenterCrossings(
+        &graph,
+        &ranks,
+        &centers,
+    );
+    var work = LayoutWorkTracker{ .control = .{} };
+    try refineJointExplicitRankOrderCoordinates(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        &work,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), crossings_before);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expectEqualSlices(
+        f64,
+        &free_before,
+        centers[free_0..][0..2],
+    );
+    try std.testing.expect(work.work > 0);
 }
 
 test "explicit rank slot sifting repacks heterogeneous widths" {
