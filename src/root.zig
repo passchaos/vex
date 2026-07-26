@@ -5260,6 +5260,10 @@ fn markLayeredBackEdgesDepthFirst(
         const edge_item = graph.edges.items[edge_id];
         if (!edge_item.constraint or edge_item.from != node_id or
             edge_item.to >= state.len) continue;
+        // Self-loops are routed locally and do not participate in ranking.
+        // Reversing one is a no-op but would incorrectly classify an otherwise
+        // acyclic graph as cyclic and suppress DAG-only rank optimization.
+        if (edge_item.from == edge_item.to) continue;
         if (state[edge_item.to] == 1) {
             if (edge_id < reverse_edge.len) reverse_edge[edge_id] = true;
             continue;
@@ -5621,6 +5625,10 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
 
     for (layout_graph.edges.items) |edge_item| {
         if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
+        // A self-loop has no feasible layered minlen constraint and must not
+        // contribute indegree. Counting it here prevents an otherwise acyclic
+        // node and every downstream edge from ever entering the Kahn queue.
+        if (edge_item.from == edge_item.to) continue;
         if (edge_item.to < n) indegree[edge_item.to] += 1;
     }
 
@@ -5635,6 +5643,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             if (edge_id >= layout_graph.edges.items.len) continue;
             const edge_item = layout_graph.edges.items[edge_id];
             if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
+            if (edge_item.from == edge_item.to) continue;
             if (edge_item.from != u) continue;
             const min_len = edge_item.min_len;
             if (ranks[edge_item.to] < ranks[u] + min_len) ranks[edge_item.to] = ranks[u] + min_len;
@@ -5677,8 +5686,9 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
-    const clusterless_dag_closure = graph.directed and
-        graph.subgraphs.items.len == 0 and acyclic_graph == graph and
+    const allow_clusterless_closure = graph.directed and
+        graph.subgraphs.items.len == 0 and
+        (acyclic_graph == graph or graph.nodes.items.len >= 48) and
         attrValue(graph.attrs.items, "searchsize") == null;
     _ = try improveRanksByMaximumClosure(
         allocator,
@@ -5686,7 +5696,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         ranks,
         acyclic_edge,
         rank_pivot_limit,
-        clusterless_dag_closure,
+        allow_clusterless_closure,
     );
     if (layout_graph.directed) {
         balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
@@ -5889,6 +5899,24 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         } else {
             compressed_virtual_positions.deinit();
         }
+    }
+    const rigid_rank_offsets_applied = refineCyclicRigidRankOffsets(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        acyclic_graph != reciprocal_graph,
+    );
+    if (rigid_rank_offsets_applied) {
+        refreshVirtualPositionsFromRealCenters(
+            layout_graph,
+            &virtual_levels,
+            ranks,
+            centers,
+            &final_virtual_positions,
+        );
     }
 
     var total_along: f64 = 0;
@@ -13380,6 +13408,154 @@ fn adoptSmallDirectedCandidateIfBetter(
         physical_depths,
     );
     if (candidate_crossings < current_crossings) @memcpy(centers, candidate);
+}
+
+fn refineCyclicRigidRankOffsets(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    has_feedback_edges: bool,
+) bool {
+    if (!has_feedback_edges or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len < 48 or graph.nodes.items.len > 128 or
+        graph.edges.items.len > 256 or hasActiveRankConstraints(graph)) return false;
+    for (graph.nodes.items) |node_item| {
+        if (nodeGroupName(node_item) != null or
+            orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
+    }
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return false;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    if (baseline_crossings == 0) return false;
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+
+    var candidate: [128]f64 = undefined;
+    var rank_offsets: [128]f64 = undefined;
+    @memset(rank_offsets[0..rank_count], 0);
+    var ordered: [128]NodeId = undefined;
+    for (levels, 0..) |level, rank| {
+        if (rank >= rank_count or level.items.len == 0 or
+            level.items.len > ordered.len) continue;
+        @memcpy(ordered[0..level.items.len], level.items);
+        std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+            fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                if (left >= node_centers.len or right >= node_centers.len) return left < right;
+                if (node_centers[left] == node_centers[right]) return left < right;
+                return node_centers[left] < node_centers[right];
+            }
+        }.lessThan);
+        var cursor: f64 = 0;
+        var offset_sum: f64 = 0;
+        for (ordered[0..level.items.len]) |node_id| {
+            if (node_id >= candidate.len or node_id >= sizes.len or node_id >= centers.len) return false;
+            cursor += sizes[node_id].width / 2.0;
+            candidate[node_id] = cursor;
+            offset_sum += centers[node_id] - candidate[node_id];
+            cursor += sizes[node_id].width / 2.0;
+        }
+        rank_offsets[rank] =
+            offset_sum / @as(f64, @floatFromInt(level.items.len));
+    }
+
+    // Each rank is now a rigid, minimum-width sequence. Coordinate descent on
+    // one translation variable per rank minimizes horizontal edge length
+    // without changing order or clearance. This removes the rank-dependent
+    // slack that can make straight center-lines cross even after the discrete
+    // Sugiyama order has converged.
+    for (0..20) |_| {
+        for (0..rank_count) |rank| {
+            var target_sum: f64 = 0;
+            var target_count: usize = 0;
+            for (graph.edges.items) |edge_item| {
+                if (edge_item.from == edge_item.to or
+                    edge_item.from >= ranks.len or edge_item.to >= ranks.len or
+                    edge_item.from >= candidate.len or edge_item.to >= candidate.len) continue;
+                if (ranks[edge_item.from] == rank and ranks[edge_item.to] != rank) {
+                    target_sum += candidate[edge_item.to] +
+                        rank_offsets[ranks[edge_item.to]] -
+                        candidate[edge_item.from];
+                    target_count += 1;
+                } else if (ranks[edge_item.to] == rank and ranks[edge_item.from] != rank) {
+                    target_sum += candidate[edge_item.from] +
+                        rank_offsets[ranks[edge_item.from]] -
+                        candidate[edge_item.to];
+                    target_count += 1;
+                }
+            }
+            if (target_count > 0) {
+                rank_offsets[rank] =
+                    target_sum / @as(f64, @floatFromInt(target_count));
+            }
+        }
+    }
+    for (candidate[0..centers.len], ranks) |*center, rank| {
+        if (rank >= rank_count) return false;
+        center.* += rank_offsets[rank];
+    }
+    normalizeCenters(candidate[0..centers.len], sizes);
+    if (!allRankCentersHaveClearance(ranks, candidate[0..centers.len], sizes) or
+        centersExtent(candidate[0..centers.len], sizes) > baseline_extent + 0.0001 or
+        coordinateEdgeStress(graph, ranks, candidate[0..centers.len]) >
+            baseline_stress * 1.04 + 0.0001) return false;
+    const candidate_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        candidate[0..centers.len],
+        physical_depths,
+    );
+    if (candidate_crossings < baseline_crossings) {
+        @memcpy(centers, candidate[0..centers.len]);
+        return true;
+    }
+    return false;
+}
+
+fn refreshVirtualPositionsFromRealCenters(
+    graph: *const Graph,
+    virtual_levels: *const VirtualLevels,
+    ranks: []const usize,
+    centers: []const f64,
+    positions: *VirtualPositions,
+) void {
+    // The accepted rigid-rank candidate changes real coordinates after the
+    // normal virtual-coordinate pass. Re-interpolate dummy waypoints from the
+    // final endpoints so routing and canvas extent describe the same geometry;
+    // do not compact here, since that would move the accepted real centers.
+    for (virtual_levels.levels, 0..) |level, rank| {
+        if (rank >= positions.positions.len or
+            positions.positions[rank].items.len != level.items.len) continue;
+        for (level.items, 0..) |vnode, index| {
+            switch (vnode) {
+                .real => |node_id| {
+                    if (node_id < centers.len) {
+                        positions.positions[rank].items[index] = centers[node_id];
+                    }
+                },
+                .dummy => |edge_id| {
+                    if (virtualDummyHint(graph, ranks, centers, edge_id, rank)) |hint| {
+                        positions.positions[rank].items[index] = hint;
+                    }
+                },
+            }
+        }
+    }
 }
 
 fn smallDirectedAcceptUphill(
@@ -34032,6 +34208,27 @@ test "layered layout keeps back edges from expanding ranks" {
     try std.testing.expect(layout.ranks[a1] < layout.ranks[a2]);
     try std.testing.expect(layout.ranks[a2] < layout.ranks[a3]);
     try std.testing.expect(layout.ranks[a3] <= layout.ranks[a0] + 3);
+}
+
+test "layered self-loops do not block downstream rank constraints" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  source -> middle -> sink;
+        \\  source -> source;
+        \\  middle -> middle;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const source = nodeIdByLabel(&graph, "source");
+    const middle = nodeIdByLabel(&graph, "middle");
+    const sink = nodeIdByLabel(&graph, "sink");
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[source]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[middle]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[sink]);
 }
 
 test "layered layout tightens avoidable rank slack" {
