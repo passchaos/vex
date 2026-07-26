@@ -5677,12 +5677,16 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
+    const clusterless_dag_closure = graph.directed and
+        graph.subgraphs.items.len == 0 and acyclic_graph == graph and
+        attrValue(graph.attrs.items, "searchsize") == null;
     _ = try improveRanksByMaximumClosure(
         allocator,
         layout_graph,
         ranks,
         acyclic_edge,
         rank_pivot_limit,
+        clusterless_dag_closure,
     );
     if (layout_graph.directed) {
         balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
@@ -10554,14 +10558,18 @@ fn improveRanksByMaximumClosure(
     ranks: []usize,
     acyclic_edge: []const bool,
     max_shifts: usize,
+    allow_clusterless_dag: bool,
 ) !usize {
     if (max_shifts == 0 or ranks.len == 0) return 0;
-    if (graph.subgraphs.items.len == 0) return 0;
+    if (graph.subgraphs.items.len == 0 and !allow_clusterless_dag) return 0;
     // Ordinary flat clusters already retain useful long-edge slack for
     // boundary routing. Enable the exact pass only when nested/wrapper
     // clusters are dense enough that the global rank optimum dominates that
-    // routing benefit, as in generated compound dataflow graphs.
-    if (graph.subgraphs.items.len * 2 <= graph.nodes.items.len) return 0;
+    // routing benefit, as in generated compound dataflow graphs. A truly
+    // acyclic clusterless graph has no boundary or feedback-edge routing
+    // objective, so its weighted span can use the same exact descent.
+    if (!allow_clusterless_dag and
+        graph.subgraphs.items.len * 2 <= graph.nodes.items.len) return 0;
     // A maximum-closure solve is exact for one rank-descent direction but is
     // substantially heavier than the linear seed closures above. Keep this
     // quality pass on medium graphs; the large-graph path already has strict
@@ -10572,6 +10580,12 @@ fn improveRanksByMaximumClosure(
     // authority instead of letting this ordinary-rank descent undo them.
     if (hasActiveRankConstraints(graph) or graphHasStrongClusters(graph)) return 0;
 
+    const initial_ranks: []usize = if (allow_clusterless_dag)
+        try allocator.dupe(usize, ranks)
+    else
+        &.{};
+    defer if (initial_ranks.len != 0) allocator.free(initial_ranks);
+    const initial_peak_occupancy = maximumRankOccupancy(initial_ranks);
     const edges = try collectRankEdges(allocator, graph, acyclic_edge);
     defer allocator.free(edges);
     if (edges.len == 0) return 0;
@@ -10637,7 +10651,30 @@ fn improveRanksByMaximumClosure(
             for (ranks) |*rank| rank.* -= min_rank;
         }
     }
+    if (allow_clusterless_dag and
+        maximumRankOccupancy(ranks) > initial_peak_occupancy)
+    {
+        // Weighted span alone can collapse a wide inheritance-style DAG into
+        // a crowded central rank. That is optimal for the simplex objective
+        // but usually costs both crossings and horizontal canvas extent.
+        // Preserve the prior feasible ranking unless exact descent also keeps
+        // the peak layer width no worse.
+        @memcpy(ranks, initial_ranks);
+        return 0;
+    }
     return shifts;
+}
+
+fn maximumRankOccupancy(ranks: []const usize) usize {
+    var peak: usize = 0;
+    for (ranks) |candidate| {
+        var count: usize = 0;
+        for (ranks) |rank| {
+            if (rank == candidate) count += 1;
+        }
+        peak = @max(peak, count);
+    }
+    return peak;
 }
 
 fn buildRankShiftClosure(
@@ -25510,8 +25547,18 @@ test "searchsize trades rank span quality for leaving-edge effort" {
     var default_layout = try layoutLayered(allocator, &default_graph, .{});
     defer default_layout.deinit();
 
+    var explicit_default_graph = try parseDot(allocator, source);
+    defer explicit_default_graph.deinit();
+    try explicit_default_graph.setGraphAttr(.{ .searchsize = 30 });
+    var explicit_default_layout = try layoutLayered(allocator, &explicit_default_graph, .{});
+    defer explicit_default_layout.deinit();
+
     try std.testing.expectEqual(@as(f64, 604), layoutRankSpanCost(&limited_graph, &limited));
-    try std.testing.expectEqual(@as(f64, 569), layoutRankSpanCost(&default_graph, &default_layout));
+    try std.testing.expectEqual(
+        @as(f64, 569),
+        layoutRankSpanCost(&explicit_default_graph, &explicit_default_layout),
+    );
+    try std.testing.expectEqual(@as(f64, 524), layoutRankSpanCost(&default_graph, &default_layout));
 }
 
 test "explicit crossing passes override mclimit maximum" {
@@ -34887,12 +34934,72 @@ test "maximum-closure rank descent moves jointly profitable tight dependencies" 
         &ranks,
         &acyclic_edge,
         8,
+        false,
     );
 
     try std.testing.expect(shifts > 0);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, &ranks);
     try std.testing.expect(rankAssignmentCost(&graph, &ranks, &acyclic_edge) < before);
     try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
+}
+
+test "maximum-closure rank descent improves a balanced clusterless DAG" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const branch = try graph.addNode("branch", .{});
+    const dependent = try graph.addNode("dependent", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addEdge(source, branch, .{ .weight = 4 });
+    _ = try graph.addEdge(branch, dependent, .{ .weight = 3 });
+    _ = try graph.addEdge(dependent, sink, .{ .weight = 6 });
+
+    var ranks = [_]usize{ 0, 1, 2, 6 };
+    var acyclic_edge = [_]bool{ true, true, true };
+    const before = rankAssignmentCost(&graph, &ranks, &acyclic_edge);
+    const shifts = try improveRanksByMaximumClosure(
+        allocator,
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        8,
+        true,
+    );
+
+    try std.testing.expect(shifts > 0);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, &ranks);
+    try std.testing.expect(rankAssignmentCost(&graph, &ranks, &acyclic_edge) < before);
+}
+
+test "maximum-closure rank descent rejects a wider peak layer" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const left = try graph.addNode("left", .{});
+    const right = try graph.addNode("right", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addNode("occupant", .{});
+    _ = try graph.addEdge(source, left, .{ .weight = 1 });
+    _ = try graph.addEdge(source, right, .{ .weight = 1 });
+    _ = try graph.addEdge(left, sink, .{ .weight = 4 });
+    _ = try graph.addEdge(right, sink, .{ .weight = 4 });
+
+    var ranks = [_]usize{ 0, 1, 1, 4, 3 };
+    const original = ranks;
+    var acyclic_edge = [_]bool{ true, true, true, true };
+    const shifts = try improveRanksByMaximumClosure(
+        allocator,
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        8,
+        true,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), shifts);
+    try std.testing.expectEqualSlices(usize, &original, &ranks);
 }
 
 test "direct center transpose reduces crossings without moving ranks" {
