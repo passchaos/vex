@@ -2,6 +2,7 @@
 
 pub const axes = @import("axes.zig");
 pub const circo = @import("circo.zig");
+pub const closure = @import("closure.zig");
 pub const nop = @import("nop.zig");
 pub const osage = @import("osage.zig");
 pub const options = @import("options.zig");

@@ -5488,6 +5488,13 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     } else {
         applyRankConstraints(layout_graph, ranks);
     }
+    _ = try improveRanksByMaximumClosure(
+        allocator,
+        layout_graph,
+        ranks,
+        acyclic_edge,
+        rank_pivot_limit,
+    );
     if (graph.directed) {
         balanceEqualCostRanks(layout_graph, ranks, acyclic_edge, &rank_edge_adjacency);
     }
@@ -10317,6 +10324,98 @@ fn improveRankEdgesByClosureShifts(
     return shifts;
 }
 
+fn improveRanksByMaximumClosure(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    ranks: []usize,
+    acyclic_edge: []const bool,
+    max_shifts: usize,
+) !usize {
+    if (max_shifts == 0 or ranks.len == 0) return 0;
+    if (graph.subgraphs.items.len == 0) return 0;
+    // Ordinary flat clusters already retain useful long-edge slack for
+    // boundary routing. Enable the exact pass only when nested/wrapper
+    // clusters are dense enough that the global rank optimum dominates that
+    // routing benefit, as in generated compound dataflow graphs.
+    if (graph.subgraphs.items.len * 2 <= graph.nodes.items.len) return 0;
+    // A maximum-closure solve is exact for one rank-descent direction but is
+    // substantially heavier than the linear seed closures above. Keep this
+    // quality pass on medium graphs; the large-graph path already has strict
+    // scale gates and should not pay for repeated flow networks.
+    if (ranks.len > 512 or graph.edges.items.len > 2_048) return 0;
+    // Boundary/same constraints and compact subgraphs add objectives beyond
+    // ordinary weighted edge span. Their specialized passes remain the sole
+    // authority instead of letting this ordinary-rank descent undo them.
+    if (hasActiveRankConstraints(graph) or graphHasStrongClusters(graph)) return 0;
+
+    const edges = try collectRankEdges(allocator, graph, acyclic_edge);
+    defer allocator.free(edges);
+    if (edges.len == 0) return 0;
+
+    const profits = try allocator.alloc(f64, ranks.len);
+    defer allocator.free(profits);
+    const selected = try allocator.alloc(bool, ranks.len);
+    defer allocator.free(selected);
+    const backup = try allocator.alloc(usize, ranks.len);
+    defer allocator.free(backup);
+    var implications = std.ArrayList(layout_mod.closure.Implication).empty;
+    defer implications.deinit(allocator);
+    try implications.ensureTotalCapacity(allocator, edges.len);
+
+    var shifts: usize = 0;
+    while (shifts < max_shifts) {
+        @memset(profits, 0);
+        implications.clearRetainingCapacity();
+        for (edges) |edge| {
+            if (edge.from >= ranks.len or edge.to >= ranks.len) continue;
+            const weight = @max(edge.weight, 0);
+            // Increasing only the tail shortens this edge; increasing only the
+            // head lengthens it. These are the per-rank profits consumed by
+            // the maximum-closure reduction.
+            profits[edge.from] += weight;
+            profits[edge.to] -= weight;
+            if (rankEdgeTight(edge, ranks)) {
+                // A tight tail may move only when its head moves with it.
+                try implications.append(allocator, .{
+                    .from = edge.from,
+                    .to = edge.to,
+                });
+            }
+        }
+
+        const predicted_gain = try layout_mod.closure.solveMaximumWeight(
+            allocator,
+            profits,
+            implications.items,
+            selected,
+        );
+        if (predicted_gain <= 0.0001) break;
+        const limit = rankShiftLimit(edges, ranks, selected, true) orelse break;
+        if (limit == 0) break;
+
+        @memcpy(backup, ranks);
+        const before = rankEdgesCost(edges, ranks);
+        shiftRankClosure(ranks, selected, limit, true);
+        const after = rankEdgesCost(edges, ranks);
+        if (!rankAssignmentFeasible(graph, ranks, acyclic_edge) or
+            !rankConstraintsSatisfied(graph, ranks) or
+            after + 0.0001 >= before)
+        {
+            @memcpy(ranks, backup);
+            break;
+        }
+        shifts += 1;
+    }
+    if (shifts > 0) {
+        var min_rank = ranks[0];
+        for (ranks[1..]) |rank| min_rank = @min(min_rank, rank);
+        if (min_rank > 0) {
+            for (ranks) |*rank| rank.* -= min_rank;
+        }
+    }
+    return shifts;
+}
+
 fn buildRankShiftClosure(
     graph: *const Graph,
     edges: []const RankEdge,
@@ -12695,7 +12794,11 @@ fn refineDirectEdgeCenterCrossings(
     sizes: []const NodeSize,
     passes: usize,
 ) void {
-    if (passes == 0 or graph.subgraphs.items.len != 0) return;
+    if (passes == 0) return;
+    // Explicit remincross=false promises to preserve the first cluster block
+    // order. A final transpose would otherwise silently re-enable the second
+    // crossing-minimization phase for clustered graphs.
+    if (graph.subgraphs.items.len != 0 and !remincrossEnabled(graph)) return;
     if (graph.nodes.items.len > 128 or graph.edges.items.len > 256) return;
     var current = countDirectCenterCrossings(graph, ranks, centers);
     for (0..passes) |_| {
@@ -33344,6 +33447,39 @@ test "equal-cost rank balance reduces peak layer width" {
     try std.testing.expectEqual(@as(usize, 1), ranks[crowded_a]);
     try std.testing.expectEqual(@as(usize, 1), ranks[crowded_b]);
     try std.testing.expectEqual(before_cost, rankAssignmentCost(&graph, &ranks, &acyclic_edge));
+    try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
+}
+
+test "maximum-closure rank descent moves jointly profitable tight dependencies" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const cluster = try graph.addSubgraph("cluster", null, &.{}, .{});
+    const source = try graph.addNode("source", .{});
+    const branch = try graph.addNode("branch", .{});
+    const dependent = try graph.addNode("dependent", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addSubgraph("branch-wrapper", cluster, &.{branch}, .{});
+    _ = try graph.addSubgraph("dependent-wrapper", cluster, &.{dependent}, .{});
+    try graph.setSubgraphContent(cluster, &.{ source, sink }, .{});
+    _ = try graph.addEdge(source, branch, .{ .weight = 4 });
+    _ = try graph.addEdge(branch, dependent, .{ .weight = 3 });
+    _ = try graph.addEdge(dependent, sink, .{ .weight = 6 });
+
+    var ranks = [_]usize{ 0, 1, 2, 6 };
+    var acyclic_edge = [_]bool{ true, true, true };
+    const before = rankAssignmentCost(&graph, &ranks, &acyclic_edge);
+    const shifts = try improveRanksByMaximumClosure(
+        allocator,
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        8,
+    );
+
+    try std.testing.expect(shifts > 0);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, &ranks);
+    try std.testing.expect(rankAssignmentCost(&graph, &ranks, &acyclic_edge) < before);
     try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
 }
 

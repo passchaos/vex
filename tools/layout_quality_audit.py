@@ -58,14 +58,17 @@ def vex_geometry(
     nodes: dict[str, tuple[float, float, float, float]] = {}
     for match in VEX_NODE_RE.finditer(svg):
         attrs = xml_attrs(match.group(1))
-        nodes[attrs["label"]] = tuple(
+        # Display labels are not identities: real corpora such as 1332.dot
+        # contain many nodes with the same record label. Metadata IDs and edge
+        # endpoint IDs preserve the actual graph topology.
+        nodes[attrs["id"]] = tuple(
             float(attrs[name]) for name in ("x", "y", "width", "height")
         )
     edges: list[tuple[str, str]] = []
     for match in VEX_EDGE_RE.finditer(svg):
         attrs = xml_attrs(match.group(1))
-        if "from-label" in attrs and "to-label" in attrs:
-            edges.append((attrs["from-label"], attrs["to-label"]))
+        if "from" in attrs and "to" in attrs:
+            edges.append((attrs["from"], attrs["to"]))
     graph_match = VEX_GRAPH_RE.search(svg)
     if graph_match is None:
         raise RuntimeError("Vex SVG metadata has no graph entry")
@@ -272,6 +275,13 @@ def main() -> int:
             0,
             1.30,
             1.00,
+        ),
+        (
+            "1332",
+            args.graphviz_root / "tests" / "1332.dot",
+            25,
+            1.20,
+            1.55,
         ),
     )
     aggregate_vex_crossings = 0
