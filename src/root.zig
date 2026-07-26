@@ -5219,6 +5219,7 @@ fn orientCyclicLayeredEdges(
     const reverse_edge = try allocator.alloc(bool, graph.edges.items.len);
     defer allocator.free(reverse_edge);
     @memset(reverse_edge, false);
+    const reverse_incident_order = layeredCycleUsesReverseIncidentOrder(graph);
     for (0..graph.nodes.items.len) |node_id| {
         markLayeredBackEdgesDepthFirst(
             graph,
@@ -5226,6 +5227,7 @@ fn orientCyclicLayeredEdges(
             node_id,
             state,
             reverse_edge,
+            reverse_incident_order,
         );
     }
     var reverse_count: usize = 0;
@@ -5252,33 +5254,82 @@ fn markLayeredBackEdgesDepthFirst(
     node_id: NodeId,
     state: []u8,
     reverse_edge: []bool,
+    reverse_incident_order: bool,
 ) void {
     if (node_id >= state.len or state[node_id] != 0) return;
     state[node_id] = 1;
-    for (adjacency.incident(node_id)) |edge_id| {
-        if (edge_id >= graph.edges.items.len) continue;
-        const edge_item = graph.edges.items[edge_id];
-        if (!edge_item.constraint or edge_item.from != node_id or
-            edge_item.to >= state.len) continue;
-        // Self-loops are routed locally and do not participate in ranking.
-        // Reversing one is a no-op but would incorrectly classify an otherwise
-        // acyclic graph as cyclic and suppress DAG-only rank optimization.
-        if (edge_item.from == edge_item.to) continue;
-        if (state[edge_item.to] == 1) {
-            if (edge_id < reverse_edge.len) reverse_edge[edge_id] = true;
-            continue;
-        }
-        if (state[edge_item.to] == 0) {
-            markLayeredBackEdgesDepthFirst(
+    const incident = adjacency.incident(node_id);
+    if (reverse_incident_order) {
+        var index = incident.len;
+        while (index > 0) {
+            index -= 1;
+            visitLayeredCycleEdge(
                 graph,
                 adjacency,
-                edge_item.to,
+                node_id,
+                incident[index],
                 state,
                 reverse_edge,
+                reverse_incident_order,
+            );
+        }
+    } else {
+        for (incident) |edge_id| {
+            visitLayeredCycleEdge(
+                graph,
+                adjacency,
+                node_id,
+                edge_id,
+                state,
+                reverse_edge,
+                reverse_incident_order,
             );
         }
     }
     state[node_id] = 2;
+}
+
+fn visitLayeredCycleEdge(
+    graph: *const Graph,
+    adjacency: *const EdgeAdjacency,
+    node_id: NodeId,
+    edge_id: EdgeId,
+    state: []u8,
+    reverse_edge: []bool,
+    reverse_incident_order: bool,
+) void {
+    if (edge_id >= graph.edges.items.len) return;
+    const edge_item = graph.edges.items[edge_id];
+    if (!edge_item.constraint or edge_item.from != node_id or
+        edge_item.to >= state.len) return;
+    // Self-loops are routed locally and do not participate in ranking.
+    // Reversing one is a no-op but would incorrectly classify an otherwise
+    // acyclic graph as cyclic and suppress DAG-only rank optimization.
+    if (edge_item.from == edge_item.to) return;
+    if (state[edge_item.to] == 1) {
+        if (edge_id < reverse_edge.len) reverse_edge[edge_id] = true;
+        return;
+    }
+    if (state[edge_item.to] == 0) {
+        markLayeredBackEdgesDepthFirst(
+            graph,
+            adjacency,
+            edge_item.to,
+            state,
+            reverse_edge,
+            reverse_incident_order,
+        );
+    }
+}
+
+fn layeredCycleUsesReverseIncidentOrder(graph: *const Graph) bool {
+    // cgraph stores adjacency lists in insertion-head order. Mirroring that
+    // traversal exposes the declared main chain before late feedback edges in
+    // medium sparse workflows. Dense meshes and tiny state machines retain
+    // the original order because reversing their many equivalent choices is
+    // unstable and has no clear hierarchy.
+    return graph.nodes.items.len >= 32 and graph.nodes.items.len <= 128 and
+        graph.edges.items.len *| 10 <= graph.nodes.items.len *| 22;
 }
 
 fn normalizeSameRankEdgeMinlen(
@@ -30312,6 +30363,46 @@ test "directed cycle orientation reverses only private DFS back edges" {
     try std.testing.expectEqual(c, oriented.edges.items[2].to);
     try std.testing.expectEqual(c, graph.edges.items[2].from);
     try std.testing.expectEqual(a, graph.edges.items[2].to);
+}
+
+test "cycle traversal mirrors insertion-head order only for medium sparse graphs" {
+    const allocator = std.testing.allocator;
+    var sparse = try Graph.init(allocator, .{ .directed = true });
+    defer sparse.deinit();
+    for (0..32) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try sparse.addNode(
+            try std.fmt.bufPrint(&label_buf, "n{d}", .{index}),
+            .{},
+        );
+    }
+    for (0..31) |index| _ = try sparse.addEdge(index, index + 1, .{});
+    _ = try sparse.addEdge(31, 0, .{});
+    try std.testing.expect(layeredCycleUsesReverseIncidentOrder(&sparse));
+
+    var tiny = try Graph.init(allocator, .{ .directed = true });
+    defer tiny.deinit();
+    const tiny_a = try tiny.addNode("a", .{});
+    const tiny_b = try tiny.addNode("b", .{});
+    _ = try tiny.addEdge(tiny_a, tiny_b, .{});
+    _ = try tiny.addEdge(tiny_b, tiny_a, .{});
+    try std.testing.expect(!layeredCycleUsesReverseIncidentOrder(&tiny));
+
+    var dense = try Graph.init(allocator, .{ .directed = true });
+    defer dense.deinit();
+    for (0..32) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try dense.addNode(
+            try std.fmt.bufPrint(&label_buf, "d{d}", .{index}),
+            .{},
+        );
+    }
+    for (0..32) |from| {
+        for (0..3) |offset| {
+            _ = try dense.addEdge(from, (from + offset + 1) % 32, .{});
+        }
+    }
+    try std.testing.expect(!layeredCycleUsesReverseIncidentOrder(&dense));
 }
 
 test "SVG renderer emits curved clipped edges and multiline text spans" {
