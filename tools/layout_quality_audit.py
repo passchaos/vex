@@ -251,14 +251,14 @@ def main() -> int:
         (
             "ngk10_4",
             args.graphviz_root / "tests" / "graphs" / "ngk10_4.gv",
-            260,
+            240,
             0.75,
             1.10,
         ),
         (
             "fig6",
             args.graphviz_root / "tests" / "graphs" / "fig6.gv",
-            85,
+            78,
             1.15,
             1.10,
         ),
@@ -279,7 +279,7 @@ def main() -> int:
         (
             "1332",
             args.graphviz_root / "tests" / "1332.dot",
-            20,
+            18,
             1.20,
             1.55,
         ),
@@ -308,8 +308,8 @@ def main() -> int:
             raise SystemExit(f"{name}: Vex normalized canvas area regressed")
         aggregate_vex_crossings += vex_score[1]
         aggregate_graphviz_crossings += graphviz_score[1]
-    if aggregate_vex_crossings > 333:
-        raise SystemExit("aggregate Vex crossing count regressed above 333")
+    if aggregate_vex_crossings > 325:
+        raise SystemExit("aggregate Vex crossing count regressed above 325")
     print(
         "layout-quality-audit aggregate "
         f"vex_crossings={aggregate_vex_crossings} "

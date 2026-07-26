@@ -5618,6 +5618,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     }
     applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_limit);
     refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
+    refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -12864,6 +12865,71 @@ fn refineDirectEdgeCenterCrossings(
         }
         if (!changed) break;
     }
+}
+
+fn refinePostSpacingCenterCrossings(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    passes: usize,
+) void {
+    if (passes == 0 or
+        (graph.subgraphs.items.len != 0 and !remincrossEnabled(graph))) return;
+    if (graph.nodes.items.len > 128 or graph.edges.items.len > 256) return;
+    var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            for (level.items, 0..) |left, left_index| {
+                for (level.items[left_index + 1 ..]) |right| {
+                    if (left >= centers.len or right >= centers.len or
+                        left >= sizes.len or right >= sizes.len) continue;
+                    if (left >= graph.nodes.items.len or right >= graph.nodes.items.len or
+                        nodeGroupName(graph.nodes.items[left]) != null or
+                        nodeGroupName(graph.nodes.items[right]) != null) continue;
+
+                    std.mem.swap(f64, &centers[left], &centers[right]);
+                    if (!centerLevelHasClearance(level.items, centers, sizes)) {
+                        std.mem.swap(f64, &centers[left], &centers[right]);
+                        continue;
+                    }
+                    const after_crossings = countDirectCenterCrossings(graph, ranks, centers);
+                    const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                    if (after_crossings < current_crossings and
+                        after_stress <= baseline_stress * 1.04 + 0.0001)
+                    {
+                        current_crossings = after_crossings;
+                        changed = true;
+                    } else {
+                        std.mem.swap(f64, &centers[left], &centers[right]);
+                    }
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn centerLevelHasClearance(
+    level: []const NodeId,
+    centers: []const f64,
+    sizes: []const NodeSize,
+) bool {
+    for (level, 0..) |left, left_index| {
+        if (left >= centers.len or left >= sizes.len) return false;
+        for (level[left_index + 1 ..]) |right| {
+            if (right >= centers.len or right >= sizes.len) return false;
+            if (@abs(centers[left] - centers[right]) + 0.0001 <
+                sizes[left].width / 2.0 + sizes[right].width / 2.0)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
@@ -33536,6 +33602,45 @@ test "direct center transpose reduces crossings without moving ranks" {
         (centers[a] < centers[b] and centers[d] < centers[c]) or
             (centers[b] < centers[a] and centers[c] < centers[d]),
     );
+}
+
+test "post-spacing transpose accepts unequal-size slots with clearance" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(b, c, .{});
+
+    const ranks = [_]usize{ 0, 0, 1, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ a, b });
+    try levels[1].appendSlice(allocator, &.{ c, d });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 30, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 50, 10, 50 };
+    const before = countDirectCenterCrossings(&graph, &ranks, &centers);
+    refinePostSpacingCenterCrossings(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        2,
+    );
+    const after = countDirectCenterCrossings(&graph, &ranks, &centers);
+
+    try std.testing.expectEqual(@as(usize, 1), before);
+    try std.testing.expectEqual(@as(usize, 0), after);
+    try std.testing.expect(centerLevelHasClearance(levels[1].items, &centers, &sizes));
 }
 
 test "rank slack tightening reduces whole graph weighted span cost" {
