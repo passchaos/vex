@@ -5689,7 +5689,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
     refineSmallDirectedCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes);
     refineContinuousCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 4);
-    refineClusterOwnerGroupCrossings(layout_graph, ranks, centers, axis_sizes, 3);
+    refineClusterOwnerGroupCrossings(
+        layout_graph,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        3,
+    );
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -13284,75 +13291,222 @@ fn refineClusterOwnerGroupCrossings(
     ranks: []const usize,
     centers: []f64,
     sizes: []const NodeSize,
+    options: LayoutOptions,
     passes: usize,
 ) void {
     if (passes == 0 or graph.subgraphs.items.len == 0 or
         graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
         graph.subgraphs.items.len > 128 or !remincrossEnabled(graph)) return;
+    const dense_nested =
+        graph.subgraphs.items.len >= 8 and
+        graph.subgraphs.items.len *| 2 > graph.nodes.items.len;
     const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
     const baseline_extent = centersExtent(centers, sizes);
-    var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = if (dense_nested)
+        fillLayeredRankCenterDepths(
+            graph,
+            ranks,
+            sizes,
+            options,
+            &rank_depths,
+        ) orelse return
+    else
+        fillUnitRankDepths(ranks, &rank_depths) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    var current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    var current_stress = baseline_stress;
+    var best_crossings = current_crossings;
+    var best_stress = current_stress;
+    var best_centers: [128]f64 = undefined;
+    @memcpy(best_centers[0..centers.len], centers);
 
     var owner_by_node: [128]?SubgraphId = undefined;
     for (owner_by_node[0..graph.nodes.items.len], 0..) |*owner, node_id| {
         owner.* = deepestSubgraphContainingNode(graph, node_id);
     }
 
-    for (0..passes) |_| {
-        var changed = false;
-        var bounds: [128]OwnerGroupAlongBounds = undefined;
-        const bound_count = collectOwnerGroupAlongBounds(
+    for (0..2) |phase| {
+        if (phase == 1 and !dense_nested) break;
+        const allow_plateaus = phase == 1;
+        for (0..passes) |_| {
+            var changed = false;
+            var bounds: [128]OwnerGroupAlongBounds = undefined;
+            const bound_count = collectOwnerGroupAlongBounds(
+                graph,
+                owner_by_node[0..graph.nodes.items.len],
+                centers,
+                sizes,
+                &bounds,
+            );
+            for (bounds[0..bound_count]) |group| {
+                const original_min = group.min;
+                const original_max = group.max;
+                const original_center = (group.min + group.max) / 2.0;
+                var candidates: [128 * 3]f64 = undefined;
+                var candidate_count: usize = 0;
+                appendOwnerGroupCandidate(&candidates, &candidate_count, 0);
+                for (bounds[0..bound_count]) |other| {
+                    if (other.owner == group.owner) continue;
+                    const other_center = (other.min + other.max) / 2.0;
+                    appendOwnerGroupCandidate(
+                        &candidates,
+                        &candidate_count,
+                        other.min - original_max - 24.0,
+                    );
+                    appendOwnerGroupCandidate(
+                        &candidates,
+                        &candidate_count,
+                        other.max - original_min + 24.0,
+                    );
+                    appendOwnerGroupCandidate(
+                        &candidates,
+                        &candidate_count,
+                        other_center - original_center,
+                    );
+                }
+
+                var best_delta: f64 = 0;
+                var candidate_crossings = current_crossings;
+                var candidate_stress = current_stress;
+                for (candidates[0..candidate_count]) |delta| {
+                    if (@abs(delta) <= 0.0001) continue;
+                    shiftOwnerGroup(
+                        owner_by_node[0..graph.nodes.items.len],
+                        group.owner,
+                        centers,
+                        delta,
+                    );
+                    const legal =
+                        centersExtent(centers, sizes) <= baseline_extent + 0.0001 and
+                        (!dense_nested or centersHaveNonnegativeBounds(centers, sizes)) and
+                        allRankCentersHaveClearance(ranks, centers, sizes);
+                    if (legal) {
+                        const after_crossings = countPhysicalCenterCrossings(
+                            graph,
+                            ranks,
+                            centers,
+                            physical_depths,
+                        );
+                        const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                        if (after_stress <= baseline_stress * 1.04 + 0.0001 and
+                            (after_crossings < candidate_crossings or
+                                (allow_plateaus and
+                                    after_crossings == candidate_crossings and
+                                    after_stress + 0.0001 < candidate_stress)))
+                        {
+                            candidate_crossings = after_crossings;
+                            candidate_stress = after_stress;
+                            best_delta = delta;
+                        }
+                    }
+                    shiftOwnerGroup(
+                        owner_by_node[0..graph.nodes.items.len],
+                        group.owner,
+                        centers,
+                        -delta,
+                    );
+                }
+                if (@abs(best_delta) > 0.0001) {
+                    shiftOwnerGroup(
+                        owner_by_node[0..graph.nodes.items.len],
+                        group.owner,
+                        centers,
+                        best_delta,
+                    );
+                    current_crossings = candidate_crossings;
+                    current_stress = candidate_stress;
+                    if (current_crossings < best_crossings or
+                        (current_crossings == best_crossings and
+                            current_stress + 0.0001 < best_stress))
+                    {
+                        best_crossings = current_crossings;
+                        best_stress = current_stress;
+                        @memcpy(best_centers[0..centers.len], centers);
+                    }
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+    }
+    @memcpy(centers, best_centers[0..centers.len]);
+    if (dense_nested) {
+        refineAncestorClusterGroupCrossings(
             graph,
-            owner_by_node[0..graph.nodes.items.len],
+            ranks,
             centers,
             sizes,
-            &bounds,
+            owner_by_node[0..graph.nodes.items.len],
+            physical_depths,
+            baseline_stress,
+            baseline_extent,
         );
-        for (bounds[0..bound_count]) |group| {
-            const original_min = group.min;
-            const original_max = group.max;
-            const original_center = (group.min + group.max) / 2.0;
-            var candidates: [128 * 3]f64 = undefined;
-            var candidate_count: usize = 0;
-            appendOwnerGroupCandidate(&candidates, &candidate_count, 0);
-            for (bounds[0..bound_count]) |other| {
-                if (other.owner == group.owner) continue;
-                const other_center = (other.min + other.max) / 2.0;
-                appendOwnerGroupCandidate(
-                    &candidates,
-                    &candidate_count,
-                    other.min - original_max - 24.0,
-                );
-                appendOwnerGroupCandidate(
-                    &candidates,
-                    &candidate_count,
-                    other.max - original_min + 24.0,
-                );
-                appendOwnerGroupCandidate(
-                    &candidates,
-                    &candidate_count,
-                    other_center - original_center,
-                );
-            }
+    }
+}
 
-            var best_delta: f64 = 0;
-            var best_crossings = current_crossings;
-            for (candidates[0..candidate_count]) |delta| {
+fn refineAncestorClusterGroupCrossings(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    owner_by_node: []const ?SubgraphId,
+    physical_depths: []const f64,
+    baseline_stress: f64,
+    baseline_extent: f64,
+) void {
+    var current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    var ancestor_bounds: [128]OwnerGroupAlongBounds = undefined;
+    const bound_count = collectAncestorGroupAlongBounds(
+        graph,
+        owner_by_node,
+        centers,
+        sizes,
+        &ancestor_bounds,
+    );
+    for (ancestor_bounds[0..bound_count]) |group| {
+        const original_center = (group.min + group.max) / 2.0;
+        var best_delta: f64 = 0;
+        var best_crossings = current_crossings;
+        for (ancestor_bounds[0..bound_count]) |other| {
+            if (other.owner == group.owner or
+                subgraphIsAncestorOf(graph, group.owner, other.owner) or
+                subgraphIsAncestorOf(graph, other.owner, group.owner)) continue;
+            const other_center = (other.min + other.max) / 2.0;
+            const candidates = [_]f64{
+                other.min - group.max - 24.0,
+                other.max - group.min + 24.0,
+                other_center - original_center,
+            };
+            for (candidates) |delta| {
                 if (@abs(delta) <= 0.0001) continue;
-                shiftOwnerGroup(
-                    owner_by_node[0..graph.nodes.items.len],
+                shiftAncestorGroup(
+                    graph,
+                    owner_by_node,
                     group.owner,
                     centers,
                     delta,
                 );
                 const legal =
                     centersExtent(centers, sizes) <= baseline_extent + 0.0001 and
+                    centersHaveNonnegativeBounds(centers, sizes) and
                     allRankCentersHaveClearance(ranks, centers, sizes);
                 if (legal) {
-                    const after_crossings = countDirectCenterCrossings(
+                    const after_crossings = countPhysicalCenterCrossings(
                         graph,
                         ranks,
                         centers,
+                        physical_depths,
                     );
                     const after_stress = coordinateEdgeStress(graph, ranks, centers);
                     if (after_crossings < best_crossings and
@@ -13362,25 +13516,75 @@ fn refineClusterOwnerGroupCrossings(
                         best_delta = delta;
                     }
                 }
-                shiftOwnerGroup(
-                    owner_by_node[0..graph.nodes.items.len],
+                shiftAncestorGroup(
+                    graph,
+                    owner_by_node,
                     group.owner,
                     centers,
                     -delta,
                 );
             }
-            if (@abs(best_delta) > 0.0001) {
-                shiftOwnerGroup(
-                    owner_by_node[0..graph.nodes.items.len],
-                    group.owner,
-                    centers,
-                    best_delta,
-                );
-                current_crossings = best_crossings;
-                changed = true;
-            }
         }
-        if (!changed) break;
+        if (@abs(best_delta) > 0.0001) {
+            shiftAncestorGroup(
+                graph,
+                owner_by_node,
+                group.owner,
+                centers,
+                best_delta,
+            );
+            current_crossings = best_crossings;
+        }
+    }
+}
+
+fn collectAncestorGroupAlongBounds(
+    graph: *const Graph,
+    owner_by_node: []const ?SubgraphId,
+    centers: []const f64,
+    sizes: []const NodeSize,
+    bounds: *[128]OwnerGroupAlongBounds,
+) usize {
+    var count: usize = 0;
+    for (graph.subgraphs.items) |subgraph| {
+        var min_along = std.math.floatMax(f64);
+        var max_along = -std.math.floatMax(f64);
+        for (owner_by_node, 0..) |owner, node_id| {
+            if (owner == null or node_id >= centers.len or node_id >= sizes.len or
+                !subgraphIsAncestorOf(graph, subgraph.id, owner.?)) continue;
+            min_along = @min(
+                min_along,
+                centers[node_id] - sizes[node_id].width / 2.0,
+            );
+            max_along = @max(
+                max_along,
+                centers[node_id] + sizes[node_id].width / 2.0,
+            );
+        }
+        if (min_along == std.math.floatMax(f64)) continue;
+        bounds[count] = .{
+            .owner = subgraph.id,
+            .min = min_along,
+            .max = max_along,
+        };
+        count += 1;
+    }
+    return count;
+}
+
+fn shiftAncestorGroup(
+    graph: *const Graph,
+    owner_by_node: []const ?SubgraphId,
+    ancestor: SubgraphId,
+    centers: []f64,
+    delta: f64,
+) void {
+    for (owner_by_node, 0..) |owner, node_id| {
+        if (owner != null and node_id < centers.len and
+            subgraphIsAncestorOf(graph, ancestor, owner.?))
+        {
+            centers[node_id] += delta;
+        }
     }
 }
 
@@ -13464,6 +13668,110 @@ fn allRankCentersHaveClearance(
     return true;
 }
 
+fn centersHaveNonnegativeBounds(
+    centers: []const f64,
+    sizes: []const NodeSize,
+) bool {
+    for (centers, 0..) |center, node_id| {
+        if (node_id >= sizes.len or center + 0.0001 < sizes[node_id].width / 2.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn fillLayeredRankCenterDepths(
+    graph: *const Graph,
+    ranks: []const usize,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    depths: *[128]f64,
+) ?usize {
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    const rank_count = max_rank + 1;
+    if (rank_count > depths.len) return null;
+    var heights: [128]f64 = undefined;
+    @memset(heights[0..rank_count], options.node_height);
+    for (ranks, 0..) |rank, node_id| {
+        if (rank >= rank_count or node_id >= sizes.len) continue;
+        heights[rank] = @max(heights[rank], sizes[node_id].height);
+    }
+    if (options.ranksep_equally) {
+        var max_height: f64 = 0;
+        for (heights[0..rank_count]) |height| max_height = @max(max_height, height);
+        var equal_gap = options.rank_gap;
+        for (0..if (rank_count == 0) 0 else rank_count - 1) |rank| {
+            equal_gap = @max(
+                equal_gap,
+                layout_mod.subgraph.rankGapBetween(
+                    graph.subgraphs.items,
+                    ranks,
+                    rank,
+                    options.rank_gap,
+                ),
+            );
+        }
+        const step = max_height + equal_gap;
+        for (depths[0..rank_count], 0..) |*depth, rank| {
+            depth.* = @as(f64, @floatFromInt(rank)) * step + max_height / 2.0;
+        }
+        return rank_count;
+    }
+    var cursor: f64 = 0;
+    for (heights[0..rank_count], 0..) |height, rank| {
+        depths[rank] = cursor + height / 2.0;
+        cursor += height;
+        if (rank + 1 < rank_count) {
+            cursor += layout_mod.subgraph.rankGapBetween(
+                graph.subgraphs.items,
+                ranks,
+                rank,
+                options.rank_gap,
+            );
+        }
+    }
+    return rank_count;
+}
+
+fn fillUnitRankDepths(ranks: []const usize, depths: *[128]f64) ?usize {
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    const rank_count = max_rank + 1;
+    if (rank_count > depths.len) return null;
+    for (depths[0..rank_count], 0..) |*depth, rank| {
+        depth.* = @floatFromInt(rank);
+    }
+    return rank_count;
+}
+
+fn countPhysicalCenterCrossings(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+    rank_depths: []const f64,
+) usize {
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |left, left_index| {
+        if (left.from >= ranks.len or left.to >= ranks.len or
+            left.from >= centers.len or left.to >= centers.len) continue;
+        if (ranks[left.from] >= rank_depths.len or ranks[left.to] >= rank_depths.len) continue;
+        const a = Point{ .x = centers[left.from], .y = rank_depths[ranks[left.from]] };
+        const b = Point{ .x = centers[left.to], .y = rank_depths[ranks[left.to]] };
+        for (graph.edges.items[left_index + 1 ..]) |right| {
+            if (right.from >= ranks.len or right.to >= ranks.len or
+                right.from >= centers.len or right.to >= centers.len) continue;
+            if (ranks[right.from] >= rank_depths.len or ranks[right.to] >= rank_depths.len) continue;
+            if (left.from == right.from or left.from == right.to or
+                left.to == right.from or left.to == right.to) continue;
+            const c = Point{ .x = centers[right.from], .y = rank_depths[ranks[right.from]] };
+            const d = Point{ .x = centers[right.to], .y = rank_depths[ranks[right.to]] };
+            if (pointSegmentsCross(a, b, c, d)) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
 fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
     var crossings: usize = 0;
     for (graph.edges.items, 0..) |left, left_index| {
@@ -13529,6 +13837,10 @@ fn directCenterSegmentsCross(left: Edge, right: Edge, ranks: []const usize, cent
     const b = Point{ .x = centers[left.to], .y = @floatFromInt(ranks[left.to]) };
     const c = Point{ .x = centers[right.from], .y = @floatFromInt(ranks[right.from]) };
     const d = Point{ .x = centers[right.to], .y = @floatFromInt(ranks[right.to]) };
+    return pointSegmentsCross(a, b, c, d);
+}
+
+fn pointSegmentsCross(a: Point, b: Point, c: Point, d: Point) bool {
     const ab_c = pointOrientation(a, b, c);
     const ab_d = pointOrientation(a, b, d);
     const cd_a = pointOrientation(c, d, a);
@@ -34312,7 +34624,9 @@ test "cluster owner group sifting moves members together" {
         .{ .width = 20, .height = 20 },
         .{ .width = 20, .height = 20 },
     };
-    var centers = [_]f64{ 10, 10, 70, 70 };
+    // Leave valid space on both sides so a singleton owner can jump around
+    // the two-node group without relying on negative coordinates.
+    var centers = [_]f64{ 100, 100, 160, 160 };
     const original_delta = centers[b] - centers[a];
     const before = countDirectCenterCrossings(&graph, &ranks, &centers);
     refineClusterOwnerGroupCrossings(
@@ -34320,6 +34634,7 @@ test "cluster owner group sifting moves members together" {
         &ranks,
         &centers,
         &sizes,
+        .{},
         3,
     );
 
