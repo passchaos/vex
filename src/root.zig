@@ -5619,6 +5619,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_limit);
     refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
     refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
+    refineSmallDirectedCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -12932,6 +12933,167 @@ fn centerLevelHasClearance(
     return true;
 }
 
+const SmallDirectedCrossingSearch = struct {
+    const restart_count: usize = 13;
+    const perturbation_moves: usize = 160;
+    const search_moves: usize = 1_000;
+
+    state: u64 = 0x243f6a8885a308d3,
+
+    fn next(self: *SmallDirectedCrossingSearch) u64 {
+        // SplitMix64 with a fixed seed provides broad but byte-deterministic
+        // restart candidates on every target.
+        self.state +%= 0x9e3779b97f4a7c15;
+        var value = self.state;
+        value = (value ^ (value >> 30)) *% 0xbf58476d1ce4e5b9;
+        value = (value ^ (value >> 27)) *% 0x94d049bb133111eb;
+        return value ^ (value >> 31);
+    }
+
+    fn index(self: *SmallDirectedCrossingSearch, upper_bound: usize) usize {
+        if (upper_bound <= 1) return 0;
+        return @intCast(self.next() % upper_bound);
+    }
+};
+
+fn refineSmallDirectedCenterCrossings(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+) void {
+    if (!graph.directed or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len > 64 or graph.edges.items.len > 128 or
+        graph.edges.items.len *| 2 > graph.nodes.items.len *| 3) return;
+    if (orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return;
+    for (graph.nodes.items) |node_item| {
+        if (nodeGroupName(node_item) != null or
+            orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return;
+    }
+
+    var eligible_levels: [64]usize = undefined;
+    var eligible_count: usize = 0;
+    for (levels, 0..) |level, rank| {
+        if (level.items.len <= 1) continue;
+        eligible_levels[eligible_count] = rank;
+        eligible_count += 1;
+    }
+    if (eligible_count == 0) return;
+
+    const baseline_crossings = countDirectCenterCrossings(graph, ranks, centers);
+    if (baseline_crossings < 16) return;
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    var best_crossings = baseline_crossings;
+    var best_centers: [64]f64 = undefined;
+    @memcpy(best_centers[0..centers.len], centers);
+    var search = SmallDirectedCrossingSearch{};
+
+    for (0..SmallDirectedCrossingSearch.restart_count) |_| {
+        @memcpy(centers, best_centers[0..centers.len]);
+        for (0..SmallDirectedCrossingSearch.perturbation_moves) |_| {
+            _ = trySmallDirectedCenterSwap(
+                &search,
+                levels,
+                centers,
+                sizes,
+                eligible_levels[0..eligible_count],
+            );
+        }
+
+        var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
+        for (0..SmallDirectedCrossingSearch.search_moves) |step| {
+            const swapped = trySmallDirectedCenterSwap(
+                &search,
+                levels,
+                centers,
+                sizes,
+                eligible_levels[0..eligible_count],
+            ) orelse continue;
+            std.mem.swap(f64, &centers[swapped.left], &centers[swapped.right]);
+            const before_affected = countDirectCenterCrossingsTouching(
+                graph,
+                ranks,
+                centers,
+                swapped.left,
+                swapped.right,
+            );
+            std.mem.swap(f64, &centers[swapped.left], &centers[swapped.right]);
+            const after_affected = countDirectCenterCrossingsTouching(
+                graph,
+                ranks,
+                centers,
+                swapped.left,
+                swapped.right,
+            );
+            const after_crossings = current_crossings -| before_affected +| after_affected;
+            const remaining = SmallDirectedCrossingSearch.search_moves - step;
+            const delta = after_crossings -| current_crossings;
+            const accept_uphill = smallDirectedAcceptUphill(&search, delta, remaining);
+            if (after_crossings <= current_crossings or accept_uphill) {
+                current_crossings = after_crossings;
+                if (after_crossings < best_crossings and
+                    coordinateEdgeStress(graph, ranks, centers) <= baseline_stress * 1.04 + 0.0001)
+                {
+                    best_crossings = after_crossings;
+                    @memcpy(best_centers[0..centers.len], centers);
+                }
+            } else {
+                std.mem.swap(f64, &centers[swapped.left], &centers[swapped.right]);
+            }
+        }
+    }
+    @memcpy(centers, best_centers[0..centers.len]);
+}
+
+fn smallDirectedAcceptUphill(
+    search: *SmallDirectedCrossingSearch,
+    delta: usize,
+    remaining: usize,
+) bool {
+    if (delta == 0) return true;
+    const total = SmallDirectedCrossingSearch.search_moves;
+    const denominator: usize = if (remaining * 3 > total * 2)
+        std.math.pow(usize, 2, @min(delta, 8))
+    else if (remaining * 3 > total and delta == 1)
+        8
+    else
+        return false;
+    return search.index(denominator) == 0;
+}
+
+const SmallDirectedCenterSwap = struct {
+    left: NodeId,
+    right: NodeId,
+};
+
+fn trySmallDirectedCenterSwap(
+    search: *SmallDirectedCrossingSearch,
+    levels: []const std.ArrayList(NodeId),
+    centers: []f64,
+    sizes: []const NodeSize,
+    eligible_levels: []const usize,
+) ?SmallDirectedCenterSwap {
+    for (0..8) |_| {
+        const rank = eligible_levels[search.index(eligible_levels.len)];
+        if (rank >= levels.len) continue;
+        const level = levels[rank].items;
+        const left_index = search.index(level.len);
+        var right_index = search.index(level.len - 1);
+        if (right_index >= left_index) right_index += 1;
+        const left = level[left_index];
+        const right = level[right_index];
+        if (left >= centers.len or right >= centers.len or
+            left >= sizes.len or right >= sizes.len) continue;
+        std.mem.swap(f64, &centers[left], &centers[right]);
+        if (centerLevelHasClearance(level, centers, sizes)) {
+            return .{ .left = left, .right = right };
+        }
+        std.mem.swap(f64, &centers[left], &centers[right]);
+    }
+    return null;
+}
+
 fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers: []const f64) usize {
     var crossings: usize = 0;
     for (graph.edges.items, 0..) |left, left_index| {
@@ -12945,6 +13107,47 @@ fn countDirectCenterCrossings(graph: *const Graph, ranks: []const usize, centers
             {
                 continue;
             }
+            if (directCenterSegmentsCross(left, right, ranks, centers)) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn countDirectCenterCrossingsTouching(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+    left_node: NodeId,
+    right_node: NodeId,
+) usize {
+    var touched: [128]EdgeId = undefined;
+    var touched_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from != left_node and edge_item.to != left_node and
+            edge_item.from != right_node and edge_item.to != right_node) continue;
+        if (touched_count >= touched.len) return countDirectCenterCrossings(graph, ranks, centers);
+        touched[touched_count] = edge_item.id;
+        touched_count += 1;
+    }
+
+    var crossings: usize = 0;
+    for (touched[0..touched_count], 0..) |left_id, touched_index| {
+        if (left_id >= graph.edges.items.len) continue;
+        const left = graph.edges.items[left_id];
+        if (left.from >= ranks.len or left.to >= ranks.len or
+            left.from >= centers.len or left.to >= centers.len) continue;
+        for (graph.edges.items) |right| {
+            if (right.id == left_id or right.from >= ranks.len or right.to >= ranks.len or
+                right.from >= centers.len or right.to >= centers.len) continue;
+            var duplicate = false;
+            for (touched[0..touched_index]) |previous_id| {
+                if (right.id == previous_id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate or left.from == right.from or left.from == right.to or
+                left.to == right.from or left.to == right.to) continue;
             if (directCenterSegmentsCross(left, right, ranks, centers)) crossings += 1;
         }
     }
@@ -33641,6 +33844,42 @@ test "post-spacing transpose accepts unequal-size slots with clearance" {
     try std.testing.expectEqual(@as(usize, 1), before);
     try std.testing.expectEqual(@as(usize, 0), after);
     try std.testing.expect(centerLevelHasClearance(levels[1].items, &centers, &sizes));
+}
+
+test "touched-edge crossing score matches full swap delta" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(b, c, .{});
+
+    const ranks = [_]usize{ 0, 0, 1, 1 };
+    var centers = [_]f64{ 10, 40, 10, 40 };
+    const full_before = countDirectCenterCrossings(&graph, &ranks, &centers);
+    const touched_before = countDirectCenterCrossingsTouching(
+        &graph,
+        &ranks,
+        &centers,
+        c,
+        d,
+    );
+    std.mem.swap(f64, &centers[c], &centers[d]);
+    const full_after = countDirectCenterCrossings(&graph, &ranks, &centers);
+    const touched_after = countDirectCenterCrossingsTouching(
+        &graph,
+        &ranks,
+        &centers,
+        c,
+        d,
+    );
+
+    try std.testing.expectEqual(full_before, touched_before);
+    try std.testing.expectEqual(full_after, touched_after);
+    try std.testing.expectEqual(full_before - full_after, touched_before - touched_after);
 }
 
 test "rank slack tightening reduces whole graph weighted span cost" {
