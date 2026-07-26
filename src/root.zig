@@ -5939,6 +5939,15 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
                 axis_sizes,
                 4,
             );
+            refineContinuousCenterStressPlateau(
+                layout_graph,
+                levels,
+                ranks,
+                centers,
+                axis_sizes,
+                effective_options,
+                4,
+            );
             @memcpy(width_aware_candidate[0..centers.len], centers);
             has_width_aware_candidate = true;
         }
@@ -13819,6 +13828,10 @@ fn centerLevelHasClearance(
 const SmallDirectedCrossingSearch = struct {
     const restart_count: usize = 13;
     const medium_restart_count: usize = 64;
+    const medium_width_alternate_states = [_]u64{
+        0x9a5c70483a5f8012,
+        0x2d513fe613a50a39,
+    };
     const perturbation_moves: usize = 160;
     const search_moves: usize = 1_000;
 
@@ -13897,7 +13910,23 @@ fn refineSmallDirectedCenterCrossings(
     // heterogeneous labels without changing the original search trajectory.
     if (adjacent_width_aware and hasActiveRankConstraints(graph)) return false;
     var search = SmallDirectedCrossingSearch{};
-    for (0..restart_count) |_| {
+    const alternate_count: usize = if (adjacent_width_aware and
+        restart_count == SmallDirectedCrossingSearch.medium_restart_count and
+        baseline_crossings <= 32)
+        SmallDirectedCrossingSearch.medium_width_alternate_states.len
+    else
+        0;
+    for (0..restart_count + alternate_count) |restart| {
+        if (restart >= restart_count) {
+            // These sparse late SplitMix checkpoints form a short path into a
+            // useful width-aware basin without paying for every intervening
+            // restart. Each checkpoint starts from the best candidate found
+            // by its predecessor, matching the normal monotone restart flow.
+            search.state =
+                SmallDirectedCrossingSearch.medium_width_alternate_states[
+                    restart - restart_count
+                ];
+        }
         @memcpy(centers, best_centers[0..centers.len]);
         for (0..SmallDirectedCrossingSearch.perturbation_moves) |_| {
             _ = trySmallDirectedCenterSwap(
@@ -14364,6 +14393,142 @@ fn appendContinuousCandidate(
     if (count.* >= candidates.len) return;
     candidates[count.*] = candidate;
     count.* += 1;
+}
+
+fn incidentCoordinateStressTarget(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+    node_id: NodeId,
+    edge_adjacency: *const EdgeAdjacency,
+) ?f64 {
+    if (node_id >= ranks.len or node_id >= centers.len) return null;
+    var weighted_sum: f64 = 0;
+    var total_weight: f64 = 0;
+    for (edge_adjacency.incident(node_id)) |edge_id| {
+        if (edge_id >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_id];
+        if (!edgeAffectsLayeredObjective(edge_item)) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len or
+            edge_item.from >= centers.len or edge_item.to >= centers.len) continue;
+        const from_rank = ranks[edge_item.from];
+        const to_rank = ranks[edge_item.to];
+        if (from_rank >= to_rank) continue;
+        const neighbor = if (edge_item.from == node_id)
+            edge_item.to
+        else if (edge_item.to == node_id)
+            edge_item.from
+        else
+            continue;
+        const span = to_rank - from_rank;
+        const weight = @max(edge_item.weight, 0) /
+            @as(f64, @floatFromInt(span));
+        if (!std.math.isFinite(weight) or weight <= 0 or
+            !std.math.isFinite(centers[neighbor])) continue;
+        weighted_sum += centers[neighbor] * weight;
+        total_weight += weight;
+    }
+    if (!std.math.isFinite(weighted_sum) or
+        !std.math.isFinite(total_weight) or total_weight <= 0) return null;
+    const target = weighted_sum / total_weight;
+    return if (std.math.isFinite(target)) target else null;
+}
+
+fn refineContinuousCenterStressPlateau(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    passes: usize,
+) void {
+    if (passes == 0 or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len > 64 or graph.edges.items.len > 128) return;
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_extent = centersExtent(centers, sizes);
+    var current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    var current_stress = coordinateEdgeStress(graph, ranks, centers);
+    var edge_adjacency = EdgeAdjacency.init(graph.allocator, graph) catch return;
+    defer edge_adjacency.deinit();
+
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            if (level.items.len == 0 or level.items.len > 64) continue;
+            var ordered: [64]NodeId = undefined;
+            @memcpy(ordered[0..level.items.len], level.items);
+            std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+                fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                    if (left >= node_centers.len or right >= node_centers.len) return left < right;
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan);
+
+            for (ordered[0..level.items.len], 0..) |node_id, index| {
+                if (node_id >= centers.len or node_id >= sizes.len) continue;
+                const original = centers[node_id];
+                const lower = if (index == 0)
+                    sizes[node_id].width / 2.0
+                else lower: {
+                    const previous = ordered[index - 1];
+                    break :lower centers[previous] + sizes[previous].width / 2.0 +
+                        sizes[node_id].width / 2.0;
+                };
+                const upper = if (index + 1 == level.items.len)
+                    baseline_extent - sizes[node_id].width / 2.0
+                else upper: {
+                    const next = ordered[index + 1];
+                    break :upper centers[next] - sizes[next].width / 2.0 -
+                        sizes[node_id].width / 2.0;
+                };
+                if (lower > upper + 0.0001) continue;
+                const target = incidentCoordinateStressTarget(
+                    graph,
+                    ranks,
+                    centers,
+                    node_id,
+                    &edge_adjacency,
+                ) orelse continue;
+                const candidate = std.math.clamp(target, lower, upper);
+                if (@abs(candidate - original) <= 0.0001) continue;
+
+                centers[node_id] = candidate;
+                const after_crossings = countPhysicalCenterCrossings(
+                    graph,
+                    ranks,
+                    centers,
+                    physical_depths,
+                );
+                const after_stress = coordinateEdgeStress(graph, ranks, centers);
+                if (after_crossings <= current_crossings and
+                    after_stress + 0.0001 < current_stress and
+                    centersExtent(centers, sizes) <= baseline_extent + 0.0001)
+                {
+                    current_crossings = after_crossings;
+                    current_stress = after_stress;
+                    changed = true;
+                } else {
+                    centers[node_id] = original;
+                }
+            }
+        }
+        if (!changed) break;
+    }
 }
 
 fn refineExplicitRankCoordinateStress(
@@ -36573,6 +36738,56 @@ test "medium crossed directed graphs receive deeper deterministic restarts" {
         SmallDirectedCrossingSearch.restart_count,
         smallDirectedCrossingRestartCount(65, 20),
     );
+}
+
+test "continuous stress plateau preserves crossings and lowers stress" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper = try graph.addNode("upper", .{});
+    const lower = try graph.addNode("lower", .{});
+    _ = try graph.addEdge(upper, lower, .{ .weight = 3 });
+
+    const ranks = [_]usize{ 0, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].append(allocator, upper);
+    try levels[1].append(allocator, lower);
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 100 };
+    const crossings_before = countDirectCenterCrossings(
+        &graph,
+        &ranks,
+        &centers,
+    );
+    const stress_before = coordinateEdgeStress(&graph, &ranks, &centers);
+
+    refineContinuousCenterStressPlateau(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        4,
+    );
+
+    try std.testing.expectEqual(
+        crossings_before,
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expect(
+        coordinateEdgeStress(&graph, &ranks, &centers) + 0.0001 <
+            stress_before,
+    );
+    try std.testing.expect(allRankCentersHaveClearance(
+        &ranks,
+        &centers,
+        &sizes,
+    ));
 }
 
 test "explicit rank slot sifting checks every legal insertion slot" {
