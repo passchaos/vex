@@ -5618,7 +5618,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     }
     applyCrossClusterDiagonalNudges(layout_graph, ranks, centers, axis_sizes, cluster_along_limit);
     refineDirectEdgeCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
-    refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 2);
+    refinePostSpacingCenterCrossings(layout_graph, levels, ranks, centers, axis_sizes, 8);
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
