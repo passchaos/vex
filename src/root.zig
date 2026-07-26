@@ -14133,9 +14133,27 @@ fn refineExplicitRankCoordinateStress(
         orderingMode(attrValue(graph.attrs.items, "ordering")) == .out;
     if (passes == 0 or graph.subgraphs.items.len != 0 or
         graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
-        (!ordered_graph and !allNodesHaveActiveSameRankConstraint(graph))) return false;
+        graph.nodes.items.len == 0 or centers.len < graph.nodes.items.len or
+        sizes.len < graph.nodes.items.len) return false;
+    var same_rank_covered: [128]bool = undefined;
+    markNodesWithActiveSameRankConstraint(
+        graph,
+        same_rank_covered[0..graph.nodes.items.len],
+    );
+    var any_node_covered = false;
+    var every_node_covered = true;
+    for (same_rank_covered[0..graph.nodes.items.len]) |covered| {
+        any_node_covered = any_node_covered or covered;
+        if (!covered) {
+            every_node_covered = false;
+        }
+    }
+    if (!ordered_graph and !any_node_covered) return false;
     var current_crossings = countDirectCenterCrossings(graph, ranks, centers);
-    const crossing_limit = if (ordered_graph)
+    // Fully explicit-rank graphs retain the historical small crossing budget
+    // used to escape a compactness basin. A partially constrained graph has no
+    // such whole-graph contract, so compaction must be crossing-nonincreasing.
+    const crossing_limit = if (ordered_graph or !every_node_covered)
         current_crossings
     else
         current_crossings +| @max(current_crossings / 12, 2);
@@ -14148,6 +14166,10 @@ fn refineExplicitRankCoordinateStress(
         var changed = false;
         for (levels) |level| {
             if (level.items.len == 0 or level.items.len > 128) continue;
+            if (!ordered_graph and !levelFullyCoveredBySameRankConstraint(
+                level.items,
+                same_rank_covered[0..graph.nodes.items.len],
+            )) continue;
             var ordered: [128]NodeId = undefined;
             @memcpy(ordered[0..level.items.len], level.items);
             std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
@@ -14234,19 +14256,49 @@ fn refineExplicitRankCoordinateStress(
     return any_changed;
 }
 
-fn allNodesHaveActiveSameRankConstraint(graph: *const Graph) bool {
-    for (graph.nodes.items) |node_item| {
-        var found = false;
-        for (graph.rank_constraints.items) |constraint| {
-            if (constraint.kind != .same or !rankConstraintActive(graph, constraint)) continue;
-            if (containsNode(constraint.node_ids, node_item.id)) {
-                found = true;
-                break;
-            }
+fn markNodesWithActiveSameRankConstraint(
+    graph: *const Graph,
+    covered: []bool,
+) void {
+    @memset(covered, false);
+    for (graph.rank_constraints.items) |constraint| {
+        if (constraint.kind != .same or !rankConstraintActive(graph, constraint)) continue;
+        for (constraint.node_ids) |node_id| {
+            if (node_id < covered.len) covered[node_id] = true;
         }
-        if (!found) return false;
     }
-    return graph.nodes.items.len > 0;
+}
+
+fn levelFullyCoveredBySameRankConstraint(
+    level: []const NodeId,
+    covered: []const bool,
+) bool {
+    if (level.len == 0) return false;
+    for (level) |node_id| {
+        if (node_id >= covered.len or !covered[node_id]) return false;
+    }
+    return true;
+}
+
+fn fillLevelOrderCenters(
+    order: []const NodeId,
+    left_boundary: f64,
+    gaps: []const f64,
+    sizes: []const NodeSize,
+    result: []f64,
+) bool {
+    if (result.len < order.len or gaps.len + 1 < order.len) return false;
+    var cursor = left_boundary;
+    for (order, 0..) |node_id, index| {
+        if (node_id >= sizes.len) return false;
+        const width = sizes[node_id].width;
+        if (!std.math.isFinite(width) or width < 0) return false;
+        cursor += width / 2.0;
+        result[index] = cursor;
+        cursor += width / 2.0;
+        if (index < gaps.len) cursor += gaps[index];
+    }
+    return true;
 }
 
 fn refineExplicitRankSlotSifting(
@@ -14258,11 +14310,22 @@ fn refineExplicitRankSlotSifting(
     options: LayoutOptions,
     passes: usize,
 ) void {
-    if (passes == 0 or !allNodesHaveActiveSameRankConstraint(graph) or
-        graph.subgraphs.items.len != 0 or graph.nodes.items.len > 128 or
-        graph.edges.items.len > 256) return;
+    if (passes == 0 or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len == 0 or graph.nodes.items.len > 128 or
+        graph.edges.items.len > 256 or centers.len < graph.nodes.items.len or
+        sizes.len < graph.nodes.items.len) return;
     if (orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return;
 
+    var same_rank_covered: [128]bool = undefined;
+    markNodesWithActiveSameRankConstraint(
+        graph,
+        same_rank_covered[0..graph.nodes.items.len],
+    );
+    var has_covered_node = false;
+    for (same_rank_covered[0..graph.nodes.items.len]) |covered| {
+        has_covered_node = has_covered_node or covered;
+    }
+    if (!has_covered_node) return;
     var rank_depths: [128]f64 = undefined;
     const rank_count = fillLayeredRankCenterDepths(
         graph,
@@ -14280,27 +14343,26 @@ fn refineExplicitRankSlotSifting(
         physical_depths,
     );
     var current_stress = baseline_stress;
-    var slots: [128]f64 = undefined;
     var order: [128]NodeId = undefined;
     var candidate_order: [128]NodeId = undefined;
+    var candidate_centers: [128]f64 = undefined;
     var backup: [128]f64 = undefined;
+    var gaps: [127]f64 = undefined;
 
     for (0..passes) |_| {
         var changed = false;
         for (levels) |level| {
             if (level.items.len <= 1 or level.items.len > order.len) continue;
-            const first = level.items[0];
-            if (first >= sizes.len) continue;
-            var equal_widths = true;
-            for (level.items) |node_id| {
-                if (node_id >= centers.len or node_id >= sizes.len or
-                    @abs(sizes[node_id].width - sizes[first].width) > 0.0001)
-                {
-                    equal_widths = false;
-                    break;
-                }
-            }
-            if (!equal_widths) continue;
+
+            // A rank constraint justifies reconsidering order within the rank,
+            // but it says nothing about unrelated, coincidentally co-ranked
+            // nodes. Requiring complete coverage per level extends the
+            // all-explicit-rank optimization to mixed graphs without moving
+            // any unconstrained level.
+            if (!levelFullyCoveredBySameRankConstraint(
+                level.items,
+                same_rank_covered[0..graph.nodes.items.len],
+            )) continue;
 
             @memcpy(order[0..level.items.len], level.items);
             std.mem.sort(NodeId, order[0..level.items.len], centers, struct {
@@ -14309,9 +14371,21 @@ fn refineExplicitRankSlotSifting(
                     return node_centers[left] < node_centers[right];
                 }
             }.lessThan);
-            for (order[0..level.items.len], 0..) |node_id, index| {
-                slots[index] = centers[node_id];
+
+            const first = order[0];
+            const left_boundary = centers[first] - sizes[first].width / 2.0;
+            var legal_slots = std.math.isFinite(left_boundary);
+            for (order[1..level.items.len], 0..) |node_id, gap_index| {
+                const previous = order[gap_index];
+                const gap = centers[node_id] - sizes[node_id].width / 2.0 -
+                    (centers[previous] + sizes[previous].width / 2.0);
+                if (!std.math.isFinite(gap) or gap < -0.0001) {
+                    legal_slots = false;
+                    break;
+                }
+                gaps[gap_index] = @max(0.0, gap);
             }
+            if (!legal_slots) continue;
 
             var source_index: usize = 0;
             while (source_index < level.items.len) : (source_index += 1) {
@@ -14327,9 +14401,16 @@ fn refineExplicitRankSlotSifting(
                         source_index,
                         target_index,
                     );
-                    for (candidate_order[0..level.items.len], slots[0..level.items.len]) |candidate, slot| {
+                    if (!fillLevelOrderCenters(
+                        candidate_order[0..level.items.len],
+                        left_boundary,
+                        gaps[0 .. level.items.len - 1],
+                        sizes,
+                        candidate_centers[0..level.items.len],
+                    )) continue;
+                    for (candidate_order[0..level.items.len], candidate_centers[0..level.items.len]) |candidate, candidate_center| {
                         backup[candidate] = centers[candidate];
-                        centers[candidate] = slot;
+                        centers[candidate] = candidate_center;
                     }
                     const after_crossings = countPhysicalCenterCrossings(
                         graph,
@@ -14353,8 +14434,15 @@ fn refineExplicitRankSlotSifting(
                 }
                 if (best_target == source_index) continue;
                 moveLevelItem(order[0..level.items.len], source_index, best_target);
-                for (order[0..level.items.len], slots[0..level.items.len]) |candidate, slot| {
-                    centers[candidate] = slot;
+                if (!fillLevelOrderCenters(
+                    order[0..level.items.len],
+                    left_boundary,
+                    gaps[0 .. level.items.len - 1],
+                    sizes,
+                    candidate_centers[0..level.items.len],
+                )) return;
+                for (order[0..level.items.len], candidate_centers[0..level.items.len]) |candidate, candidate_center| {
+                    centers[candidate] = candidate_center;
                 }
                 current_crossings = best_crossings;
                 current_stress = best_stress;
@@ -36084,6 +36172,172 @@ test "explicit rank slot sifting checks every legal insertion slot" {
     try std.testing.expectEqual(@as(usize, 6), before);
     try std.testing.expectEqual(@as(usize, 0), after);
     try std.testing.expect(allRankCentersHaveClearance(&ranks, &centers, &sizes));
+}
+
+test "explicit rank slot sifting accepts partially constrained graphs" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper_0 = try graph.addNode("u0", .{});
+    const upper_1 = try graph.addNode("u1", .{});
+    const upper_2 = try graph.addNode("u2", .{});
+    const lower_0 = try graph.addNode("v0", .{});
+    const lower_1 = try graph.addNode("v1", .{});
+    const lower_2 = try graph.addNode("v2", .{});
+    const free_0 = try graph.addNode("free0", .{});
+    const free_1 = try graph.addNode("free1", .{});
+    _ = try graph.addEdge(upper_0, lower_2, .{});
+    _ = try graph.addEdge(upper_1, lower_1, .{});
+    _ = try graph.addEdge(upper_2, lower_0, .{});
+    try graph.addRankConstraint(.same, &.{ upper_0, upper_1, upper_2 });
+    try graph.addRankConstraint(.same, &.{ lower_0, lower_1, lower_2 });
+
+    const ranks = [_]usize{ 0, 0, 0, 1, 1, 1, 2, 2 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ upper_0, upper_1, upper_2 });
+    try levels[1].appendSlice(allocator, &.{ lower_0, lower_1, lower_2 });
+    try levels[2].appendSlice(allocator, &.{ free_0, free_1 });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 30, 50, 10, 30, 50, 80, 20 };
+    const free_before = [_]f64{ centers[free_0], centers[free_1] };
+    const before = countDirectCenterCrossings(&graph, &ranks, &centers);
+    refineExplicitRankSlotSifting(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        3,
+    );
+
+    try std.testing.expectEqual(@as(usize, 3), before);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expectEqualSlices(
+        f64,
+        &free_before,
+        centers[free_0..][0..2],
+    );
+}
+
+test "explicit rank stress compaction skips unconstrained levels" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper_0 = try graph.addNode("u0", .{});
+    const upper_1 = try graph.addNode("u1", .{});
+    const lower_0 = try graph.addNode("v0", .{});
+    const lower_1 = try graph.addNode("v1", .{});
+    const free_0 = try graph.addNode("free0", .{});
+    const free_1 = try graph.addNode("free1", .{});
+    _ = try graph.addEdge(upper_0, lower_0, .{});
+    _ = try graph.addEdge(upper_1, lower_1, .{});
+    try graph.addRankConstraint(.same, &.{ upper_0, upper_1 });
+    try graph.addRankConstraint(.same, &.{ lower_0, lower_1 });
+
+    const ranks = [_]usize{ 0, 0, 1, 1, 2, 2 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ upper_0, upper_1 });
+    try levels[1].appendSlice(allocator, &.{ lower_0, lower_1 });
+    try levels[2].appendSlice(allocator, &.{ free_0, free_1 });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 100, 40, 190, 170, 30 };
+    const free_before = [_]f64{ centers[free_0], centers[free_1] };
+    const stress_before = coordinateEdgeStress(&graph, &ranks, &centers);
+    const crossings_before = countDirectCenterCrossings(&graph, &ranks, &centers);
+
+    try std.testing.expect(refineExplicitRankCoordinateStress(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        20,
+    ));
+
+    try std.testing.expect(
+        coordinateEdgeStress(&graph, &ranks, &centers) + 0.0001 <
+            stress_before,
+    );
+    try std.testing.expectEqual(
+        crossings_before,
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expectEqualSlices(
+        f64,
+        &free_before,
+        centers[free_0..][0..2],
+    );
+}
+
+test "explicit rank slot sifting repacks heterogeneous widths" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper_0 = try graph.addNode("u0", .{});
+    const upper_1 = try graph.addNode("u1", .{});
+    const upper_2 = try graph.addNode("u2", .{});
+    const lower_0 = try graph.addNode("v0", .{});
+    const lower_1 = try graph.addNode("v1", .{});
+    const lower_2 = try graph.addNode("v2", .{});
+    _ = try graph.addEdge(upper_0, lower_2, .{});
+    _ = try graph.addEdge(upper_1, lower_1, .{});
+    _ = try graph.addEdge(upper_2, lower_0, .{});
+    try graph.addRankConstraint(.same, &.{ upper_0, upper_1, upper_2 });
+    try graph.addRankConstraint(.same, &.{ lower_0, lower_1, lower_2 });
+
+    const ranks = [_]usize{ 0, 0, 0, 1, 1, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ upper_0, upper_1, upper_2 });
+    try levels[1].appendSlice(allocator, &.{ lower_0, lower_1, lower_2 });
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 40, .height = 20 },
+        .{ .width = 30, .height = 20 },
+        .{ .width = 30, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 40, .height = 20 },
+    };
+    var centers = [_]f64{ 10, 45, 90, 15, 50, 90 };
+    const before_extent = centersExtent(&centers, &sizes);
+    refineExplicitRankSlotSifting(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        3,
+    );
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countDirectCenterCrossings(&graph, &ranks, &centers),
+    );
+    try std.testing.expect(allRankCentersHaveClearance(&ranks, &centers, &sizes));
+    try std.testing.expect(centersExtent(&centers, &sizes) <= before_extent + 0.0001);
 }
 
 test "post-spacing transpose accepts unequal-size slots with clearance" {
