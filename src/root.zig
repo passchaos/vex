@@ -5007,6 +5007,7 @@ fn orientUndirectedLayeredGraph(
     storage: *Graph,
 ) !*const Graph {
     if (graph.directed or graph.nodes.items.len == 0) return graph;
+    if (isTinyCubicUndirectedGraph(graph)) return graph;
     // Tiny dense meshes are better served by the cyclic coordinate path; a
     // hierarchy adds arbitrary depth without enough structure to recover it.
     if (graph.nodes.items.len < 32 and
@@ -5084,6 +5085,22 @@ fn orientUndirectedLayeredGraph(
         }
     }
     return storage;
+}
+
+fn isTinyCubicUndirectedGraph(graph: *const Graph) bool {
+    if (graph.directed or graph.nodes.items.len < 10 or graph.nodes.items.len > 16 or
+        graph.edges.items.len * 2 != graph.nodes.items.len * 3) return false;
+    var degrees: [16]usize = @splat(0);
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= graph.nodes.items.len or edge_item.to >= graph.nodes.items.len or
+            edge_item.from == edge_item.to) return false;
+        degrees[edge_item.from] += 1;
+        degrees[edge_item.to] += 1;
+    }
+    for (degrees[0..graph.nodes.items.len]) |degree| {
+        if (degree != 3) return false;
+    }
+    return true;
 }
 
 const UndirectedOrientationSelection = struct {
@@ -30403,6 +30420,38 @@ test "cycle traversal mirrors insertion-head order only for medium sparse graphs
         }
     }
     try std.testing.expect(!layeredCycleUsesReverseIncidentOrder(&dense));
+}
+
+test "tiny cubic undirected graphs preserve declared cycle orientation" {
+    const allocator = std.testing.allocator;
+    var cubic = try Graph.init(allocator, .{ .directed = false });
+    defer cubic.deinit();
+    for (0..10) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try cubic.addNode(
+            try std.fmt.bufPrint(&label_buf, "n{d}", .{index}),
+            .{},
+        );
+    }
+    for (0..10) |index| {
+        _ = try cubic.addEdge(index, (index + 1) % 10, .{});
+        if (index < 5) _ = try cubic.addEdge(index, index + 5, .{});
+    }
+    try std.testing.expect(isTinyCubicUndirectedGraph(&cubic));
+
+    var non_cubic = try Graph.init(allocator, .{ .directed = false });
+    defer non_cubic.deinit();
+    for (0..10) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try non_cubic.addNode(
+            try std.fmt.bufPrint(&label_buf, "m{d}", .{index}),
+            .{},
+        );
+    }
+    for (0..10) |index| {
+        _ = try non_cubic.addEdge(index, (index + 1) % 10, .{});
+    }
+    try std.testing.expect(!isTinyCubicUndirectedGraph(&non_cubic));
 }
 
 test "SVG renderer emits curved clipped edges and multiline text spans" {
