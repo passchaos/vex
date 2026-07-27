@@ -6236,6 +6236,13 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         axis_sizes,
         effective_options,
     );
+    compactSingleEdgeFreeRankIfHelpful(
+        layout_graph,
+        levels,
+        centers,
+        axis_sizes,
+        effective_options,
+    );
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -9680,8 +9687,15 @@ fn fixedsizeMode(attrs: []const Attr) FixedSizeMode {
 
 fn parseInchDimension(value: []const u8) ?f64 {
     const inches = std.fmt.parseFloat(f64, value) catch return null;
-    if (inches <= 0) return null;
-    return @max(12.0, inches * 72.0);
+    if (!std.math.isFinite(inches) or inches <= 0) return null;
+    const points = inches * 72.0;
+    // Graphviz stores the point-space node extent through its ROUND macro,
+    // whose result type is a signed int. Values beyond this range therefore
+    // fall back to the shape/label minimum instead of producing an enormous
+    // or wrapped canvas (Graphviz regression #2784).
+    if (!std.math.isFinite(points) or
+        points > @as(f64, @floatFromInt(std.math.maxInt(i32)))) return null;
+    return @max(12.0, points);
 }
 
 fn parseInchMargin(value: []const u8) ?f64 {
@@ -15302,6 +15316,36 @@ fn compactZeroCrossingStarIfHelpful(
         physical_depths,
     ) >= baseline_length - 0.0001) return;
     @memcpy(centers, candidate[0..centers.len]);
+}
+
+fn compactSingleEdgeFreeRankIfHelpful(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+) void {
+    const graphviz_default_nodesep: f64 = 18.0;
+    if (graph.edges.items.len != 0 or levels.len != 1 or
+        levels[0].items.len < 2 or
+        attrValue(graph.attrs.items, "nodesep") != null or
+        options.node_gap <= graphviz_default_nodesep + 0.0001 or
+        centers.len < graph.nodes.items.len or sizes.len < graph.nodes.items.len) return;
+
+    // An edge-free rank has no crossing or stress objective to protect.
+    // Graphviz still packs it at the documented 0.25in default nodesep, while
+    // Vex's conservative 36pt general default otherwise doubles whitespace.
+    // Preserve the existing order and only replace the inter-node gaps.
+    const level = levels[0].items;
+    var cursor: f64 = 0;
+    for (level, 0..) |node_id, index| {
+        if (node_id >= centers.len or node_id >= sizes.len) return;
+        cursor += sizes[node_id].width / 2.0;
+        centers[node_id] = cursor;
+        cursor += sizes[node_id].width / 2.0;
+        if (index + 1 < level.len) cursor += graphviz_default_nodesep;
+    }
+    normalizeCenters(centers, sizes);
 }
 
 fn refineExplicitRankCoordinateStress(
@@ -42888,4 +42932,80 @@ test "layout honors DOT node width height and fixedsize attributes" {
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "an even longer label than the fixed circle") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "r=\"18\" fill=\"none\" stroke=\"black\"") != null);
+}
+
+test "node dimensions beyond signed point space fall back safely" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  ordinary;
+        \\  overflow [width=30000000, height=30000000];
+        \\  fixed [width=30000000, height=30000000, fixedsize=true];
+        \\  shape_fixed [shape=circle, width=30000000, height=30000000, fixedsize=shape];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(parseInchDimension("29826161") != null);
+    try std.testing.expect(parseInchDimension("29826162") == null);
+    try std.testing.expect(parseInchDimension("30000000000000000") == null);
+    try std.testing.expect(parseInchDimension("inf") == null);
+    try std.testing.expect(parseInchDimension("nan") == null);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const ordinary = nodeIdByLabel(&graph, "ordinary");
+    const overflow = nodeIdByLabel(&graph, "overflow");
+    const fixed = nodeIdByLabel(&graph, "fixed");
+    const shape_fixed = nodeIdByLabel(&graph, "shape_fixed");
+    for ([_]NodeId{ overflow, fixed, shape_fixed }) |node_id| {
+        try std.testing.expect(layout.nodes[node_id].width < 256);
+        try std.testing.expect(layout.nodes[node_id].height < 256);
+    }
+    try std.testing.expect(layout.nodes[overflow].height == layout.nodes[ordinary].height);
+    try std.testing.expect(layout.width < 1024);
+    try std.testing.expect(layout.height < 1024);
+}
+
+test "edge-free rank uses Graphviz default nodesep" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G { a; b; c; }
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 18),
+        layout.nodes[b].center.x - layout.nodes[a].center.x -
+            (layout.nodes[a].width + layout.nodes[b].width) / 2.0,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 18),
+        layout.nodes[c].center.x - layout.nodes[b].center.x -
+            (layout.nodes[b].width + layout.nodes[c].width) / 2.0,
+        0.001,
+    );
+
+    var explicit = try parseDot(allocator,
+        \\graph G { nodesep=1; a; b; c; }
+    );
+    defer explicit.deinit();
+    var explicit_layout = try layoutLayered(allocator, &explicit, .{});
+    defer explicit_layout.deinit();
+    const explicit_a = nodeIdByLabel(&explicit, "a");
+    const explicit_b = nodeIdByLabel(&explicit, "b");
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 72),
+        explicit_layout.nodes[explicit_b].center.x -
+            explicit_layout.nodes[explicit_a].center.x -
+            (explicit_layout.nodes[explicit_a].width +
+                explicit_layout.nodes[explicit_b].width) / 2.0,
+        0.001,
+    );
 }
