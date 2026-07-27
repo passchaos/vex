@@ -6305,7 +6305,19 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         effective_options,
         acyclic_graph != reciprocal_graph,
     );
-    if (rigid_rank_offsets_applied) {
+    // Run the strict physical transpose after the rigid-rank candidate. Both
+    // stages are monotone relative to their own input, but reversing them can
+    // steer the later rigid solve away from an already-better candidate.
+    const physical_rank_transpose_applied = refinePhysicalRankAdjacentCrossings(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        8,
+    );
+    if (physical_rank_transpose_applied or rigid_rank_offsets_applied) {
         refreshVirtualPositionsFromRealCenters(
             layout_graph,
             &virtual_levels,
@@ -14472,6 +14484,115 @@ fn adoptSmallDirectedCandidateIfBetter(
         physical_depths,
     );
     if (candidate_crossings < current_crossings) @memcpy(centers, candidate);
+}
+
+fn refinePhysicalRankAdjacentCrossings(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    passes: usize,
+) bool {
+    if (passes == 0 or !graph.directed or graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
+        orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return false;
+    for (graph.nodes.items) |node_item| {
+        if (nodeGroupName(node_item) != null or
+            orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
+    }
+
+    // Earlier transposes optimize virtual-rank or coordinate-axis crossings.
+    // Once rank heights are known, unequal heights can change the true
+    // straight-segment objective. Revisit only adjacent physical slots here:
+    // exchanging their outer boundaries preserves every other slot's
+    // clearance and extent, while strict acceptance makes this a safe final
+    // descent rather than another declaration-sensitive restart.
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return false;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+    var current_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    if (current_crossings == 0) return false;
+
+    var improved = false;
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            if (level.items.len <= 1 or level.items.len > 128) continue;
+            var ordered: [128]NodeId = undefined;
+            @memcpy(ordered[0..level.items.len], level.items);
+            std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+                fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                    if (left >= node_centers.len or right >= node_centers.len) return left < right;
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan);
+
+            var index: usize = 0;
+            while (index + 1 < level.items.len) {
+                const move = makeSmallDirectedCenterSwap(
+                    ordered[index],
+                    ordered[index + 1],
+                    centers,
+                    sizes,
+                    true,
+                ) orelse {
+                    index += 1;
+                    continue;
+                };
+                applySmallDirectedCenterSwap(centers, move, true);
+                const legal =
+                    centerLevelHasClearance(level.items, centers, sizes) and
+                    centersExtent(centers, sizes) <= baseline_extent + 0.0001 and
+                    coordinateEdgeStress(graph, ranks, centers) <=
+                        baseline_stress * 1.04 + 0.0001;
+                const after_crossings = if (legal)
+                    countPhysicalCenterCrossings(
+                        graph,
+                        ranks,
+                        centers,
+                        physical_depths,
+                    )
+                else
+                    current_crossings;
+                if (legal and after_crossings < current_crossings) {
+                    current_crossings = after_crossings;
+                    std.mem.swap(
+                        NodeId,
+                        &ordered[index],
+                        &ordered[index + 1],
+                    );
+                    changed = true;
+                    improved = true;
+                    if (index > 0) {
+                        index -= 1;
+                    } else {
+                        index += 1;
+                    }
+                } else {
+                    applySmallDirectedCenterSwap(centers, move, false);
+                    index += 1;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+    return improved;
 }
 
 fn refineRigidRankOffsets(
@@ -38144,6 +38265,88 @@ test "width-aware center transpose preserves heterogeneous pair boundaries" {
 
     applySmallDirectedCenterSwap(&centers, move, false);
     try std.testing.expectEqualSlices(f64, &.{ 20, 70 }, &centers);
+}
+
+test "physical rank transpose reduces crossings across unequal rank heights" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper_left = try graph.addNode("upper-left", .{});
+    const upper_right = try graph.addNode("upper-right", .{});
+    const lower_left = try graph.addNode("lower-left", .{});
+    const lower_right = try graph.addNode("lower-right", .{});
+    _ = try graph.addEdge(upper_left, lower_right, .{});
+    _ = try graph.addEdge(upper_right, lower_left, .{});
+
+    const ranks = [_]usize{ 0, 0, 1, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(
+        allocator,
+        &.{ upper_left, upper_right },
+    );
+    try levels[1].appendSlice(
+        allocator,
+        &.{ lower_left, lower_right },
+    );
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 40, .height = 20 },
+        .{ .width = 60, .height = 60 },
+        .{ .width = 30, .height = 60 },
+    };
+    var centers = [_]f64{ 10, 50, 30, 90 };
+    var physical_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        &graph,
+        &ranks,
+        &sizes,
+        .{},
+        &physical_depths,
+    ).?;
+    const before_extent = centersExtent(&centers, &sizes);
+    const before_stress = coordinateEdgeStress(&graph, &ranks, &centers);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &centers,
+            physical_depths[0..rank_count],
+        ),
+    );
+
+    try std.testing.expect(refinePhysicalRankAdjacentCrossings(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        2,
+    ));
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &centers,
+            physical_depths[0..rank_count],
+        ),
+    );
+    try std.testing.expect(allRankCentersHaveClearance(
+        &ranks,
+        &centers,
+        &sizes,
+    ));
+    try std.testing.expect(
+        centersExtent(&centers, &sizes) <= before_extent + 0.0001,
+    );
+    try std.testing.expect(
+        coordinateEdgeStress(&graph, &ranks, &centers) <=
+            before_stress * 1.04 + 0.0001,
+    );
 }
 
 test "medium crossed directed graphs receive deeper deterministic restarts" {
