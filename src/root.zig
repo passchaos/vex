@@ -6296,7 +6296,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             compressed_virtual_positions.deinit();
         }
     }
-    const rigid_rank_offsets_applied = refineCyclicRigidRankOffsets(
+    const rigid_rank_offsets_applied = refineRigidRankOffsets(
         layout_graph,
         levels,
         ranks,
@@ -14474,7 +14474,7 @@ fn adoptSmallDirectedCandidateIfBetter(
     if (candidate_crossings < current_crossings) @memcpy(centers, candidate);
 }
 
-fn refineCyclicRigidRankOffsets(
+fn refineRigidRankOffsets(
     graph: *const Graph,
     levels: []const std.ArrayList(NodeId),
     ranks: []const usize,
@@ -14483,9 +14483,17 @@ fn refineCyclicRigidRankOffsets(
     options: LayoutOptions,
     has_feedback_edges: bool,
 ) bool {
-    if (!has_feedback_edges or graph.subgraphs.items.len != 0 or
-        graph.nodes.items.len < 48 or graph.nodes.items.len > 128 or
-        graph.edges.items.len > 256 or hasActiveRankConstraints(graph)) return false;
+    const zero_crossing_ordered_dag =
+        !has_feedback_edges and
+        graph.nodes.items.len >= 40 and
+        orderingMode(attrValue(graph.attrs.items, "ordering")) == .out;
+    const crossed_feedback_graph =
+        has_feedback_edges and
+        graph.nodes.items.len >= 48 and
+        !hasActiveRankConstraints(graph);
+    if (graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
+        (!zero_crossing_ordered_dag and !crossed_feedback_graph)) return false;
     for (graph.nodes.items) |node_item| {
         if (nodeGroupName(node_item) != null or
             orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
@@ -14506,7 +14514,8 @@ fn refineCyclicRigidRankOffsets(
         centers,
         physical_depths,
     );
-    if (baseline_crossings == 0) return false;
+    if ((crossed_feedback_graph and baseline_crossings == 0) or
+        (zero_crossing_ordered_dag and baseline_crossings != 0)) return false;
     const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
     const baseline_extent = centersExtent(centers, sizes);
 
@@ -14584,7 +14593,14 @@ fn refineCyclicRigidRankOffsets(
         candidate[0..centers.len],
         physical_depths,
     );
-    if (candidate_crossings < baseline_crossings) {
+    const candidate_extent =
+        centersExtent(candidate[0..centers.len], sizes);
+    const accept = if (crossed_feedback_graph)
+        candidate_crossings < baseline_crossings
+    else
+        candidate_crossings <= baseline_crossings and
+            candidate_extent < baseline_extent - 0.0001;
+    if (accept) {
         @memcpy(centers, candidate[0..centers.len]);
         return true;
     }
@@ -42572,6 +42588,67 @@ test "layered layout honors DOT ordering hints for edge declaration order" {
     const ic = nodeIdByLabel(&incoming, "c");
     try std.testing.expect(incoming_layout.nodes[ic].center.x < incoming_layout.nodes[ia].center.x);
     try std.testing.expect(incoming_layout.nodes[ia].center.x < incoming_layout.nodes[ib].center.x);
+}
+
+test "ordered rigid ranks ignore node first-declaration order" {
+    const allocator = std.testing.allocator;
+    const early =
+        \\digraph G {
+        \\  ordering=out;
+        \\  root; a; b; c; a1; b1; c1;
+        \\  n0; n1; n2; n3; n4; n5; n6; n7; n8; n9; n10; n11; n12; n13; n14; n15; n16; n17; n18; n19; n20; n21; n22; n23; n24; n25; n26; n27; n28; n29; n30; n31; n32;
+        \\  root -> a;
+        \\  root -> b;
+        \\  root -> c;
+        \\  a -> a1;
+        \\  b -> b1;
+        \\  c -> c1;
+        \\}
+    ;
+    const late =
+        \\digraph G {
+        \\  ordering=out;
+        \\  { rank=same; a; b; c; }
+        \\  { rank=same; a1; b1; c1; }
+        \\  root;
+        \\  n0; n1; n2; n3; n4; n5; n6; n7; n8; n9; n10; n11; n12; n13; n14; n15; n16; n17; n18; n19; n20; n21; n22; n23; n24; n25; n26; n27; n28; n29; n30; n31; n32;
+        \\  root -> a;
+        \\  root -> b;
+        \\  root -> c;
+        \\  a -> a1;
+        \\  b -> b1;
+        \\  c -> c1;
+        \\}
+    ;
+
+    var early_graph = try parseDot(allocator, early);
+    defer early_graph.deinit();
+    var early_layout = try layoutLayered(allocator, &early_graph, .{});
+    defer early_layout.deinit();
+    var late_graph = try parseDot(allocator, late);
+    defer late_graph.deinit();
+    var late_layout = try layoutLayered(allocator, &late_graph, .{});
+    defer late_layout.deinit();
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        layoutAdjacentRankCrossingCount(&early_graph, &early_layout),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        layoutAdjacentRankCrossingCount(&late_graph, &late_layout),
+    );
+    try std.testing.expect(
+        late_layout.width <= early_layout.width + 0.001,
+    );
+    for ([_][]const u8{ "a", "b", "c" }) |label| {
+        const early_id = nodeIdByLabel(&early_graph, label);
+        const late_id = nodeIdByLabel(&late_graph, label);
+        try std.testing.expectEqual(
+            early_layout.ranks[early_id],
+            late_layout.ranks[late_id],
+        );
+    }
 }
 
 test "layered layout honors subgraph ordering hints for members" {
