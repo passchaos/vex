@@ -5070,6 +5070,18 @@ fn orientUndirectedLayeredGraph(
     storage: *Graph,
 ) !*const Graph {
     if (graph.directed or graph.nodes.items.len == 0) return graph;
+    if (svg_mod.edge.routingMode(graph.attrs.items) == .ortho) {
+        // Orthogonal circuit/process graphs commonly encode their intended
+        // hierarchy in the textual endpoints even though the DOT graph is
+        // undirected. Preserve that declaration direction in the private
+        // layered view; the caller-owned graph remains undirected for SVG
+        // endpoint and marker semantics.
+        storage.* = graph.*;
+        storage.directed = true;
+        storage.edges = .empty;
+        try storage.edges.appendSlice(allocator, graph.edges.items);
+        return storage;
+    }
     if (isTinyCubicUndirectedGraph(graph)) return graph;
     // Tiny dense meshes are better served by the cyclic coordinate path; a
     // hierarchy adds arbitrary depth without enough structure to recover it.
@@ -32508,6 +32520,33 @@ test "medium leafless undirected orientation uses a midpoint-shell root" {
         if (edge_item.from == 8) out_degree += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), out_degree);
+}
+
+test "orthogonal undirected orientation preserves declared endpoints" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .splines = .ortho });
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    _ = try graph.addEdge(b, a, .{});
+    _ = try graph.addEdge(c, b, .{});
+
+    var storage: Graph = undefined;
+    const oriented = try orientUndirectedLayeredGraph(
+        allocator,
+        &graph,
+        &storage,
+    );
+    defer if (oriented == &storage) storage.edges.deinit(allocator);
+    try std.testing.expect(oriented == &storage);
+    try std.testing.expect(oriented.directed);
+    try std.testing.expectEqual(b, oriented.edges.items[0].from);
+    try std.testing.expectEqual(a, oriented.edges.items[0].to);
+    try std.testing.expectEqual(c, oriented.edges.items[1].from);
+    try std.testing.expectEqual(b, oriented.edges.items[1].to);
+    try std.testing.expect(!graph.directed);
 }
 
 test "reciprocal rank orientation follows first declaration without mutating graph" {
