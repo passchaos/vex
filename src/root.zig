@@ -12,6 +12,7 @@ const entities = @import("entities.zig");
 const layout_mod = @import("layout/mod.zig");
 const size_mod = @import("size.zig");
 const svg_mod = @import("svg/mod.zig");
+const text_metrics = @import("text_metrics.zig");
 
 pub const NodeId = usize;
 pub const EdgeId = usize;
@@ -6545,6 +6546,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         axis_sizes,
         effective_options,
     );
+    const compact_default_gap_ranks = compactExactMetricRanksToGraphvizGapIfHelpful(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+    );
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -6581,7 +6590,9 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         8,
         graph.subgraphs.items.len == 0,
     );
-    if (physical_rank_transpose_applied or rigid_rank_offsets_applied) {
+    if (physical_rank_transpose_applied or rigid_rank_offsets_applied or
+        compact_default_gap_ranks)
+    {
         refreshVirtualPositionsFromRealCenters(
             layout_graph,
             &virtual_levels,
@@ -9740,6 +9751,18 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const margin = nodeMargin(node_item.attrs.items, 0);
     var text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
     var text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
+    const symbol_label_width = if (symbolFont(node_item.attrs.items))
+        text_metrics.symbolLabelWidth(node_item.label, font_size)
+    else
+        null;
+    if (symbol_label_width) |measured_width| {
+        text_width = measured_width;
+        // Graphviz 2.42 rounded Pango's span height and then replaced it with
+        // the historical 1.1× line-height kludge. The resulting integer line
+        // box is part of poly_init's ellipse containment contract.
+        text_height = @as(f64, @floatFromInt(line_count)) *
+            @floor(font_size * 1.1 + 0.5);
+    }
     if (options.quantum > 0) {
         text_width = @ceil(text_width / options.quantum) * options.quantum;
         text_height = @ceil(text_height / options.quantum) * options.quantum;
@@ -9747,6 +9770,33 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     var width = @max(options.node_width, text_width + options.node_padding_x * 2.0 + margin.x * 2.0);
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
     switch (node_item.shape) {
+        .ellipse => {
+            if (symbol_label_width != null) {
+                // Graphviz `poly_init` pads a non-box label by 8pt per
+                // horizontal side and 4pt per vertical side, then enlarges
+                // the minimum 54x36 node to the smallest centered ellipse
+                // containing that padded label rectangle.
+                const explicit_margin =
+                    attrValue(node_item.attrs.items, "margin") != null;
+                const padded_width = text_width +
+                    if (explicit_margin) margin.x * 2.0 else 16.0;
+                const padded_height = text_height +
+                    if (explicit_margin) margin.y * 2.0 else 8.0;
+                const labelloc = attrValue(node_item.attrs.items, "labelloc");
+                const centered = labelloc == null or
+                    (!std.ascii.eqlIgnoreCase(labelloc.?, "t") and
+                        !std.ascii.eqlIgnoreCase(labelloc.?, "b"));
+                const fitted = fitGraphvizEllipseLabel(
+                    padded_width,
+                    padded_height,
+                    options.node_width,
+                    options.node_height,
+                    centered,
+                );
+                width = fitted.width;
+                height = fitted.height;
+            }
+        },
         .point => {
             width = 12;
             height = 12;
@@ -9897,6 +9947,34 @@ fn graphvizDefaultSerifFont(attrs: []const Attr) bool {
         std.ascii.eqlIgnoreCase(font_name, "Times-Roman") or
         std.ascii.eqlIgnoreCase(font_name, "DejaVu Serif") or
         std.ascii.eqlIgnoreCase(font_name, "serif");
+}
+
+fn symbolFont(attrs: []const Attr) bool {
+    const font_name = attrValue(attrs, "fontname") orelse return false;
+    return std.ascii.eqlIgnoreCase(font_name, "Symbol");
+}
+
+fn fitGraphvizEllipseLabel(
+    label_width: f64,
+    label_height: f64,
+    minimum_width: f64,
+    minimum_height: f64,
+    centered: bool,
+) NodeSize {
+    const ellipse_height = label_height * std.math.sqrt2;
+    if (minimum_height > ellipse_height and centered) {
+        const ratio = label_height / minimum_height;
+        const fitted_width =
+            label_width * @sqrt(1.0 / @max(1.0 - ratio * ratio, 0.0001));
+        return .{
+            .width = @max(minimum_width, fitted_width),
+            .height = minimum_height,
+        };
+    }
+    return .{
+        .width = @max(minimum_width, label_width * std.math.sqrt2),
+        .height = @max(minimum_height, ellipse_height),
+    };
 }
 
 fn graphvizSerifLabelWidth(text: []const u8, font_size: f64) f64 {
@@ -16616,6 +16694,144 @@ fn compactSingleEdgeFreeRankIfHelpful(
         if (index + 1 < level.len) cursor += graphviz_default_nodesep;
     }
     normalizeCenters(centers, sizes);
+}
+
+fn compactExactMetricRanksToGraphvizGapIfHelpful(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+) bool {
+    const graphviz_default_nodesep: f64 = 18.0;
+    if (graph.subgraphs.items.len != 0 or graph.nodes.items.len < 3 or
+        graph.nodes.items.len > 128 or graph.edges.items.len == 0 or
+        graph.edges.items.len > 256 or
+        attrValue(graph.attrs.items, "nodesep") != null or
+        options.node_gap <= graphviz_default_nodesep + 0.0001 or
+        centers.len != graph.nodes.items.len or sizes.len < centers.len) return false;
+    // Only the Symbol face currently has complete deterministic glyph metrics
+    // in Vex. Applying this global spacing correction to approximate text
+    // sizes would disturb edge-weight, nslimit, and incremental-layout
+    // contracts, so keep it tied to graphs whose every node is exact.
+    for (graph.nodes.items) |node_item| {
+        if (!nodeHasExactGraphvizMetrics(node_item)) return false;
+    }
+
+    var has_multi_node_rank = false;
+    var candidate: [128]f64 = undefined;
+    @memcpy(candidate[0..centers.len], centers);
+    var ordered: [128]NodeId = undefined;
+    for (levels) |level| {
+        if (level.items.len == 0 or level.items.len > ordered.len) return false;
+        if (level.items.len == 1) continue;
+        has_multi_node_rank = true;
+        @memcpy(ordered[0..level.items.len], level.items);
+        std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+            fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                if (node_centers[left] == node_centers[right]) return left < right;
+                return node_centers[left] < node_centers[right];
+            }
+        }.lessThan);
+
+        var cursor: f64 = 0;
+        var offset_sum: f64 = 0;
+        for (ordered[0..level.items.len], 0..) |node_id, index| {
+            cursor += sizes[node_id].width / 2.0;
+            candidate[node_id] = cursor;
+            offset_sum += centers[node_id] - cursor;
+            cursor += sizes[node_id].width / 2.0;
+            if (index + 1 < level.items.len) cursor += graphviz_default_nodesep;
+        }
+        const offset = offset_sum / @as(f64, @floatFromInt(level.items.len));
+        for (ordered[0..level.items.len]) |node_id| candidate[node_id] += offset;
+    }
+    if (!has_multi_node_rank) return false;
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return false;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+    const baseline_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+
+    // The compacted ranks are rigid sequences. Translating one whole rank at
+    // a time minimizes horizontal edge stress without changing order or its
+    // exact 18pt Graphviz clearance.
+    for (0..20) |_| {
+        for (levels) |level| {
+            if (level.items.len == 0) continue;
+            var target_sum: f64 = 0;
+            var target_count: usize = 0;
+            for (graph.edges.items) |edge_item| {
+                if (!edgeAffectsLayeredObjective(edge_item) or
+                    edge_item.from == edge_item.to or
+                    edge_item.from >= ranks.len or edge_item.to >= ranks.len or
+                    edge_item.from >= candidate.len or edge_item.to >= candidate.len) continue;
+                const from_in_level = ranks[edge_item.from] == ranks[level.items[0]];
+                const to_in_level = ranks[edge_item.to] == ranks[level.items[0]];
+                if (from_in_level == to_in_level) continue;
+                const inside = if (from_in_level) edge_item.from else edge_item.to;
+                const outside = if (from_in_level) edge_item.to else edge_item.from;
+                target_sum += candidate[outside] - candidate[inside];
+                target_count += 1;
+            }
+            if (target_count == 0) continue;
+            const shift = target_sum / @as(f64, @floatFromInt(target_count));
+            for (level.items) |node_id| candidate[node_id] += shift;
+        }
+    }
+    normalizeCenters(candidate[0..centers.len], sizes);
+    if (!allRankCentersHaveClearance(ranks, candidate[0..centers.len], sizes)) return false;
+    const candidate_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        candidate[0..centers.len],
+        physical_depths,
+    );
+    const candidate_stress = coordinateEdgeStress(graph, ranks, candidate[0..centers.len]);
+    const candidate_extent = centersExtent(candidate[0..centers.len], sizes);
+    const candidate_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        candidate[0..centers.len],
+        physical_depths,
+    );
+    if (candidate_crossings > baseline_crossings or
+        candidate_stress > baseline_stress + 0.0001 or
+        candidate_length > baseline_length + 0.0001 or
+        candidate_extent >= baseline_extent - 0.0001) return false;
+
+    @memcpy(centers, candidate[0..centers.len]);
+    return true;
+}
+
+fn nodeHasExactGraphvizMetrics(node_item: Node) bool {
+    if (node_item.shape != .ellipse or !symbolFont(node_item.attrs.items)) {
+        return false;
+    }
+    return text_metrics.symbolLabelWidth(
+        node_item.label,
+        parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0),
+    ) != null;
 }
 
 fn refineExplicitRankCoordinateStress(
@@ -31009,6 +31225,67 @@ test "DOT plain labels decode Graphviz HTML 4 character references" {
     try std.testing.expectEqualStrings("X &beta;", attrValue(graph.nodes.items[angle].attrs.items, "xlabel").?);
 }
 
+test "Symbol font labels use Graphviz ellipse fitting" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  greek [fontname=Symbol,
+        \\    label="&alpha;&beta;&gamma;&delta;&epsilon;&zeta;&eta;&theta;&iota;&kappa;&lambda;&mu;&nu;&xi;&omicron;&pi;&rho;&sigmaf;&sigma;&tau;&upsilon;&phi;&chi;&psi;&omega;&upsih;&piv;"];
+        \\  quantified [fontname=Symbol, label="for all: &forall;"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = LayoutOptions{};
+    const greek = measureNode(graph.nodes.items[nodeIdByLabel(&graph, "αβγδεζηθικλμνξοπρςστυφχψωϒϖ")], options);
+    const quantified = measureNode(graph.nodes.items[nodeIdByLabel(&graph, "for all: ∀")], options);
+    try std.testing.expectApproxEqAbs(@as(f64, 291.174), greek.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), greek.height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 111.790), quantified.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 36), quantified.height, 0.001);
+
+    // The specialized metrics must not leak into typed or DOT labels using a
+    // different face, even when their text contains the same codepoints.
+    const plain = try graph.addNode("αβ", .{ .fontname = "Helvetica" });
+    try std.testing.expectEqual(@as(f64, 54), measureNode(graph.nodes.items[plain], options).width);
+
+    var variants = try parseDot(allocator,
+        \\digraph G {
+        \\  margin [fontname=Symbol, label="for all: &forall;", margin="0.1,0.2"];
+        \\  top [fontname=Symbol, label="for all: &forall;", labelloc=t];
+        \\}
+    );
+    defer variants.deinit();
+    const margin_size = measureNode(
+        variants.nodes.items[nodeIdByLabel(&variants, "for all: ∀")],
+        options,
+    );
+    const margin_width = 70.0 + 14.4;
+    const margin_height = 15.0 + 28.8;
+    try std.testing.expectApproxEqAbs(
+        margin_width * std.math.sqrt2,
+        margin_size.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        margin_height * std.math.sqrt2,
+        margin_size.height,
+        0.001,
+    );
+
+    const top_size = measureNode(variants.nodes.items[1], options);
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 86) * std.math.sqrt2,
+        top_size.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 36),
+        top_size.height,
+        0.001,
+    );
+}
+
 test "DOT implicit quoted node labels decode entities without changing identity" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -39960,6 +40237,57 @@ test "zero-crossing star compaction uses Graphviz default nodesep" {
             &centers,
             &.{ 18, 90 },
         ),
+    );
+}
+
+test "default nodesep compacts parallel DAG ranks without worsening stress" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [fontname=Symbol];
+        \\  root -> a1 -> a2 -> a3;
+        \\  root -> b1 -> b2 -> b3;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(
+        allocator,
+        &graph,
+        .{ .node_gap = 36 },
+    );
+    defer layout.deinit();
+
+    const a1 = nodeIdByLabel(&graph, "a1");
+    const b1 = nodeIdByLabel(&graph, "b1");
+    const expected_gap =
+        layout.nodes[a1].width / 2.0 +
+        18.0 +
+        layout.nodes[b1].width / 2.0;
+    try std.testing.expectApproxEqAbs(
+        expected_gap,
+        @abs(layout.nodes[b1].center.x - layout.nodes[a1].center.x),
+        0.001,
+    );
+
+    var explicit = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [nodesep=0.5];
+        \\  root -> a;
+        \\  root -> b;
+        \\}
+    );
+    defer explicit.deinit();
+    var explicit_layout = try layoutLayered(allocator, &explicit, .{});
+    defer explicit_layout.deinit();
+    const a = nodeIdByLabel(&explicit, "a");
+    const b = nodeIdByLabel(&explicit, "b");
+    try std.testing.expectApproxEqAbs(
+        explicit_layout.nodes[a].width / 2.0 +
+            36.0 +
+            explicit_layout.nodes[b].width / 2.0,
+        @abs(explicit_layout.nodes[b].center.x - explicit_layout.nodes[a].center.x),
+        0.001,
     );
 }
 
