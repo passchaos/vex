@@ -354,6 +354,13 @@ def main() -> int:
             1.00,
         ),
         (
+            "grdcolors",
+            args.graphviz_root / "tests" / "graphs" / "grdcolors.gv",
+            0,
+            1.00,
+            1.04,
+        ),
+        (
             "awilliams",
             args.graphviz_root / "tests" / "graphs" / "awilliams.gv",
             0,

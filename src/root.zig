@@ -5996,6 +5996,11 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     }
     applyTopBottomBalance(layout_graph, ranks);
     settleRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
+    alignIsolatedClusterMembersToActiveRank(
+        layout_graph,
+        ranks,
+        &rank_edge_adjacency,
+    );
 
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -10554,6 +10559,49 @@ fn applyTopBottomBalance(graph: *const Graph, ranks: []usize) void {
         }
         if (move_to_min and !has_in) rank.* = 0;
         if (move_to_max and !has_out) rank.* = max_rank;
+    }
+}
+
+fn alignIsolatedClusterMembersToActiveRank(
+    graph: *const Graph,
+    ranks: []usize,
+    edge_adjacency: *const EdgeAdjacency,
+) void {
+    if (clusterRankMode(graph) != .local or graph.subgraphs.items.len == 0) {
+        return;
+    }
+    for (graph.subgraphs.items) |cluster| {
+        if (!cluster.is_cluster or subgraphCompact(cluster)) continue;
+        var active_rank: ?usize = null;
+        var has_isolated = false;
+        var compatible = true;
+        for (cluster.nodes) |node_id| {
+            if (node_id >= ranks.len) continue;
+            if (edge_adjacency.incident(node_id).len == 0) {
+                has_isolated = true;
+                continue;
+            }
+            if (active_rank) |rank| {
+                if (ranks[node_id] != rank) {
+                    compatible = false;
+                    break;
+                }
+            } else {
+                active_rank = ranks[node_id];
+            }
+        }
+        const target = active_rank orelse continue;
+        if (!compatible or !has_isolated) continue;
+
+        // Graphviz ranks a local cluster recursively; when every connected
+        // member collapses to one local rank, otherwise-free members share
+        // that rank instead of remaining on the root graph's rank zero.
+        for (cluster.nodes) |node_id| {
+            if (node_id >= ranks.len or
+                edge_adjacency.incident(node_id).len != 0 or
+                rankTighteningPinned(graph, node_id)) continue;
+            ranks[node_id] = target;
+        }
     }
 }
 
@@ -42024,6 +42072,47 @@ test "clusterrank global disables compact strong subgraph ranking" {
     const global_b = nodeIdByLabel(&global_graph, "b");
     try std.testing.expectEqual(local.ranks[local_a], local.ranks[local_b]);
     try std.testing.expect(global.ranks[global_a] != global.ranks[global_b]);
+}
+
+test "local cluster isolated members share its single active rank" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_top { active_top; free_top_a; free_top_b; }
+        \\  subgraph cluster_bottom { active_bottom; free_bottom_a; free_bottom_b; }
+        \\  active_top -> active_bottom;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const active_top = nodeIdByLabel(&graph, "active_top");
+    const free_top_a = nodeIdByLabel(&graph, "free_top_a");
+    const free_top_b = nodeIdByLabel(&graph, "free_top_b");
+    const active_bottom = nodeIdByLabel(&graph, "active_bottom");
+    const free_bottom_a = nodeIdByLabel(&graph, "free_bottom_a");
+    const free_bottom_b = nodeIdByLabel(&graph, "free_bottom_b");
+    try std.testing.expectEqual(layout.ranks[active_top], layout.ranks[free_top_a]);
+    try std.testing.expectEqual(layout.ranks[active_top], layout.ranks[free_top_b]);
+    try std.testing.expectEqual(layout.ranks[active_bottom], layout.ranks[free_bottom_a]);
+    try std.testing.expectEqual(layout.ranks[active_bottom], layout.ranks[free_bottom_b]);
+    try std.testing.expect(layout.ranks[active_top] < layout.ranks[active_bottom]);
+
+    var pinned = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_c { active; free; { rank=min; pinned; } }
+        \\  source -> active;
+        \\}
+    );
+    defer pinned.deinit();
+    var pinned_layout = try layoutLayered(allocator, &pinned, .{});
+    defer pinned_layout.deinit();
+    const active = nodeIdByLabel(&pinned, "active");
+    const free = nodeIdByLabel(&pinned, "free");
+    const pinned_id = nodeIdByLabel(&pinned, "pinned");
+    try std.testing.expectEqual(pinned_layout.ranks[active], pinned_layout.ranks[free]);
+    try std.testing.expectEqual(@as(usize, 0), pinned_layout.ranks[pinned_id]);
 }
 
 test "compact strong subgraph preserves explicit rank constraints" {
