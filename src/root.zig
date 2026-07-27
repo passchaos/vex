@@ -11075,10 +11075,11 @@ fn balancedHeavyPassThroughRank(
         @abs(in_edge.weight - out_edge.weight) > 0.0001) return null;
 
     // Equal incident weights make every feasible rank identical in weighted
-    // span cost. The midpoint minimizes the larger of the two edge spans and
-    // avoids pushing a pass-through node to a sparse boundary rank merely to
-    // reduce occupancy.
-    return bounds.min + (bounds.max - bounds.min) / 2;
+    // span cost. Keep the node inside the interval, but bias it one quartile
+    // toward its source. Compared with the midpoint this leaves more
+    // sink-side ranks available as channels for long feedback edges, while
+    // avoiding the sparse boundary placement that occupancy balancing chose.
+    return bounds.min + (bounds.max - bounds.min) / 4;
 }
 
 fn privateBranchChainEntry(
@@ -38141,7 +38142,7 @@ test "private branch chain rank ties preserve the tight incoming edge" {
     try std.testing.expect(rankAssignmentFeasible(&graph, &ranks, &acyclic_edge));
 }
 
-test "heavy pass-through rank ties balance incident spans" {
+test "heavy pass-through rank ties reserve sink-side feedback channels" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true });
     defer graph.deinit();
@@ -38176,7 +38177,7 @@ test "heavy pass-through rank ties balance incident spans" {
     try std.testing.expectEqual(@as(usize, 1), bounds.min);
     try std.testing.expectEqual(@as(usize, 10), bounds.max);
     try std.testing.expectEqual(
-        @as(?usize, 5),
+        @as(?usize, 3),
         balancedHeavyPassThroughRank(
             &graph,
             &acyclic_edge,
