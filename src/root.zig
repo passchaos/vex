@@ -5936,7 +5936,13 @@ fn layoutFragmentedComponentsWithControl(
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, effective_options);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            effective_options,
+            graph.nodes.items.len,
+        );
+    }
 
     var adjacency = try EdgeAdjacency.init(allocator, graph);
     defer adjacency.deinit();
@@ -6338,7 +6344,13 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
-    for (layout_graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, effective_options);
+    for (layout_graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            effective_options,
+            layout_graph.nodes.items.len,
+        );
+    }
 
     const axis_sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(axis_sizes);
@@ -6755,7 +6767,13 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            default_layout_options,
+            graph.nodes.items.len,
+        );
+    }
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
@@ -6913,7 +6931,13 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            default_layout_options,
+            graph.nodes.items.len,
+        );
+    }
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
@@ -7191,7 +7215,13 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            default_layout_options,
+            graph.nodes.items.len,
+        );
+    }
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
@@ -7374,7 +7404,13 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            default_layout_options,
+            graph.nodes.items.len,
+        );
+    }
 
     const sfdp_edges = try allocator.alloc(layout_mod.sfdp.Edge, graph.edges.items.len);
     defer allocator.free(sfdp_edges);
@@ -7474,7 +7510,13 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
-    for (graph.nodes.items, 0..) |node_item, id| sizes[id] = measureNode(node_item, default_layout_options);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            default_layout_options,
+            graph.nodes.items.len,
+        );
+    }
 
     const edges = try allocator.alloc(layout_mod.twopi.Edge, graph.edges.items.len);
     defer allocator.free(edges);
@@ -7605,7 +7647,11 @@ fn layoutCircularWithControl(allocator: std.mem.Allocator, graph: *const Graph, 
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
     var largest_node: f64 = 0;
     for (graph.nodes.items, 0..) |node_item, id| {
-        sizes[id] = measureNode(node_item, default_layout_options);
+        sizes[id] = measureNodeForGraph(
+            node_item,
+            default_layout_options,
+            graph.nodes.items.len,
+        );
         largest_node = @max(largest_node, @max(sizes[id].width, sizes[id].height));
     }
     const edges = try allocator.alloc(layout_mod.circo.Edge, graph.edges.items.len);
@@ -7785,7 +7831,11 @@ fn layoutOsageWithControl(allocator: std.mem.Allocator, graph: *const Graph, opt
     const osage_nodes = try allocator.alloc(layout_mod.osage.Node, n);
     defer allocator.free(osage_nodes);
     for (graph.nodes.items, 0..) |node_item, id| {
-        const size = measureNode(node_item, effective_options);
+        const size = measureNodeForGraph(
+            node_item,
+            effective_options,
+            n,
+        );
         osage_nodes[id] = .{
             .width = size.width,
             .height = size.height,
@@ -7915,7 +7965,11 @@ fn layoutPositionedWithControl(
         const raw_position = attrValue(node_item.attrs.items, "pos") orelse return error.MissingNodePosition;
         const parsed = layout_mod.nop.parseNodePosition(raw_position) catch return error.InvalidNodePosition;
         input_positions[id] = parsed.point;
-        const size = measureNode(node_item, effective_options);
+        const size = measureNodeForGraph(
+            node_item,
+            effective_options,
+            n,
+        );
         sizes[id] = .{ .width = size.width, .height = size.height };
     }
     const overlap_mode = layout_mod.nop.parseOverlapMode(attrValue(graph.attrs.items, "overlap"));
@@ -9744,6 +9798,29 @@ fn syncVirtualRealOrder(virtual_levels: *VirtualLevels, levels: []const std.Arra
 }
 
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
+    return measureNodeWithExactStandardFonts(node_item, options, true);
+}
+
+fn measureNodeForGraph(
+    node_item: Node,
+    options: LayoutOptions,
+    node_count: usize,
+) NodeSize {
+    // Exact dimensions can perturb discrete rank ordering. The <=128-node
+    // envelope has full old/new/Graphviz fixture diff coverage; larger graphs
+    // retain the conservative dimensions used by the crossing-quality corpus.
+    return measureNodeWithExactStandardFonts(
+        node_item,
+        options,
+        node_count <= 128,
+    );
+}
+
+fn measureNodeWithExactStandardFonts(
+    node_item: Node,
+    options: LayoutOptions,
+    exact_standard_fonts: bool,
+) NodeSize {
     const font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
     const font_scale = font_size / 14.0;
     const line_count = displayLabelLineCount(node_item.label);
@@ -9751,11 +9828,16 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     const margin = nodeMargin(node_item.attrs.items, 0);
     var text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
     var text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
-    const symbol_label_width = if (symbolFont(node_item.attrs.items))
-        text_metrics.symbolLabelWidth(node_item.label, font_size)
+    const exact_ellipse_label_width = if (node_item.shape == .ellipse)
+        if (symbolFont(node_item.attrs.items))
+            text_metrics.symbolLabelWidth(node_item.label, font_size)
+        else if (exact_standard_fonts and helveticaRegularFont(node_item.attrs.items))
+            text_metrics.helveticaAsciiLabelWidth(node_item.label, font_size)
+        else
+            null
     else
         null;
-    if (symbol_label_width) |measured_width| {
+    if (exact_ellipse_label_width) |measured_width| {
         text_width = measured_width;
         // Graphviz 2.42 rounded Pango's span height and then replaced it with
         // the historical 1.1× line-height kludge. The resulting integer line
@@ -9771,7 +9853,7 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
     var height = @max(options.node_height, text_height + options.node_padding_y * 2.0 + margin.y * 2.0);
     switch (node_item.shape) {
         .ellipse => {
-            if (symbol_label_width != null) {
+            if (exact_ellipse_label_width != null) {
                 // Graphviz `poly_init` pads a non-box label by 8pt per
                 // horizontal side and 4pt per vertical side, then enlarges
                 // the minimum 54x36 node to the smallest centered ellipse
@@ -9952,6 +10034,11 @@ fn graphvizDefaultSerifFont(attrs: []const Attr) bool {
 fn symbolFont(attrs: []const Attr) bool {
     const font_name = attrValue(attrs, "fontname") orelse return false;
     return std.ascii.eqlIgnoreCase(font_name, "Symbol");
+}
+
+fn helveticaRegularFont(attrs: []const Attr) bool {
+    const font_name = attrValue(attrs, "fontname") orelse return false;
+    return std.ascii.eqlIgnoreCase(font_name, "Helvetica");
 }
 
 fn fitGraphvizEllipseLabel(
@@ -16375,7 +16462,17 @@ const JointExplicitRankSearch = struct {
                                 self.sizes[node_id].width / 2.0 -
                                 self.node_gap;
                         };
-                        if (lower > upper + 0.0001) continue;
+                        // Floating-point accumulation can leave a nominally
+                        // zero-width feasible interval inverted by less than
+                        // epsilon. `std.math.clamp` requires lower <= upper,
+                        // so collapse that degenerate interval explicitly;
+                        // genuinely infeasible permutations remain rejected by
+                        // the clearance checks below.
+                        if (lower > upper) {
+                            if (lower > upper + 0.0001) continue;
+                            self.candidate[node_id] = (lower + upper) / 2.0;
+                            continue;
+                        }
                         const projected = std.math.clamp(target, lower, upper);
                         max_movement = @max(
                             max_movement,
@@ -31286,6 +31383,47 @@ test "Symbol font labels use Graphviz ellipse fitting" {
     );
 }
 
+test "Helvetica ASCII labels use Graphviz ellipse fitting" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  regular [fontname=Helvetica, label="abcdefghij"];
+        \\  narrow [fontname=Helvetica, label="iiiiiiiiii"];
+        \\  wide [fontname=Helvetica, label="mmmmmmmmmm"];
+        \\  bold [fontname="Helvetica-Bold", label="mmmmmmmmmm"];
+        \\  unicode [fontname=Helvetica, label="alpha α"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = LayoutOptions{};
+    const regular = measureNode(graph.nodes.items[nodeIdByLabel(&graph, "abcdefghij")], options);
+    const narrow = measureNode(graph.nodes.items[nodeIdByLabel(&graph, "iiiiiiiiii")], options);
+    const wide = measureNode(graph.nodes.items[nodeIdByLabel(&graph, "mmmmmmmmmm")], options);
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 89) / @sqrt(1.0 - std.math.pow(f64, 23.0 / 36.0, 2)),
+        regular.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 54) / @sqrt(1.0 - std.math.pow(f64, 23.0 / 36.0, 2)),
+        narrow.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 152) / @sqrt(1.0 - std.math.pow(f64, 23.0 / 36.0, 2)),
+        wide.width,
+        0.001,
+    );
+
+    // Variants and unsupported Unicode fall back rather than silently using
+    // regular-ASCII metrics for a different shaping contract.
+    const bold = measureNode(graph.nodes.items[3], options);
+    const unicode = measureNode(graph.nodes.items[4], options);
+    try std.testing.expectEqual(@as(f64, 108), bold.width);
+    try std.testing.expectEqual(@as(f64, 84), unicode.width);
+}
+
 test "DOT implicit quoted node labels decode entities without changing identity" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -40174,6 +40312,49 @@ test "joint explicit-rank search leaves uncovered levels unchanged" {
         centers[free_0..][0..2],
     );
     try std.testing.expect(work.work > 0);
+}
+
+test "joint explicit-rank search tolerates epsilon-inverted intervals" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, d, .{});
+    _ = try graph.addEdge(b, c, .{});
+    try graph.addRankConstraint(.same, &.{ a, b });
+    try graph.addRankConstraint(.same, &.{ c, d });
+
+    const ranks = [_]usize{ 0, 0, 1, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ a, b });
+    try levels[1].appendSlice(allocator, &.{ c, d });
+    const sizes = [_]NodeSize{
+        .{ .width = 40.00003, .height = 20 },
+        .{ .width = 40.00003, .height = 20 },
+        .{ .width = 40.00003, .height = 20 },
+        .{ .width = 40.00003, .height = 20 },
+    };
+    var centers = [_]f64{ 20.000015, 96.000045, 20.000015, 96.000045 };
+    var work = LayoutWorkTracker{ .control = .{} };
+
+    try refineJointExplicitRankOrderCoordinates(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        &work,
+    );
+    try std.testing.expect(allRankCentersHaveClearance(
+        &ranks,
+        &centers,
+        &sizes,
+    ));
 }
 
 test "zero-crossing star compaction uses Graphviz default nodesep" {

@@ -9,6 +9,7 @@ normalized mean edge length, and normalized canvas area.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 import shlex
@@ -95,8 +96,14 @@ def graphviz_geometry(
     nodes: dict[str, tuple[float, float, float, float]] = {}
     edges: list[tuple[str, str]] = []
     canvas = (0.0, 0.0)
-    for line in result.stdout.decode("utf-8", "replace").splitlines():
-        fields = shlex.split(line)
+    try:
+        lines = [
+            shlex.split(line)
+            for line in result.stdout.decode("utf-8", "replace").splitlines()
+        ]
+    except ValueError:
+        return graphviz_json_geometry(fixture, engine)
+    for fields in lines:
         if not fields:
             continue
         if fields[0] == "graph":
@@ -111,6 +118,38 @@ def graphviz_geometry(
         elif fields[0] == "edge":
             edges.append((fields[1], fields[2]))
     return nodes, edges, canvas
+
+
+def graphviz_json_geometry(
+    fixture: Path, engine: str = "dot",
+) -> tuple[dict[str, tuple[float, float, float, float]], list[tuple[str, str]], tuple[float, float]]:
+    result = subprocess.run(
+        [engine, "-Tjson", str(fixture)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode("utf-8", "replace"))
+    data = json.loads(result.stdout)
+    objects = data.get("objects", [])
+    names = [item["name"] for item in objects]
+    nodes: dict[str, tuple[float, float, float, float]] = {}
+    for item in objects:
+        x_text, y_text = item["pos"].split(",", 1)
+        nodes[item["name"]] = (
+            float(x_text),
+            float(y_text),
+            float(item["width"]) * 72.0,
+            float(item["height"]) * 72.0,
+        )
+    edges = [
+        (names[item["tail"]], names[item["head"]])
+        for item in data.get("edges", [])
+    ]
+    left, bottom, right, top = (float(value) for value in data["bb"].split(","))
+    return nodes, edges, (right - left, top - bottom)
 
 
 def force_quality(
@@ -484,6 +523,13 @@ def main() -> int:
             args.graphviz_root / "tests" / "graphs" / "Symbol.gv",
             0,
             1.01,
+            1.13,
+        ),
+        (
+            "2193-helvetica-ellipse",
+            args.graphviz_root / "tests" / "2193.dot",
+            0,
+            1.12,
             1.13,
         ),
         (

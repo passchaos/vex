@@ -12,6 +12,56 @@ const SymbolMetric = struct {
     quarter_points: u8,
 };
 
+const helvetica_ascii_quarter_points = [_]u8{
+    18, 21, 27, 48, 36, 54, 45, 15, 21, 21, 27, 48, 18, 21, 18, 18,
+    36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 18, 18, 48, 48, 48, 30,
+    57, 39, 39, 39, 42, 36, 33, 42, 42, 18, 18, 36, 30, 48, 42, 45,
+    33, 45, 39, 36, 33, 42, 39, 54, 39, 33, 39, 21, 18, 21, 48, 27,
+    27, 33, 36, 30, 36, 33, 21, 36, 36, 15, 15, 33, 15, 54, 36, 33,
+    36, 36, 24, 30, 21, 36, 33, 45, 33, 33, 30, 36, 18, 36, 48,
+};
+
+const helvetica_ascii_13pt_quarter_points = [_]u8{
+    18, 21, 24, 45, 33, 48, 42, 15, 21, 21, 27, 45, 18, 18, 18, 18,
+    33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 18, 18, 45, 45, 45, 27,
+    51, 36, 36, 36, 39, 33, 30, 39, 39, 15, 15, 33, 30, 45, 39, 42,
+    30, 42, 36, 33, 33, 39, 36, 51, 36, 33, 36, 21, 18, 21, 45, 27,
+    27, 33, 33, 30, 33, 33, 18, 33, 33, 15, 15, 30, 15, 51, 33, 33,
+    33, 33, 21, 27, 21, 33, 30, 42, 30, 30, 27, 33, 18, 33, 45,
+};
+
+/// Returns Graphviz/Pango's maximum line advance for regular Helvetica/Arial
+/// when every character is printable ASCII.
+///
+/// Graphviz resolves Helvetica to DejaVu Sans on the reference Linux stack.
+/// At 96dpi with hint metrics enabled, printable ASCII advances at 14pt land
+/// exactly on quarter-point units and compose additively. As with Symbol,
+/// Graphviz 2.42 then applies `(int)(line_width + 1)` to the complete span.
+pub fn helveticaAsciiLabelWidth(text: []const u8, font_size: f64) ?f64 {
+    const metrics = if (@abs(font_size - 14.0) <= 0.0001)
+        &helvetica_ascii_quarter_points
+    else if (@abs(font_size - 13.0) <= 0.0001)
+        &helvetica_ascii_13pt_quarter_points
+    else
+        return null;
+    var line_width: f64 = 0;
+    var max_width: f64 = 0;
+    for (text) |byte| {
+        if (isLineBreak(byte)) {
+            max_width = @max(max_width, line_width);
+            line_width = 0;
+        } else if (byte == '\t') {
+            line_width += @as(f64, metrics[0]) * 4.0;
+        } else if (byte >= 0x20 and byte <= 0x7e) {
+            line_width += @as(f64, metrics[byte - 0x20]);
+        } else {
+            return null;
+        }
+    }
+    const pango_width = @max(max_width, line_width) * 0.25;
+    return @floor(pango_width + 1.0);
+}
+
 /// Returns the maximum line advance for Graphviz's PostScript `Symbol` face.
 ///
 /// The table below was generated from the Pango logical advances of
@@ -426,4 +476,14 @@ test "Symbol metrics reproduce Graphviz fixture widths" {
 
 test "Symbol metrics reject uncovered codepoints" {
     try std.testing.expect(symbolLabelWidth("CJK 漢", 14) == null);
+}
+
+test "Helvetica ASCII metrics reproduce Graphviz fixture widths" {
+    try std.testing.expectEqual(@as(f64, 73), helveticaAsciiLabelWidth("abcdefghij", 14).?);
+    try std.testing.expectEqual(@as(f64, 38), helveticaAsciiLabelWidth("iiiiiiiiii", 14).?);
+    try std.testing.expectEqual(@as(f64, 136), helveticaAsciiLabelWidth("mmmmmmmmmm", 14).?);
+    try std.testing.expectEqual(@as(f64, 125), helveticaAsciiLabelWidth("thin iii wide WWW", 14).?);
+    try std.testing.expectEqual(@as(f64, 70), helveticaAsciiLabelWidth("abcdefghij", 13).?);
+    try std.testing.expect(helveticaAsciiLabelWidth("abcdefghij", 21) == null);
+    try std.testing.expect(helveticaAsciiLabelWidth("non-ASCII α", 14) == null);
 }
