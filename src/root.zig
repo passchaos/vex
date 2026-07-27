@@ -6316,6 +6316,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         axis_sizes,
         effective_options,
         8,
+        graph.subgraphs.items.len == 0,
     );
     if (physical_rank_transpose_applied or rigid_rank_offsets_applied) {
         refreshVirtualPositionsFromRealCenters(
@@ -14495,6 +14496,7 @@ fn refinePhysicalRankAdjacentCrossings(
     sizes: []const NodeSize,
     options: LayoutOptions,
     passes: usize,
+    barrier_eligible: bool,
 ) bool {
     if (passes == 0 or !graph.directed or graph.subgraphs.items.len != 0 or
         graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
@@ -14532,6 +14534,10 @@ fn refinePhysicalRankAdjacentCrossings(
     var plateau_candidate: [128]f64 = undefined;
     if (centers.len > plateau_candidate.len) return false;
     @memcpy(plateau_candidate[0..centers.len], centers);
+    var barrier_candidate: [128]f64 = undefined;
+    if (barrier_eligible) {
+        @memcpy(barrier_candidate[0..centers.len], centers);
+    }
     const strict_improved = refinePhysicalRankAdjacentCrossingPath(
         graph,
         levels,
@@ -14556,13 +14562,27 @@ fn refinePhysicalRankAdjacentCrossings(
         passes,
         true,
     );
+    if (barrier_eligible) {
+        _ = refinePhysicalRankBarrierCrossingPath(
+            graph,
+            levels,
+            ranks,
+            barrier_candidate[0..centers.len],
+            sizes,
+            physical_depths,
+            baseline_stress,
+            baseline_extent,
+            baseline_crossings,
+        );
+    }
 
     // Keep the strict-only path independently available. A stress plateau can
     // open a better adjacent basin, but it can also steer an annotation-heavy
     // round trip away from the strict path. Compare complete candidates by the
     // public physical objective instead of letting one local trajectory erase
     // the other.
-    const strict_crossings = countPhysicalCenterCrossings(
+    var candidate_changed = strict_improved;
+    var incumbent_crossings = countPhysicalCenterCrossings(
         graph,
         ranks,
         centers,
@@ -14574,7 +14594,7 @@ fn refinePhysicalRankAdjacentCrossings(
         plateau_candidate[0..centers.len],
         physical_depths,
     );
-    const strict_length = physicalCenterEdgeLength(
+    var incumbent_length = physicalCenterEdgeLength(
         graph,
         ranks,
         centers,
@@ -14589,14 +14609,40 @@ fn refinePhysicalRankAdjacentCrossings(
     if (physicalRankCandidateIsBetter(
         plateau_crossings,
         plateau_length,
-        strict_crossings,
-        strict_length,
+        incumbent_crossings,
+        incumbent_length,
     )) {
         @memcpy(centers, plateau_candidate[0..centers.len]);
-        return plateau_crossings < baseline_crossings or
-            plateau_length + 0.0001 < strict_length;
+        incumbent_crossings = plateau_crossings;
+        incumbent_length = plateau_length;
+        candidate_changed = true;
     }
-    return strict_improved;
+    if (barrier_eligible) {
+        const barrier_crossings = countPhysicalCenterCrossings(
+            graph,
+            ranks,
+            barrier_candidate[0..centers.len],
+            physical_depths,
+        );
+        const barrier_length = physicalCenterEdgeLength(
+            graph,
+            ranks,
+            barrier_candidate[0..centers.len],
+            physical_depths,
+        );
+        if (physicalRankCandidateIsBetter(
+            barrier_crossings,
+            barrier_length,
+            incumbent_crossings,
+            incumbent_length,
+        )) {
+            @memcpy(centers, barrier_candidate[0..centers.len]);
+            incumbent_crossings = barrier_crossings;
+            incumbent_length = barrier_length;
+            candidate_changed = true;
+        }
+    }
+    return candidate_changed;
 }
 
 fn physicalRankCandidateIsBetter(
@@ -14704,6 +14750,121 @@ fn refinePhysicalRankAdjacentCrossingPath(
         if (!changed) break;
     }
     return improved;
+}
+
+fn refinePhysicalRankBarrierCrossingPath(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    physical_depths: []const f64,
+    baseline_stress: f64,
+    baseline_extent: f64,
+    baseline_crossings: usize,
+) bool {
+    const restart_count: usize = 6;
+    if (graph.nodes.items.len < 32 or graph.nodes.items.len > 64 or
+        graph.edges.items.len > 128 or baseline_crossings == 0 or
+        baseline_crossings > 8) return false;
+
+    var eligible_levels: [64]usize = undefined;
+    var eligible_count: usize = 0;
+    for (levels, 0..) |level, rank| {
+        if (level.items.len <= 1 or level.items.len > 64) continue;
+        eligible_levels[eligible_count] = rank;
+        eligible_count += 1;
+    }
+    if (eligible_count == 0) return false;
+
+    // Strict descent cannot cross a multi-rank ordering barrier. Search a
+    // separate deterministic adjacent-swap trajectory that may temporarily
+    // increase crossings, then expose only its best complete state to the
+    // caller. Every move keeps the swapped pair's outer boundary fixed, and
+    // every retained state remains inside the normal 4% stress/extent budget.
+    var best: [64]f64 = undefined;
+    @memcpy(best[0..centers.len], centers);
+    var best_crossings = baseline_crossings;
+    var best_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    var search = SmallDirectedCrossingSearch{};
+    for (0..restart_count) |_| {
+        @memcpy(centers, best[0..centers.len]);
+        var current_crossings = countPhysicalCenterCrossings(
+            graph,
+            ranks,
+            centers,
+            physical_depths,
+        );
+        for (0..SmallDirectedCrossingSearch.search_moves) |step| {
+            const swapped = trySmallDirectedCenterSwap(
+                &search,
+                levels,
+                centers,
+                sizes,
+                eligible_levels[0..eligible_count],
+                true,
+            ) orelse continue;
+            applySmallDirectedCenterSwap(centers, swapped, false);
+            const before_affected = countPhysicalCenterCrossingsTouching(
+                graph,
+                ranks,
+                centers,
+                physical_depths,
+                swapped.left,
+                swapped.right,
+            );
+            applySmallDirectedCenterSwap(centers, swapped, true);
+            const after_stress = coordinateEdgeStress(graph, ranks, centers);
+            if (after_stress > baseline_stress * 1.04 + 0.0001 or
+                centersExtent(centers, sizes) > baseline_extent + 0.0001)
+            {
+                applySmallDirectedCenterSwap(centers, swapped, false);
+                continue;
+            }
+            const after_affected = countPhysicalCenterCrossingsTouching(
+                graph,
+                ranks,
+                centers,
+                physical_depths,
+                swapped.left,
+                swapped.right,
+            );
+            const after_crossings =
+                current_crossings -| before_affected +| after_affected;
+            const remaining = SmallDirectedCrossingSearch.search_moves - step;
+            const delta = after_crossings -| current_crossings;
+            if (after_crossings <= current_crossings or
+                smallDirectedAcceptUphill(&search, delta, remaining))
+            {
+                current_crossings = after_crossings;
+                const after_length = physicalCenterEdgeLength(
+                    graph,
+                    ranks,
+                    centers,
+                    physical_depths,
+                );
+                if (physicalRankCandidateIsBetter(
+                    after_crossings,
+                    after_length,
+                    best_crossings,
+                    best_length,
+                )) {
+                    best_crossings = after_crossings;
+                    best_length = after_length;
+                    @memcpy(best[0..centers.len], centers);
+                }
+            } else {
+                applySmallDirectedCenterSwap(centers, swapped, false);
+            }
+        }
+    }
+    @memcpy(centers, best[0..centers.len]);
+    return best_crossings < baseline_crossings;
 }
 
 fn refineRigidRankOffsets(
@@ -17016,21 +17177,115 @@ fn countPhysicalCenterCrossings(
     for (graph.edges.items, 0..) |left, left_index| {
         if (left.from >= ranks.len or left.to >= ranks.len or
             left.from >= centers.len or left.to >= centers.len) continue;
-        if (ranks[left.from] >= rank_depths.len or ranks[left.to] >= rank_depths.len) continue;
-        const a = Point{ .x = centers[left.from], .y = rank_depths[ranks[left.from]] };
-        const b = Point{ .x = centers[left.to], .y = rank_depths[ranks[left.to]] };
+        if (ranks[left.from] >= rank_depths.len or
+            ranks[left.to] >= rank_depths.len) continue;
+        const a = Point{
+            .x = centers[left.from],
+            .y = rank_depths[ranks[left.from]],
+        };
+        const b = Point{
+            .x = centers[left.to],
+            .y = rank_depths[ranks[left.to]],
+        };
         for (graph.edges.items[left_index + 1 ..]) |right| {
             if (right.from >= ranks.len or right.to >= ranks.len or
                 right.from >= centers.len or right.to >= centers.len) continue;
-            if (ranks[right.from] >= rank_depths.len or ranks[right.to] >= rank_depths.len) continue;
+            if (ranks[right.from] >= rank_depths.len or
+                ranks[right.to] >= rank_depths.len) continue;
             if (left.from == right.from or left.from == right.to or
                 left.to == right.from or left.to == right.to) continue;
-            const c = Point{ .x = centers[right.from], .y = rank_depths[ranks[right.from]] };
-            const d = Point{ .x = centers[right.to], .y = rank_depths[ranks[right.to]] };
+            const c = Point{
+                .x = centers[right.from],
+                .y = rank_depths[ranks[right.from]],
+            };
+            const d = Point{
+                .x = centers[right.to],
+                .y = rank_depths[ranks[right.to]],
+            };
             if (pointSegmentsCross(a, b, c, d)) crossings += 1;
         }
     }
     return crossings;
+}
+
+fn countPhysicalCenterCrossingsTouching(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+    rank_depths: []const f64,
+    left_node: NodeId,
+    right_node: NodeId,
+) usize {
+    var touched: [128]EdgeId = undefined;
+    var touched_count: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from != left_node and edge_item.to != left_node and
+            edge_item.from != right_node and edge_item.to != right_node) continue;
+        if (touched_count >= touched.len) {
+            return countPhysicalCenterCrossings(
+                graph,
+                ranks,
+                centers,
+                rank_depths,
+            );
+        }
+        touched[touched_count] = edge_item.id;
+        touched_count += 1;
+    }
+
+    var crossings: usize = 0;
+    for (touched[0..touched_count], 0..) |left_id, touched_index| {
+        if (left_id >= graph.edges.items.len) continue;
+        const left = graph.edges.items[left_id];
+        for (graph.edges.items) |right| {
+            if (right.id == left_id) continue;
+            var duplicate = false;
+            for (touched[0..touched_index]) |previous_id| {
+                if (right.id == previous_id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate or left.from == right.from or left.from == right.to or
+                left.to == right.from or left.to == right.to) continue;
+            if (physicalCenterSegmentsCross(
+                left,
+                right,
+                ranks,
+                centers,
+                rank_depths,
+            )) crossings += 1;
+        }
+    }
+    return crossings;
+}
+
+fn physicalCenterSegmentsCross(
+    left: Edge,
+    right: Edge,
+    ranks: []const usize,
+    centers: []const f64,
+    rank_depths: []const f64,
+) bool {
+    if (left.from >= ranks.len or left.to >= ranks.len or
+        right.from >= ranks.len or right.to >= ranks.len or
+        left.from >= centers.len or left.to >= centers.len or
+        right.from >= centers.len or right.to >= centers.len) return false;
+    const left_from_rank = ranks[left.from];
+    const left_to_rank = ranks[left.to];
+    const right_from_rank = ranks[right.from];
+    const right_to_rank = ranks[right.to];
+    if (left_from_rank >= rank_depths.len or left_to_rank >= rank_depths.len or
+        right_from_rank >= rank_depths.len or right_to_rank >= rank_depths.len)
+    {
+        return false;
+    }
+    return pointSegmentsCross(
+        .{ .x = centers[left.from], .y = rank_depths[left_from_rank] },
+        .{ .x = centers[left.to], .y = rank_depths[left_to_rank] },
+        .{ .x = centers[right.from], .y = rank_depths[right_from_rank] },
+        .{ .x = centers[right.to], .y = rank_depths[right_to_rank] },
+    );
 }
 
 fn physicalCenterEdgeLength(
@@ -38435,6 +38690,7 @@ test "physical rank transpose reduces crossings across unequal rank heights" {
         &sizes,
         .{},
         2,
+        true,
     ));
 
     try std.testing.expectEqual(
@@ -38551,6 +38807,96 @@ test "physical rank plateau may cross an equal-crossing stress tie" {
     try std.testing.expect(
         coordinateEdgeStress(&graph, &ranks, &plateau_centers) + 0.0001 <
             baseline_stress,
+    );
+}
+
+test "physical rank barrier candidate crosses a multi-rank local minimum" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    for (0..32) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try graph.addNode(
+            try std.fmt.bufPrint(&label_buf, "n{d}", .{index}),
+            .{},
+        );
+    }
+    for ([_][2]NodeId{
+        .{ 0, 6 },
+        .{ 5, 8 },
+        .{ 1, 6 },
+        .{ 0, 3 },
+        .{ 0, 5 },
+        .{ 3, 7 },
+        .{ 2, 7 },
+        .{ 1, 4 },
+    }) |endpoints| {
+        _ = try graph.addEdge(endpoints[0], endpoints[1], .{});
+    }
+
+    var ranks: [32]usize = undefined;
+    for (0..3) |rank| {
+        for (0..3) |slot| ranks[rank * 3 + slot] = rank;
+    }
+    for (9..32) |node_id| ranks[node_id] = node_id - 6;
+    var levels = [_]std.ArrayList(NodeId){.empty} ** 26;
+    defer for (&levels) |*level| level.deinit(allocator);
+    for (ranks, 0..) |rank, node_id| {
+        try levels[rank].append(allocator, node_id);
+    }
+    const sizes = [_]NodeSize{.{ .width = 20, .height = 20 }} ** 32;
+    var centers = [_]f64{10} ** 32;
+    for (0..3) |rank| {
+        for (0..3) |slot| {
+            centers[rank * 3 + slot] =
+                10.0 + @as(f64, @floatFromInt(slot)) * 40.0;
+        }
+    }
+    var physical_depths: [26]f64 = undefined;
+    for (&physical_depths, 0..) |*depth, rank| {
+        depth.* = 10.0 + @as(f64, @floatFromInt(rank)) * 80.0;
+    }
+    const baseline_crossings = countPhysicalCenterCrossings(
+        &graph,
+        &ranks,
+        &centers,
+        &physical_depths,
+    );
+    const baseline_stress = coordinateEdgeStress(
+        &graph,
+        &ranks,
+        &centers,
+    );
+    const baseline_extent = centersExtent(&centers, &sizes);
+    try std.testing.expectEqual(@as(usize, 4), baseline_crossings);
+
+    try std.testing.expect(refinePhysicalRankBarrierCrossingPath(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        &physical_depths,
+        baseline_stress,
+        baseline_extent,
+        baseline_crossings,
+    ));
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &centers,
+            &physical_depths,
+        ),
+    );
+    try std.testing.expect(
+        coordinateEdgeStress(&graph, &ranks, &centers) <=
+            baseline_stress * 1.04 + 0.0001,
+    );
+    try std.testing.expect(
+        centersExtent(&centers, &sizes) <= baseline_extent + 0.0001,
     );
 }
 

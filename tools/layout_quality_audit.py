@@ -431,6 +431,13 @@ def main() -> int:
             1.25,
         ),
         (
+            "unix2-roundtrip",
+            args.graphviz_root / "tests" / "share" / "unix2.gv",
+            2,
+            1.15,
+            1.25,
+        ),
+        (
             "rankdir-roundtrip",
             args.graphviz_root / "tests" / "linux.x86" / "rankdir_dot.gv",
             4,
@@ -490,8 +497,8 @@ def main() -> int:
             raise SystemExit(f"{name}: Vex normalized canvas area regressed")
         aggregate_vex_crossings += vex_score[1]
         aggregate_graphviz_crossings += graphviz_score[1]
-    if aggregate_vex_crossings > 770:
-        raise SystemExit("aggregate Vex crossing count regressed above 770")
+    if aggregate_vex_crossings > 772:
+        raise SystemExit("aggregate Vex crossing count regressed above 772")
     print(
         "layout-quality-audit aggregate "
         f"vex_crossings={aggregate_vex_crossings} "
