@@ -6677,7 +6677,13 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     @memcpy(layout_ranks, ranks);
     computeSubgraphLayouts(layout_graph, axes, nodes, cluster_layouts);
     if (!compression_applied) {
-        alignCrossClusterMembersGraphvizLikeTb(layout_graph, axes, nodes, ranks, cluster_layouts);
+        alignCrossClusterMembersGraphvizLikeTbIfHelpful(
+            layout_graph,
+            axes,
+            nodes,
+            ranks,
+            cluster_layouts,
+        );
     }
     shiftClusterMemberNodesDownForCrossClusterTb(layout_graph, axes, nodes, 0.5);
     try computeEdgeWaypoints(allocator, layout_graph, axes, nodes, ranks, rank_depths, layout_rank_heights, total_depth, effective_options.margin, effective_options.margin_y, edge_waypoints, &virtual_levels, &final_virtual_positions);
@@ -10510,9 +10516,54 @@ fn shiftRightClusterMembersLeftByRankForCrossClusterTb(graph: *const Graph, axes
     }
 }
 
-fn alignCrossClusterMembersGraphvizLikeTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, ranks: []const usize, clusters: []const SubgraphLayout) void {
+fn alignCrossClusterMembersGraphvizLikeTbIfHelpful(
+    graph: *const Graph,
+    axes: LayoutAxes,
+    nodes: []NodeLayout,
+    ranks: []const usize,
+    clusters: []const SubgraphLayout,
+) void {
+    if (nodes.len > 128 or graph.edges.items.len > 256) return;
+    // These tiny sub-point shifts are SVG-oracle corrections, not part of the
+    // rank/coordinate solve. Guard them against undoing the crossing objective
+    // that all earlier stages optimized.
+    const before_crossings = countNodeLayoutCenterCrossings(graph, nodes);
+    var backup: [128]NodeLayout = undefined;
+    @memcpy(backup[0..nodes.len], nodes);
+
     alignLeftClusterMembersTowardVisualPaddingTb(graph, axes, nodes, clusters, 55.0, 1.50);
     alignRightOuterClusterMembersTowardVisualPaddingTb(graph, axes, nodes, ranks, clusters, 35.0, 1.47);
+
+    if (countNodeLayoutCenterCrossings(graph, nodes) > before_crossings) {
+        @memcpy(nodes, backup[0..nodes.len]);
+    }
+}
+
+fn countNodeLayoutCenterCrossings(
+    graph: *const Graph,
+    nodes: []const NodeLayout,
+) usize {
+    var crossings: usize = 0;
+    for (graph.edges.items, 0..) |left, left_index| {
+        if (left.from >= nodes.len or left.to >= nodes.len) continue;
+        for (graph.edges.items[left_index + 1 ..]) |right| {
+            if (right.from >= nodes.len or right.to >= nodes.len or
+                left.from == right.from or left.from == right.to or
+                left.to == right.from or left.to == right.to)
+            {
+                continue;
+            }
+            if (pointSegmentsCross(
+                nodes[left.from].center,
+                nodes[left.to].center,
+                nodes[right.from].center,
+                nodes[right.to].center,
+            )) {
+                crossings += 1;
+            }
+        }
+    }
+    return crossings;
 }
 
 fn alignLeftClusterMembersTowardVisualPaddingTb(graph: *const Graph, axes: LayoutAxes, nodes: []NodeLayout, clusters: []const SubgraphLayout, target_padding: f64, max_shift: f64) void {
@@ -40981,6 +41032,72 @@ test "cluster owner group sifting moves members together" {
         deepestSubgraphContainingNode(&graph, a).? == group,
     );
     try std.testing.expect(allRankCentersHaveClearance(&ranks, &centers, &sizes));
+}
+
+test "cross-cluster visual alignment cannot introduce center crossings" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_small { a -> b; }
+        \\  subgraph cluster_big { p -> q -> r -> s -> t; t -> p; }
+        \\  t -> a;
+        \\  b -> q;
+        \\}
+    );
+    defer graph.deinit();
+
+    var nodes = [_]NodeLayout{
+        .{ .center = .{ .x = 39, .y = 18 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 39, .y = 90 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 39, .y = 450 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 39, .y = 162 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 39, .y = 234 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 39, .y = 306 }, .width = 54, .height = 36 },
+        .{ .center = .{ .x = 39, .y = 378 }, .width = 54, .height = 36 },
+    };
+    const ranks = [_]usize{ 0, 1, 6, 2, 3, 4, 5 };
+    const clusters = [_]SubgraphLayout{
+        .{ .id = 0, .x = 0, .y = 0, .width = 86, .height = 144 },
+        .{ .id = 1, .x = 0, .y = 144, .width = 86, .height = 360 },
+    };
+    const before = nodes;
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countNodeLayoutCenterCrossings(&graph, &nodes),
+    );
+
+    var unguarded = nodes;
+    alignLeftClusterMembersTowardVisualPaddingTb(
+        &graph,
+        .init(.TB),
+        &unguarded,
+        &clusters,
+        55.0,
+        1.50,
+    );
+    alignRightOuterClusterMembersTowardVisualPaddingTb(
+        &graph,
+        .init(.TB),
+        &unguarded,
+        &ranks,
+        &clusters,
+        35.0,
+        1.47,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        countNodeLayoutCenterCrossings(&graph, &unguarded),
+    );
+
+    alignCrossClusterMembersGraphvizLikeTbIfHelpful(
+        &graph,
+        .init(.TB),
+        &nodes,
+        &ranks,
+        &clusters,
+    );
+
+    try std.testing.expectEqualSlices(NodeLayout, &before, &nodes);
 }
 
 test "touched-edge crossing score matches full swap delta" {

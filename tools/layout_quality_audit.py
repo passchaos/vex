@@ -428,6 +428,13 @@ def main() -> int:
             1.20,
         ),
         (
+            "try-cross-cluster",
+            args.graphviz_root / "tests" / "graphs" / "try.gv",
+            0,
+            1.00,
+            1.00,
+        ),
+        (
             "b57",
             args.graphviz_root / "tests" / "graphs" / "b57.gv",
             0,
