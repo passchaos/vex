@@ -5992,6 +5992,8 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             &rank_edge_adjacency,
             acyclic_graph == reciprocal_graph and
                 layout_graph.subgraphs.items.len == 0,
+            graph.directed,
+            acyclic_graph == reciprocal_graph,
         );
     }
     applyTopBottomBalance(layout_graph, ranks);
@@ -10757,6 +10759,11 @@ const RankBounds = struct {
     max: usize,
 };
 
+const PassThroughEdges = struct {
+    incoming: Edge,
+    outgoing: Edge,
+};
+
 fn feasibleRankBoundsForNode(graph: *const Graph, ranks: []const usize, acyclic_edge: []const bool, node_id: NodeId) ?RankBounds {
     if (node_id >= ranks.len) return null;
     var min_rank: usize = 0;
@@ -10939,6 +10946,8 @@ fn balanceEqualCostRanks(
     acyclic_edge: []const bool,
     edge_adjacency: *const EdgeAdjacency,
     preserve_private_branch_chains: bool,
+    public_graph_directed: bool,
+    rank_view_acyclic: bool,
 ) void {
     if (ranks.len <= 1 or ranks.len > 4_096) return;
     var max_rank: usize = 0;
@@ -10965,6 +10974,27 @@ fn balanceEqualCostRanks(
                 incident_edges,
             ) orelse continue;
             if (bounds.max -| bounds.min > 128) continue;
+            if (public_graph_directed and rank_view_acyclic) {
+                if (balancedSmallDagPassThroughRank(
+                    graph,
+                    acyclic_edge,
+                    node_id,
+                    incident_edges,
+                    bounds,
+                )) |balanced_rank| {
+                    if (balanced_rank != current_rank) {
+                        ranks[node_id] = balanced_rank;
+                        if (rankConstraintsSatisfied(graph, ranks)) {
+                            counts[current_rank] -= 1;
+                            counts[balanced_rank] += 1;
+                            changed = true;
+                        } else {
+                            ranks[node_id] = current_rank;
+                        }
+                    }
+                    continue;
+                }
+            }
             if (!preserve_private_branch_chains) {
                 if (balancedHeavyPassThroughRank(
                     graph,
@@ -11047,6 +11077,29 @@ fn balanceEqualCostRanks(
     }
 }
 
+fn balancedSmallDagPassThroughRank(
+    graph: *const Graph,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    edge_ids: []const EdgeId,
+    bounds: RankBounds,
+) ?usize {
+    if (graph.subgraphs.items.len != 0 or graph.nodes.items.len > 31 or
+        bounds.max -| bounds.min < 2) return null;
+    if (equalWeightPassThroughEdges(
+        graph,
+        acyclic_edge,
+        node_id,
+        edge_ids,
+    ) == null) return null;
+
+    // Equal incident weights make the complete feasible interval identical in
+    // weighted rank-span cost. On small acyclic graphs there is no feedback
+    // channel to reserve, so choose the midpoint rather than letting a one-node
+    // occupancy difference pin the pass-through to either boundary.
+    return bounds.min + (bounds.max - bounds.min) / 2;
+}
+
 fn balancedHeavyPassThroughRank(
     graph: *const Graph,
     acyclic_edge: []const bool,
@@ -11056,6 +11109,28 @@ fn balancedHeavyPassThroughRank(
 ) ?usize {
     if (graph.subgraphs.items.len != 0 or graph.nodes.items.len < 48 or
         graph.nodes.items.len > 64 or bounds.max -| bounds.min < 4) return null;
+    const edges = equalWeightPassThroughEdges(
+        graph,
+        acyclic_edge,
+        node_id,
+        edge_ids,
+    ) orelse return null;
+    if (edges.incoming.weight <= 1.0) return null;
+
+    // Equal incident weights make every feasible rank identical in weighted
+    // span cost. Keep the node inside the interval, but bias it one quartile
+    // toward its source. Compared with the midpoint this leaves more
+    // sink-side ranks available as channels for long feedback edges, while
+    // avoiding the sparse boundary placement that occupancy balancing chose.
+    return bounds.min + (bounds.max - bounds.min) / 4;
+}
+
+fn equalWeightPassThroughEdges(
+    graph: *const Graph,
+    acyclic_edge: []const bool,
+    node_id: NodeId,
+    edge_ids: []const EdgeId,
+) ?PassThroughEdges {
     var incoming: ?Edge = null;
     var outgoing: ?Edge = null;
     for (edge_ids) |edge_id| {
@@ -11072,15 +11147,10 @@ fn balancedHeavyPassThroughRank(
     }
     const in_edge = incoming orelse return null;
     const out_edge = outgoing orelse return null;
-    if (in_edge.weight <= 1.0 or
-        @abs(in_edge.weight - out_edge.weight) > 0.0001) return null;
-
-    // Equal incident weights make every feasible rank identical in weighted
-    // span cost. Keep the node inside the interval, but bias it one quartile
-    // toward its source. Compared with the midpoint this leaves more
-    // sink-side ranks available as channels for long feedback edges, while
-    // avoiding the sparse boundary placement that occupancy balancing chose.
-    return bounds.min + (bounds.max - bounds.min) / 4;
+    if (@abs(@max(in_edge.weight, 0) - @max(out_edge.weight, 0)) > 0.0001) {
+        return null;
+    }
+    return .{ .incoming = in_edge, .outgoing = out_edge };
 }
 
 fn privateBranchChainEntry(
@@ -38345,7 +38415,15 @@ test "equal-cost rank balance reduces peak layer width" {
     var adjacency = try EdgeAdjacency.init(allocator, &graph);
     defer adjacency.deinit();
     const before_cost = rankAssignmentCost(&graph, &ranks, &acyclic_edge);
-    balanceEqualCostRanks(&graph, &ranks, &acyclic_edge, &adjacency, false);
+    balanceEqualCostRanks(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        &adjacency,
+        false,
+        true,
+        true,
+    );
 
     try std.testing.expectEqual(@as(usize, 2), ranks[movable]);
     try std.testing.expectEqual(@as(usize, 1), ranks[crowded_a]);
@@ -38390,6 +38468,8 @@ test "private branch chain rank ties preserve the tight incoming edge" {
         &ranks,
         &acyclic_edge,
         &adjacency,
+        true,
+        true,
         true,
     );
 
@@ -38459,6 +38539,76 @@ test "heavy pass-through rank ties reserve sink-side feedback channels" {
             adjacency.incident(middle),
         ),
     );
+}
+
+test "small DAG pass-through rank ties choose the feasible midpoint" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const middle = try graph.addNode("middle", .{});
+    const sink = try graph.addNode("sink", .{});
+    for (3..15) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try graph.addNode(
+            try std.fmt.bufPrint(&label_buf, "filler{d}", .{index}),
+            .{},
+        );
+    }
+    _ = try graph.addEdge(source, middle, .{ .weight = 1 });
+    _ = try graph.addEdge(middle, sink, .{ .weight = 1 });
+
+    const acyclic_edge = [_]bool{ true, true };
+    var ranks = [_]usize{0} ** 15;
+    ranks[source] = 0;
+    ranks[middle] = 3;
+    ranks[sink] = 4;
+    var adjacency = try EdgeAdjacency.init(allocator, &graph);
+    defer adjacency.deinit();
+    const bounds = feasibleRankBoundsForNodeIndexed(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        middle,
+        adjacency.incident(middle),
+    ).?;
+    const before_cost = rankAssignmentCost(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), bounds.min);
+    try std.testing.expectEqual(@as(usize, 3), bounds.max);
+    try std.testing.expectEqual(
+        @as(?usize, 2),
+        balancedSmallDagPassThroughRank(
+            &graph,
+            &acyclic_edge,
+            middle,
+            adjacency.incident(middle),
+            bounds,
+        ),
+    );
+    balanceEqualCostRanks(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+        &adjacency,
+        false,
+        true,
+        true,
+    );
+    try std.testing.expectEqual(@as(usize, 2), ranks[middle]);
+    try std.testing.expectEqual(
+        before_cost,
+        rankAssignmentCost(&graph, &ranks, &acyclic_edge),
+    );
+    try std.testing.expect(rankAssignmentFeasible(
+        &graph,
+        &ranks,
+        &acyclic_edge,
+    ));
 }
 
 test "maximum-closure rank descent moves jointly profitable tight dependencies" {
