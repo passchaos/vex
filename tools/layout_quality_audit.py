@@ -326,6 +326,13 @@ def main() -> int:
             1.40,
         ),
         (
+            "clust5-roundtrip",
+            args.graphviz_root / "tests" / "share" / "clust5.gv",
+            0,
+            1.05,
+            1.00,
+        ),
+        (
             "awilliams",
             args.graphviz_root / "tests" / "graphs" / "awilliams.gv",
             0,

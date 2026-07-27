@@ -6228,6 +6228,15 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         effective_options,
         work,
     );
+    try refineJointClusterRankSlots(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        work,
+    );
     compactZeroCrossingStarIfHelpful(
         layout_graph,
         levels,
@@ -14894,6 +14903,231 @@ const JointExplicitRankLevel = struct {
     start: usize,
     len: usize,
 };
+
+const JointClusterRankSlotSearch = struct {
+    graph: *const Graph,
+    ranks: []const usize,
+    sizes: []const NodeSize,
+    levels: []const JointExplicitRankLevel,
+    order: []NodeId,
+    slots: []const f64,
+    baseline: []const f64,
+    candidate: []f64,
+    best: []f64,
+    physical_depths: []const f64,
+    baseline_extent: f64,
+    best_crossings: usize,
+    best_length: f64,
+
+    fn enumerate(self: *JointClusterRankSlotSearch, level_index: usize) void {
+        if (level_index == self.levels.len) {
+            self.evaluate();
+            return;
+        }
+        self.permuteLevel(level_index, 0);
+    }
+
+    fn permuteLevel(
+        self: *JointClusterRankSlotSearch,
+        level_index: usize,
+        suffix_index: usize,
+    ) void {
+        const level = self.levels[level_index];
+        if (suffix_index >= level.len) {
+            self.enumerate(level_index + 1);
+            return;
+        }
+        const begin = level.start + suffix_index;
+        const end = level.start + level.len;
+        for (begin..end) |candidate_index| {
+            std.mem.swap(
+                NodeId,
+                &self.order[begin],
+                &self.order[candidate_index],
+            );
+            self.permuteLevel(level_index, suffix_index + 1);
+            std.mem.swap(
+                NodeId,
+                &self.order[begin],
+                &self.order[candidate_index],
+            );
+        }
+    }
+
+    fn evaluate(self: *JointClusterRankSlotSearch) void {
+        @memcpy(self.candidate, self.baseline);
+        for (self.levels) |level| {
+            if (!clusterRankOrderIsContiguous(
+                self.graph,
+                self.order[level.start .. level.start + level.len],
+            )) return;
+            for (0..level.len) |slot_index| {
+                const node_id = self.order[level.start + slot_index];
+                if (node_id >= self.candidate.len) return;
+                self.candidate[node_id] = self.slots[level.start + slot_index];
+            }
+        }
+        if (!allRankCentersHaveClearance(
+            self.ranks,
+            self.candidate,
+            self.sizes,
+        ) or centersExtent(self.candidate, self.sizes) >
+            self.baseline_extent + 0.0001) return;
+        const crossings = countPhysicalCenterCrossings(
+            self.graph,
+            self.ranks,
+            self.candidate,
+            self.physical_depths,
+        );
+        if (crossings > self.best_crossings) return;
+        const length = physicalCenterEdgeLength(
+            self.graph,
+            self.ranks,
+            self.candidate,
+            self.physical_depths,
+        );
+        if (crossings < self.best_crossings or
+            (crossings == self.best_crossings and
+                length + 0.0001 < self.best_length))
+        {
+            self.best_crossings = crossings;
+            self.best_length = length;
+            @memcpy(self.best, self.candidate);
+        }
+    }
+};
+
+fn clusterRankOrderIsContiguous(
+    graph: *const Graph,
+    order: []const NodeId,
+) bool {
+    for (graph.subgraphs.items) |cluster| {
+        var first: ?usize = null;
+        var last: usize = 0;
+        var count: usize = 0;
+        for (order, 0..) |node_id, index| {
+            if (!containsNode(cluster.nodes, node_id)) continue;
+            if (first == null) first = index;
+            last = index;
+            count += 1;
+        }
+        if (count > 1 and last - first.? + 1 != count) return false;
+    }
+    return true;
+}
+
+fn refineJointClusterRankSlots(
+    graph: *const Graph,
+    graph_levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    work: *LayoutWorkTracker,
+) !void {
+    const max_nodes: usize = 20;
+    const max_combinations: usize = 8_192;
+    if (graph.subgraphs.items.len == 0 or graph.nodes.items.len == 0 or
+        graph.nodes.items.len > max_nodes or graph.edges.items.len > 40 or
+        centers.len < graph.nodes.items.len or sizes.len < graph.nodes.items.len or
+        !remincrossEnabled(graph) or
+        orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return;
+
+    var search_levels: [max_nodes]JointExplicitRankLevel = undefined;
+    var level_count: usize = 0;
+    var order: [max_nodes]NodeId = undefined;
+    var slots: [max_nodes]f64 = undefined;
+    var item_count: usize = 0;
+    var combination_count: usize = 1;
+    var has_permutation = false;
+    for (graph_levels) |level| {
+        if (level.items.len <= 1) continue;
+        if (item_count + level.items.len > order.len) return;
+        search_levels[level_count] = .{
+            .start = item_count,
+            .len = level.items.len,
+        };
+        @memcpy(
+            order[item_count .. item_count + level.items.len],
+            level.items,
+        );
+        std.mem.sort(
+            NodeId,
+            order[item_count .. item_count + level.items.len],
+            centers,
+            struct {
+                fn lessThan(
+                    node_centers: []const f64,
+                    left: NodeId,
+                    right: NodeId,
+                ) bool {
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan,
+        );
+        for (order[item_count .. item_count + level.items.len], 0..) |node_id, index| {
+            slots[item_count + index] = centers[node_id];
+        }
+        var factor: usize = 1;
+        for (2..level.items.len + 1) |value| {
+            factor *|= value;
+            if (factor > max_combinations) return;
+        }
+        combination_count *|= factor;
+        if (combination_count > max_combinations) return;
+        has_permutation = has_permutation or factor > 1;
+        item_count += level.items.len;
+        level_count += 1;
+    }
+    if (!has_permutation or level_count == 0) return;
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    if (baseline_crossings == 0) return;
+    try work.checkpoint(
+        combination_count *| (graph.nodes.items.len +| graph.edges.items.len +| 1),
+    );
+
+    var candidate: [max_nodes]f64 = undefined;
+    var best: [max_nodes]f64 = undefined;
+    @memcpy(best[0..centers.len], centers);
+    var search = JointClusterRankSlotSearch{
+        .graph = graph,
+        .ranks = ranks,
+        .sizes = sizes,
+        .levels = search_levels[0..level_count],
+        .order = order[0..item_count],
+        .slots = slots[0..item_count],
+        .baseline = centers,
+        .candidate = candidate[0..centers.len],
+        .best = best[0..centers.len],
+        .physical_depths = physical_depths,
+        .baseline_extent = centersExtent(centers, sizes),
+        .best_crossings = baseline_crossings,
+        .best_length = physicalCenterEdgeLength(
+            graph,
+            ranks,
+            centers,
+            physical_depths,
+        ),
+    };
+    search.enumerate(0);
+    if (search.best_crossings < baseline_crossings) @memcpy(centers, search.best);
+}
 
 const JointExplicitRankSearch = struct {
     graph: *const Graph,
@@ -41268,6 +41502,83 @@ test "remincross repeats crossing minimization after cluster grouping" {
     var invalid = try layoutLayered(allocator, &invalid_graph, .{});
     defer invalid.deinit();
     try expectNodeCentersEqual(&single, &invalid);
+}
+
+test "small cluster rank search is stable across declaration order" {
+    const allocator = std.testing.allocator;
+    const early_main =
+        \\digraph G {
+        \\  a -> b -> c;
+        \\  subgraph cluster0 { x0 -> y0; x0 -> z0; }
+        \\  subgraph cluster1 { x1 -> y1; x1 -> z1; }
+        \\  subgraph cluster2 { x2 -> y2; x2 -> z2; }
+        \\  a -> x0;
+        \\  b -> x1;
+        \\  b -> x2;
+        \\  a -> z2;
+        \\  c -> z1;
+        \\}
+    ;
+    const late_main =
+        \\digraph G {
+        \\  subgraph cluster0 { x0 -> y0; x0 -> z0; }
+        \\  subgraph cluster1 { x1 -> y1; x1 -> z1; }
+        \\  subgraph cluster2 { x2 -> y2; x2 -> z2; }
+        \\  a -> b;
+        \\  a -> x0;
+        \\  a -> z2;
+        \\  b -> c;
+        \\  b -> x1;
+        \\  b -> x2;
+        \\  c -> z1;
+        \\}
+    ;
+
+    var early_graph = try parseDot(allocator, early_main);
+    defer early_graph.deinit();
+    var early = try layoutLayered(allocator, &early_graph, .{});
+    defer early.deinit();
+
+    var late_graph = try parseDot(allocator, late_main);
+    defer late_graph.deinit();
+    var late = try layoutLayered(allocator, &late_graph, .{});
+    defer late.deinit();
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        layoutAdjacentRankCrossingCount(&early_graph, &early),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        layoutAdjacentRankCrossingCount(&late_graph, &late),
+    );
+    for (early_graph.subgraphs.items) |cluster| {
+        var rank: usize = 0;
+        while (rank < early.rank_depths.len) : (rank += 1) {
+            var slots: [16]f64 = undefined;
+            var count: usize = 0;
+            for (cluster.nodes) |node_id| {
+                if (node_id >= early.ranks.len or early.ranks[node_id] != rank) continue;
+                slots[count] = LayoutAxes.init(early.rankdir).pointAlong(
+                    early.nodes[node_id].center,
+                );
+                count += 1;
+            }
+            if (count <= 1) continue;
+            std.mem.sort(f64, slots[0..count], {}, lessThanF64);
+            // No node outside this cluster may sit between its first and last
+            // same-rank member after the exact slot search.
+            for (early.nodes, 0..) |node, node_id| {
+                if (early.ranks[node_id] != rank or
+                    containsNode(cluster.nodes, node_id)) continue;
+                const along = LayoutAxes.init(early.rankdir).pointAlong(node.center);
+                try std.testing.expect(
+                    along < slots[0] - 0.0001 or
+                        along > slots[count - 1] + 0.0001,
+                );
+            }
+        }
+    }
 }
 
 test "remincross is inert without subgraphs" {
