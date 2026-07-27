@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const big5_mod = @import("big5.zig");
+const entities = @import("entities.zig");
 const layout_mod = @import("layout/mod.zig");
 const size_mod = @import("size.zig");
 const svg_mod = @import("svg/mod.zig");
@@ -2465,6 +2466,40 @@ fn isNameContinue(c: u8) bool {
 const AttrList = std.ArrayList(Attr);
 const NodeSet = std.ArrayList(NodeId);
 
+const ParsedIdText = struct {
+    value: []const u8,
+    is_html: bool,
+};
+
+const ParsedAttr = struct {
+    name: []const u8,
+    value: []const u8,
+    is_html: bool,
+};
+
+const ParsedAttrList = std.ArrayList(ParsedAttr);
+
+const NodeLabelKinds = struct {
+    label_is_html: bool = false,
+    xlabel_is_html: bool = false,
+};
+
+const EdgeLabelKinds = struct {
+    label_is_html: bool = false,
+    xlabel_is_html: bool = false,
+    headlabel_is_html: bool = false,
+    taillabel_is_html: bool = false,
+};
+
+const DefaultLabelKinds = struct {
+    node_label_is_html: bool,
+    node_xlabel_is_html: bool,
+    edge_label_is_html: bool,
+    edge_xlabel_is_html: bool,
+    edge_headlabel_is_html: bool,
+    edge_taillabel_is_html: bool,
+};
+
 const NodeRef = struct {
     id: NodeId,
     port: CompassPort = .auto,
@@ -2563,10 +2598,22 @@ const Parser = struct {
     collectors: std.ArrayList(*NodeSet) = .empty,
     rank_scopes: std.ArrayList(*?RankKind) = .empty,
     subgraph_scopes: std.ArrayList(?*AttrList) = .empty,
+    subgraph_label_kind_scopes: std.ArrayList(*?bool) = .empty,
     subgraph_stack: std.ArrayList(SubgraphId) = .empty,
     node_index: std.StringHashMap(NodeId),
     edge_key_index: std.StringHashMap(EdgeId),
     node_text_ids: std.ArrayList([]const u8) = .empty,
+    node_text_id_is_html: std.ArrayList(bool) = .empty,
+    node_label_kinds: std.ArrayList(NodeLabelKinds) = .empty,
+    edge_label_kinds: std.ArrayList(EdgeLabelKinds) = .empty,
+    graph_label_is_html: bool = false,
+    subgraph_label_is_html: std.ArrayList(bool) = .empty,
+    default_node_label_is_html: bool = false,
+    default_node_xlabel_is_html: bool = false,
+    default_edge_label_is_html: bool = false,
+    default_edge_xlabel_is_html: bool = false,
+    default_edge_headlabel_is_html: bool = false,
+    default_edge_taillabel_is_html: bool = false,
     edge_key_index_keys: std.ArrayList([]const u8) = .empty,
     subgraph_text_ids: std.ArrayList([]const u8) = .empty,
     lex_error: ?anyerror = null,
@@ -2587,11 +2634,16 @@ const Parser = struct {
         freeStringList(self.allocator, &self.subgraph_text_ids);
         freeStringList(self.allocator, &self.edge_key_index_keys);
         freeStringList(self.allocator, &self.node_text_ids);
+        self.node_text_id_is_html.deinit(self.allocator);
+        self.node_label_kinds.deinit(self.allocator);
+        self.edge_label_kinds.deinit(self.allocator);
+        self.subgraph_label_is_html.deinit(self.allocator);
         self.node_index.deinit();
         self.edge_key_index.deinit();
         self.collectors.deinit(self.allocator);
         self.rank_scopes.deinit(self.allocator);
         self.subgraph_scopes.deinit(self.allocator);
+        self.subgraph_label_kind_scopes.deinit(self.allocator);
         self.subgraph_stack.deinit(self.allocator);
     }
 
@@ -2625,6 +2677,7 @@ const Parser = struct {
             if (self.node_index.get(root_name)) |root_id| graph.radial_root = root_id;
         }
         try normalizeParsedGraphCharset(&graph);
+        try self.decodeParsedPlainLabels(&graph);
         return graph;
     }
 
@@ -2632,11 +2685,23 @@ const Parser = struct {
         clearStringList(self.allocator, &self.subgraph_text_ids);
         clearStringList(self.allocator, &self.edge_key_index_keys);
         clearStringList(self.allocator, &self.node_text_ids);
+        self.node_text_id_is_html.clearRetainingCapacity();
+        self.node_label_kinds.clearRetainingCapacity();
+        self.edge_label_kinds.clearRetainingCapacity();
+        self.subgraph_label_is_html.clearRetainingCapacity();
+        self.graph_label_is_html = false;
+        self.default_node_label_is_html = false;
+        self.default_node_xlabel_is_html = false;
+        self.default_edge_label_is_html = false;
+        self.default_edge_xlabel_is_html = false;
+        self.default_edge_headlabel_is_html = false;
+        self.default_edge_taillabel_is_html = false;
         self.node_index.clearRetainingCapacity();
         self.edge_key_index.clearRetainingCapacity();
         self.collectors.clearRetainingCapacity();
         self.rank_scopes.clearRetainingCapacity();
         self.subgraph_scopes.clearRetainingCapacity();
+        self.subgraph_label_kind_scopes.clearRetainingCapacity();
         self.subgraph_stack.clearRetainingCapacity();
     }
 
@@ -2696,30 +2761,30 @@ const Parser = struct {
 
     fn parseStmt(self: *Parser, graph: *Graph) anyerror!void {
         if (self.matchKeyword("graph")) {
-            var attrs = AttrList.empty;
-            defer freeTempAttrs(self.allocator, &attrs);
+            var attrs = ParsedAttrList.empty;
+            defer freeParsedAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
             for (attrs.items) |attr| {
                 if (try self.recordRankAttr(attr.name, attr.value)) continue;
-                if (try self.recordSubgraphAttr(graph, attr.name, attr.value)) continue;
-                try self.setParsedGraphAttr(graph, attr.name, attr.value);
+                if (try self.recordSubgraphAttr(graph, attr)) continue;
+                try self.setParsedGraphAttr(graph, attr);
             }
             return;
         }
         if (self.matchKeyword("node")) {
-            var attrs = AttrList.empty;
-            defer freeTempAttrs(self.allocator, &attrs);
+            var attrs = ParsedAttrList.empty;
+            defer freeParsedAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
-            for (attrs.items) |attr| try graph.setDefaultNodeAttrRaw(attr.name, attr.value);
+            for (attrs.items) |attr| try self.setParsedDefaultNodeAttr(graph, attr);
             return;
         }
         if (self.matchKeyword("edge")) {
-            var attrs = AttrList.empty;
-            defer freeTempAttrs(self.allocator, &attrs);
+            var attrs = ParsedAttrList.empty;
+            defer freeParsedAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
             for (attrs.items) |attr| {
                 if (std.ascii.eqlIgnoreCase(attr.name, "key")) continue;
-                try graph.setDefaultEdgeAttrRaw(attr.name, attr.value);
+                try self.setParsedDefaultEdgeAttr(graph, attr);
             }
             return;
         }
@@ -2729,31 +2794,32 @@ const Parser = struct {
             if (self.current.tag == .arrow or self.current.tag == .dashdash) {
                 try self.parseEdgeTail(graph, &first);
             } else {
-                var attrs = AttrList.empty;
-                defer freeTempAttrs(self.allocator, &attrs);
+                var attrs = ParsedAttrList.empty;
+                defer freeParsedAttrs(self.allocator, &attrs);
                 try self.parseAttrLists(&attrs);
                 for (first.items) |node_id| {
-                    for (attrs.items) |attr| try self.setParsedNodeAttr(graph, node_id, attr.name, attr.value);
+                    for (attrs.items) |attr| try self.setParsedNodeAttr(graph, node_id, attr);
                 }
             }
             return;
         }
 
-        const first_name = try self.parseIdText();
-        defer self.allocator.free(first_name);
+        const first_name = try self.parseIdTextWithKind();
+        defer self.allocator.free(first_name.value);
         const first_port = try self.parseOptionalPort();
         defer if (first_port.record_port) |port| self.allocator.free(port);
 
         if (self.match(.equal)) {
-            const value = try self.parseIdText();
-            defer self.allocator.free(value);
-            if (try self.recordRankAttr(first_name, value)) return;
-            if (try self.recordSubgraphAttr(graph, first_name, value)) return;
-            try self.setParsedGraphAttr(graph, first_name, value);
+            const value = try self.parseIdTextWithKind();
+            defer self.allocator.free(value.value);
+            if (try self.recordRankAttr(first_name.value, value.value)) return;
+            const attr = ParsedAttr{ .name = first_name.value, .value = value.value, .is_html = value.is_html };
+            if (try self.recordSubgraphAttr(graph, attr)) return;
+            try self.setParsedGraphAttr(graph, attr);
             return;
         }
 
-        const first_id = try self.nodeByTextId(graph, first_name);
+        const first_id = try self.nodeByParsedTextId(graph, first_name);
         try self.recordNode(first_id);
         var first_refs = NodeRefSet.empty;
         defer freeNodeRefSet(self.allocator, &first_refs);
@@ -2771,8 +2837,8 @@ const Parser = struct {
         if (self.current.tag == .arrow or self.current.tag == .dashdash) {
             try self.parseEdgeTailRefs(graph, &first_refs);
         } else {
-            var attrs = AttrList.empty;
-            defer freeTempAttrs(self.allocator, &attrs);
+            var attrs = ParsedAttrList.empty;
+            defer freeParsedAttrs(self.allocator, &attrs);
             try self.parseAttrLists(&attrs);
             for (first_refs.items, 0..) |node_ref, index| {
                 var duplicate = false;
@@ -2783,7 +2849,7 @@ const Parser = struct {
                     }
                 }
                 if (duplicate) continue;
-                for (attrs.items) |attr| try self.setParsedNodeAttr(graph, node_ref.id, attr.name, attr.value);
+                for (attrs.items) |attr| try self.setParsedNodeAttr(graph, node_ref.id, attr);
             }
         }
     }
@@ -2814,10 +2880,10 @@ const Parser = struct {
             try operands.append(self.allocator, try self.parseOperandRefs(graph));
         }
 
-        var attrs = AttrList.empty;
-        defer freeTempAttrs(self.allocator, &attrs);
+        var attrs = ParsedAttrList.empty;
+        defer freeParsedAttrs(self.allocator, &attrs);
         try self.parseAttrLists(&attrs);
-        const edge_key = attrValue(attrs.items, "key");
+        const edge_key = parsedAttrValue(attrs.items, "key");
 
         var i: usize = 0;
         while (i + 1 < operands.items.len) : (i += 1) {
@@ -2827,7 +2893,7 @@ const Parser = struct {
                     if (parsed_edge.created) try self.expandParsedEdgeDefaultLabelAttrs(graph, parsed_edge.id);
                     for (attrs.items) |attr| {
                         if (std.ascii.eqlIgnoreCase(attr.name, "key")) continue;
-                        try self.setParsedEdgeAttr(graph, parsed_edge.id, attr.name, attr.value);
+                        try self.setParsedEdgeAttr(graph, parsed_edge.id, attr);
                     }
                 }
             }
@@ -2849,6 +2915,7 @@ const Parser = struct {
         if (!graph.strict) {
             if (edge_key) |key| {
                 const lookup_key = try parsedEdgeKeyText(self.allocator, graph.directed, from.id, to.id, key);
+                errdefer self.allocator.free(lookup_key);
                 if (self.edge_key_index.get(lookup_key)) |edge_id| {
                     self.allocator.free(lookup_key);
                     try graph.applyEdgeOptions(edge_id, options);
@@ -2858,13 +2925,17 @@ const Parser = struct {
                 try self.edge_key_index.put(lookup_key, edge_id);
                 errdefer _ = self.edge_key_index.remove(lookup_key);
                 try self.edge_key_index_keys.append(self.allocator, lookup_key);
+                errdefer _ = self.edge_key_index_keys.pop();
+                try self.recordCreatedEdgeLabelKinds(edge_id);
                 return .{ .id = edge_id, .created = true };
             }
         }
 
         const previous_count = graph.edges.items.len;
         const edge_id = try graph.addEdge(from.id, to.id, options);
-        return .{ .id = edge_id, .created = graph.edges.items.len > previous_count };
+        const created = graph.edges.items.len > previous_count;
+        if (created) try self.recordCreatedEdgeLabelKinds(edge_id);
+        return .{ .id = edge_id, .created = created };
     }
 
     fn parseOperandRefs(self: *Parser, graph: *Graph) anyerror!NodeRefSet {
@@ -2901,8 +2972,8 @@ const Parser = struct {
         errdefer nodes.deinit(self.allocator);
         while (true) {
             const name = try self.parseNodeIdText();
-            defer self.allocator.free(name);
-            const id = try self.nodeByTextId(graph, name);
+            defer self.allocator.free(name.value);
+            const id = try self.nodeByParsedTextId(graph, name);
             try self.recordNode(id);
             if (!containsNode(nodes.items, id)) try nodes.append(self.allocator, id);
             if (!self.match(.comma)) break;
@@ -2911,9 +2982,9 @@ const Parser = struct {
     }
 
     fn parseNodeRef(self: *Parser, graph: *Graph) !NodeRef {
-        const name = try self.parseIdText();
-        defer self.allocator.free(name);
-        const id = try self.nodeByTextId(graph, name);
+        const name = try self.parseIdTextWithKind();
+        defer self.allocator.free(name.value);
+        const id = try self.nodeByParsedTextId(graph, name);
         const parsed_port = try self.parseOptionalPort();
         return .{ .id = id, .port = parsed_port.compass, .record_port = parsed_port.record_port };
     }
@@ -2954,9 +3025,11 @@ const Parser = struct {
 
         var defaults = try DefaultScope.snapshot(self.allocator, graph);
         defer defaults.deinit(self.allocator);
+        const default_label_kinds = self.defaultLabelKinds();
 
         var subgraph_attrs = AttrList.empty;
         defer freeAttrList(self.allocator, &subgraph_attrs);
+        var subgraph_label_kind: ?bool = null;
         const is_subgraph = subgraph_id != null;
         const parent_subgraph = if (is_subgraph and self.subgraph_stack.items.len > 0) self.subgraph_stack.items[self.subgraph_stack.items.len - 1] else null;
         const rank_constraint_scope = subgraph_id orelse if (self.subgraph_stack.items.len > 0)
@@ -2973,6 +3046,8 @@ const Parser = struct {
         errdefer self.rank_scopes.items.len -= 1;
         try self.subgraph_scopes.append(self.allocator, &subgraph_attrs);
         errdefer self.subgraph_scopes.items.len -= 1;
+        try self.subgraph_label_kind_scopes.append(self.allocator, &subgraph_label_kind);
+        errdefer self.subgraph_label_kind_scopes.items.len -= 1;
         var stack_pushed = false;
         if (is_subgraph) {
             try self.subgraph_stack.append(self.allocator, subgraph_id.?);
@@ -2985,11 +3060,16 @@ const Parser = struct {
         self.collectors.items.len -= 1;
         self.rank_scopes.items.len -= 1;
         self.subgraph_scopes.items.len -= 1;
+        self.subgraph_label_kind_scopes.items.len -= 1;
         if (stack_pushed) self.subgraph_stack.items.len -= 1;
         try self.expect(.rbrace);
         if (is_subgraph) {
             graph.subgraphs.items[subgraph_id.?].parent = parent_subgraph;
             try graph.mergeSubgraphContentRaw(subgraph_id.?, nodes.items, subgraph_attrs.items);
+            if (subgraph_label_kind) |is_html| {
+                try self.ensureSubgraphLabelKind(subgraph_id.?);
+                self.subgraph_label_is_html.items[subgraph_id.?] = is_html;
+            }
             const parsed_subgraph = &graph.subgraphs.items[subgraph_id.?];
             parsed_subgraph.is_cluster =
                 dotSubgraphNameIsCluster(self.subgraphTextId(graph, subgraph_id.?)) or
@@ -3000,6 +3080,7 @@ const Parser = struct {
         }
         if (rank_kind) |kind| try graph.addRankConstraintInScope(kind, nodes.items, rank_constraint_scope);
         defaults.restore(self.allocator, graph);
+        self.restoreDefaultLabelKinds(default_label_kinds);
         return nodes;
     }
 
@@ -3021,31 +3102,40 @@ const Parser = struct {
         return true;
     }
 
-    fn recordSubgraphAttr(self: *Parser, graph: *Graph, name: []const u8, value: []const u8) !bool {
+    fn recordSubgraphAttr(self: *Parser, graph: *Graph, attr: ParsedAttr) !bool {
         if (self.subgraph_scopes.items.len == 0) return false;
         const attrs = self.subgraph_scopes.items[self.subgraph_scopes.items.len - 1] orelse return false;
-        if (std.ascii.eqlIgnoreCase(name, "label")) {
+        if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
             const subgraph_name = self.currentSubgraphTextId(graph);
-            const expanded = try expandSubgraphLabel(self.allocator, subgraph_name, value);
+            const expanded = try expandSubgraphLabel(self.allocator, subgraph_name, attr.value);
             defer self.allocator.free(expanded);
-            try setAttrInList(self.allocator, attrs, name, expanded);
+            try setAttrInList(self.allocator, attrs, attr.name, expanded);
+            std.debug.assert(self.subgraph_label_kind_scopes.items.len > 0);
+            self.subgraph_label_kind_scopes.items[self.subgraph_label_kind_scopes.items.len - 1].* = attr.is_html;
             return true;
         }
-        try setAttrInList(self.allocator, attrs, name, value);
+        try setAttrInList(self.allocator, attrs, attr.name, attr.value);
         return true;
     }
 
-    fn nodeByTextId(self: *Parser, graph: *Graph, text_id: []const u8) !NodeId {
-        if (self.node_index.get(text_id)) |id| return id;
-        const id = try graph.addNode(text_id, .{});
-        if (builtin.is_test) try graph.setNodeAttrRaw(id, "vex_text_id", text_id);
-        const owned_text_id = try self.allocator.dupe(u8, text_id);
+    fn nodeByParsedTextId(self: *Parser, graph: *Graph, parsed: ParsedIdText) !NodeId {
+        if (self.node_index.get(parsed.value)) |id| return id;
+        const id = try graph.addNode(parsed.value, .{});
+        if (builtin.is_test) try graph.setNodeAttrRaw(id, "vex_text_id", parsed.value);
+        const owned_text_id = try self.allocator.dupe(u8, parsed.value);
         errdefer self.allocator.free(owned_text_id);
         try self.node_index.put(owned_text_id, id);
         errdefer _ = self.node_index.remove(owned_text_id);
         std.debug.assert(id == self.node_text_ids.items.len);
         try self.node_text_ids.append(self.allocator, owned_text_id);
         errdefer _ = self.node_text_ids.pop();
+        try self.node_text_id_is_html.append(self.allocator, parsed.is_html);
+        errdefer _ = self.node_text_id_is_html.pop();
+        try self.node_label_kinds.append(self.allocator, .{
+            .label_is_html = self.default_node_label_is_html,
+            .xlabel_is_html = self.default_node_xlabel_is_html,
+        });
+        errdefer _ = self.node_label_kinds.pop();
         try self.expandParsedNodeDefaultLabelAttrs(graph, id);
         return id;
     }
@@ -3063,6 +3153,8 @@ const Parser = struct {
         const owned_text_id = try self.allocator.dupe(u8, text_id);
         errdefer self.allocator.free(owned_text_id);
         try self.subgraph_text_ids.append(self.allocator, owned_text_id);
+        errdefer _ = self.subgraph_text_ids.pop();
+        try self.subgraph_label_is_html.append(self.allocator, false);
         return id;
     }
 
@@ -3099,6 +3191,42 @@ const Parser = struct {
         return graph.nodes.items[id].label;
     }
 
+    fn recordCreatedEdgeLabelKinds(self: *Parser, id: EdgeId) !void {
+        std.debug.assert(id == self.edge_label_kinds.items.len);
+        try self.edge_label_kinds.append(self.allocator, .{
+            .label_is_html = self.default_edge_label_is_html,
+            .xlabel_is_html = self.default_edge_xlabel_is_html,
+            .headlabel_is_html = self.default_edge_headlabel_is_html,
+            .taillabel_is_html = self.default_edge_taillabel_is_html,
+        });
+    }
+
+    fn ensureSubgraphLabelKind(self: *Parser, id: SubgraphId) !void {
+        while (self.subgraph_label_is_html.items.len <= id) {
+            try self.subgraph_label_is_html.append(self.allocator, false);
+        }
+    }
+
+    fn defaultLabelKinds(self: *const Parser) DefaultLabelKinds {
+        return .{
+            .node_label_is_html = self.default_node_label_is_html,
+            .node_xlabel_is_html = self.default_node_xlabel_is_html,
+            .edge_label_is_html = self.default_edge_label_is_html,
+            .edge_xlabel_is_html = self.default_edge_xlabel_is_html,
+            .edge_headlabel_is_html = self.default_edge_headlabel_is_html,
+            .edge_taillabel_is_html = self.default_edge_taillabel_is_html,
+        };
+    }
+
+    fn restoreDefaultLabelKinds(self: *Parser, kinds: DefaultLabelKinds) void {
+        self.default_node_label_is_html = kinds.node_label_is_html;
+        self.default_node_xlabel_is_html = kinds.node_xlabel_is_html;
+        self.default_edge_label_is_html = kinds.edge_label_is_html;
+        self.default_edge_xlabel_is_html = kinds.edge_xlabel_is_html;
+        self.default_edge_headlabel_is_html = kinds.edge_headlabel_is_html;
+        self.default_edge_taillabel_is_html = kinds.edge_taillabel_is_html;
+    }
+
     fn subgraphTextId(self: *Parser, graph: *const Graph, id: SubgraphId) []const u8 {
         if (id < self.subgraph_text_ids.items.len) return self.subgraph_text_ids.items[id];
         return graph.subgraphs.items[id].label;
@@ -3111,14 +3239,37 @@ const Parser = struct {
         return self.subgraphTextId(graph, id);
     }
 
-    fn setParsedGraphAttr(self: *Parser, graph: *Graph, name: []const u8, value: []const u8) !void {
-        if (std.ascii.eqlIgnoreCase(name, "label")) {
-            const expanded = try expandLabelEscapes(self.allocator, value, .{ .graph_name = graph.name, .label_name = value });
+    fn setParsedGraphAttr(self: *Parser, graph: *Graph, attr: ParsedAttr) !void {
+        if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
+            const expanded = try expandLabelEscapes(self.allocator, attr.value, .{ .graph_name = graph.name, .label_name = attr.value });
             defer self.allocator.free(expanded);
-            try graph.setGraphAttrRaw(name, expanded);
+            try graph.setGraphAttrRaw(attr.name, expanded);
+            self.graph_label_is_html = attr.is_html;
             return;
         }
-        try graph.setGraphAttrRaw(name, value);
+        try graph.setGraphAttrRaw(attr.name, attr.value);
+    }
+
+    fn setParsedDefaultNodeAttr(self: *Parser, graph: *Graph, attr: ParsedAttr) !void {
+        try graph.setDefaultNodeAttrRaw(attr.name, attr.value);
+        if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
+            self.default_node_label_is_html = attr.is_html;
+        } else if (std.ascii.eqlIgnoreCase(attr.name, "xlabel")) {
+            self.default_node_xlabel_is_html = attr.is_html;
+        }
+    }
+
+    fn setParsedDefaultEdgeAttr(self: *Parser, graph: *Graph, attr: ParsedAttr) !void {
+        try graph.setDefaultEdgeAttrRaw(attr.name, attr.value);
+        if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
+            self.default_edge_label_is_html = attr.is_html;
+        } else if (std.ascii.eqlIgnoreCase(attr.name, "xlabel")) {
+            self.default_edge_xlabel_is_html = attr.is_html;
+        } else if (std.ascii.eqlIgnoreCase(attr.name, "headlabel")) {
+            self.default_edge_headlabel_is_html = attr.is_html;
+        } else if (std.ascii.eqlIgnoreCase(attr.name, "taillabel")) {
+            self.default_edge_taillabel_is_html = attr.is_html;
+        }
     }
 
     fn expandParsedNodeDefaultLabelAttrs(self: *Parser, graph: *Graph, id: NodeId) !void {
@@ -3139,49 +3290,72 @@ const Parser = struct {
         }
     }
 
-    fn setParsedNodeAttr(self: *Parser, graph: *Graph, id: NodeId, name: []const u8, value: []const u8) !void {
-        if (std.ascii.eqlIgnoreCase(name, "label") or std.ascii.eqlIgnoreCase(name, "xlabel")) {
-            const expanded = try expandNodeLabel(self.allocator, graph, self.nodeTextId(graph, id), value);
+    fn setParsedNodeAttr(self: *Parser, graph: *Graph, id: NodeId, attr: ParsedAttr) !void {
+        if (std.ascii.eqlIgnoreCase(attr.name, "label") or std.ascii.eqlIgnoreCase(attr.name, "xlabel")) {
+            const expanded = try expandNodeLabel(self.allocator, graph, self.nodeTextId(graph, id), attr.value);
             defer self.allocator.free(expanded);
-            try graph.setNodeAttrRaw(id, name, expanded);
+            try graph.setNodeAttrRaw(id, attr.name, expanded);
+            if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
+                self.node_label_kinds.items[id].label_is_html = attr.is_html;
+            } else {
+                self.node_label_kinds.items[id].xlabel_is_html = attr.is_html;
+            }
             return;
         }
-        try graph.setNodeAttrRaw(id, name, value);
+        try graph.setNodeAttrRaw(id, attr.name, attr.value);
     }
 
     fn expandParsedEdgeDefaultLabelAttrs(self: *Parser, graph: *Graph, id: EdgeId) !void {
         if (id >= graph.edges.items.len) return error.InvalidEdgeId;
-        if (attrValue(graph.edges.items[id].attrs.items, "label")) |value| try self.setParsedEdgeAttr(graph, id, "label", value);
-        if (attrValue(graph.edges.items[id].attrs.items, "xlabel")) |value| try self.setParsedEdgeAttr(graph, id, "xlabel", value);
-        if (attrValue(graph.edges.items[id].attrs.items, "headlabel")) |value| try self.setParsedEdgeAttr(graph, id, "headlabel", value);
-        if (attrValue(graph.edges.items[id].attrs.items, "taillabel")) |value| try self.setParsedEdgeAttr(graph, id, "taillabel", value);
+        if (attrValue(graph.edges.items[id].attrs.items, "label")) |value| {
+            try self.setParsedEdgeAttr(graph, id, .{ .name = "label", .value = value, .is_html = self.edge_label_kinds.items[id].label_is_html });
+        }
+        if (attrValue(graph.edges.items[id].attrs.items, "xlabel")) |value| {
+            try self.setParsedEdgeAttr(graph, id, .{ .name = "xlabel", .value = value, .is_html = self.edge_label_kinds.items[id].xlabel_is_html });
+        }
+        if (attrValue(graph.edges.items[id].attrs.items, "headlabel")) |value| {
+            try self.setParsedEdgeAttr(graph, id, .{ .name = "headlabel", .value = value, .is_html = self.edge_label_kinds.items[id].headlabel_is_html });
+        }
+        if (attrValue(graph.edges.items[id].attrs.items, "taillabel")) |value| {
+            try self.setParsedEdgeAttr(graph, id, .{ .name = "taillabel", .value = value, .is_html = self.edge_label_kinds.items[id].taillabel_is_html });
+        }
     }
 
-    fn setParsedEdgeAttr(self: *Parser, graph: *Graph, id: EdgeId, name: []const u8, value: []const u8) !void {
-        if (edgeLabelLikeAttr(name)) {
+    fn setParsedEdgeAttr(self: *Parser, graph: *Graph, id: EdgeId, attr: ParsedAttr) !void {
+        if (edgeLabelLikeAttr(attr.name)) {
             const edge_item = graph.edges.items[id];
             const tail = self.nodeTextId(graph, edge_item.from);
             const head = self.nodeTextId(graph, edge_item.to);
             var edge_name_buf: [512]u8 = undefined;
             const edge_name = edgeTextWithPorts(edge_name_buf[0..], graph.directed, tail, head, edge_item.tail_record_port, edge_item.tail_port, edge_item.head_record_port, edge_item.head_port) catch
                 std.fmt.bufPrint(edge_name_buf[0..], "{s}{s}{s}", .{ tail, if (graph.directed) "->" else "--", head }) catch tail;
-            const expanded = try expandLabelEscapes(self.allocator, value, .{
+            const expanded = try expandLabelEscapes(self.allocator, attr.value, .{
                 .graph_name = graph.name,
                 .tail_name = tail,
                 .head_name = head,
                 .edge_name = edge_name,
-                .label_name = value,
+                .label_name = attr.value,
             });
             defer self.allocator.free(expanded);
-            try graph.setEdgeAttrRaw(id, name, expanded);
+            try graph.setEdgeAttrRaw(id, attr.name, expanded);
+            const kinds = &self.edge_label_kinds.items[id];
+            if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
+                kinds.label_is_html = attr.is_html;
+            } else if (std.ascii.eqlIgnoreCase(attr.name, "xlabel")) {
+                kinds.xlabel_is_html = attr.is_html;
+            } else if (std.ascii.eqlIgnoreCase(attr.name, "headlabel")) {
+                kinds.headlabel_is_html = attr.is_html;
+            } else {
+                kinds.taillabel_is_html = attr.is_html;
+            }
             return;
         }
-        if (std.ascii.eqlIgnoreCase(name, "ltail")) {
-            if (self.resolveSubgraphTextId(graph, value)) |subgraph_id| graph.edges.items[id].ltail = subgraph_id;
-        } else if (std.ascii.eqlIgnoreCase(name, "lhead")) {
-            if (self.resolveSubgraphTextId(graph, value)) |subgraph_id| graph.edges.items[id].lhead = subgraph_id;
+        if (std.ascii.eqlIgnoreCase(attr.name, "ltail")) {
+            if (self.resolveSubgraphTextId(graph, attr.value)) |subgraph_id| graph.edges.items[id].ltail = subgraph_id;
+        } else if (std.ascii.eqlIgnoreCase(attr.name, "lhead")) {
+            if (self.resolveSubgraphTextId(graph, attr.value)) |subgraph_id| graph.edges.items[id].lhead = subgraph_id;
         }
-        try graph.setEdgeAttrRaw(id, name, value);
+        try graph.setEdgeAttrRaw(id, attr.name, attr.value);
     }
 
     fn edgeLabelLikeAttr(name: []const u8) bool {
@@ -3191,7 +3365,7 @@ const Parser = struct {
             std.ascii.eqlIgnoreCase(name, "taillabel");
     }
 
-    fn parseAttrLists(self: *Parser, attrs: *AttrList) !void {
+    fn parseAttrLists(self: *Parser, attrs: *ParsedAttrList) !void {
         while (self.match(.lbracket)) {
             while (self.current.tag != .rbracket and self.current.tag != .eof) {
                 if (self.current.tag == .comma or self.current.tag == .semicolon) {
@@ -3201,19 +3375,19 @@ const Parser = struct {
                 const name = try self.parseIdText();
                 errdefer self.allocator.free(name);
                 const value = if (self.match(.equal))
-                    try self.parseIdText()
+                    try self.parseIdTextWithKind()
                 else
-                    try self.allocator.dupe(u8, "true");
-                errdefer self.allocator.free(value);
-                try attrs.append(self.allocator, .{ .name = name, .value = value });
+                    ParsedIdText{ .value = try self.allocator.dupe(u8, "true"), .is_html = false };
+                errdefer self.allocator.free(value.value);
+                try attrs.append(self.allocator, .{ .name = name, .value = value.value, .is_html = value.is_html });
                 _ = self.match(.comma) or self.match(.semicolon);
             }
             try self.expect(.rbracket);
         }
     }
 
-    fn parseNodeIdText(self: *Parser) ![]const u8 {
-        const name = try self.parseIdText();
+    fn parseNodeIdText(self: *Parser) !ParsedIdText {
+        const name = try self.parseIdTextWithKind();
         if (self.match(.colon)) {
             const port = try self.parseIdText();
             self.allocator.free(port);
@@ -3226,7 +3400,12 @@ const Parser = struct {
     }
 
     fn parseIdText(self: *Parser) ![]const u8 {
+        return (try self.parseIdTextWithKind()).value;
+    }
+
+    fn parseIdTextWithKind(self: *Parser) !ParsedIdText {
         if (self.current.tag != .id and self.current.tag != .string and self.current.tag != .angle_string) return error.ExpectedId;
+        const is_html = self.current.tag == .angle_string;
         var value = if (self.current.tag == .string)
             try dupeDotString(self.allocator, self.current.lexeme)
         else
@@ -3243,7 +3422,56 @@ const Parser = struct {
             value = joined;
             try self.advance();
         }
-        return value;
+        return .{ .value = value, .is_html = is_html };
+    }
+
+    fn decodeParsedPlainLabels(self: *Parser, graph: *Graph) !void {
+        if (!self.graph_label_is_html) _ = try decodeAttrInList(graph.allocator, graph.attrs.items, "label");
+        if (!self.default_node_label_is_html) _ = try decodeAttrInList(graph.allocator, graph.node_default_attrs.items, "label");
+        if (!self.default_node_xlabel_is_html) _ = try decodeAttrInList(graph.allocator, graph.node_default_attrs.items, "xlabel");
+        if (!self.default_edge_label_is_html) _ = try decodeAttrInList(graph.allocator, graph.edge_default_attrs.items, "label");
+        if (!self.default_edge_xlabel_is_html) _ = try decodeAttrInList(graph.allocator, graph.edge_default_attrs.items, "xlabel");
+        if (!self.default_edge_headlabel_is_html) _ = try decodeAttrInList(graph.allocator, graph.edge_default_attrs.items, "headlabel");
+        if (!self.default_edge_taillabel_is_html) _ = try decodeAttrInList(graph.allocator, graph.edge_default_attrs.items, "taillabel");
+
+        for (graph.nodes.items, 0..) |*node, id| {
+            const kinds = self.node_label_kinds.items[id];
+            if (attrValue(node.attrs.items, "label") != null) {
+                if (!kinds.label_is_html) {
+                    if (try decodeAttrInList(graph.allocator, node.attrs.items, "label")) {
+                        try replaceOwnedText(graph.allocator, &node.label, attrValue(node.attrs.items, "label").?);
+                    }
+                }
+            } else if (!self.node_text_id_is_html.items[id]) {
+                _ = try decodeOwnedText(graph.allocator, &node.label);
+            }
+            if (!kinds.xlabel_is_html) _ = try decodeAttrInList(graph.allocator, node.attrs.items, "xlabel");
+        }
+
+        for (graph.edges.items, 0..) |*edge, id| {
+            const kinds = self.edge_label_kinds.items[id];
+            if (!kinds.label_is_html) {
+                if (try decodeAttrInList(graph.allocator, edge.attrs.items, "label")) {
+                    if (edge.label) |old_label| {
+                        const label = attrValue(edge.attrs.items, "label").?;
+                        var owned = old_label;
+                        try replaceOwnedText(graph.allocator, &owned, label);
+                        edge.label = owned;
+                    }
+                }
+            }
+            if (!kinds.xlabel_is_html) _ = try decodeAttrInList(graph.allocator, edge.attrs.items, "xlabel");
+            if (!kinds.headlabel_is_html) _ = try decodeAttrInList(graph.allocator, edge.attrs.items, "headlabel");
+            if (!kinds.taillabel_is_html) _ = try decodeAttrInList(graph.allocator, edge.attrs.items, "taillabel");
+        }
+
+        for (graph.subgraphs.items, 0..) |*subgraph, id| {
+            if (id < self.subgraph_label_is_html.items.len and self.subgraph_label_is_html.items[id]) continue;
+            if (attrValue(subgraph.attrs.items, "label") == null) continue;
+            if (try decodeAttrInList(graph.allocator, subgraph.attrs.items, "label")) {
+                try replaceOwnedText(graph.allocator, &subgraph.label, attrValue(subgraph.attrs.items, "label").?);
+            }
+        }
     }
 
     fn matchKeyword(self: *Parser, keyword: []const u8) bool {
@@ -3281,12 +3509,41 @@ const Parser = struct {
     }
 };
 
-fn freeTempAttrs(allocator: std.mem.Allocator, attrs: *AttrList) void {
+fn freeParsedAttrs(allocator: std.mem.Allocator, attrs: *ParsedAttrList) void {
     for (attrs.items) |attr| {
         allocator.free(attr.name);
         allocator.free(attr.value);
     }
     attrs.deinit(allocator);
+}
+
+fn parsedAttrValue(attrs: []const ParsedAttr, name: []const u8) ?[]const u8 {
+    for (attrs) |attr| {
+        if (std.ascii.eqlIgnoreCase(attr.name, name)) return attr.value;
+    }
+    return null;
+}
+
+fn decodeAttrInList(allocator: std.mem.Allocator, attrs: []Attr, name: []const u8) !bool {
+    for (attrs) |*attr| {
+        if (!std.ascii.eqlIgnoreCase(attr.name, name)) continue;
+        return decodeOwnedText(allocator, &attr.value);
+    }
+    return false;
+}
+
+fn decodeOwnedText(allocator: std.mem.Allocator, value: *[]const u8) !bool {
+    if (std.mem.indexOfScalar(u8, value.*, '&') == null) return false;
+    const decoded = try entities.decodeAlloc(allocator, value.*);
+    allocator.free(value.*);
+    value.* = decoded;
+    return true;
+}
+
+fn replaceOwnedText(allocator: std.mem.Allocator, destination: *[]const u8, source: []const u8) !void {
+    const owned = try allocator.dupe(u8, source);
+    allocator.free(destination.*);
+    destination.* = owned;
 }
 
 fn normalizeParsedGraphCharset(graph: *Graph) !void {
@@ -30711,6 +30968,112 @@ test "DOT parser supports subgraphs, ports, escaped strings, and angle strings" 
     try std.testing.expectEqualStrings("hello\nworld", graph.nodes.items[a].label);
     try std.testing.expect(graph.attrs.items.len >= 2);
     try std.testing.expectEqualStrings(" <B>Fancy</B> Graph ", graph.attrs.items[1].value);
+}
+
+test "DOT plain labels decode Graphviz HTML 4 character references" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph Entities {
+        \\  graph [label="graph=&alpha; numeric=&#946; unknown=&bogus; apos=&apos;"];
+        \\  node [label="node=\N &gamma;", xlabel="x=&delta;"];
+        \\  edge [label="\T->\H &forall;", xlabel="x=&exist;",
+        \\        headlabel="h=&sum;", taillabel="t=&prod;"];
+        \\  "&alpha;" -> b;
+        \\  subgraph cluster_c { label="cluster=&empty;"; c; }
+        \\  angle [label=<A &alpha; &#945;>, xlabel=<X &beta;>];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings(
+        "graph=α numeric=β unknown=&bogus; apos=&apos;",
+        attrValue(graph.attrs.items, "label").?,
+    );
+
+    // The quoted node ID remains the parser identity while its implicit or
+    // default plain label is decoded after object-escape expansion.
+    const alpha = nodeIdByLabel(&graph, "node=α γ");
+    try std.testing.expectEqualStrings("node=α γ", graph.nodes.items[alpha].label);
+    try std.testing.expectEqualStrings("x=δ", attrValue(graph.nodes.items[alpha].attrs.items, "xlabel").?);
+
+    const edge = graph.edges.items[0];
+    try std.testing.expectEqualStrings("α->b ∀", edge.label.?);
+    try std.testing.expectEqualStrings("x=∃", attrValue(edge.attrs.items, "xlabel").?);
+    try std.testing.expectEqualStrings("h=∑", attrValue(edge.attrs.items, "headlabel").?);
+    try std.testing.expectEqualStrings("t=∏", attrValue(edge.attrs.items, "taillabel").?);
+    try std.testing.expectEqualStrings("cluster=∅", graph.subgraphs.items[0].label);
+
+    // Angle strings are HTML-like DOT values. Vex currently renders them as
+    // plain text, but must not run the plain-label entity pass over them.
+    const angle = nodeIdByLabel(&graph, "A &alpha; &#945;");
+    try std.testing.expectEqualStrings("X &beta;", attrValue(graph.nodes.items[angle].attrs.items, "xlabel").?);
+}
+
+test "DOT implicit quoted node labels decode entities without changing identity" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  "&alpha;" -> plain;
+        \\  <&beta;>;
+        \\}
+    );
+    defer graph.deinit();
+
+    const alpha = nodeIdByLabel(&graph, "α");
+    try std.testing.expectEqualStrings("α", graph.nodes.items[alpha].label);
+    try std.testing.expectEqualStrings("&alpha;", attrValue(graph.nodes.items[alpha].attrs.items, "vex_text_id").?);
+
+    var html_id: ?NodeId = null;
+    for (graph.nodes.items) |node| {
+        if (attrValue(node.attrs.items, "vex_text_id")) |text_id| {
+            if (std.mem.eql(u8, text_id, "&beta;")) html_id = node.id;
+        }
+    }
+    try std.testing.expect(html_id != null);
+    try std.testing.expectEqualStrings("&beta;", graph.nodes.items[html_id.?].label);
+}
+
+test "anonymous subgraph label entities do not change the parent label kind" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_parent {
+        \\    label=<parent &alpha;>;
+        \\    { label="anonymous &beta;"; a; }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("parent &alpha;", graph.subgraphs.items[0].label);
+}
+
+test "DOT entity decoding follows charset normalization" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(
+        allocator,
+        "digraph G { graph [charset=latin1, label=\"caf\xe9 &alpha;\"]; a [label=\"na\xefve &forall;\"]; }",
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqualStrings("café α", attrValue(graph.attrs.items, "label").?);
+    try std.testing.expectEqualStrings("naïve ∀", graph.nodes.items[0].label);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(graph.nodes.items[0].label));
+}
+
+test "typed API label text does not decode HTML entities" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const node = try graph.addNode("&alpha;&#945;", .{});
+    const other = try graph.addNode("other", .{});
+    const edge = try graph.addEdge(node, other, .{ .label = "&forall;" });
+    try graph.setGraphAttr(.{ .label = "&sum;" });
+
+    try std.testing.expectEqualStrings("&alpha;&#945;", graph.nodes.items[node].label);
+    try std.testing.expectEqualStrings("&forall;", graph.edges.items[edge].label.?);
+    try std.testing.expectEqualStrings("&sum;", attrValue(graph.attrs.items, "label").?);
 }
 
 test "DOT parser normalizes Graphviz Latin-1 charsets to UTF-8 model text" {

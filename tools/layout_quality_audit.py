@@ -480,6 +480,13 @@ def main() -> int:
             1.00,
         ),
         (
+            "Symbol",
+            args.graphviz_root / "tests" / "graphs" / "Symbol.gv",
+            0,
+            1.06,
+            1.15,
+        ),
+        (
             "1332",
             args.graphviz_root / "tests" / "1332.dot",
             9,
