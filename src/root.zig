@@ -6617,8 +6617,19 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         8,
         graph.subgraphs.items.len == 0,
     );
+    // Undirected inputs may use a private directed view for ranking, but they
+    // must not inherit a directed branch-shifting policy.
+    const owner_component_shift_applied =
+        graph.directed and refineNestedOwnerComponentCrossings(
+            layout_graph,
+            ranks,
+            centers,
+            axis_sizes,
+            effective_options,
+            4,
+        );
     if (physical_rank_transpose_applied or rigid_rank_offsets_applied or
-        compact_default_gap_ranks)
+        compact_default_gap_ranks or owner_component_shift_applied)
     {
         refreshVirtualPositionsFromRealCenters(
             layout_graph,
@@ -18035,6 +18046,298 @@ fn shiftAncestorGroup(
     for (owner_by_node, 0..) |owner, node_id| {
         if (owner != null and node_id < centers.len and
             subgraphIsAncestorOf(graph, ancestor, owner.?))
+        {
+            centers[node_id] += delta;
+        }
+    }
+}
+
+const OwnerComponent = struct {
+    owner: SubgraphId,
+    root: NodeId,
+    min: f64,
+    max: f64,
+};
+
+fn refineNestedOwnerComponentCrossings(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    passes: usize,
+) bool {
+    if (passes == 0 or !graph.directed or graph.subgraphs.items.len < 2 or
+        graph.subgraphs.items.len > 64 or graph.nodes.items.len > 64 or
+        graph.edges.items.len > 128 or !remincrossEnabled(graph))
+    {
+        return false;
+    }
+    for (graph.nodes.items) |node_item| {
+        if (nodeGroupName(node_item) != null) return false;
+    }
+    var has_nested_cluster = false;
+    for (graph.subgraphs.items) |subgraph| {
+        if (subgraph.is_cluster and subgraph.parent != null) {
+            has_nested_cluster = true;
+            break;
+        }
+    }
+    if (!has_nested_cluster) return false;
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return false;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    if (baseline_crossings == 0) return false;
+    const baseline_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+
+    var owner_by_node: [64]?SubgraphId = undefined;
+    for (owner_by_node[0..graph.nodes.items.len], 0..) |*owner, node_id| {
+        owner.* = deepestSubgraphContainingNode(graph, node_id);
+    }
+    var component_parent: [64]NodeId = undefined;
+    for (component_parent[0..graph.nodes.items.len], 0..) |*parent, node_id| {
+        parent.* = node_id;
+    }
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= graph.nodes.items.len or
+            edge_item.to >= graph.nodes.items.len) continue;
+        const from_owner = owner_by_node[edge_item.from] orelse continue;
+        const to_owner = owner_by_node[edge_item.to] orelse continue;
+        if (from_owner != to_owner) continue;
+        unionOwnerComponent(
+            component_parent[0..graph.nodes.items.len],
+            edge_item.from,
+            edge_item.to,
+        );
+    }
+
+    const max_owner_components: usize = 24;
+    const component_gap: f64 = 24.0;
+    var current_crossings = baseline_crossings;
+    var current_length = baseline_length;
+    var improved = false;
+    for (0..passes) |_| {
+        var changed = false;
+        var components: [64]OwnerComponent = undefined;
+        const component_count = collectOwnerComponents(
+            owner_by_node[0..graph.nodes.items.len],
+            component_parent[0..graph.nodes.items.len],
+            centers,
+            sizes,
+            &components,
+        );
+        // Candidate evaluation is quadratic in both components and edges.
+        // Keep this final exact physical check bounded independently of graph
+        // size, even though the surrounding graph envelope is already small.
+        if (component_count > max_owner_components) return improved;
+        for (components[0..component_count]) |component| {
+            var best_delta: f64 = 0;
+            var best_crossings = current_crossings;
+            var best_length = current_length;
+            const component_center = (component.min + component.max) / 2.0;
+            for (components[0..component_count]) |other| {
+                if (other.root == component.root or
+                    (other.owner != component.owner and
+                        !subgraphIsAncestorOf(
+                            graph,
+                            component.owner,
+                            other.owner,
+                        )))
+                {
+                    continue;
+                }
+                const other_center = (other.min + other.max) / 2.0;
+                const candidates = [_]f64{
+                    other.min - component.max - component_gap,
+                    other.max - component.min + component_gap,
+                    other_center - component_center,
+                };
+                for (candidates) |delta| {
+                    if (@abs(delta) <= 0.0001) continue;
+                    shiftOwnerComponent(
+                        owner_by_node[0..graph.nodes.items.len],
+                        component_parent[0..graph.nodes.items.len],
+                        component.owner,
+                        component.root,
+                        centers,
+                        delta,
+                    );
+                    const legal =
+                        centersHaveNonnegativeBounds(centers, sizes) and
+                        centersExtent(centers, sizes) <=
+                            baseline_extent + 0.0001 and
+                        allRankCentersHaveClearance(ranks, centers, sizes) and
+                        orderingConstraintsSatisfiedByCenters(
+                            graph,
+                            ranks,
+                            centers,
+                        );
+                    if (legal) {
+                        const after_crossings = countPhysicalCenterCrossings(
+                            graph,
+                            ranks,
+                            centers,
+                            physical_depths,
+                        );
+                        const after_length = physicalCenterEdgeLength(
+                            graph,
+                            ranks,
+                            centers,
+                            physical_depths,
+                        );
+                        const after_stress =
+                            coordinateEdgeStress(graph, ranks, centers);
+                        const strictly_better =
+                            after_crossings < best_crossings or
+                            (after_crossings == best_crossings and
+                                after_length + 0.0001 < best_length);
+                        if (after_crossings < current_crossings and
+                            strictly_better and
+                            after_stress <=
+                                baseline_stress * 1.04 + 0.0001 and
+                            after_length <= current_length + 0.0001)
+                        {
+                            best_delta = delta;
+                            best_crossings = after_crossings;
+                            best_length = after_length;
+                        }
+                    }
+                    shiftOwnerComponent(
+                        owner_by_node[0..graph.nodes.items.len],
+                        component_parent[0..graph.nodes.items.len],
+                        component.owner,
+                        component.root,
+                        centers,
+                        -delta,
+                    );
+                }
+            }
+            if (@abs(best_delta) <= 0.0001 or
+                best_crossings >= current_crossings) continue;
+            shiftOwnerComponent(
+                owner_by_node[0..graph.nodes.items.len],
+                component_parent[0..graph.nodes.items.len],
+                component.owner,
+                component.root,
+                centers,
+                best_delta,
+            );
+            current_crossings = best_crossings;
+            current_length = best_length;
+            changed = true;
+            improved = true;
+            // Component bounds were collected before this shift. Restart the
+            // pass so every later alignment candidate sees current geometry.
+            break;
+        }
+        if (!changed or current_crossings == 0) break;
+    }
+    return improved;
+}
+
+fn ownerComponentRoot(
+    parent: []const NodeId,
+    node_id: NodeId,
+) NodeId {
+    var root = node_id;
+    while (root < parent.len and parent[root] != root) {
+        root = parent[root];
+    }
+    return root;
+}
+
+fn unionOwnerComponent(
+    parent: []NodeId,
+    left: NodeId,
+    right: NodeId,
+) void {
+    if (left >= parent.len or right >= parent.len) return;
+    const left_root = ownerComponentRoot(parent, left);
+    const right_root = ownerComponentRoot(parent, right);
+    if (left_root == right_root) return;
+    // The lower NodeId is the stable representative, making component
+    // identity independent of edge iteration direction.
+    const root = @min(left_root, right_root);
+    const child = @max(left_root, right_root);
+    parent[child] = root;
+}
+
+fn collectOwnerComponents(
+    owner_by_node: []const ?SubgraphId,
+    parent: []const NodeId,
+    centers: []const f64,
+    sizes: []const NodeSize,
+    components: *[64]OwnerComponent,
+) usize {
+    var count: usize = 0;
+    for (owner_by_node, 0..) |owner, node_id| {
+        const component_owner = owner orelse continue;
+        if (node_id >= centers.len or node_id >= sizes.len) continue;
+        const root = ownerComponentRoot(parent, node_id);
+        var component_index: ?usize = null;
+        for (components[0..count], 0..) |component, index| {
+            if (component.owner == component_owner and
+                component.root == root)
+            {
+                component_index = index;
+                break;
+            }
+        }
+        const index = component_index orelse blk: {
+            if (count >= components.len) return count;
+            components[count] = .{
+                .owner = component_owner,
+                .root = root,
+                .min = std.math.floatMax(f64),
+                .max = -std.math.floatMax(f64),
+            };
+            count += 1;
+            break :blk count - 1;
+        };
+        components[index].min = @min(
+            components[index].min,
+            centers[node_id] - sizes[node_id].width / 2.0,
+        );
+        components[index].max = @max(
+            components[index].max,
+            centers[node_id] + sizes[node_id].width / 2.0,
+        );
+    }
+    return count;
+}
+
+fn shiftOwnerComponent(
+    owner_by_node: []const ?SubgraphId,
+    parent: []const NodeId,
+    owner: SubgraphId,
+    root: NodeId,
+    centers: []f64,
+    delta: f64,
+) void {
+    for (owner_by_node, 0..) |node_owner, node_id| {
+        if (node_owner != null and node_owner.? == owner and
+            node_id < centers.len and
+            ownerComponentRoot(parent, node_id) == root)
         {
             centers[node_id] += delta;
         }
@@ -41032,6 +41335,112 @@ test "cluster owner group sifting moves members together" {
         deepestSubgraphContainingNode(&graph, a).? == group,
     );
     try std.testing.expect(allRankCentersHaveClearance(&ranks, &centers, &sizes));
+}
+
+test "nested owner components align independently across descendant slots" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const c0 = try graph.addNode("c0", .{});
+    const c1 = try graph.addNode("c1", .{});
+    const c2 = try graph.addNode("c2", .{});
+    const h0 = try graph.addNode("h0", .{});
+    const h1 = try graph.addNode("h1", .{});
+    const h2 = try graph.addNode("h2", .{});
+    const descendant = try graph.addNode("descendant", .{});
+    const success = try graph.addNode("success", .{});
+    const glory = try graph.addNode("glory", .{});
+    _ = try graph.addEdge(c0, c1, .{});
+    _ = try graph.addEdge(c1, c2, .{});
+    _ = try graph.addEdge(h0, h1, .{});
+    _ = try graph.addEdge(h1, h2, .{});
+    _ = try graph.addEdge(c1, success, .{});
+    _ = try graph.addEdge(h1, glory, .{});
+    _ = try graph.addEdge(h2, glory, .{});
+
+    const outer = try graph.addSubgraph(
+        "outer",
+        null,
+        &.{ c0, c1, c2, h0, h1, h2, descendant, success, glory },
+        .{},
+    );
+    const inner = try graph.addSubgraph(
+        "inner",
+        outer,
+        &.{ c0, c1, c2, h0, h1, h2, descendant },
+        .{},
+    );
+    _ = try graph.addSubgraph(
+        "descendant-owner",
+        inner,
+        &.{descendant},
+        .{},
+    );
+
+    const ranks = [_]usize{ 0, 1, 2, 0, 1, 2, 0, 3, 3 };
+    const sizes = [_]NodeSize{.{ .width = 20, .height = 20 }} ** 9;
+    var centers = [_]f64{ 300, 300, 300, 400, 400, 450, 100, 500, 100 };
+    var physical_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        &graph,
+        &ranks,
+        &sizes,
+        .{},
+        &physical_depths,
+    ).?;
+    const before_crossings = countPhysicalCenterCrossings(
+        &graph,
+        &ranks,
+        &centers,
+        physical_depths[0..rank_count],
+    );
+    const before_length = physicalCenterEdgeLength(
+        &graph,
+        &ranks,
+        &centers,
+        physical_depths[0..rank_count],
+    );
+    try std.testing.expect(before_crossings > 0);
+
+    try std.testing.expect(refineNestedOwnerComponentCrossings(
+        &graph,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        4,
+    ));
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &centers,
+            physical_depths[0..rank_count],
+        ),
+    );
+    try std.testing.expect(
+        physicalCenterEdgeLength(
+            &graph,
+            &ranks,
+            &centers,
+            physical_depths[0..rank_count],
+        ) < before_length,
+    );
+    try std.testing.expect(allRankCentersHaveClearance(
+        &ranks,
+        &centers,
+        &sizes,
+    ));
+    try std.testing.expectEqual(centers[c0] - centers[c1], @as(f64, 0));
+    try std.testing.expectEqual(centers[c1] - centers[c2], @as(f64, 0));
+    try std.testing.expectEqual(centers[h0] - centers[h1], @as(f64, 0));
+    try std.testing.expectEqual(centers[h2] - centers[h1], @as(f64, 50));
+    try std.testing.expect(
+        @abs(centers[c0] - 300) > 0.0001 or
+            @abs(centers[h0] - 400) > 0.0001,
+    );
 }
 
 test "cross-cluster visual alignment cannot introduce center crossings" {

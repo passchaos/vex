@@ -351,6 +351,13 @@ def main() -> int:
             1.36,
         ),
         (
+            "2476-nested-owner-components",
+            args.graphviz_root / "tests" / "2476.dot",
+            0,
+            0.83,
+            1.02,
+        ),
+        (
             "2825",
             args.graphviz_root / "tests" / "2825.dot",
             3,
