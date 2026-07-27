@@ -587,11 +587,12 @@ The parser currently supports a practical, mainstream DOT subset:
   (at most 32 nodes/64 edges), when every node belongs to exactly one cluster,
   every cluster has an internal DAG edge, and no rank/newrank override is
   present, Vex now mirrors Graphviz cluster ranking: compute internal local
-  offsets, collapse clusters to base variables with flat cross-cluster
-  constraints, then expand offsets. Real `2521_1.dot` contracts from 9 singleton
-  ranks/1 crossing to 5 local timeline ranks/0 crossings, with normalized
-  edge/area `2.13/3.67` versus Graphviz `2.00/4.13`; the other 479 holdout
-  fixtures are unchanged. Visual-only clusters and internal cycles are rejected.
+  offsets, collapse clusters to base variables, translate each inter-cluster
+  edge through a Graphviz-style slack node with `CL_BACK=10` tail anchoring,
+  then expand offsets. Real `2521_1.dot` contracts from 9 singleton ranks/1
+  crossing to 5 local timeline ranks/0 crossings, with normalized edge/area
+  `2.12/4.09` versus Graphviz `2.00/4.13`; the other 479 holdout fixtures are
+  unchanged. Visual-only clusters and internal cycles are rejected.
 - Rank subgraphs including `same`, `min`, `max`, `source`, and `sink`, with `source` / `sink` kept as exclusive boundary ranks.
 - Port syntax in node ids: `a:out:e`.
 - Attribute statements: `graph [rankdir=LR]`, `graph [layout=neato]`, `node [...]`, `edge [...]`.

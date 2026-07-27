@@ -10712,31 +10712,68 @@ fn compactDisjointLocalClusterDagRanks(
     }
     if (tail != graph.nodes.items.len) return false;
 
-    var bases: [max_clusters]isize = @splat(0);
-    // Graphviz replaces each inter-cluster edge with a virtual connection
-    // between collapsed leaders. The original minlen is already represented
-    // by the endpoint's local offset, so the base constraint is only
-    // nondecreasing: base[to] + local[to] >= base[from] + local[from].
-    // Keeping minlen again here would recreate the over-serialized global DAG.
-    for (0..cluster_count) |pass| {
-        var changed = false;
-        for (graph.edges.items) |edge_item| {
-            if (!edge_item.constraint or edge_item.from >= graph.nodes.items.len or
-                edge_item.to >= graph.nodes.items.len) continue;
-            const from_owner = owner[edge_item.from].?;
-            const to_owner = owner[edge_item.to].?;
-            if (from_owner == to_owner) continue;
-            const delta =
-                @as(isize, @intCast(local_ranks[edge_item.from])) -
-                @as(isize, @intCast(local_ranks[edge_item.to]));
-            const candidate = bases[from_owner] + delta;
-            if (candidate > bases[to_owner]) {
-                if (pass + 1 == cluster_count) return false;
-                bases[to_owner] = candidate;
-                changed = true;
-            }
-        }
-        if (!changed) break;
+    const cluster_back_weight: f64 = 10.0;
+    var problem_ranks: [max_clusters + max_edges]usize = @splat(0);
+    var problem_edges: [max_edges * 2]RankEdge = undefined;
+    var problem_edge_count: usize = 0;
+    var variable_count = cluster_count;
+    var max_constraint: usize = 0;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.from >= graph.nodes.items.len or
+            edge_item.to >= graph.nodes.items.len) continue;
+        const from_owner = owner[edge_item.from].?;
+        const to_owner = owner[edge_item.to].?;
+        if (from_owner == to_owner) continue;
+        if (variable_count >= problem_ranks.len or
+            problem_edge_count + 2 > problem_edges.len) return false;
+
+        // Match Graphviz interclust1(): transfer the endpoint-local offsets
+        // onto a private slack variable, strongly anchoring its tail side.
+        const offset =
+            @as(isize, @intCast(edge_item.min_len)) +
+            @as(isize, @intCast(local_ranks[edge_item.from])) -
+            @as(isize, @intCast(local_ranks[edge_item.to]));
+        const tail_len: usize = if (offset < 0) @intCast(-offset) else 0;
+        const head_len: usize = if (offset > 0) @intCast(offset) else 0;
+        max_constraint = @max(max_constraint, @max(tail_len, head_len));
+        const auxiliary = variable_count;
+        variable_count += 1;
+        problem_edges[problem_edge_count] = .{
+            .edge_id = edge_item.id,
+            .from = auxiliary,
+            .to = from_owner,
+            .min_len = tail_len,
+            .weight = @max(edge_item.weight, 0) * cluster_back_weight,
+        };
+        problem_edge_count += 1;
+        problem_edges[problem_edge_count] = .{
+            .edge_id = edge_item.id,
+            .from = auxiliary,
+            .to = to_owner,
+            .min_len = head_len,
+            .weight = @max(edge_item.weight, 0),
+        };
+        problem_edge_count += 1;
+    }
+    if (variable_count == cluster_count or problem_edge_count == 0) return false;
+    @memset(problem_ranks[0..cluster_count], max_constraint);
+    _ = improveAugmentedRankEdges(
+        graph.allocator,
+        graph,
+        problem_edges[0..problem_edge_count],
+        problem_ranks[0..variable_count],
+        &.{},
+        0,
+        variable_count * 8,
+    ) catch return false;
+    if (!rankEdgesFeasible(
+        problem_edges[0..problem_edge_count],
+        problem_ranks[0..variable_count],
+    )) return false;
+
+    var min_base = problem_ranks[0];
+    for (problem_ranks[1..cluster_count]) |base| {
+        min_base = @min(min_base, base);
     }
 
     var candidate: [max_nodes]usize = undefined;
@@ -10744,9 +10781,8 @@ fn compactDisjointLocalClusterDagRanks(
     var current_max: usize = 0;
     for (ranks) |rank| current_max = @max(current_max, rank);
     for (candidate[0..graph.nodes.items.len], 0..) |*rank, node_id| {
-        const base = bases[owner[node_id].?];
-        if (base < 0) return false;
-        rank.* = @as(usize, @intCast(base)) +| local_ranks[node_id];
+        const base = problem_ranks[owner[node_id].?] - min_base;
+        rank.* = base +| local_ranks[node_id];
         candidate_max = @max(candidate_max, rank.*);
     }
     if (candidate_max >= current_max) return false;
@@ -10756,8 +10792,6 @@ fn compactDisjointLocalClusterDagRanks(
         if (owner[edge_item.from] == owner[edge_item.to]) {
             if (candidate[edge_item.to] <
                 candidate[edge_item.from] +| edge_item.min_len) return false;
-        } else if (candidate[edge_item.to] < candidate[edge_item.from]) {
-            return false;
         }
     }
     @memcpy(ranks, candidate[0..graph.nodes.items.len]);
@@ -43209,14 +43243,14 @@ test "disjoint local DAG clusters collapse and expand local rank offsets" {
     const c2 = nodeIdByLabel(&graph, "c2");
     const c3 = nodeIdByLabel(&graph, "c3");
     try std.testing.expectEqual(@as(usize, 0), layout.ranks[b1]);
-    try std.testing.expectEqual(@as(usize, 0), layout.ranks[a1]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[a1]);
     try std.testing.expectEqual(@as(usize, 1), layout.ranks[b2]);
-    try std.testing.expectEqual(@as(usize, 1), layout.ranks[a2]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[a2]);
     try std.testing.expectEqual(@as(usize, 2), layout.ranks[b3]);
-    try std.testing.expectEqual(@as(usize, 1), layout.ranks[c1]);
-    try std.testing.expectEqual(@as(usize, 2), layout.ranks[a3]);
-    try std.testing.expectEqual(@as(usize, 2), layout.ranks[c2]);
-    try std.testing.expectEqual(@as(usize, 3), layout.ranks[c3]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[c1]);
+    try std.testing.expectEqual(@as(usize, 3), layout.ranks[a3]);
+    try std.testing.expectEqual(@as(usize, 3), layout.ranks[c2]);
+    try std.testing.expectEqual(@as(usize, 4), layout.ranks[c3]);
     try std.testing.expectEqual(
         @as(usize, 0),
         layoutAdjacentRankCrossingCount(&graph, &layout),
