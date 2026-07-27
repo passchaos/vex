@@ -5936,11 +5936,13 @@ fn layoutFragmentedComponentsWithControl(
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             effective_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -6344,11 +6346,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
+    const exact_times_ellipse_graph =
+        graphHasOnlyExactTimesEllipses(layout_graph);
     for (layout_graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             effective_options,
             layout_graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -6767,11 +6772,13 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             default_layout_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -6931,11 +6938,13 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             default_layout_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -7215,11 +7224,13 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             default_layout_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -7404,11 +7415,13 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             default_layout_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -7510,11 +7523,13 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             default_layout_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
     }
 
@@ -7645,12 +7660,14 @@ fn layoutCircularWithControl(allocator: std.mem.Allocator, graph: *const Graph, 
     const sizes = try allocator.alloc(NodeSize, n);
     defer allocator.free(sizes);
     const default_layout_options = layoutOptionsWithGraphAttrs(.{}, graph);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     var largest_node: f64 = 0;
     for (graph.nodes.items, 0..) |node_item, id| {
         sizes[id] = measureNodeForGraph(
             node_item,
             default_layout_options,
             graph.nodes.items.len,
+            exact_times_ellipse_graph,
         );
         largest_node = @max(largest_node, @max(sizes[id].width, sizes[id].height));
     }
@@ -7830,11 +7847,13 @@ fn layoutOsageWithControl(allocator: std.mem.Allocator, graph: *const Graph, opt
 
     const osage_nodes = try allocator.alloc(layout_mod.osage.Node, n);
     defer allocator.free(osage_nodes);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         const size = measureNodeForGraph(
             node_item,
             effective_options,
             n,
+            exact_times_ellipse_graph,
         );
         osage_nodes[id] = .{
             .width = size.width,
@@ -7961,6 +7980,7 @@ fn layoutPositionedWithControl(
     defer allocator.free(input_positions);
     const sizes = try allocator.alloc(layout_mod.nop.Size, n);
     defer allocator.free(sizes);
+    const exact_times_ellipse_graph = graphHasOnlyExactTimesEllipses(graph);
     for (graph.nodes.items, 0..) |node_item, id| {
         const raw_position = attrValue(node_item.attrs.items, "pos") orelse return error.MissingNodePosition;
         const parsed = layout_mod.nop.parseNodePosition(raw_position) catch return error.InvalidNodePosition;
@@ -7969,6 +7989,7 @@ fn layoutPositionedWithControl(
             node_item,
             effective_options,
             n,
+            exact_times_ellipse_graph,
         );
         sizes[id] = .{ .width = size.width, .height = size.height };
     }
@@ -9798,13 +9819,14 @@ fn syncVirtualRealOrder(virtual_levels: *VirtualLevels, levels: []const std.Arra
 }
 
 fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
-    return measureNodeWithExactStandardFonts(node_item, options, true);
+    return measureNodeWithExactStandardFonts(node_item, options, true, true);
 }
 
 fn measureNodeForGraph(
     node_item: Node,
     options: LayoutOptions,
     node_count: usize,
+    exact_times_ellipse_graph: bool,
 ) NodeSize {
     // Exact dimensions can perturb discrete rank ordering. The <=128-node
     // envelope has full old/new/Graphviz fixture diff coverage; larger graphs
@@ -9813,6 +9835,7 @@ fn measureNodeForGraph(
         node_item,
         options,
         node_count <= 128,
+        exact_times_ellipse_graph,
     );
 }
 
@@ -9820,6 +9843,7 @@ fn measureNodeWithExactStandardFonts(
     node_item: Node,
     options: LayoutOptions,
     exact_standard_fonts: bool,
+    exact_times_ellipse_graph: bool,
 ) NodeSize {
     const font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
     const font_scale = font_size / 14.0;
@@ -9833,6 +9857,9 @@ fn measureNodeWithExactStandardFonts(
             text_metrics.symbolLabelWidth(node_item.label, font_size)
         else if (exact_standard_fonts and helveticaRegularFont(node_item.attrs.items))
             text_metrics.helveticaAsciiLabelWidth(node_item.label, font_size)
+        else if (exact_standard_fonts and exact_times_ellipse_graph and
+            timesRegularFont(node_item.attrs.items))
+            text_metrics.timesAsciiLabelWidth(node_item.label, font_size)
         else
             null
     else
@@ -10039,6 +10066,30 @@ fn symbolFont(attrs: []const Attr) bool {
 fn helveticaRegularFont(attrs: []const Attr) bool {
     const font_name = attrValue(attrs, "fontname") orelse return false;
     return std.ascii.eqlIgnoreCase(font_name, "Helvetica");
+}
+
+fn timesRegularFont(attrs: []const Attr) bool {
+    const font_name = attrValue(attrs, "fontname") orelse return false;
+    return std.ascii.eqlIgnoreCase(font_name, "Times") or
+        std.ascii.eqlIgnoreCase(font_name, "Times-Roman");
+}
+
+fn graphHasOnlyExactTimesEllipses(graph: *const Graph) bool {
+    if (graph.nodes.items.len == 0 or graph.nodes.items.len > 64) return false;
+    for (graph.nodes.items) |node_item| {
+        if (node_item.shape != .ellipse or
+            !timesRegularFont(node_item.attrs.items))
+        {
+            return false;
+        }
+        const font_size =
+            parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
+        if (text_metrics.timesAsciiLabelWidth(
+            node_item.label,
+            font_size,
+        ) == null) return false;
+    }
+    return true;
 }
 
 fn fitGraphvizEllipseLabel(
@@ -15928,6 +15979,19 @@ fn appendContinuousCandidate(
     count.* += 1;
 }
 
+fn projectCoordinateToInterval(
+    value: f64,
+    lower: f64,
+    upper: f64,
+) ?f64 {
+    if (lower <= upper) return std.math.clamp(value, lower, upper);
+    // Width and gap accumulation can invert a mathematically zero-width
+    // interval by a few ulps. Collapse that numerical tie to its midpoint;
+    // larger inversions are genuinely infeasible and must be rejected.
+    if (lower <= upper + 0.0001) return (lower + upper) / 2.0;
+    return null;
+}
+
 fn incidentCoordinateStressTarget(
     graph: *const Graph,
     ranks: []const usize,
@@ -16462,18 +16526,11 @@ const JointExplicitRankSearch = struct {
                                 self.sizes[node_id].width / 2.0 -
                                 self.node_gap;
                         };
-                        // Floating-point accumulation can leave a nominally
-                        // zero-width feasible interval inverted by less than
-                        // epsilon. `std.math.clamp` requires lower <= upper,
-                        // so collapse that degenerate interval explicitly;
-                        // genuinely infeasible permutations remain rejected by
-                        // the clearance checks below.
-                        if (lower > upper) {
-                            if (lower > upper + 0.0001) continue;
-                            self.candidate[node_id] = (lower + upper) / 2.0;
-                            continue;
-                        }
-                        const projected = std.math.clamp(target, lower, upper);
+                        const projected = projectCoordinateToInterval(
+                            target,
+                            lower,
+                            upper,
+                        ) orelse continue;
                         max_movement = @max(
                             max_movement,
                             @abs(projected - self.candidate[node_id]),
@@ -17033,7 +17090,11 @@ fn refineExplicitRankCoordinateStress(
                     appendContinuousCandidate(
                         &candidates,
                         &candidate_count,
-                        std.math.clamp(centers[neighbor], lower, upper),
+                        projectCoordinateToInterval(
+                            centers[neighbor],
+                            lower,
+                            upper,
+                        ) orelse continue,
                     );
                 }
 
@@ -31424,6 +31485,46 @@ test "Helvetica ASCII labels use Graphviz ellipse fitting" {
     try std.testing.expectEqual(@as(f64, 84), unicode.width);
 }
 
+test "Times ASCII labels use Graphviz ellipse fitting" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  default [fontname="Times-Roman", label="WMWMWMWM"];
+        \\  explicit [fontname="Times-Roman", label="iiiiiiiiii"];
+        \\  italic [fontname="Times-Italic", label="mmmmmmmmmm"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = LayoutOptions{};
+    const default_size = measureNodeWithExactStandardFonts(
+        graph.nodes.items[0],
+        options,
+        true,
+        true,
+    );
+    const explicit_size = measureNodeWithExactStandardFonts(
+        graph.nodes.items[1],
+        options,
+        true,
+        true,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 131) / @sqrt(1.0 - std.math.pow(f64, 23.0 / 36.0, 2)),
+        default_size.width,
+        0.001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 62) / @sqrt(1.0 - std.math.pow(f64, 23.0 / 36.0, 2)),
+        explicit_size.width,
+        0.001,
+    );
+    try std.testing.expectEqual(
+        @as(f64, 108),
+        measureNode(graph.nodes.items[2], options).width,
+    );
+}
+
 test "DOT implicit quoted node labels decode entities without changing identity" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -40355,6 +40456,21 @@ test "joint explicit-rank search tolerates epsilon-inverted intervals" {
         &centers,
         &sizes,
     ));
+}
+
+test "coordinate interval projection handles numerical inversion" {
+    try std.testing.expectEqual(
+        @as(f64, 3),
+        projectCoordinateToInterval(4, 1, 3).?,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 2.000025),
+        projectCoordinateToInterval(8, 2.00005, 2.0).?,
+        0.000001,
+    );
+    try std.testing.expect(
+        projectCoordinateToInterval(8, 2.001, 2.0) == null,
+    );
 }
 
 test "zero-crossing star compaction uses Graphviz default nodesep" {

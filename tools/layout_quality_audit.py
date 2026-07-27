@@ -533,6 +533,13 @@ def main() -> int:
             1.13,
         ),
         (
+            "b94-times-ellipse",
+            args.graphviz_root / "tests" / "graphs" / "b94.gv",
+            0,
+            0.55,
+            0.56,
+        ),
+        (
             "1332",
             args.graphviz_root / "tests" / "1332.dot",
             9,

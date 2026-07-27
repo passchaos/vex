@@ -30,6 +30,34 @@ const helvetica_ascii_13pt_quarter_points = [_]u8{
     33, 33, 21, 27, 21, 33, 30, 42, 30, 30, 27, 33, 18, 33, 45,
 };
 
+const times_ascii_quarter_points = [_]u8{
+    18, 24, 27, 48, 36, 54, 51, 15, 21, 21, 27, 48, 18, 18, 18, 18,
+    36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 18, 18, 48, 48, 48, 30,
+    57, 39, 42, 42, 45, 42, 39, 45, 48, 21, 21, 42, 36, 57, 48, 45,
+    39, 45, 42, 39, 36, 48, 39, 57, 39, 36, 39, 21, 18, 21, 48, 27,
+    27, 33, 36, 30, 36, 33, 21, 36, 36, 18, 18, 33, 18, 54, 36, 33,
+    36, 36, 27, 30, 24, 36, 33, 48, 33, 33, 30, 36, 18, 36, 48,
+};
+
+const times_ascii_13pt_quarter_points = [_]u8{
+    18, 21, 24, 45, 33, 48, 45, 15, 21, 21, 27, 45, 18, 18, 18, 18,
+    33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 18, 18, 45, 45, 45, 27,
+    51, 39, 39, 39, 42, 39, 36, 42, 45, 21, 21, 39, 36, 54, 45, 42,
+    36, 42, 39, 36, 36, 45, 39, 54, 36, 33, 36, 21, 18, 21, 45, 27,
+    27, 30, 33, 30, 33, 30, 18, 33, 33, 18, 15, 33, 18, 48, 33, 30,
+    33, 33, 24, 27, 21, 33, 30, 45, 30, 30, 27, 33, 18, 33, 45,
+};
+
+pub fn timesAsciiLabelWidth(text: []const u8, font_size: f64) ?f64 {
+    const metrics = if (@abs(font_size - 14.0) <= 0.0001)
+        &times_ascii_quarter_points
+    else if (@abs(font_size - 13.0) <= 0.0001)
+        &times_ascii_13pt_quarter_points
+    else
+        return null;
+    return asciiLabelWidth(text, metrics);
+}
+
 /// Returns Graphviz/Pango's maximum line advance for regular Helvetica/Arial
 /// when every character is printable ASCII.
 ///
@@ -44,6 +72,10 @@ pub fn helveticaAsciiLabelWidth(text: []const u8, font_size: f64) ?f64 {
         &helvetica_ascii_13pt_quarter_points
     else
         return null;
+    return asciiLabelWidth(text, metrics);
+}
+
+fn asciiLabelWidth(text: []const u8, metrics: *const [95]u8) ?f64 {
     var line_width: f64 = 0;
     var max_width: f64 = 0;
     for (text) |byte| {
@@ -486,4 +518,12 @@ test "Helvetica ASCII metrics reproduce Graphviz fixture widths" {
     try std.testing.expectEqual(@as(f64, 70), helveticaAsciiLabelWidth("abcdefghij", 13).?);
     try std.testing.expect(helveticaAsciiLabelWidth("abcdefghij", 21) == null);
     try std.testing.expect(helveticaAsciiLabelWidth("non-ASCII α", 14) == null);
+}
+
+test "Times ASCII metrics reproduce Graphviz fixture widths" {
+    try std.testing.expectEqual(@as(f64, 75), timesAsciiLabelWidth("abcdefghij", 14).?);
+    try std.testing.expectEqual(@as(f64, 46), timesAsciiLabelWidth("iiiiiiiiii", 14).?);
+    try std.testing.expectEqual(@as(f64, 136), timesAsciiLabelWidth("mmmmmmmmmm", 14).?);
+    try std.testing.expectEqual(@as(f64, 115), timesAsciiLabelWidth("WMWMWMWM", 14).?);
+    try std.testing.expect(timesAsciiLabelWidth("abcdefghij", 21) == null);
 }
