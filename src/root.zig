@@ -9461,7 +9461,27 @@ fn measureNode(node_item: Node, options: LayoutOptions) NodeSize {
             height = diameter;
         },
         .circle, .doublecircle => {
-            const diameter = @max(width, height);
+            var diameter = @max(width, height);
+            if (node_item.shape == .doublecircle) {
+                // Graphviz fits non-box labels in an enclosing ellipse before
+                // enforcing regularity, then adds the 4pt gap between the two
+                // peripheries. The ordinary circle path previously used only
+                // the rectangular text estimate, making multiline
+                // doublecircles much too small and changing legal rank order.
+                const padded_width =
+                    (if (graphvizDefaultSerifFont(node_item.attrs.items))
+                        graphvizSerifLabelWidth(node_item.label, font_size)
+                    else
+                        text_width) + 8.0 + margin.x * 2.0;
+                const padded_height =
+                    @as(f64, @floatFromInt(line_count)) *
+                    font_size * (15.0 / 14.0) +
+                    4.0 + margin.y * 2.0;
+                diameter = @max(
+                    diameter,
+                    @max(padded_width, padded_height) * std.math.sqrt2 + 8.0,
+                );
+            }
             width = diameter;
             height = diameter;
         },
@@ -43276,6 +43296,33 @@ test "node dimensions beyond signed point space fall back safely" {
     try std.testing.expect(layout.nodes[overflow].height == layout.nodes[ordinary].height);
     try std.testing.expect(layout.width < 1024);
     try std.testing.expect(layout.height < 1024);
+}
+
+test "multiline doublecircle uses Graphviz ellipse fit and periphery gap" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  node [fontname="Times-Roman"];
+        \\  single [shape=circle, fontsize=7, label="182948-1\n182949-1\npipe"];
+        \\  double [shape=doublecircle, fontsize=7, label="182948-1\n182949-1\npipe"];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const single = nodeIdByLabel(&graph, "182948-1\n182949-1\npipe");
+    const double = single + 1;
+    try std.testing.expect(layout.nodes[single].width >= 60.0);
+    try std.testing.expect(layout.nodes[double].width >= 66.0);
+    try std.testing.expectApproxEqAbs(
+        layout.nodes[double].width,
+        layout.nodes[double].height,
+        0.001,
+    );
+    try std.testing.expect(
+        layout.nodes[double].width >= layout.nodes[single].width + 6.0,
+    );
 }
 
 test "edge-free rank uses Graphviz default nodesep" {

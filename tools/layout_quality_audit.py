@@ -333,6 +333,13 @@ def main() -> int:
             1.00,
         ),
         (
+            "pmpipe",
+            args.graphviz_root / "tests" / "graphs" / "pmpipe.gv",
+            0,
+            1.06,
+            1.20,
+        ),
+        (
             "awilliams",
             args.graphviz_root / "tests" / "graphs" / "awilliams.gv",
             0,
