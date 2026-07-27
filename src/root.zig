@@ -5440,6 +5440,130 @@ fn normalizeSameRankEdgeMinlen(
     return storage;
 }
 
+fn suppressContractedRankSetCycles(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    excluded_edge: []const bool,
+    suppressed_edge: []bool,
+) !void {
+    if (!graph.directed or graph.nodes.items.len == 0 or
+        graph.rank_constraints.items.len == 0 or
+        suppressed_edge.len < graph.edges.items.len) return;
+
+    const representative = try allocator.alloc(NodeId, graph.nodes.items.len);
+    defer allocator.free(representative);
+    for (representative, 0..) |*root, node_id| root.* = node_id;
+    for (graph.rank_constraints.items) |constraint| {
+        if (constraint.kind != .same or !rankConstraintActive(graph, constraint)) continue;
+        var leader: ?NodeId = null;
+        for (constraint.node_ids) |node_id| {
+            if (node_id >= representative.len or
+                !nodeParticipatesInRankConstraint(graph, constraint, node_id)) continue;
+            const root = contractedRankSetFind(representative, node_id);
+            if (leader) |existing| {
+                const leader_root = contractedRankSetFind(representative, existing);
+                if (root != leader_root) representative[root] = leader_root;
+            } else {
+                leader = root;
+            }
+        }
+    }
+    for (representative, 0..) |_, node_id| {
+        representative[node_id] = contractedRankSetFind(representative, node_id);
+    }
+
+    const first_out = try allocator.alloc(?usize, representative.len);
+    defer allocator.free(first_out);
+    @memset(first_out, null);
+    const next_out = try allocator.alloc(?usize, graph.edges.items.len);
+    defer allocator.free(next_out);
+    @memset(next_out, null);
+    // Build the contracted adjacency in declaration order. Iterating backward
+    // while prepending preserves the same deterministic DFS choice as a
+    // forward scan without paying O(component_count * edge_count).
+    var edge_index = graph.edges.items.len;
+    while (edge_index > 0) {
+        edge_index -= 1;
+        const edge_item = graph.edges.items[edge_index];
+        if (!edge_item.constraint or edge_item.id >= suppressed_edge.len or
+            (edge_item.id < excluded_edge.len and excluded_edge[edge_item.id]) or
+            edge_item.from >= representative.len or edge_item.to >= representative.len) continue;
+        const from = representative[edge_item.from];
+        const to = representative[edge_item.to];
+        if (from == to) continue;
+        next_out[edge_index] = first_out[from];
+        first_out[from] = edge_index;
+    }
+
+    const state = try allocator.alloc(u8, representative.len);
+    defer allocator.free(state);
+    @memset(state, 0);
+    for (0..representative.len) |node_id| {
+        suppressContractedRankSetCyclesDepthFirst(
+            graph,
+            representative,
+            first_out,
+            next_out,
+            node_id,
+            state,
+            suppressed_edge,
+        );
+    }
+}
+
+fn contractedRankSetFind(parent: []NodeId, node_id: NodeId) NodeId {
+    var root = node_id;
+    while (root < parent.len and parent[root] != root) root = parent[root];
+    var current = node_id;
+    while (current < parent.len and parent[current] != current) {
+        const next = parent[current];
+        parent[current] = root;
+        current = next;
+    }
+    return root;
+}
+
+fn suppressContractedRankSetCyclesDepthFirst(
+    graph: *const Graph,
+    representative: []const NodeId,
+    first_out: []const ?usize,
+    next_out: []const ?usize,
+    component: NodeId,
+    state: []u8,
+    suppressed_edge: []bool,
+) void {
+    if (component >= state.len or representative[component] != component or
+        state[component] != 0) return;
+    state[component] = 1;
+    var current = first_out[component];
+    while (current) |edge_index| {
+        current = if (edge_index < next_out.len) next_out[edge_index] else null;
+        if (edge_index >= graph.edges.items.len) continue;
+        const edge_item = graph.edges.items[edge_index];
+        if (edge_item.id >= suppressed_edge.len or suppressed_edge[edge_item.id] or
+            edge_item.to >= representative.len) continue;
+        const to = representative[edge_item.to];
+        if (state[to] == 1) {
+            // A hard edge can become cyclic only after rank=same contraction.
+            // Exclude that feedback constraint from ranking rather than
+            // reversing endpoints: the caller-owned graph still routes the
+            // original edge, including cluster back-edge channel semantics.
+            suppressed_edge[edge_item.id] = true;
+        } else if (state[to] == 0) {
+            suppressContractedRankSetCyclesDepthFirst(
+                graph,
+                representative,
+                first_out,
+                next_out,
+                to,
+                state,
+                suppressed_edge,
+            );
+        }
+    }
+    state[component] = 2;
+}
+
 const UndirectedNeighborOrderContext = struct {
     graph: *const Graph,
     adjacency: *const EdgeAdjacency,
@@ -5746,6 +5870,9 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     var acyclic_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
     defer allocator.free(acyclic_edge);
     @memset(acyclic_edge, false);
+    const suppressed_rank_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
+    defer allocator.free(suppressed_rank_edge);
+    @memset(suppressed_rank_edge, false);
     const strong_edge = try allocator.alloc(bool, layout_graph.edges.items.len);
     defer allocator.free(strong_edge);
     var rank_edge_adjacency = try EdgeAdjacency.init(allocator, layout_graph);
@@ -5753,9 +5880,17 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     for (layout_graph.edges.items) |edge_item| {
         strong_edge[edge_item.id] = rankEdgeUsesStrongClusterPenalty(layout_graph, edge_item);
     }
+    try suppressContractedRankSetCycles(
+        allocator,
+        layout_graph,
+        strong_edge,
+        suppressed_rank_edge,
+    );
 
     for (layout_graph.edges.items) |edge_item| {
-        if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
+        if (!edge_item.constraint or
+            (edge_item.id < suppressed_rank_edge.len and suppressed_rank_edge[edge_item.id]) or
+            strong_edge[edge_item.id]) continue;
         // A self-loop has no feasible layered minlen constraint and must not
         // contribute indegree. Counting it here prevents an otherwise acyclic
         // node and every downstream edge from ever entering the Kahn queue.
@@ -5773,7 +5908,8 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         for (rank_edge_adjacency.incident(u)) |edge_id| {
             if (edge_id >= layout_graph.edges.items.len) continue;
             const edge_item = layout_graph.edges.items[edge_id];
-            if (!edge_item.constraint or strong_edge[edge_item.id]) continue;
+            if (!edge_item.constraint or suppressed_rank_edge[edge_item.id] or
+                strong_edge[edge_item.id]) continue;
             if (edge_item.from == edge_item.to) continue;
             if (edge_item.from != u) continue;
             const min_len = edge_item.min_len;
@@ -5786,7 +5922,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         }
     }
 
-    assignRanksForCyclicComponentsIndexed(layout_graph, ranks, acyclic_edge, strong_edge, &rank_edge_adjacency);
+    assignRanksForCyclicComponentsIndexed(
+        layout_graph,
+        ranks,
+        acyclic_edge,
+        strong_edge,
+        suppressed_rank_edge,
+        &rank_edge_adjacency,
+    );
     if (graphHasStrongClusters(layout_graph)) {
         settleRanksWithExplicitConstraints(layout_graph, ranks, acyclic_edge, n + 1);
     } else {
@@ -10272,14 +10415,30 @@ fn assignRanksForCyclicComponents(
     var edge_adjacency: ?EdgeAdjacency = EdgeAdjacency.init(graph.allocator, graph) catch null;
     defer if (edge_adjacency) |*adjacency| adjacency.deinit();
     if (edge_adjacency) |*adjacency| {
-        assignRanksForCyclicComponentsIndexed(graph, ranks, acyclic_edge, strong_edge, adjacency);
+        assignRanksForCyclicComponentsIndexed(
+            graph,
+            ranks,
+            acyclic_edge,
+            strong_edge,
+            &.{},
+            adjacency,
+        );
         return;
     }
     const state = graph.allocator.alloc(u8, ranks.len) catch return;
     defer graph.allocator.free(state);
     @memset(state, 0);
     for (graph.nodes.items, 0..) |_, id| {
-        relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, null, id);
+        relaxRanksDepthFirst(
+            graph,
+            ranks,
+            state,
+            acyclic_edge,
+            strong_edge,
+            &.{},
+            null,
+            id,
+        );
     }
 }
 
@@ -10288,6 +10447,7 @@ fn assignRanksForCyclicComponentsIndexed(
     ranks: []usize,
     acyclic_edge: []const bool,
     strong_edge: []const bool,
+    suppressed_edge: []const bool,
     edge_adjacency: *const EdgeAdjacency,
 ) void {
     const state = graph.allocator.alloc(u8, ranks.len) catch return;
@@ -10300,6 +10460,7 @@ fn assignRanksForCyclicComponentsIndexed(
             state,
             acyclic_edge,
             strong_edge,
+            suppressed_edge,
             edge_adjacency,
             id,
         );
@@ -10334,6 +10495,7 @@ fn relaxRanksDepthFirst(
     state: []u8,
     acyclic_edge: []const bool,
     strong_edge: []const bool,
+    suppressed_edge: []const bool,
     edge_adjacency: ?*const EdgeAdjacency,
     node_id: NodeId,
 ) void {
@@ -10350,6 +10512,7 @@ fn relaxRanksDepthFirst(
                 state,
                 acyclic_edge,
                 strong_edge,
+                suppressed_edge,
                 adjacency,
                 node_id,
                 graph.edges.items[edge_id],
@@ -10363,6 +10526,7 @@ fn relaxRanksDepthFirst(
                 state,
                 acyclic_edge,
                 strong_edge,
+                suppressed_edge,
                 null,
                 node_id,
                 edge_item,
@@ -10378,11 +10542,13 @@ fn relaxRankEdge(
     state: []u8,
     acyclic_edge: []const bool,
     strong_edge: []const bool,
+    suppressed_edge: []const bool,
     edge_adjacency: ?*const EdgeAdjacency,
     node_id: NodeId,
     edge_item: Edge,
 ) void {
     if (edge_item.id < acyclic_edge.len and acyclic_edge[edge_item.id]) return;
+    if (edge_item.id < suppressed_edge.len and suppressed_edge[edge_item.id]) return;
     if (!edge_item.constraint or edge_item.from != node_id) return;
     if (edge_item.id < strong_edge.len and strong_edge[edge_item.id]) return;
     if (edge_item.to >= ranks.len or edge_item.to == node_id) return;
@@ -10392,7 +10558,16 @@ fn relaxRankEdge(
         ranks[edge_item.to] = candidate;
         if (state[edge_item.to] == 2) state[edge_item.to] = 0;
     }
-    relaxRanksDepthFirst(graph, ranks, state, acyclic_edge, strong_edge, edge_adjacency, edge_item.to);
+    relaxRanksDepthFirst(
+        graph,
+        ranks,
+        state,
+        acyclic_edge,
+        strong_edge,
+        suppressed_edge,
+        edge_adjacency,
+        edge_item.to,
+    );
 }
 
 fn tightenRanksTowardSinks(graph: *const Graph, ranks: []usize, acyclic_edge: []const bool) void {
@@ -35896,6 +36071,55 @@ test "same-rank edge minlen is zero only in the private layout view" {
     try std.testing.expect(normalized == &storage);
     try std.testing.expectEqual(@as(usize, 0), normalized.edges.items[edge_id].min_len);
     try std.testing.expectEqual(@as(usize, 10), graph.edges.items[edge_id].min_len);
+}
+
+test "same-rank contraction suppresses only its feedback rank edge" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_c {
+        \\    a -> b;
+        \\    c -> a;
+        \\    { rank=same; b; c; }
+        \\  }
+        \\}
+    );
+    defer graph.deinit();
+
+    var same_rank_view: Graph = undefined;
+    const normalized = try normalizeSameRankEdgeMinlen(
+        allocator,
+        &graph,
+        &same_rank_view,
+    );
+    defer if (normalized == &same_rank_view)
+        same_rank_view.edges.deinit(allocator);
+
+    const suppressed = try allocator.alloc(bool, normalized.edges.items.len);
+    defer allocator.free(suppressed);
+    @memset(suppressed, false);
+    try suppressContractedRankSetCycles(
+        allocator,
+        normalized,
+        &.{},
+        suppressed,
+    );
+    try std.testing.expect(!suppressed[0]);
+    try std.testing.expect(suppressed[1]);
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expectEqual(layout.ranks[b], layout.ranks[c]);
+    try std.testing.expect(layout.ranks[a] < layout.ranks[b]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[b] - layout.ranks[a]);
+
+    // Endpoint direction remains public graph data; only the private rank
+    // constraint is suppressed, preserving back-edge routing semantics.
+    try std.testing.expectEqual(c, graph.edges.items[1].from);
+    try std.testing.expectEqual(a, graph.edges.items[1].to);
 }
 
 test "layered layout applies rank same and boundary constraints" {
