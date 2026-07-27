@@ -6469,6 +6469,16 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             effective_options,
         );
     }
+    refineFinalFeedbackCenterStressPlateau(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+        4,
+        graph.directed and acyclic_graph != reciprocal_graph,
+    );
     refineClusterOwnerGroupCrossings(
         layout_graph,
         ranks,
@@ -16162,6 +16172,97 @@ fn refineContinuousCenterStressPlateau(
         }
         if (!changed) break;
     }
+}
+
+fn refineFinalFeedbackCenterStressPlateau(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+    passes: usize,
+    has_feedback_edges: bool,
+) void {
+    if (passes == 0 or !graph.directed or !has_feedback_edges or
+        graph.subgraphs.items.len != 0 or
+        graph.nodes.items.len < 48 or graph.nodes.items.len > 64 or
+        graph.edges.items.len > 128 or hasActiveRankConstraints(graph) or
+        orderingMode(attrValue(graph.attrs.items, "ordering")) != .none)
+    {
+        return;
+    }
+    for (graph.nodes.items) |node_item| {
+        if (nodeGroupName(node_item) != null or
+            orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none)
+        {
+            return;
+        }
+    }
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    if (baseline_crossings == 0) return;
+    const baseline_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
+    const baseline_extent = centersExtent(centers, sizes);
+    var candidate: [64]f64 = undefined;
+    @memcpy(candidate[0..centers.len], centers);
+
+    // Earlier center searches keep independent crossing-optimal candidates.
+    // This final pass operates on the selected physical candidate instead of
+    // an arbitrary restart branch. It may traverse equal-crossing states, but
+    // the result is exposed only when crossings strictly fall and edge length,
+    // stress, and extent all stay within their existing monotone budgets.
+    refineContinuousCenterStressPlateau(
+        graph,
+        levels,
+        ranks,
+        candidate[0..centers.len],
+        sizes,
+        options,
+        passes,
+        true,
+    );
+    const candidate_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        candidate[0..centers.len],
+        physical_depths,
+    );
+    if (candidate_crossings >= baseline_crossings or
+        physicalCenterEdgeLength(
+            graph,
+            ranks,
+            candidate[0..centers.len],
+            physical_depths,
+        ) > baseline_length + 0.0001 or
+        coordinateEdgeStress(graph, ranks, candidate[0..centers.len]) >
+            baseline_stress * 1.04 + 0.0001 or
+        centersExtent(candidate[0..centers.len], sizes) >
+            baseline_extent + 0.0001)
+    {
+        return;
+    }
+    @memcpy(centers, candidate[0..centers.len]);
 }
 
 const JointExplicitRankLevel = struct {
@@ -40179,6 +40280,118 @@ test "continuous stress plateau preserves crossings and lowers stress" {
         &centers,
         &sizes,
     ));
+}
+
+test "final feedback stress plateau exposes only a monotone crossing win" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    for (0..48) |index| {
+        var label_buf: [16]u8 = undefined;
+        _ = try graph.addNode(
+            try std.fmt.bufPrint(&label_buf, "n{d}", .{index}),
+            .{},
+        );
+    }
+    // Moving node 2 toward node 3 is an equal-crossing stress improvement.
+    // That opens a second move for node 1, after which the long diagonal no
+    // longer crosses edge 2->3. The remaining nodes exercise the bounded
+    // medium-workflow eligibility without affecting the candidate.
+    _ = try graph.addEdge(0, 1, .{});
+    _ = try graph.addEdge(2, 3, .{});
+
+    var ranks: [48]usize = undefined;
+    ranks[0] = 0;
+    ranks[2] = 1;
+    ranks[3] = 2;
+    ranks[1] = 3;
+    for (4..48) |node_id| ranks[node_id] = node_id;
+    var levels = [_]std.ArrayList(NodeId){.empty} ** 48;
+    defer for (&levels) |*level| level.deinit(allocator);
+    for (ranks, 0..) |rank, node_id| {
+        try levels[rank].append(allocator, node_id);
+    }
+    const sizes = [_]NodeSize{.{ .width = 20, .height = 20 }} ** 48;
+    var centers = [_]f64{10} ** 48;
+    centers[0] = 10;
+    centers[1] = 90;
+    centers[2] = 90;
+    centers[3] = 10;
+    for (4..48) |node_id| {
+        centers[node_id] = 200.0 + @as(f64, @floatFromInt(node_id));
+    }
+    var physical_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        &graph,
+        &ranks,
+        &sizes,
+        .{},
+        &physical_depths,
+    ).?;
+    const before_crossings = countPhysicalCenterCrossings(
+        &graph,
+        &ranks,
+        &centers,
+        physical_depths[0..rank_count],
+    );
+    const before_length = physicalCenterEdgeLength(
+        &graph,
+        &ranks,
+        &centers,
+        physical_depths[0..rank_count],
+    );
+    const before_stress = coordinateEdgeStress(&graph, &ranks, &centers);
+    const before_extent = centersExtent(&centers, &sizes);
+    try std.testing.expectEqual(@as(usize, 1), before_crossings);
+
+    const original = centers;
+    refineFinalFeedbackCenterStressPlateau(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        4,
+        false,
+    );
+    try std.testing.expectEqualSlices(f64, &original, &centers);
+
+    refineFinalFeedbackCenterStressPlateau(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+        4,
+        true,
+    );
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &centers,
+            physical_depths[0..rank_count],
+        ),
+    );
+    try std.testing.expect(
+        physicalCenterEdgeLength(
+            &graph,
+            &ranks,
+            &centers,
+            physical_depths[0..rank_count],
+        ) <= before_length + 0.0001,
+    );
+    try std.testing.expect(
+        coordinateEdgeStress(&graph, &ranks, &centers) <=
+            before_stress * 1.04 + 0.0001,
+    );
+    try std.testing.expect(
+        centersExtent(&centers, &sizes) <= before_extent + 0.0001,
+    );
 }
 
 test "explicit rank slot sifting checks every legal insertion slot" {
