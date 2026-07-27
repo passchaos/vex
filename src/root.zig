@@ -6022,6 +6022,14 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         effective_options,
         work,
     );
+    compactZeroCrossingStarIfHelpful(
+        layout_graph,
+        levels,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options,
+    );
     const compression_target = layeredCompressionTarget(layout_graph, axes, effective_options);
     var compression_applied = false;
     if (compression_target) |target_extent| {
@@ -14914,6 +14922,104 @@ fn refineJointExplicitRankOrderCoordinates(
     };
     search.enumerate(0);
     if (search.best_crossings < baseline_crossings) @memcpy(centers, search.best);
+}
+
+fn compactZeroCrossingStarIfHelpful(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    options: LayoutOptions,
+) void {
+    const graphviz_default_nodesep: f64 = 18.0;
+    if (levels.len != 2 or graph.subgraphs.items.len != 0 or
+        attrValue(graph.attrs.items, "nodesep") != null or
+        options.node_gap <= graphviz_default_nodesep + 0.0001 or
+        graph.nodes.items.len > 128 or centers.len != graph.nodes.items.len or
+        sizes.len < centers.len) return;
+    const wide_rank: usize, const singleton_rank: usize = if (levels[0].items.len >= 8 and levels[1].items.len == 1)
+        .{ 0, 1 }
+    else if (levels[1].items.len >= 8 and levels[0].items.len == 1)
+        .{ 1, 0 }
+    else
+        return;
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len or
+            edge_item.from == edge_item.to or
+            ranks[edge_item.from] == ranks[edge_item.to]) return;
+    }
+
+    var rank_depths: [128]f64 = undefined;
+    const rank_count = fillLayeredRankCenterDepths(
+        graph,
+        ranks,
+        sizes,
+        options,
+        &rank_depths,
+    ) orelse return;
+    const physical_depths = rank_depths[0..rank_count];
+    if (countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    ) != 0) return;
+    const baseline_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const baseline_extent = centersExtent(centers, sizes);
+    var candidate: [128]f64 = undefined;
+    @memcpy(candidate[0..centers.len], centers);
+    var ordered: [128]NodeId = undefined;
+    const wide_level = levels[wide_rank].items;
+    @memcpy(ordered[0..wide_level.len], wide_level);
+    std.mem.sort(NodeId, ordered[0..wide_level.len], centers, struct {
+        fn lessThan(
+            node_centers: []const f64,
+            left: NodeId,
+            right: NodeId,
+        ) bool {
+            if (node_centers[left] == node_centers[right]) return left < right;
+            return node_centers[left] < node_centers[right];
+        }
+    }.lessThan);
+
+    var cursor: f64 = 0;
+    for (ordered[0..wide_level.len], 0..) |node_id, index| {
+        cursor += sizes[node_id].width / 2.0;
+        candidate[node_id] = cursor;
+        cursor += sizes[node_id].width / 2.0;
+        if (index + 1 < wide_level.len) cursor += graphviz_default_nodesep;
+    }
+    const singleton = levels[singleton_rank].items[0];
+    const first = ordered[0];
+    const last = ordered[wide_level.len - 1];
+    candidate[singleton] =
+        (candidate[first] - sizes[first].width / 2.0 +
+            candidate[last] + sizes[last].width / 2.0) / 2.0;
+    normalizeCenters(candidate[0..centers.len], sizes);
+
+    if (!allRankCentersHaveClearance(
+        ranks,
+        candidate[0..centers.len],
+        sizes,
+    ) or countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        candidate[0..centers.len],
+        physical_depths,
+    ) != 0 or centersExtent(candidate[0..centers.len], sizes) >=
+        baseline_extent - 0.0001 or physicalCenterEdgeLength(
+        graph,
+        ranks,
+        candidate[0..centers.len],
+        physical_depths,
+    ) >= baseline_length - 0.0001) return;
+    @memcpy(centers, candidate[0..centers.len]);
 }
 
 fn refineExplicitRankCoordinateStress(
@@ -37437,6 +37543,70 @@ test "joint explicit-rank search leaves uncovered levels unchanged" {
         centers[free_0..][0..2],
     );
     try std.testing.expect(work.work > 0);
+}
+
+test "zero-crossing star compaction uses Graphviz default nodesep" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const sink = try graph.addNode("sink", .{});
+    for (1..9) |index| {
+        var label_buf: [16]u8 = undefined;
+        const leaf = try graph.addNode(
+            try std.fmt.bufPrint(&label_buf, "leaf{d}", .{index}),
+            .{},
+        );
+        _ = try graph.addEdge(leaf, sink, .{});
+    }
+
+    const ranks = [_]usize{ 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(allocator, &.{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    try levels[1].append(allocator, sink);
+    const sizes = [_]NodeSize{.{ .width = 54, .height = 36 }} ** 9;
+    var centers: [9]f64 = undefined;
+    for (1..9) |node_id| {
+        centers[node_id] = 27.0 +
+            @as(f64, @floatFromInt(node_id - 1)) * 90.0;
+    }
+    centers[sink] = (centers[1] + centers[8]) / 2.0;
+    const before_extent = centersExtent(&centers, &sizes);
+    const before_length = physicalCenterEdgeLength(
+        &graph,
+        &ranks,
+        &centers,
+        &.{ 18, 90 },
+    );
+
+    compactZeroCrossingStarIfHelpful(
+        &graph,
+        &levels,
+        &ranks,
+        &centers,
+        &sizes,
+        .{},
+    );
+
+    try std.testing.expectApproxEqAbs(
+        @as(f64, 72),
+        centers[2] - centers[1],
+        0.0001,
+    );
+    try std.testing.expect(centersExtent(&centers, &sizes) < before_extent);
+    try std.testing.expect(
+        physicalCenterEdgeLength(&graph, &ranks, &centers, &.{ 18, 90 }) <
+            before_length,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &centers,
+            &.{ 18, 90 },
+        ),
+    );
 }
 
 test "explicit rank slot sifting repacks heterogeneous widths" {

@@ -298,6 +298,13 @@ def main() -> int:
             1.00,
         ),
         (
+            "1855",
+            args.graphviz_root / "tests" / "1855.dot",
+            0,
+            1.00,
+            1.03,
+        ),
+        (
             "awilliams",
             args.graphviz_root / "tests" / "graphs" / "awilliams.gv",
             0,
