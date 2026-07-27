@@ -6183,9 +6183,22 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         projectOutgoingDfsOrder(
             layout_graph,
             levels,
+            ranks,
             centers,
             axis_sizes,
             effective_options.node_gap,
+        );
+        // DFS projection gives declaration-stable slots and restores each
+        // tail's ordering=out subsequence. One final constrained transpose can
+        // still improve unrelated nodes around those fixed subsequences; the
+        // ordering validator prevents it from undoing the public contract.
+        refineOrderedGraphCenterCrossings(
+            layout_graph,
+            levels,
+            ranks,
+            centers,
+            axis_sizes,
+            4,
         );
     }
     const explicit_rank_compacted = refineExplicitRankCoordinateStress(
@@ -13614,6 +13627,35 @@ fn applyOrderingHints(graph: *const Graph, levels: []std.ArrayList(NodeId), rank
     }
 }
 
+fn applyStableOrderingConstraints(
+    graph: *const Graph,
+    levels: []std.ArrayList(NodeId),
+    ranks: []const usize,
+) void {
+    const graph_mode = orderingMode(attrValue(graph.attrs.items, "ordering"));
+    // Later constraints receive any remaining freedom, but an earlier tail's
+    // already-established neighbor order is never inverted. This is a stable
+    // topological projection of all ordering subsequences, unlike repeatedly
+    // moving each sequence to the left edge of its rank.
+    for (0..graph.nodes.items.len) |node_offset| {
+        const node_id = graph.nodes.items.len - 1 - node_offset;
+        const node_item = graph.nodes.items[node_id];
+        const node_mode = orderingMode(attrValue(node_item.attrs.items, "ordering"));
+        const subgraph_mode = subgraphOrderingModeForNode(graph, node_item.id);
+        const mode = if (node_mode != .none)
+            node_mode
+        else if (subgraph_mode != .none)
+            subgraph_mode
+        else
+            graph_mode;
+        switch (mode) {
+            .none => {},
+            .out => applyNodeOrdering(graph, levels, ranks, node_item.id, true),
+            .in => applyNodeOrdering(graph, levels, ranks, node_item.id, false),
+        }
+    }
+}
+
 fn subgraphOrderingModeForNode(graph: *const Graph, node_id: NodeId) OrderingMode {
     const cluster_index = clusterIndexContainingNode(graph, node_id) orelse return .none;
     return orderingMode(layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, cluster_index, "ordering"));
@@ -15957,6 +15999,7 @@ fn refineExplicitRankSlotSifting(
 fn projectOutgoingDfsOrder(
     graph: *const Graph,
     levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
     centers: []f64,
     sizes: []const NodeSize,
     gap: f64,
@@ -15976,12 +16019,47 @@ fn projectOutgoingDfsOrder(
             &next_preorder,
         );
     }
+    // DFS projection is only a stable global starting order. Graphviz's
+    // ordering=out contract is per tail and follows distinct neighbor
+    // declaration order, so restore those local hard subsequences before
+    // assigning the final physical slots.
+    var projected_levels: [256]std.ArrayList(NodeId) = undefined;
+    if (levels.len > projected_levels.len) return;
+    for (levels, 0..) |level, rank| {
+        projected_levels[rank] = .empty;
+        projected_levels[rank].appendSlice(graph.allocator, level.items) catch {
+            for (projected_levels[0..rank]) |*projected| {
+                projected.deinit(graph.allocator);
+            }
+            return;
+        };
+    }
+    defer for (projected_levels[0..levels.len]) |*projected| {
+        projected.deinit(graph.allocator);
+    };
+    for (projected_levels[0..levels.len]) |*projected| {
+        std.mem.sort(NodeId, projected.items, preorder[0..graph.nodes.items.len], struct {
+            fn lessThan(order: []const usize, left: NodeId, right: NodeId) bool {
+                if (left >= order.len or right >= order.len) return left < right;
+                if (order[left] == order[right]) return left < right;
+                return order[left] < order[right];
+            }
+        }.lessThan);
+    }
+    applyStableOrderingConstraints(
+        graph,
+        projected_levels[0..levels.len],
+        ranks,
+    );
 
     var slots: [256]f64 = undefined;
     var ordered: [256]NodeId = undefined;
-    for (levels) |level| {
+    for (levels, 0..) |level, rank| {
         if (level.items.len <= 1 or level.items.len > ordered.len) continue;
-        @memcpy(ordered[0..level.items.len], level.items);
+        @memcpy(
+            ordered[0..level.items.len],
+            projected_levels[rank].items,
+        );
         var original_left = std.math.floatMax(f64);
         var original_right = -std.math.floatMax(f64);
         for (level.items) |node_id| {
@@ -15997,13 +16075,6 @@ fn projectOutgoingDfsOrder(
         }
         for (level.items, 0..) |node_id, index| slots[index] = centers[node_id];
         std.mem.sort(f64, slots[0..level.items.len], {}, lessThanF64);
-        std.mem.sort(NodeId, ordered[0..level.items.len], preorder[0..graph.nodes.items.len], struct {
-            fn lessThan(order: []const usize, left: NodeId, right: NodeId) bool {
-                if (left >= order.len or right >= order.len) return left < right;
-                if (order[left] == order[right]) return left < right;
-                return order[left] < order[right];
-            }
-        }.lessThan);
         var slots_legal = true;
         for (ordered[0..level.items.len], 0..) |node_id, index| {
             if (index == 0) continue;
@@ -16034,6 +16105,108 @@ fn projectOutgoingDfsOrder(
             cursor += sizes[node_id].width + gap;
         }
     }
+}
+
+fn refineOrderedGraphCenterCrossings(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    passes: usize,
+) void {
+    if (passes == 0 or
+        orderingMode(attrValue(graph.attrs.items, "ordering")) != .out) return;
+    var current = countDirectCenterCrossings(graph, ranks, centers);
+    for (0..passes) |_| {
+        var changed = false;
+        for (levels) |level| {
+            if (level.items.len <= 1 or level.items.len > 128) continue;
+            var ordered: [128]NodeId = undefined;
+            @memcpy(ordered[0..level.items.len], level.items);
+            std.mem.sort(NodeId, ordered[0..level.items.len], centers, struct {
+                fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                    if (node_centers[left] == node_centers[right]) return left < right;
+                    return node_centers[left] < node_centers[right];
+                }
+            }.lessThan);
+            var index: usize = 0;
+            while (index + 1 < level.items.len) {
+                const left = ordered[index];
+                const right = ordered[index + 1];
+                if (left >= centers.len or right >= centers.len or
+                    left >= sizes.len or right >= sizes.len or
+                    @abs(sizes[left].width - sizes[right].width) > 0.0001)
+                {
+                    index += 1;
+                    continue;
+                }
+                std.mem.swap(f64, &centers[left], &centers[right]);
+                std.mem.swap(NodeId, &ordered[index], &ordered[index + 1]);
+                const valid_order = orderingConstraintsSatisfiedByCenters(
+                    graph,
+                    ranks,
+                    centers,
+                );
+                const after = if (valid_order)
+                    countDirectCenterCrossings(graph, ranks, centers)
+                else
+                    current;
+                if (valid_order and after < current) {
+                    current = after;
+                    changed = true;
+                    if (index > 0) {
+                        index -= 1;
+                    } else {
+                        index += 1;
+                    }
+                } else {
+                    std.mem.swap(f64, &centers[left], &centers[right]);
+                    std.mem.swap(NodeId, &ordered[index], &ordered[index + 1]);
+                    index += 1;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+fn orderingConstraintsSatisfiedByCenters(
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []const f64,
+) bool {
+    for (graph.nodes.items) |node_item| {
+        const node_mode = orderingMode(attrValue(node_item.attrs.items, "ordering"));
+        const subgraph_mode = subgraphOrderingModeForNode(graph, node_item.id);
+        const graph_mode = orderingMode(attrValue(graph.attrs.items, "ordering"));
+        const mode = if (node_mode != .none)
+            node_mode
+        else if (subgraph_mode != .none)
+            subgraph_mode
+        else
+            graph_mode;
+        if (mode == .none) continue;
+
+        var previous_by_rank: [128]?NodeId = @splat(null);
+        for (graph.edges.items) |edge_item| {
+            const neighbor = if (mode == .out and edge_item.from == node_item.id)
+                edge_item.to
+            else if (mode == .in and edge_item.to == node_item.id)
+                edge_item.from
+            else
+                continue;
+            if (neighbor >= ranks.len or neighbor >= centers.len) continue;
+            const rank = ranks[neighbor];
+            if (rank >= previous_by_rank.len) return false;
+            if (previous_by_rank[rank]) |previous| {
+                if (previous >= centers.len or
+                    centers[previous] > centers[neighbor] + 0.0001) return false;
+            }
+            previous_by_rank[rank] = neighbor;
+        }
+    }
+    return true;
 }
 
 fn fillOutgoingDfsPreorder(
@@ -42211,6 +42384,48 @@ test "layered layout honors DOT ordering hints for edge declaration order" {
     const pc = nodeIdByLabel(&parallel, "c");
     try std.testing.expect(parallel_layout.nodes[pa].center.x < parallel_layout.nodes[pb].center.x);
     try std.testing.expect(parallel_layout.nodes[pb].center.x < parallel_layout.nodes[pc].center.x);
+
+    var overlapping_tails = try parseDot(allocator,
+        \\digraph G {
+        \\  ordering=out;
+        \\  { rank=same; "1"; "2"; }
+        \\  "1" -> "2";
+        \\  { rank=same; "4"; "5"; }
+        \\  "4" -> "5";
+        \\  "7" -> "5";
+        \\  "7" -> "4";
+        \\  "6" -> "1";
+        \\  "3" -> "6";
+        \\  "6" -> "4";
+        \\  "3" -> "8";
+        \\}
+    );
+    defer overlapping_tails.deinit();
+    var overlapping_layout = try layoutLayered(
+        allocator,
+        &overlapping_tails,
+        .{},
+    );
+    defer overlapping_layout.deinit();
+    const one = nodeIdByLabel(&overlapping_tails, "1");
+    const two = nodeIdByLabel(&overlapping_tails, "2");
+    const four = nodeIdByLabel(&overlapping_tails, "4");
+    const five = nodeIdByLabel(&overlapping_tails, "5");
+    try std.testing.expect(
+        overlapping_layout.nodes[one].center.x <
+            overlapping_layout.nodes[two].center.x,
+    );
+    try std.testing.expect(
+        overlapping_layout.nodes[five].center.x <
+            overlapping_layout.nodes[four].center.x,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        layoutAdjacentRankCrossingCount(
+            &overlapping_tails,
+            &overlapping_layout,
+        ),
+    );
 
     var incoming = try parseDot(allocator,
         \\digraph G {
