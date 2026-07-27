@@ -333,6 +333,13 @@ def main() -> int:
             1.22,
         ),
         (
+            "2521-local-timelines",
+            args.graphviz_root / "tests" / "2521_1.dot",
+            0,
+            1.07,
+            1.00,
+        ),
+        (
             "clust5-roundtrip",
             args.graphviz_root / "tests" / "share" / "clust5.gv",
             0,

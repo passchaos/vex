@@ -6003,6 +6003,10 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         ranks,
         &rank_edge_adjacency,
     );
+    _ = compactDisjointLocalClusterDagRanks(
+        layout_graph,
+        ranks,
+    );
 
     var max_rank: usize = 0;
     for (ranks) |rank| max_rank = @max(max_rank, rank);
@@ -10618,6 +10622,146 @@ fn alignIsolatedClusterMembersToActiveRank(
             ranks[node_id] = target;
         }
     }
+}
+
+fn compactDisjointLocalClusterDagRanks(
+    graph: *const Graph,
+    ranks: []usize,
+) bool {
+    const max_nodes: usize = 32;
+    const max_edges: usize = 64;
+    const max_clusters: usize = 8;
+    if (!graph.directed or clusterRankMode(graph) != .local or
+        attrValue(graph.attrs.items, "newrank") != null or
+        graph.nodes.items.len == 0 or graph.nodes.items.len > max_nodes or
+        graph.edges.items.len > max_edges or hasActiveRankConstraints(graph))
+    {
+        return false;
+    }
+
+    var cluster_ids: [max_clusters]SubgraphId = undefined;
+    var cluster_count: usize = 0;
+    for (graph.subgraphs.items) |subgraph| {
+        if (subgraph.parent != null) return false;
+        if (!subgraph.is_cluster) continue;
+        if (cluster_count >= cluster_ids.len or subgraphCompact(subgraph)) {
+            return false;
+        }
+        cluster_ids[cluster_count] = subgraph.id;
+        cluster_count += 1;
+    }
+    if (cluster_count < 2) return false;
+
+    var owner: [max_nodes]?usize = @splat(null);
+    for (cluster_ids[0..cluster_count], 0..) |subgraph_id, cluster_index| {
+        if (subgraph_id >= graph.subgraphs.items.len) return false;
+        const subgraph = graph.subgraphs.items[subgraph_id];
+        if (subgraph.nodes.len == 0) return false;
+        for (subgraph.nodes) |node_id| {
+            if (node_id >= graph.nodes.items.len or owner[node_id] != null) {
+                return false;
+            }
+            owner[node_id] = cluster_index;
+        }
+    }
+    for (owner[0..graph.nodes.items.len]) |node_owner| {
+        if (node_owner == null) return false;
+    }
+
+    var local_ranks: [max_nodes]usize = @splat(0);
+    var indegree: [max_nodes]usize = @splat(0);
+    var internal_edge_count: [max_clusters]usize = @splat(0);
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.from == edge_item.to or
+            edge_item.from >= graph.nodes.items.len or
+            edge_item.to >= graph.nodes.items.len) continue;
+        if (owner[edge_item.from] == owner[edge_item.to]) {
+            indegree[edge_item.to] += 1;
+            internal_edge_count[owner[edge_item.from].?] += 1;
+        }
+    }
+    for (internal_edge_count[0..cluster_count]) |count| {
+        if (count == 0) return false;
+    }
+    var queue: [max_nodes]NodeId = undefined;
+    var head: usize = 0;
+    var tail: usize = 0;
+    for (indegree[0..graph.nodes.items.len], 0..) |degree, node_id| {
+        if (degree == 0) {
+            queue[tail] = node_id;
+            tail += 1;
+        }
+    }
+    while (head < tail) : (head += 1) {
+        const node_id = queue[head];
+        for (graph.edges.items) |edge_item| {
+            if (!edge_item.constraint or edge_item.from != node_id or
+                edge_item.from == edge_item.to or
+                edge_item.to >= graph.nodes.items.len or
+                owner[edge_item.from] != owner[edge_item.to]) continue;
+            local_ranks[edge_item.to] = @max(
+                local_ranks[edge_item.to],
+                local_ranks[node_id] +| edge_item.min_len,
+            );
+            indegree[edge_item.to] -= 1;
+            if (indegree[edge_item.to] == 0) {
+                queue[tail] = edge_item.to;
+                tail += 1;
+            }
+        }
+    }
+    if (tail != graph.nodes.items.len) return false;
+
+    var bases: [max_clusters]isize = @splat(0);
+    // Graphviz replaces each inter-cluster edge with a virtual connection
+    // between collapsed leaders. The original minlen is already represented
+    // by the endpoint's local offset, so the base constraint is only
+    // nondecreasing: base[to] + local[to] >= base[from] + local[from].
+    // Keeping minlen again here would recreate the over-serialized global DAG.
+    for (0..cluster_count) |pass| {
+        var changed = false;
+        for (graph.edges.items) |edge_item| {
+            if (!edge_item.constraint or edge_item.from >= graph.nodes.items.len or
+                edge_item.to >= graph.nodes.items.len) continue;
+            const from_owner = owner[edge_item.from].?;
+            const to_owner = owner[edge_item.to].?;
+            if (from_owner == to_owner) continue;
+            const delta =
+                @as(isize, @intCast(local_ranks[edge_item.from])) -
+                @as(isize, @intCast(local_ranks[edge_item.to]));
+            const candidate = bases[from_owner] + delta;
+            if (candidate > bases[to_owner]) {
+                if (pass + 1 == cluster_count) return false;
+                bases[to_owner] = candidate;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+
+    var candidate: [max_nodes]usize = undefined;
+    var candidate_max: usize = 0;
+    var current_max: usize = 0;
+    for (ranks) |rank| current_max = @max(current_max, rank);
+    for (candidate[0..graph.nodes.items.len], 0..) |*rank, node_id| {
+        const base = bases[owner[node_id].?];
+        if (base < 0) return false;
+        rank.* = @as(usize, @intCast(base)) +| local_ranks[node_id];
+        candidate_max = @max(candidate_max, rank.*);
+    }
+    if (candidate_max >= current_max) return false;
+    for (graph.edges.items) |edge_item| {
+        if (!edge_item.constraint or edge_item.from >= graph.nodes.items.len or
+            edge_item.to >= graph.nodes.items.len) continue;
+        if (owner[edge_item.from] == owner[edge_item.to]) {
+            if (candidate[edge_item.to] <
+                candidate[edge_item.from] +| edge_item.min_len) return false;
+        } else if (candidate[edge_item.to] < candidate[edge_item.from]) {
+            return false;
+        }
+    }
+    @memcpy(ranks, candidate[0..graph.nodes.items.len]);
+    return true;
 }
 
 fn relaxRanksDepthFirst(
@@ -43033,6 +43177,78 @@ test "local cluster isolated members share its single active rank" {
     const pinned_id = nodeIdByLabel(&pinned, "pinned");
     try std.testing.expectEqual(pinned_layout.ranks[active], pinned_layout.ranks[free]);
     try std.testing.expectEqual(@as(usize, 0), pinned_layout.ranks[pinned_id]);
+}
+
+test "disjoint local DAG clusters collapse and expand local rank offsets" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_a { a1 -> a2 -> a3; }
+        \\  subgraph cluster_b { b1 -> b2 -> b3; }
+        \\  subgraph cluster_c { c1 -> c2 -> c3; }
+        \\  b1 -> a1;
+        \\  a1 -> b2;
+        \\  b2 -> c1;
+        \\  c1 -> a2;
+        \\  a2 -> b3;
+        \\  b3 -> a3;
+        \\  a3 -> c2;
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const a1 = nodeIdByLabel(&graph, "a1");
+    const a2 = nodeIdByLabel(&graph, "a2");
+    const a3 = nodeIdByLabel(&graph, "a3");
+    const b1 = nodeIdByLabel(&graph, "b1");
+    const b2 = nodeIdByLabel(&graph, "b2");
+    const b3 = nodeIdByLabel(&graph, "b3");
+    const c1 = nodeIdByLabel(&graph, "c1");
+    const c2 = nodeIdByLabel(&graph, "c2");
+    const c3 = nodeIdByLabel(&graph, "c3");
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[b1]);
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[a1]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[b2]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[a2]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[b3]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[c1]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[a3]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[c2]);
+    try std.testing.expectEqual(@as(usize, 3), layout.ranks[c3]);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        layoutAdjacentRankCrossingCount(&graph, &layout),
+    );
+}
+
+test "visual-only local clusters do not collapse cross-cluster chains" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  subgraph cluster_a { a; }
+        \\  subgraph cluster_b { b; }
+        \\  subgraph cluster_c { c; }
+        \\  a -> b -> c;
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        layout.ranks[nodeIdByLabel(&graph, "a")],
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        layout.ranks[nodeIdByLabel(&graph, "b")],
+    );
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        layout.ranks[nodeIdByLabel(&graph, "c")],
+    );
 }
 
 test "compact strong subgraph preserves explicit rank constraints" {
