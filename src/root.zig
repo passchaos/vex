@@ -14520,14 +14520,114 @@ fn refinePhysicalRankAdjacentCrossings(
     const physical_depths = rank_depths[0..rank_count];
     const baseline_stress = coordinateEdgeStress(graph, ranks, centers);
     const baseline_extent = centersExtent(centers, sizes);
+    const baseline_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    if (baseline_crossings == 0) return false;
+
+    var plateau_candidate: [128]f64 = undefined;
+    if (centers.len > plateau_candidate.len) return false;
+    @memcpy(plateau_candidate[0..centers.len], centers);
+    const strict_improved = refinePhysicalRankAdjacentCrossingPath(
+        graph,
+        levels,
+        ranks,
+        centers,
+        sizes,
+        physical_depths,
+        baseline_stress,
+        baseline_extent,
+        passes,
+        false,
+    );
+    _ = refinePhysicalRankAdjacentCrossingPath(
+        graph,
+        levels,
+        ranks,
+        plateau_candidate[0..centers.len],
+        sizes,
+        physical_depths,
+        baseline_stress,
+        baseline_extent,
+        passes,
+        true,
+    );
+
+    // Keep the strict-only path independently available. A stress plateau can
+    // open a better adjacent basin, but it can also steer an annotation-heavy
+    // round trip away from the strict path. Compare complete candidates by the
+    // public physical objective instead of letting one local trajectory erase
+    // the other.
+    const strict_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const plateau_crossings = countPhysicalCenterCrossings(
+        graph,
+        ranks,
+        plateau_candidate[0..centers.len],
+        physical_depths,
+    );
+    const strict_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        centers,
+        physical_depths,
+    );
+    const plateau_length = physicalCenterEdgeLength(
+        graph,
+        ranks,
+        plateau_candidate[0..centers.len],
+        physical_depths,
+    );
+    if (physicalRankCandidateIsBetter(
+        plateau_crossings,
+        plateau_length,
+        strict_crossings,
+        strict_length,
+    )) {
+        @memcpy(centers, plateau_candidate[0..centers.len]);
+        return plateau_crossings < baseline_crossings or
+            plateau_length + 0.0001 < strict_length;
+    }
+    return strict_improved;
+}
+
+fn physicalRankCandidateIsBetter(
+    candidate_crossings: usize,
+    candidate_length: f64,
+    incumbent_crossings: usize,
+    incumbent_length: f64,
+) bool {
+    return candidate_crossings < incumbent_crossings or
+        (candidate_crossings == incumbent_crossings and
+            candidate_length + 0.0001 < incumbent_length);
+}
+
+fn refinePhysicalRankAdjacentCrossingPath(
+    graph: *const Graph,
+    levels: []const std.ArrayList(NodeId),
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    physical_depths: []const f64,
+    baseline_stress: f64,
+    baseline_extent: f64,
+    passes: usize,
+    allow_stress_plateau: bool,
+) bool {
     var current_crossings = countPhysicalCenterCrossings(
         graph,
         ranks,
         centers,
         physical_depths,
     );
-    if (current_crossings == 0) return false;
-
+    var current_stress = coordinateEdgeStress(graph, ranks, centers);
     var improved = false;
     for (0..passes) |_| {
         var changed = false;
@@ -14556,11 +14656,15 @@ fn refinePhysicalRankAdjacentCrossings(
                     continue;
                 };
                 applySmallDirectedCenterSwap(centers, move, true);
+                const after_stress = coordinateEdgeStress(
+                    graph,
+                    ranks,
+                    centers,
+                );
                 const legal =
                     centerLevelHasClearance(level.items, centers, sizes) and
                     centersExtent(centers, sizes) <= baseline_extent + 0.0001 and
-                    coordinateEdgeStress(graph, ranks, centers) <=
-                        baseline_stress * 1.04 + 0.0001;
+                    after_stress <= baseline_stress * 1.04 + 0.0001;
                 const after_crossings = if (legal)
                     countPhysicalCenterCrossings(
                         graph,
@@ -14570,8 +14674,14 @@ fn refinePhysicalRankAdjacentCrossings(
                     )
                 else
                     current_crossings;
-                if (legal and after_crossings < current_crossings) {
+                const accept = legal and
+                    (after_crossings < current_crossings or
+                        (allow_stress_plateau and
+                            after_crossings == current_crossings and
+                            after_stress + 0.0001 < current_stress));
+                if (accept) {
                     current_crossings = after_crossings;
+                    current_stress = after_stress;
                     std.mem.swap(
                         NodeId,
                         &ordered[index],
@@ -38346,6 +38456,100 @@ test "physical rank transpose reduces crossings across unequal rank heights" {
     try std.testing.expect(
         coordinateEdgeStress(&graph, &ranks, &centers) <=
             before_stress * 1.04 + 0.0001,
+    );
+}
+
+test "physical rank plateau cannot replace a lower-crossing strict path" {
+    try std.testing.expect(!physicalRankCandidateIsBetter(
+        5,
+        80,
+        4,
+        100,
+    ));
+    try std.testing.expect(physicalRankCandidateIsBetter(
+        4,
+        90,
+        4,
+        100,
+    ));
+    try std.testing.expect(!physicalRankCandidateIsBetter(
+        4,
+        110,
+        4,
+        100,
+    ));
+}
+
+test "physical rank plateau may cross an equal-crossing stress tie" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const upper_left = try graph.addNode("upper-left", .{});
+    const upper_right = try graph.addNode("upper-right", .{});
+    const lower = try graph.addNode("lower", .{});
+    _ = try graph.addEdge(upper_right, lower, .{});
+
+    const ranks = [_]usize{ 0, 0, 1 };
+    var levels = [_]std.ArrayList(NodeId){ .empty, .empty };
+    defer for (&levels) |*level| level.deinit(allocator);
+    try levels[0].appendSlice(
+        allocator,
+        &.{ upper_left, upper_right },
+    );
+    try levels[1].append(allocator, lower);
+    const sizes = [_]NodeSize{
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+        .{ .width = 20, .height = 20 },
+    };
+    const original = [_]f64{ 10, 50, 10 };
+    var strict_centers = original;
+    var plateau_centers = original;
+    const baseline_stress = coordinateEdgeStress(
+        &graph,
+        &ranks,
+        &original,
+    );
+    const baseline_extent = centersExtent(&original, &sizes);
+
+    try std.testing.expect(!refinePhysicalRankAdjacentCrossingPath(
+        &graph,
+        &levels,
+        &ranks,
+        &strict_centers,
+        &sizes,
+        &.{ 10, 90 },
+        baseline_stress,
+        baseline_extent,
+        1,
+        false,
+    ));
+    try std.testing.expectEqualSlices(f64, &original, &strict_centers);
+
+    try std.testing.expect(refinePhysicalRankAdjacentCrossingPath(
+        &graph,
+        &levels,
+        &ranks,
+        &plateau_centers,
+        &sizes,
+        &.{ 10, 90 },
+        baseline_stress,
+        baseline_extent,
+        1,
+        true,
+    ));
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        countPhysicalCenterCrossings(
+            &graph,
+            &ranks,
+            &plateau_centers,
+            &.{ 10, 90 },
+        ),
+    );
+    try std.testing.expect(
+        coordinateEdgeStress(&graph, &ranks, &plateau_centers) + 0.0001 <
+            baseline_stress,
     );
 }
 

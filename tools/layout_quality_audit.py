@@ -405,7 +405,7 @@ def main() -> int:
         (
             "NaN",
             args.graphviz_root / "tests" / "graphs" / "NaN.gv",
-            51,
+            48,
             1.00,
             1.00,
         ),
@@ -429,6 +429,13 @@ def main() -> int:
             2,
             1.15,
             1.25,
+        ),
+        (
+            "rankdir-roundtrip",
+            args.graphviz_root / "tests" / "linux.x86" / "rankdir_dot.gv",
+            4,
+            1.00,
+            1.14,
         ),
         (
             "pgram",
