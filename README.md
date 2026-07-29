@@ -51,9 +51,9 @@ cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
 
 Math-heavy graph and data-visualization labels can opt into ztex-powered
-TeX-like formula rendering with `vex_math_label=true` on graph/node/edge label
+TeX-like formula rendering with `enable_math_label=true` on graph/node/edge label
 attributes, including mixed text plus inline formulas such as
-`node [vex_math_label=true]; a [label="Energy $\\frac{x_1}{y^2}$"]`.
+`node [enable_math_label=true]; a [label="Energy $\\frac{x_1}{y^2}$"]`.
 Vex owns the DOT/Graphviz label policy and SVG placement; ztex supplies the
 reusable formula parsing, mixed-label measurement, layout, metrics, and SVG
 fragment primitives.

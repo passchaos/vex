@@ -300,7 +300,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_minimap: bool,
     vex_interactive_stats: bool,
     vex_svg_metadata: bool,
-    vex_math_label: bool,
+    enable_math_label: bool,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -371,7 +371,7 @@ pub const NodeAttr = union(enum) {
     labelloc: LabelLoc,
     labeljust: LabelJust,
     nojustify: bool,
-    vex_math_label: bool,
+    enable_math_label: bool,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -437,7 +437,7 @@ pub const NodeOptions = struct {
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
     nojustify: ?bool = null,
-    vex_math_label: ?bool = null,
+    enable_math_label: ?bool = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -511,7 +511,7 @@ pub const EdgeOptions = struct {
     labelfloat: ?bool = null,
     labelaligned: ?bool = null,
     nojustify: ?bool = null,
-    vex_math_label: ?bool = null,
+    enable_math_label: ?bool = null,
     decorate: ?bool = null,
     tailclip: ?bool = null,
     headclip: ?bool = null,
@@ -586,7 +586,7 @@ pub const EdgeAttr = union(enum) {
     labelfloat: bool,
     labelaligned: bool,
     nojustify: bool,
-    vex_math_label: bool,
+    enable_math_label: bool,
     decorate: bool,
     tailclip: bool,
     headclip: bool,
@@ -633,7 +633,7 @@ pub const SubgraphAttr = union(enum) {
     labelloc: LabelLoc,
     labeljust: LabelJust,
     nojustify: bool,
-    vex_math_label: bool,
+    enable_math_label: bool,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -678,7 +678,7 @@ pub const SubgraphOptions = struct {
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
     nojustify: ?bool = null,
-    vex_math_label: ?bool = null,
+    enable_math_label: ?bool = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -1180,7 +1180,7 @@ pub const Graph = struct {
             .vex_interactive_minimap => |value| try self.setGraphAttrRaw("vex_interactive_minimap", boolAttrValue(value)),
             .vex_interactive_stats => |value| try self.setGraphAttrRaw("vex_interactive_stats", boolAttrValue(value)),
             .vex_svg_metadata => |value| try self.setGraphAttrRaw("vex_svg_metadata", boolAttrValue(value)),
-            .vex_math_label => |value| try self.setGraphAttrRaw("vex_math_label", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setGraphAttrRaw("enable_math_label", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -1279,7 +1279,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setDefaultNodeAttrRaw("labelloc", value.name()),
             .labeljust => |value| try self.setDefaultNodeAttrRaw("labeljust", value.name()),
             .nojustify => |value| try self.setDefaultNodeAttrRaw("nojustify", boolAttrValue(value)),
-            .vex_math_label => |value| try self.setDefaultNodeAttrRaw("vex_math_label", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setDefaultNodeAttrRaw("enable_math_label", boolAttrValue(value)),
             .url => |value| try self.setDefaultNodeAttrRaw("URL", value),
             .href => |value| try self.setDefaultNodeAttrRaw("href", value),
             .tooltip => |value| try self.setDefaultNodeAttrRaw("tooltip", value),
@@ -1393,7 +1393,7 @@ pub const Graph = struct {
             .labelfloat => |value| try self.setDefaultEdgeAttrRaw("labelfloat", boolAttrValue(value)),
             .labelaligned => |value| try self.setDefaultEdgeAttrRaw("labelaligned", boolAttrValue(value)),
             .nojustify => |value| try self.setDefaultEdgeAttrRaw("nojustify", boolAttrValue(value)),
-            .vex_math_label => |value| try self.setDefaultEdgeAttrRaw("vex_math_label", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setDefaultEdgeAttrRaw("enable_math_label", boolAttrValue(value)),
             .decorate => |value| try self.setDefaultEdgeAttrRaw("decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
@@ -1469,7 +1469,7 @@ pub const Graph = struct {
         if (options.labelloc) |value| try self.setNodeAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setNodeAttr(id, .{ .labeljust = value });
         if (options.nojustify) |value| try self.setNodeAttr(id, .{ .nojustify = value });
-        if (options.vex_math_label) |value| try self.setNodeAttr(id, .{ .vex_math_label = value });
+        if (options.enable_math_label) |value| try self.setNodeAttr(id, .{ .enable_math_label = value });
         if (options.url) |value| try self.setNodeAttr(id, .{ .url = value });
         if (options.href) |value| try self.setNodeAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setNodeAttr(id, .{ .tooltip = value });
@@ -1537,7 +1537,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setNodeAttrRaw(id, "labelloc", value.name()),
             .labeljust => |value| try self.setNodeAttrRaw(id, "labeljust", value.name()),
             .nojustify => |value| try self.setNodeAttrRaw(id, "nojustify", boolAttrValue(value)),
-            .vex_math_label => |value| try self.setNodeAttrRaw(id, "vex_math_label", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setNodeAttrRaw(id, "enable_math_label", boolAttrValue(value)),
             .url => |value| try self.setNodeAttrRaw(id, "URL", value),
             .href => |value| try self.setNodeAttrRaw(id, "href", value),
             .tooltip => |value| try self.setNodeAttrRaw(id, "tooltip", value),
@@ -1651,7 +1651,7 @@ pub const Graph = struct {
         if (options.labelfloat) |value| try self.setEdgeAttr(id, .{ .labelfloat = value });
         if (options.labelaligned) |value| try self.setEdgeAttr(id, .{ .labelaligned = value });
         if (options.nojustify) |value| try self.setEdgeAttr(id, .{ .nojustify = value });
-        if (options.vex_math_label) |value| try self.setEdgeAttr(id, .{ .vex_math_label = value });
+        if (options.enable_math_label) |value| try self.setEdgeAttr(id, .{ .enable_math_label = value });
         if (options.decorate) |value| try self.setEdgeAttr(id, .{ .decorate = value });
         if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
@@ -1729,7 +1729,7 @@ pub const Graph = struct {
             .labelfloat => |value| try self.setEdgeAttrRaw(id, "labelfloat", boolAttrValue(value)),
             .labelaligned => |value| try self.setEdgeAttrRaw(id, "labelaligned", boolAttrValue(value)),
             .nojustify => |value| try self.setEdgeAttrRaw(id, "nojustify", boolAttrValue(value)),
-            .vex_math_label => |value| try self.setEdgeAttrRaw(id, "vex_math_label", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setEdgeAttrRaw(id, "enable_math_label", boolAttrValue(value)),
             .decorate => |value| try self.setEdgeAttrRaw(id, "decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
@@ -1887,7 +1887,7 @@ pub const Graph = struct {
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setSubgraphAttr(id, .{ .labeljust = value });
         if (options.nojustify) |value| try self.setSubgraphAttr(id, .{ .nojustify = value });
-        if (options.vex_math_label) |value| try self.setSubgraphAttr(id, .{ .vex_math_label = value });
+        if (options.enable_math_label) |value| try self.setSubgraphAttr(id, .{ .enable_math_label = value });
         if (options.url) |value| try self.setSubgraphAttr(id, .{ .url = value });
         if (options.href) |value| try self.setSubgraphAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setSubgraphAttr(id, .{ .tooltip = value });
@@ -1960,7 +1960,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", value.name()),
             .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", value.name()),
             .nojustify => |value| try self.setSubgraphAttrRaw(id, "nojustify", boolAttrValue(value)),
-            .vex_math_label => |value| try self.setSubgraphAttrRaw(id, "vex_math_label", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setSubgraphAttrRaw(id, "enable_math_label", boolAttrValue(value)),
             .url => |value| try self.setSubgraphAttrRaw(id, "URL", value),
             .href => |value| try self.setSubgraphAttrRaw(id, "href", value),
             .tooltip => |value| try self.setSubgraphAttrRaw(id, "tooltip", value),
@@ -28370,7 +28370,7 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
 }
 
 fn mathLabelEnabled(attrs: []const Attr) bool {
-    const value = attrValue(attrs, "vex_math_label") orelse return false;
+    const value = attrValue(attrs, "enable_math_label") orelse return false;
     return parseBool(value) orelse false;
 }
 
@@ -39119,7 +39119,7 @@ test "SVG renderer falls back from textPath for ztex math edge labels" {
     _ = try graph.addEdge(a, b, .{
         .label = "cost $a^2$",
         .labelaligned = true,
-        .vex_math_label = true,
+        .enable_math_label = true,
         .fontsize = 16,
     });
 
@@ -48081,7 +48081,7 @@ test "ztex math labels size and render mixed inline formulas through opt-in Vex 
     const formula = try graph.addNode("Energy $\\frac{x_1}{y^2}$", .{
         .shape = .plain,
         .fontsize = 18,
-        .vex_math_label = true,
+        .enable_math_label = true,
     });
     const literal = try graph.addNode("Energy $\\frac{x_1}{y^2}$", .{
         .shape = .plain,
@@ -48090,7 +48090,7 @@ test "ztex math labels size and render mixed inline formulas through opt-in Vex 
     _ = try graph.addEdge(formula, literal, .{
         .label = "cost $a^2$",
         .fontsize = 16,
-        .vex_math_label = true,
+        .enable_math_label = true,
     });
 
     const options = layoutOptionsWithGraphAttrs(.{}, &graph);
