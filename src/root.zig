@@ -7162,7 +7162,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
     switch (graphNeatoMode(graph)) {
         .major => try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work),
-        .kk => try solveKamadaKawaiPositions(positions, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work),
+        .kk => try solveKamadaKawaiPositions(positions, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), graphKamadaKawaiDamping(graph), work),
     }
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
@@ -7388,6 +7388,12 @@ fn graphNeatoMode(graph: *const Graph) NeatoMode {
     return .major;
 }
 
+fn graphKamadaKawaiDamping(graph: *const Graph) f64 {
+    const value = attrValue(graph.attrs.items, "Damping") orelse return 1.0;
+    const parsed = std.fmt.parseFloat(f64, value) catch return 1.0;
+    return if (std.math.isFinite(parsed) and parsed >= 0) parsed else 1.0;
+}
+
 fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankdir: RankDir, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) void {
     const n = positions.len;
     const cx = options.width / 2.0;
@@ -7474,6 +7480,7 @@ fn solveKamadaKawaiPositions(
     anchors: []const Point,
     stability: f64,
     epsilon: ?f64,
+    damping: f64,
     work: ?*LayoutWorkTracker,
 ) !void {
     if (positions.len != distances.node_count) return error.InvalidStressLayoutState;
@@ -7497,6 +7504,8 @@ fn solveKamadaKawaiPositions(
             step.x *= scale;
             step.y *= scale;
         }
+        step.x *= damping;
+        step.y *= damping;
 
         positions[node_id].x += step.x;
         positions[node_id].y += step.y;
@@ -29507,9 +29516,72 @@ test "neato mode KK uses Kamada-Kawai optimization path" {
         .{ .x = 210, .y = 130 },
     };
     const before = stressLayoutEnergy(&positions, distances);
-    try solveKamadaKawaiPositions(&positions, distances, 30, &.{}, 0, null, null);
+    try solveKamadaKawaiPositions(&positions, distances, 30, &.{}, 0, null, 1.0, null);
     const after = stressLayoutEnergy(&positions, distances);
     try std.testing.expect(after < before);
+}
+
+test "neato mode KK honors Graphviz Damping step factor" {
+    const allocator = std.testing.allocator;
+    var frozen = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, mode=KK, start=random17, maxiter=20, Damping=0];
+        \\  a -- b -- c -- d -- a;
+        \\  a -- c;
+        \\}
+    );
+    defer frozen.deinit();
+    var damped = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, mode=KK, start=random17, maxiter=20, Damping=0.5];
+        \\  a -- b -- c -- d -- a;
+        \\  a -- c;
+        \\}
+    );
+    defer damped.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), graphKamadaKawaiDamping(&frozen), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), graphKamadaKawaiDamping(&damped), 0.000001);
+
+    const distances = try stressGraphDistances(allocator, &damped);
+    defer allocator.free(distances.values);
+    const original = [_]Point{
+        .{ .x = 20, .y = 20 },
+        .{ .x = 380, .y = 20 },
+        .{ .x = 30, .y = 260 },
+        .{ .x = 370, .y = 250 },
+    };
+    var frozen_positions = original;
+    var damped_positions = original;
+    try solveKamadaKawaiPositions(
+        &frozen_positions,
+        distances,
+        20,
+        &.{},
+        0,
+        null,
+        graphKamadaKawaiDamping(&frozen),
+        null,
+    );
+    try solveKamadaKawaiPositions(
+        &damped_positions,
+        distances,
+        20,
+        &.{},
+        0,
+        null,
+        graphKamadaKawaiDamping(&damped),
+        null,
+    );
+
+    for (frozen_positions, original) |actual, expected| {
+        try std.testing.expectApproxEqAbs(@as(f64, 0.0), distanceBetween(actual, expected), 0.000001);
+    }
+    var displacement: f64 = 0;
+    for (damped_positions, original) |actual, expected| {
+        displacement += distanceBetween(actual, expected);
+    }
+    try std.testing.expect(displacement > 0.1);
 }
 
 test "neato stress majorization lowers graph stress" {
