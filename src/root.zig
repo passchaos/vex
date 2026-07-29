@@ -7125,7 +7125,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
-    try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, work);
+    try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work);
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
     if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
@@ -7306,6 +7306,12 @@ fn nodesAdjacent(graph: *const Graph, left: NodeId, right: NodeId) bool {
     return false;
 }
 
+fn stressEpsilon(graph: *const Graph) ?f64 {
+    const value = attrValue(graph.attrs.items, "epsilon") orelse return null;
+    const parsed = std.fmt.parseFloat(f64, value) catch return null;
+    return if (std.math.isFinite(parsed) and parsed >= 0) parsed else null;
+}
+
 fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankdir: RankDir, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) void {
     const n = positions.len;
     const cx = options.width / 2.0;
@@ -7331,9 +7337,19 @@ fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankd
     }
 }
 
-fn majorizeStressPositions(positions: []Point, scratch: []Point, distances: StressGraphDistances, iterations: usize, anchors: []const Point, stability: f64, work: ?*LayoutWorkTracker) !void {
+fn majorizeStressPositions(
+    positions: []Point,
+    scratch: []Point,
+    distances: StressGraphDistances,
+    iterations: usize,
+    anchors: []const Point,
+    stability: f64,
+    epsilon: ?f64,
+    work: ?*LayoutWorkTracker,
+) !void {
     if (positions.len != scratch.len or positions.len != distances.node_count) return error.InvalidStressLayoutState;
     const ideal_length: f64 = 72.0;
+    var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergy(positions, distances) else null;
     for (0..iterations) |_| {
         if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| 1);
         for (positions, 0..) |position, from| {
@@ -7371,6 +7387,13 @@ fn majorizeStressPositions(positions: []Point, scratch: []Point, distances: Stre
             }
         }
         @memcpy(positions, scratch);
+        if (epsilon) |threshold| {
+            const current_energy = stressLayoutEnergy(positions, distances);
+            const previous = previous_energy.?;
+            const change = @abs(previous - current_energy);
+            if (current_energy < threshold or (previous > 0 and change / previous < threshold)) break;
+            previous_energy = current_energy;
+        }
     }
 }
 
@@ -29093,6 +29116,35 @@ test "neato subset model separates asymmetric neighborhoods" {
     try std.testing.expect(sharedNodeDisplacement(&short_layout, &subset_layout, shortpath.nodes.items.len) > 0.1);
 }
 
+test "neato honors Graphviz epsilon as stress convergence threshold" {
+    const allocator = std.testing.allocator;
+    var strict = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random3, maxiter=80];
+        \\  a -- b -- c -- d -- a;
+        \\  a -- c;
+        \\}
+    );
+    defer strict.deinit();
+    var loose = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random3, maxiter=80, epsilon=1];
+        \\  a -- b -- c -- d -- a;
+        \\  a -- c;
+        \\}
+    );
+    defer loose.deinit();
+
+    try std.testing.expectEqual(@as(?f64, null), stressEpsilon(&strict));
+    try std.testing.expectEqual(@as(?f64, 1.0), stressEpsilon(&loose));
+
+    var strict_layout = try layoutGraph(allocator, &strict, .{ .algorithm = .auto });
+    defer strict_layout.deinit();
+    var loose_layout = try layoutGraph(allocator, &loose, .{ .algorithm = .auto });
+    defer loose_layout.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&strict_layout, &loose_layout, strict.nodes.items.len) > 0.1);
+}
+
 test "neato stress majorization lowers graph stress" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -29116,7 +29168,7 @@ test "neato stress majorization lowers graph stress" {
     };
     var scratch: [positions.len]Point = undefined;
     const before = stressLayoutEnergy(&positions, distances);
-    try majorizeStressPositions(&positions, &scratch, distances, 60, &.{}, 0, null);
+    try majorizeStressPositions(&positions, &scratch, distances, 60, &.{}, 0, null, null);
     const after = stressLayoutEnergy(&positions, distances);
     try std.testing.expect(after < before * 0.25);
 }
