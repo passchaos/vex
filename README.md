@@ -96,7 +96,8 @@ as final and never applies overlap adjustment.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
 `graph [vex_layout_iterations=20]` or
-`graph [layout_iterations=20]`, and the Zig API can pass
+`graph [layout_iterations=20]`; force-style Graphviz input can also use
+`graph [maxiter=20]`, and the Zig API can pass
 `.{ .force = .{ .iterations = 20 } }`.
 `--layout-work-budget` provides a deterministic cross-engine cancellation
 budget for CI and bounded previews. The Zig API can use a custom

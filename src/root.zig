@@ -5876,7 +5876,8 @@ fn forceOptionsForAlgorithm(
     var result = forceLayoutOptionsWithGraphAttrs(options, graph);
     const explicit_iterations =
         attrValue(graph.attrs.items, "vex_layout_iterations") != null or
-        attrValue(graph.attrs.items, "layout_iterations") != null;
+        attrValue(graph.attrs.items, "layout_iterations") != null or
+        attrValue(graph.attrs.items, "maxiter") != null;
     if (algorithm == .multilevel_spring_electrical and
         !explicit_iterations and
         options.iterations == (ForceLayoutOptions{}).iterations)
@@ -28723,6 +28724,47 @@ test "neato layout honors iteration budget from DOT and typed API" {
     try std.testing.expect(distanceBetween(low_budget.nodes[0].center, higher_budget.nodes[0].center) > 0.1);
 }
 
+test "force layouts honor Graphviz maxiter as iteration budget" {
+    const allocator = std.testing.allocator;
+    var low_graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer low_graph.deinit();
+    var high_graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=40];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer high_graph.deinit();
+
+    var low_budget = try layoutGraph(allocator, &low_graph, .{ .algorithm = .auto });
+    defer low_budget.deinit();
+    var high_budget = try layoutGraph(allocator, &high_graph, .{ .algorithm = .auto });
+    defer high_budget.deinit();
+
+    try std.testing.expectEqualStrings("1", attrValue(low_graph.attrs.items, "maxiter").?);
+    try std.testing.expectEqualStrings("40", attrValue(high_graph.attrs.items, "maxiter").?);
+    try std.testing.expect(distanceBetween(low_budget.nodes[0].center, high_budget.nodes[0].center) > 0.1);
+}
+
+test "Vex force iteration attrs override Graphviz maxiter" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=1, vex_layout_iterations=40];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer graph.deinit();
+
+    const options = forceLayoutOptionsWithGraphAttrs(.{}, &graph);
+    try std.testing.expectEqual(@as(usize, 40), options.iterations);
+}
+
 test "neato stress graph distances follow shortest paths" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator, "graph G { a -- b -- c -- d; }");
@@ -28955,6 +28997,16 @@ test "sfdp default quality budget exceeds the shared force default" {
         .multilevel_spring_electrical,
     );
     try std.testing.expectEqual(@as(usize, 19), dot_explicit.iterations);
+
+    var maxiter_graph = try Graph.init(allocator, .{ .directed = false });
+    defer maxiter_graph.deinit();
+    try maxiter_graph.setGraphAttrRaw("maxiter", "31");
+    const maxiter_explicit = forceOptionsForAlgorithm(
+        defaults,
+        &maxiter_graph,
+        .multilevel_spring_electrical,
+    );
+    try std.testing.expectEqual(@as(usize, 31), maxiter_explicit.iterations);
 }
 
 test "sfdp is distinct from fdp and neato on a larger graph" {

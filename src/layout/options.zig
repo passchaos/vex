@@ -217,6 +217,8 @@ pub fn withForceGraphAttrs(base: ForceLayoutOptions, graph_attrs: anytype) Force
     var result = base;
     if (attrValue(graph_attrs, "vex_layout_iterations") orelse attrValue(graph_attrs, "layout_iterations")) |value| {
         result.iterations = positiveAttrUsize(value, result.iterations);
+    } else if (attrValue(graph_attrs, "maxiter")) |value| {
+        result.iterations = attrUsize(value, result.iterations);
     }
     return result;
 }
