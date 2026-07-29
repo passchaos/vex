@@ -273,6 +273,8 @@ pub const GraphAttr = union(enum) {
     ratio: GraphRatio,
     dpi: f64,
     resolution: f64,
+    dim: usize,
+    dimen: usize,
     vex_layout_iterations: usize,
     vex_crossing_passes: usize,
     vex_coordinate_passes: usize,
@@ -1124,6 +1126,16 @@ pub const Graph = struct {
             },
             .dpi => |value| try self.setGraphAttrFloat("dpi", value),
             .resolution => |value| try self.setGraphAttrFloat("resolution", value),
+            .dim => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("dim", text);
+            },
+            .dimen => |value| {
+                var buffer: [32]u8 = undefined;
+                const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
+                try self.setGraphAttrRaw("dimen", text);
+            },
             .vex_layout_iterations => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
@@ -28959,6 +28971,37 @@ test "force layouts keep Graphviz numeric start seed reproducible" {
     defer second_layout.deinit();
 
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), sharedNodeDisplacement(&first_layout, &second_layout, first.nodes.items.len), 0.000001);
+}
+
+test "force layouts preserve Graphviz dim and dimen attributes on 2D output" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, dim=3, dimen=2];
+        \\  a -- b -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    try std.testing.expectEqualStrings("3", attrValue(graph.attrs.items, "dim").?);
+    try std.testing.expectEqualStrings("2", attrValue(graph.attrs.items, "dimen").?);
+    for (layout.nodes) |node| {
+        try std.testing.expect(std.math.isFinite(node.center.x));
+        try std.testing.expect(std.math.isFinite(node.center.y));
+    }
+}
+
+test "typed graph dim and dimen attrs serialize Graphviz names" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = false });
+    defer graph.deinit();
+
+    try graph.setGraphAttr(.{ .dim = 3 });
+    try graph.setGraphAttr(.{ .dimen = 2 });
+    try std.testing.expectEqualStrings("3", attrValue(graph.attrs.items, "dim").?);
+    try std.testing.expectEqualStrings("2", attrValue(graph.attrs.items, "dimen").?);
 }
 
 test "neato stress graph distances follow shortest paths" {
