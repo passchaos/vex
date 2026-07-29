@@ -316,6 +316,7 @@ zig build run-api-circo-layout-svg
 zig build run-api-patchwork-layout-svg
 zig build run-api-osage-layout-svg
 zig build run-api-positioned-layout-svg
+zig build run-api-math-labels-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -335,6 +336,7 @@ They progress from small SVG output to broader feature coverage:
 - `13_patchwork_layout_svg.zig`: hierarchical node/subgraph areas rendered as a squarified treemap.
 - `14_osage_layout_svg.zig`: nested subgraphs and intrinsic node rectangles rendered with deterministic array packing.
 - `15_positioned_layout_svg.zig`: typed pre-positioned nodes and a preserved nop2 cubic edge rendered to SVG.
+- `16_math_labels_svg.zig`: ztex-powered mixed text + inline math labels on nodes and edges.
 
 ## Graphviz compatibility target
 

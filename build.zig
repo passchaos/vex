@@ -356,6 +356,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/15_positioned_layout_svg.zig",
             .desc = "Run API example: nop2 positioned nodes and edge spline",
         },
+        .{
+            .step_name = "run-api-math-labels-svg",
+            .exe_name = "api-math-labels-svg",
+            .source = "examples/api/16_math_labels_svg.zig",
+            .desc = "Run API example: ztex math labels in SVG",
+        },
     };
 
     for (api_examples) |example| {
