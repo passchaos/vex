@@ -7244,9 +7244,13 @@ fn stressGraphDistances(allocator: std.mem.Allocator, graph: *const Graph) !Stre
     const values = try allocator.alloc(f64, n * n);
     @memset(values, std.math.inf(f64));
     for (0..n) |id| values[id * n + id] = 0;
+    const subset_model = graphUsesNeatoSubsetModel(graph);
     for (graph.edges.items) |edge_item| {
         if (edge_item.from >= n or edge_item.to >= n or edge_item.from == edge_item.to) continue;
-        const length = parsePositiveAttrFloat(edge_item.attrs.items, "len", 1.0);
+        const length = if (subset_model)
+            subsetModelEdgeLength(graph, edge_item)
+        else
+            parsePositiveAttrFloat(edge_item.attrs.items, "len", 1.0);
         const forward = edge_item.from * n + edge_item.to;
         const reverse = edge_item.to * n + edge_item.from;
         values[forward] = @min(values[forward], length);
@@ -7271,6 +7275,35 @@ fn stressGraphDistances(allocator: std.mem.Allocator, graph: *const Graph) !Stre
         if (std.math.isFinite(distance)) max_finite = @max(max_finite, distance);
     }
     return .{ .values = values, .node_count = n, .max_finite = max_finite };
+}
+
+fn graphUsesNeatoSubsetModel(graph: *const Graph) bool {
+    const value = attrValue(graph.attrs.items, "model") orelse return false;
+    return std.ascii.eqlIgnoreCase(value, "subset");
+}
+
+fn subsetModelEdgeLength(graph: *const Graph, edge_item: Edge) f64 {
+    var count: usize = 0;
+    for (graph.nodes.items) |node_item| {
+        const node_id = node_item.id;
+        if (node_id == edge_item.from or node_id == edge_item.to) continue;
+        const left = nodesAdjacent(graph, edge_item.from, node_id);
+        const right = nodesAdjacent(graph, edge_item.to, node_id);
+        if (left != right) count += 1;
+    }
+    return @floatFromInt(@max(count, 1));
+}
+
+fn nodesAdjacent(graph: *const Graph, left: NodeId, right: NodeId) bool {
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from == edge_item.to) continue;
+        if ((edge_item.from == left and edge_item.to == right) or
+            (edge_item.from == right and edge_item.to == left))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankdir: RankDir, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) void {
@@ -29016,6 +29049,48 @@ test "neato stress graph distances follow shortest paths" {
     try std.testing.expectEqual(@as(f64, 2), distances.at(0, 2));
     try std.testing.expectEqual(@as(f64, 3), distances.at(0, 3));
     try std.testing.expectEqual(distances.at(0, 3), distances.at(3, 0));
+}
+
+test "neato subset model separates asymmetric neighborhoods" {
+    const allocator = std.testing.allocator;
+    var shortpath = try parseDot(allocator,
+        \\graph G {
+        \\  hub -- bridge;
+        \\  hub -- h1;
+        \\  hub -- h2;
+        \\  bridge -- tail;
+        \\}
+    );
+    defer shortpath.deinit();
+    var subset = try parseDot(allocator,
+        \\graph G {
+        \\  graph [model=subset];
+        \\  hub -- bridge;
+        \\  hub -- h1;
+        \\  hub -- h2;
+        \\  bridge -- tail;
+        \\}
+    );
+    defer subset.deinit();
+
+    const short_distances = try stressGraphDistances(allocator, &shortpath);
+    defer allocator.free(short_distances.values);
+    const subset_distances = try stressGraphDistances(allocator, &subset);
+    defer allocator.free(subset_distances.values);
+    const hub = nodeIdByLabel(&subset, "hub");
+    const bridge = nodeIdByLabel(&subset, "bridge");
+    try std.testing.expectEqual(@as(f64, 1), short_distances.at(hub, bridge));
+    try std.testing.expect(subset_distances.at(hub, bridge) > short_distances.at(hub, bridge));
+
+    const config = LayoutConfig{
+        .algorithm = .stress_majorization,
+        .force = .{ .width = 420, .height = 300, .margin = 30, .iterations = 80 },
+    };
+    var short_layout = try layoutGraph(allocator, &shortpath, config);
+    defer short_layout.deinit();
+    var subset_layout = try layoutGraph(allocator, &subset, config);
+    defer subset_layout.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&short_layout, &subset_layout, shortpath.nodes.items.len) > 0.1);
 }
 
 test "neato stress majorization lowers graph stress" {
