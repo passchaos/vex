@@ -5933,11 +5933,46 @@ fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
     return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
 }
 
-fn forceStartPositions(allocator: std.mem.Allocator, graph: *const Graph, count: usize, options: ForceLayoutOptions) !?[]Point {
+fn forceStartPositions(allocator: std.mem.Allocator, graph: *const Graph, count: usize, options: ForceLayoutOptions, use_input_positions: bool) !?[]Point {
+    if (use_input_positions) {
+        if (try forceInputPositions(allocator, graph, count)) |positions| return positions;
+    }
     return switch (forceStartMode(graph)) {
         .default, .regular => null,
         .random => |seed| try seededForcePositions(allocator, count, options, seed),
     };
+}
+
+fn forceInputPositions(allocator: std.mem.Allocator, graph: *const Graph, count: usize) !?[]Point {
+    if (!hasCompleteForceInputPositions(graph, count)) return null;
+    const positions = try allocator.alloc(Point, count);
+    errdefer allocator.free(positions);
+    const scale = forceInputPositionScale(graph);
+    for (graph.nodes.items, 0..) |node_item, id| {
+        const raw_position = attrValue(node_item.attrs.items, "pos").?;
+        const parsed = layout_mod.nop.parseNodePosition(raw_position) catch return error.InvalidNodePosition;
+        positions[id] = .{
+            .x = parsed.point.x * scale,
+            .y = parsed.point.y * scale,
+        };
+    }
+    return positions;
+}
+
+fn hasCompleteForceInputPositions(graph: *const Graph, count: usize) bool {
+    if (count == 0 or graph.nodes.items.len != count) return false;
+    for (graph.nodes.items) |node_item| {
+        if (attrValue(node_item.attrs.items, "pos") == null) return false;
+    }
+    return true;
+}
+
+fn forceInputPositionScale(graph: *const Graph) f64 {
+    const value = attrValue(graph.attrs.items, "inputscale") orelse return 72.0;
+    const parsed = std.fmt.parseFloat(f64, value) catch return 72.0;
+    if (!std.math.isFinite(parsed)) return 72.0;
+    if (parsed <= 0) return 1.0;
+    return 72.0 / parsed;
 }
 
 fn seededForcePositions(allocator: std.mem.Allocator, count: usize, options: ForceLayoutOptions, seed: u64) ![]Point {
@@ -6939,7 +6974,7 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
     defer allocator.free(positions);
     var disp = try allocator.alloc(Point, n);
     defer allocator.free(disp);
-    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options, false) else null;
     defer if (start_positions) |items| allocator.free(items);
 
     const cx = options.width / 2.0;
@@ -7110,7 +7145,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
-    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options, true) else null;
     defer if (start_positions) |items| allocator.free(items);
     if (start_positions) |source| {
         @memcpy(positions, source);
@@ -7651,7 +7686,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
-    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options, true) else null;
     defer if (start_positions) |items| allocator.free(items);
     if (start_positions) |source| {
         @memcpy(positions, source);
@@ -7856,7 +7891,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
         edge_count += 1;
     }
 
-    const dot_start = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    const dot_start = if (previous == null) try forceStartPositions(allocator, graph, n, options, false) else null;
     defer if (dot_start) |positions| allocator.free(positions);
     const initial = if (dot_start) |positions|
         positions
@@ -29166,6 +29201,78 @@ test "force layouts keep Graphviz numeric start seed reproducible" {
     defer second_layout.deinit();
 
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), sharedNodeDisplacement(&first_layout, &second_layout, first.nodes.items.len), 0.000001);
+}
+
+test "neato uses Graphviz pos inputscale for initial positions" {
+    const allocator = std.testing.allocator;
+    var inches = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=0];
+        \\  a [pos="1,1!"];
+        \\  b [pos="81,1!"];
+        \\}
+    );
+    defer inches.deinit();
+    var points = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=0, inputscale=72];
+        \\  a [pos="1,1!"];
+        \\  b [pos="81,1!"];
+        \\}
+    );
+    defer points.deinit();
+    var zero = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=0, inputscale=0];
+        \\  a [pos="1,1!"];
+        \\  b [pos="81,1!"];
+        \\}
+    );
+    defer zero.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f64, 72.0), forceInputPositionScale(&inches), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), forceInputPositionScale(&points), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), forceInputPositionScale(&zero), 0.000001);
+
+    const config = LayoutConfig{
+        .algorithm = .auto,
+        .force = .{ .width = 10000, .height = 10000, .margin = 0 },
+    };
+    var inches_layout = try layoutGraph(allocator, &inches, config);
+    defer inches_layout.deinit();
+    var points_layout = try layoutGraph(allocator, &points, config);
+    defer points_layout.deinit();
+    var zero_layout = try layoutGraph(allocator, &zero, config);
+    defer zero_layout.deinit();
+
+    const inches_delta = @abs(inches_layout.nodes[1].center.x - inches_layout.nodes[0].center.x);
+    const points_delta = @abs(points_layout.nodes[1].center.x - points_layout.nodes[0].center.x);
+    const zero_delta = @abs(zero_layout.nodes[1].center.x - zero_layout.nodes[0].center.x);
+    try std.testing.expect(inches_delta > points_delta * 60.0);
+    try std.testing.expectApproxEqAbs(points_delta, zero_delta, 0.000001);
+}
+
+test "fdp also starts from complete Graphviz pos input positions" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=fdp, maxiter=0, inputscale=72];
+        \\  a [pos="10,10"];
+        \\  b [pos="20,10"];
+        \\}
+    );
+    defer graph.deinit();
+
+    const positions = (try forceStartPositions(
+        allocator,
+        &graph,
+        graph.nodes.items.len,
+        .{},
+        true,
+    )).?;
+    defer allocator.free(positions);
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), positions[0].x, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), positions[1].x, 0.000001);
 }
 
 test "force layouts preserve Graphviz dim and dimen attributes on 2D output" {

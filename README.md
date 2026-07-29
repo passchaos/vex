@@ -60,7 +60,8 @@ select the independent spring-electrical engine with all-pairs repulsion,
 edge-only springs, cluster boxes, graph `K` / `T0`, and edge `len` / `weight`
 semantics. Force-style layouts honor Graphviz `normalize` final-coordinate
 rotation, `model=subset`, `defaultdist`, `epsilon`, and seeded
-`start=randomN` / numeric `start=N` initialization.
+`start=randomN` / numeric `start=N` initialization. Neato and fdp also use
+complete node `pos` input positions with Graphviz `inputscale` unit semantics.
 Force-style layouts accept Graphviz `dim` / `dimen` attributes at the model
 boundary while Vex continues to produce 2D SVG coordinates.
 `--layout fr` selects the deterministic Fruchterman-Reingold engine.
