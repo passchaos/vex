@@ -7270,6 +7270,16 @@ fn stressGraphDistances(allocator: std.mem.Allocator, graph: *const Graph) !Stre
         }
     }
 
+    if (stressDefaultDistance(graph)) |distance| {
+        for (0..n) |from| {
+            for (0..n) |to| {
+                if (from == to) continue;
+                const index = from * n + to;
+                if (!std.math.isFinite(values[index])) values[index] = distance;
+            }
+        }
+    }
+
     var max_finite: f64 = 1.0;
     for (values) |distance| {
         if (std.math.isFinite(distance)) max_finite = @max(max_finite, distance);
@@ -7310,6 +7320,12 @@ fn stressEpsilon(graph: *const Graph) ?f64 {
     const value = attrValue(graph.attrs.items, "epsilon") orelse return null;
     const parsed = std.fmt.parseFloat(f64, value) catch return null;
     return if (std.math.isFinite(parsed) and parsed >= 0) parsed else null;
+}
+
+fn stressDefaultDistance(graph: *const Graph) ?f64 {
+    const value = attrValue(graph.attrs.items, "defaultdist") orelse return null;
+    const parsed = std.fmt.parseFloat(f64, value) catch return null;
+    return if (std.math.isFinite(parsed) and parsed > 0) parsed else null;
 }
 
 fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankdir: RankDir, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) void {
@@ -29143,6 +29159,51 @@ test "neato honors Graphviz epsilon as stress convergence threshold" {
     var loose_layout = try layoutGraph(allocator, &loose, .{ .algorithm = .auto });
     defer loose_layout.deinit();
     try std.testing.expect(sharedNodeDisplacement(&strict_layout, &loose_layout, strict.nodes.items.len) > 0.1);
+}
+
+test "neato defaultdist controls disconnected ideal distances" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, defaultdist=7];
+        \\  a -- b;
+        \\  c -- d;
+        \\}
+    );
+    defer graph.deinit();
+
+    const distances = try stressGraphDistances(allocator, &graph);
+    defer allocator.free(distances.values);
+    const a = nodeIdByLabel(&graph, "a");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expectEqual(@as(?f64, 7.0), stressDefaultDistance(&graph));
+    try std.testing.expectEqual(@as(f64, 7.0), distances.at(a, c));
+}
+
+test "neato defaultdist changes disconnected component layout" {
+    const allocator = std.testing.allocator;
+    var near = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random9, maxiter=80, defaultdist=1];
+        \\  a -- b;
+        \\  c -- d;
+        \\}
+    );
+    defer near.deinit();
+    var far = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random9, maxiter=80, defaultdist=8];
+        \\  a -- b;
+        \\  c -- d;
+        \\}
+    );
+    defer far.deinit();
+
+    var near_layout = try layoutGraph(allocator, &near, .{ .algorithm = .auto });
+    defer near_layout.deinit();
+    var far_layout = try layoutGraph(allocator, &far, .{ .algorithm = .auto });
+    defer far_layout.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&near_layout, &far_layout, near.nodes.items.len) > 0.1);
 }
 
 test "neato stress majorization lowers graph stress" {
