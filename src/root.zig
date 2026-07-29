@@ -13,11 +13,17 @@ const layout_mod = @import("layout/mod.zig");
 const size_mod = @import("size.zig");
 const svg_mod = @import("svg/mod.zig");
 const text_metrics = @import("text_metrics.zig");
+const ztex = @import("ztex");
 
 pub const NodeId = usize;
 pub const EdgeId = usize;
 pub const SubgraphId = usize;
 pub const Point = layout_mod.result.Point;
+
+/// Shared TeX-like math formula support used by Vex labels. Graph/DOT-specific
+/// label policy remains in Vex; reusable formula parsing, metrics, and display
+/// list generation come from ztex.
+pub const math_formula = ztex.formula;
 
 pub const NodePosition = struct {
     x: f64,
@@ -294,6 +300,7 @@ pub const GraphAttr = union(enum) {
     vex_interactive_minimap: bool,
     vex_interactive_stats: bool,
     vex_svg_metadata: bool,
+    vex_math_label: bool,
     pad: []const u8,
     margin: []const u8,
     fontname: []const u8,
@@ -364,6 +371,7 @@ pub const NodeAttr = union(enum) {
     labelloc: LabelLoc,
     labeljust: LabelJust,
     nojustify: bool,
+    vex_math_label: bool,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -429,6 +437,7 @@ pub const NodeOptions = struct {
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
     nojustify: ?bool = null,
+    vex_math_label: ?bool = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -502,6 +511,7 @@ pub const EdgeOptions = struct {
     labelfloat: ?bool = null,
     labelaligned: ?bool = null,
     nojustify: ?bool = null,
+    vex_math_label: ?bool = null,
     decorate: ?bool = null,
     tailclip: ?bool = null,
     headclip: ?bool = null,
@@ -576,6 +586,7 @@ pub const EdgeAttr = union(enum) {
     labelfloat: bool,
     labelaligned: bool,
     nojustify: bool,
+    vex_math_label: bool,
     decorate: bool,
     tailclip: bool,
     headclip: bool,
@@ -622,6 +633,7 @@ pub const SubgraphAttr = union(enum) {
     labelloc: LabelLoc,
     labeljust: LabelJust,
     nojustify: bool,
+    vex_math_label: bool,
     url: []const u8,
     href: []const u8,
     tooltip: []const u8,
@@ -666,6 +678,7 @@ pub const SubgraphOptions = struct {
     labelloc: ?LabelLoc = null,
     labeljust: ?LabelJust = null,
     nojustify: ?bool = null,
+    vex_math_label: ?bool = null,
     url: ?[]const u8 = null,
     href: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
@@ -1167,6 +1180,7 @@ pub const Graph = struct {
             .vex_interactive_minimap => |value| try self.setGraphAttrRaw("vex_interactive_minimap", boolAttrValue(value)),
             .vex_interactive_stats => |value| try self.setGraphAttrRaw("vex_interactive_stats", boolAttrValue(value)),
             .vex_svg_metadata => |value| try self.setGraphAttrRaw("vex_svg_metadata", boolAttrValue(value)),
+            .vex_math_label => |value| try self.setGraphAttrRaw("vex_math_label", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
             .fontname => |value| try self.setGraphAttrRaw("fontname", value),
@@ -1265,6 +1279,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setDefaultNodeAttrRaw("labelloc", value.name()),
             .labeljust => |value| try self.setDefaultNodeAttrRaw("labeljust", value.name()),
             .nojustify => |value| try self.setDefaultNodeAttrRaw("nojustify", boolAttrValue(value)),
+            .vex_math_label => |value| try self.setDefaultNodeAttrRaw("vex_math_label", boolAttrValue(value)),
             .url => |value| try self.setDefaultNodeAttrRaw("URL", value),
             .href => |value| try self.setDefaultNodeAttrRaw("href", value),
             .tooltip => |value| try self.setDefaultNodeAttrRaw("tooltip", value),
@@ -1378,6 +1393,7 @@ pub const Graph = struct {
             .labelfloat => |value| try self.setDefaultEdgeAttrRaw("labelfloat", boolAttrValue(value)),
             .labelaligned => |value| try self.setDefaultEdgeAttrRaw("labelaligned", boolAttrValue(value)),
             .nojustify => |value| try self.setDefaultEdgeAttrRaw("nojustify", boolAttrValue(value)),
+            .vex_math_label => |value| try self.setDefaultEdgeAttrRaw("vex_math_label", boolAttrValue(value)),
             .decorate => |value| try self.setDefaultEdgeAttrRaw("decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setDefaultEdgeAttrRaw("tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setDefaultEdgeAttrRaw("headclip", boolAttrValue(value)),
@@ -1453,6 +1469,7 @@ pub const Graph = struct {
         if (options.labelloc) |value| try self.setNodeAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setNodeAttr(id, .{ .labeljust = value });
         if (options.nojustify) |value| try self.setNodeAttr(id, .{ .nojustify = value });
+        if (options.vex_math_label) |value| try self.setNodeAttr(id, .{ .vex_math_label = value });
         if (options.url) |value| try self.setNodeAttr(id, .{ .url = value });
         if (options.href) |value| try self.setNodeAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setNodeAttr(id, .{ .tooltip = value });
@@ -1520,6 +1537,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setNodeAttrRaw(id, "labelloc", value.name()),
             .labeljust => |value| try self.setNodeAttrRaw(id, "labeljust", value.name()),
             .nojustify => |value| try self.setNodeAttrRaw(id, "nojustify", boolAttrValue(value)),
+            .vex_math_label => |value| try self.setNodeAttrRaw(id, "vex_math_label", boolAttrValue(value)),
             .url => |value| try self.setNodeAttrRaw(id, "URL", value),
             .href => |value| try self.setNodeAttrRaw(id, "href", value),
             .tooltip => |value| try self.setNodeAttrRaw(id, "tooltip", value),
@@ -1633,6 +1651,7 @@ pub const Graph = struct {
         if (options.labelfloat) |value| try self.setEdgeAttr(id, .{ .labelfloat = value });
         if (options.labelaligned) |value| try self.setEdgeAttr(id, .{ .labelaligned = value });
         if (options.nojustify) |value| try self.setEdgeAttr(id, .{ .nojustify = value });
+        if (options.vex_math_label) |value| try self.setEdgeAttr(id, .{ .vex_math_label = value });
         if (options.decorate) |value| try self.setEdgeAttr(id, .{ .decorate = value });
         if (options.tailclip) |value| try self.setEdgeAttr(id, .{ .tailclip = value });
         if (options.headclip) |value| try self.setEdgeAttr(id, .{ .headclip = value });
@@ -1710,6 +1729,7 @@ pub const Graph = struct {
             .labelfloat => |value| try self.setEdgeAttrRaw(id, "labelfloat", boolAttrValue(value)),
             .labelaligned => |value| try self.setEdgeAttrRaw(id, "labelaligned", boolAttrValue(value)),
             .nojustify => |value| try self.setEdgeAttrRaw(id, "nojustify", boolAttrValue(value)),
+            .vex_math_label => |value| try self.setEdgeAttrRaw(id, "vex_math_label", boolAttrValue(value)),
             .decorate => |value| try self.setEdgeAttrRaw(id, "decorate", boolAttrValue(value)),
             .tailclip => |value| try self.setEdgeAttrRaw(id, "tailclip", boolAttrValue(value)),
             .headclip => |value| try self.setEdgeAttrRaw(id, "headclip", boolAttrValue(value)),
@@ -1867,6 +1887,7 @@ pub const Graph = struct {
         if (options.labelloc) |value| try self.setSubgraphAttr(id, .{ .labelloc = value });
         if (options.labeljust) |value| try self.setSubgraphAttr(id, .{ .labeljust = value });
         if (options.nojustify) |value| try self.setSubgraphAttr(id, .{ .nojustify = value });
+        if (options.vex_math_label) |value| try self.setSubgraphAttr(id, .{ .vex_math_label = value });
         if (options.url) |value| try self.setSubgraphAttr(id, .{ .url = value });
         if (options.href) |value| try self.setSubgraphAttr(id, .{ .href = value });
         if (options.tooltip) |value| try self.setSubgraphAttr(id, .{ .tooltip = value });
@@ -1939,6 +1960,7 @@ pub const Graph = struct {
             .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", value.name()),
             .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", value.name()),
             .nojustify => |value| try self.setSubgraphAttrRaw(id, "nojustify", boolAttrValue(value)),
+            .vex_math_label => |value| try self.setSubgraphAttrRaw(id, "vex_math_label", boolAttrValue(value)),
             .url => |value| try self.setSubgraphAttrRaw(id, "URL", value),
             .href => |value| try self.setSubgraphAttrRaw(id, "href", value),
             .tooltip => |value| try self.setSubgraphAttrRaw(id, "tooltip", value),
@@ -10410,12 +10432,13 @@ fn measureNodeWithExactStandardFonts(
 ) NodeSize {
     const font_size = parsePositiveAttrFloat(node_item.attrs.items, "fontsize", 14.0);
     const font_scale = font_size / 14.0;
-    const line_count = displayLabelLineCount(node_item.label);
+    const math_label_size = mathLabelSize(node_item.attrs.items, node_item.label, font_size);
+    const line_count = if (math_label_size != null) 1 else displayLabelLineCount(node_item.label);
     const max_line_len = displayLabelMaxLineLen(node_item.label);
     const margin = nodeMargin(node_item.attrs.items, 0);
-    var text_width = @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
-    var text_height = @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
-    const exact_ellipse_label_width = if (node_item.shape == .ellipse)
+    var text_width = if (math_label_size) |math_size| math_size.width else @as(f64, @floatFromInt(max_line_len)) * options.label_char_width * font_scale;
+    var text_height = if (math_label_size) |math_size| math_size.height else @as(f64, @floatFromInt(line_count)) * options.label_line_height * font_scale;
+    const exact_ellipse_label_width = if (math_label_size == null and node_item.shape == .ellipse)
         if (symbolFont(node_item.attrs.items))
             text_metrics.symbolLabelWidth(node_item.label, font_size)
         else if (exact_standard_fonts and helveticaRegularFont(node_item.attrs.items))
@@ -20396,10 +20419,14 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
         const title_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
         const title_color = resolveSvgColor(graph, graph.attrs.items, attrValue(graph.attrs.items, "fontcolor") orelse "black");
         if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |position| {
-            try renderSvgTextBlockWithAnchor(writer, graph_label, position.x, position.y, title_size, title_color, title_font, false, false, "middle", noJustifyLineAnchor(graph.attrs.items, "middle"));
+            if (!try renderSvgMaybeMathLabel(writer, graph.allocator, graph.attrs.items, graph_label, position.x, position.y, title_size, title_color, title_font, "middle")) {
+                try renderSvgTextBlockWithAnchor(writer, graph_label, position.x, position.y, title_size, title_color, title_font, false, false, "middle", noJustifyLineAnchor(graph.attrs.items, "middle"));
+            }
         } else {
             const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
-            try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor, noJustifyLineAnchor(graph.attrs.items, text_anchor));
+            if (!try renderSvgMaybeMathLabel(writer, graph.allocator, graph.attrs.items, graph_label, title_x, title_center_y, title_size, title_color, title_font, text_anchor)) {
+                try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor, noJustifyLineAnchor(graph.attrs.items, text_anchor));
+            }
         }
     }
     try writeSvgInteractiveClose(writer, graph_wrap);
@@ -21955,6 +21982,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         const aligned_label = edge_item.label != null and
             positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
             edgeLabelAlignedEnabled(edge_item.attrs.items) and
+            !mathLabelEnabled(edge_item.attrs.items) and
             plainSingleLineLabel(edge_item.label.?);
         const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
         try renderSvgPositionedEdgeSpline(writer, graph.directed, edge_item, spline, visual, edge_path_id);
@@ -21983,6 +22011,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         const aligned_label = edge_item.label != null and
             positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
             edgeLabelAlignedEnabled(edge_item.attrs.items) and
+            !mathLabelEnabled(edge_item.attrs.items) and
             plainSingleLineLabel(edge_item.label.?);
         const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
         try renderSvgSelfLoopPaths(writer, graph, graph.directed, edge_item, route, visual, edge_path_id);
@@ -22054,7 +22083,7 @@ fn edgeXLabelCenterAvoidingNodesIndexed(graph: *const Graph, layout: *const Layo
 }
 
 fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, edge_item: Edge, label: []const u8, font_size: f64, base: Point, node_rect_index: ?*const SvgNodeRectIndex) Point {
-    const base_rect = edgeLabelRect(label, base, font_size);
+    const base_rect = edgeLabelRect(edge_item.attrs.items, label, base, font_size);
     if (!edgeLabelOverlapsNodes(graph, layout, edge_item, base_rect, node_rect_index)) return base;
 
     var candidates: [96]Point = undefined;
@@ -22070,7 +22099,7 @@ fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, 
         }
     }
 
-    const label_rect = edgeLabelRect(label, base, font_size);
+    const label_rect = edgeLabelRect(edge_item.attrs.items, label, base, font_size);
     if (node_rect_index) |index| {
         index.appendAvoidanceCandidates(label_rect, base, &candidates, &candidate_count);
     } else {
@@ -22094,7 +22123,7 @@ fn edgeLabelCenterAvoidingNodesFrom(graph: *const Graph, layout: *const Layout, 
     var best = base;
     var best_score = std.math.floatMax(f64);
     for (candidates[0..candidate_count]) |candidate| {
-        const rect = edgeLabelRect(label, candidate, font_size);
+        const rect = edgeLabelRect(edge_item.attrs.items, label, candidate, font_size);
         if (!labelRectInsideLayout(rect, layout)) continue;
         if (edgeLabelOverlapsNodes(graph, layout, edge_item, rect, node_rect_index)) continue;
         const dx = candidate.x - base.x;
@@ -22128,10 +22157,11 @@ fn shiftLabelCrossAxis(point: Point, rankdir: RankDir, offset: f64) Point {
     };
 }
 
-fn edgeLabelRect(label: []const u8, center: Point, font_size: f64) RectF {
+fn edgeLabelRect(attrs: []const Attr, label: []const u8, center: Point, font_size: f64) RectF {
+    const math_size = mathLabelSize(attrs, label, font_size);
     const line_height = font_size * 1.25;
-    const height = @as(f64, @floatFromInt(displayLabelLineCount(label))) * line_height + 8.0;
-    const width = displayLabelEstimatedWidth(label, font_size) + 12.0;
+    const height = if (math_size) |size| size.height + 8.0 else @as(f64, @floatFromInt(displayLabelLineCount(label))) * line_height + 8.0;
+    const width = if (math_size) |size| size.width + 12.0 else displayLabelEstimatedWidth(label, font_size) + 12.0;
     return .{
         .x = center.x - width / 2.0,
         .y = center.y - height / 2.0,
@@ -22376,10 +22406,10 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     try renderSvgNodeShape(writer, node_item, l, visual, options);
     try renderSvgNodeImage(writer, graph, node_item, l);
     if (node_item.shape != .record and node_item.shape != .mrecord and node_item.shape != .point) {
-        try renderSvgNodeLabel(writer, node_item, l, visual);
+        try renderSvgNodeLabel(writer, graph, node_item, l, visual);
     }
     try renderSvgNodeAuxLabels(writer, node_item, l, visual);
-    try renderSvgNodeXLabel(writer, layout, node_item, l, visual);
+    try renderSvgNodeXLabel(writer, graph, layout, node_item, l, visual);
     try writeSvgInteractiveClose(writer, node_wrap);
     try writer.writeAll("</g>\n");
 }
@@ -22483,7 +22513,7 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
     if (cached_node_rects) |rects| @memset(rects, null);
     if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |point| {
         if (attrValue(graph.attrs.items, "label")) |label| {
-            bounds.includeRect(edgeLabelRect(label, point, parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0)));
+            bounds.includeRect(edgeLabelRect(graph.attrs.items, label, point, parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0)));
         }
     }
     for (layout.subgraphs, 0..) |cluster_box, index| {
@@ -22491,7 +22521,7 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
         bounds.includeRect(clusterVisualRect(graph, layout, index));
         const subgraph = graph.subgraphs.items[index];
         if (positionedAttrPoint(layout, subgraph.attrs.items, "lp")) |point| {
-            bounds.includeRect(edgeLabelRect(subgraph.label, point, inheritedClusterFontSize(graph, subgraph)));
+            bounds.includeRect(edgeLabelRect(subgraph.attrs.items, subgraph.label, point, inheritedClusterFontSize(graph, subgraph)));
         }
     }
     for (graph.nodes.items) |node_item| {
@@ -22526,7 +22556,7 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
             const center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse
                 if (edge_item.from == edge_item.to)
                     route.label
-                else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
+                else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and !mathLabelEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
                     route.label
                 else if (edgeLabelFloatEnabled(edge_item.attrs.items))
                     Point{ .x = route.label.x, .y = route.label.y - 6.0 }
@@ -22534,7 +22564,7 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
                     edgeLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, visual, label, index)
                 else
                     edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
-            bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
+            bounds.includeRect(edgeLabelRect(edge_item.attrs.items, label, center, visual.font_size));
         }
         if (x_label) |label| {
             const font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
@@ -22542,7 +22572,7 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
                 edgeXLabelCenterAvoidingNodesIndexed(graph, layout, edge_item, route, label, font_size, index)
             else
                 edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, font_size);
-            bounds.includeRect(edgeLabelRect(label, center, font_size));
+            bounds.includeRect(edgeLabelRect(edge_item.attrs.items, label, center, font_size));
         }
     }
     return bounds.rect();
@@ -22704,13 +22734,13 @@ fn includeEdgeLabelObjectBounds(bounds: *BoundsBuilder, graph: *const Graph, lay
         const center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse
             if (edge_item.from == edge_item.to)
                 route.label
-            else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
+            else if (edgeLabelAlignedEnabled(edge_item.attrs.items) and !mathLabelEnabled(edge_item.attrs.items) and plainSingleLineLabel(label))
                 route.label
             else if (edgeLabelFloatEnabled(edge_item.attrs.items))
                 Point{ .x = route.label.x, .y = route.label.y - 6.0 }
             else
                 edgeLabelCenterAvoidingNodes(graph, layout, edge_item, route, visual, label);
-        bounds.includeRect(edgeLabelRect(label, center, visual.font_size));
+        bounds.includeRect(edgeLabelRect(edge_item.attrs.items, label, center, visual.font_size));
     }
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
     const label_distance = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0);
@@ -22718,15 +22748,15 @@ fn includeEdgeLabelObjectBounds(bounds: *BoundsBuilder, graph: *const Graph, lay
     if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
         const center = positionedAttrPoint(layout, edge_item.attrs.items, "tail_lp") orelse
             endpointLabelPosition(route.start, route.label, label_distance, -label_angle, false);
-        bounds.includeRect(edgeLabelRect(label, center, label_font_size));
+        bounds.includeRect(edgeLabelRect(edge_item.attrs.items, label, center, label_font_size));
     }
     if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
         const center = positionedAttrPoint(layout, edge_item.attrs.items, "head_lp") orelse
             endpointLabelPosition(route.end, route.label, label_distance, label_angle, true);
-        bounds.includeRect(edgeLabelRect(label, center, label_font_size));
+        bounds.includeRect(edgeLabelRect(edge_item.attrs.items, label, center, label_font_size));
     }
     if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
-        bounds.includeRect(edgeLabelRect(label, edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size), label_font_size));
+        bounds.includeRect(edgeLabelRect(edge_item.attrs.items, label, edgeXLabelCenterAvoidingNodes(graph, layout, edge_item, route, label, label_font_size), label_font_size));
     }
 }
 
@@ -23768,7 +23798,7 @@ fn renderSvgExtraEdgeLabels(writer: *Io.Writer, graph: *const Graph, layout: *co
     }
     if (edge_item.label != null and main_label_center != null and edgeDecorateEnabled(edge_item.attrs.items)) {
         const label = edge_item.label.?;
-        const label_rect = edgeLabelRect(label, main_label_center.?, visual.font_size);
+        const label_rect = edgeLabelRect(edge_item.attrs.items, label, main_label_center.?, visual.font_size);
         const anchor = lerpPoint(route.start, route.end, 0.5);
         try writeSvgPolylinePath(writer, &.{
             .{ .x = label_rect.x + 4.0, .y = label_rect.y + label_rect.height - 4.0 },
@@ -23807,7 +23837,9 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
         .suffix = svgEdgeLabelAnchorSuffix(kind),
     };
     const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label, label_anchor_id);
-    try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
+    if (!try renderSvgMaybeMathLabel(writer, graph.allocator, edge_item.attrs.items, label, pos.x, pos.y, font_size, font_color, font, "middle")) {
+        try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
+    }
     try writeSvgInteractiveClose(writer, wrap);
 }
 
@@ -24347,10 +24379,11 @@ fn offsetEdgeRoute(route: EdgeRoute, rankdir: RankDir, offset: f64) EdgeRoute {
     };
 }
 
-fn renderSvgNodeLabel(writer: *Io.Writer, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+fn renderSvgNodeLabel(writer: *Io.Writer, graph: *const Graph, node_item: Node, layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const margin = nodeMargin(node_item.attrs.items, 0);
     const anchor = nodeLabelAnchor(node_item.attrs.items, layout, margin.x);
     const y = nodeLabelY(node_item.attrs.items, visualShapeLayout(node_item, layout), margin.y) - nodeLabelYOffset(node_item);
+    if (try renderSvgMaybeMathLabel(writer, graph.allocator, node_item.attrs.items, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font, anchor.anchor)) return;
     if (plainSingleLineLabel(node_item.label)) {
         try renderSvgPlainTextBlock(writer, node_item.label, anchor.x, y, visual.font_size, visual.font_color, visual.font, anchor.anchor);
         return;
@@ -24490,11 +24523,13 @@ fn nodeAuxLabelsEligible(shape: Shape) bool {
     };
 }
 
-fn renderSvgNodeXLabel(writer: *Io.Writer, layout: *const Layout, node_item: Node, node_layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
+fn renderSvgNodeXLabel(writer: *Io.Writer, graph: *const Graph, layout: *const Layout, node_item: Node, node_layout: NodeLayout, visual: NodeVisual) Io.Writer.Error!void {
     const label = attrValue(node_item.attrs.items, "xlabel") orelse return;
     const center = positionedAttrPoint(layout, node_item.attrs.items, "xlp") orelse
         nodeXLabelCenter(label, node_layout, visual.font_size);
-    try renderSvgTextBlock(writer, label, center.x, center.y, visual.font_size, visual.font_color, visual.font, true, true);
+    if (!try renderSvgMaybeMathLabel(writer, graph.allocator, node_item.attrs.items, label, center.x, center.y, visual.font_size, visual.font_color, visual.font, "middle")) {
+        try renderSvgTextBlock(writer, label, center.x, center.y, visual.font_size, visual.font_color, visual.font, true, true);
+    }
 }
 
 fn nodeXLabelCenter(label: []const u8, node_layout: NodeLayout, font_size: f64) Point {
@@ -24508,7 +24543,7 @@ fn nodeXLabelRect(layout: *const Layout, node_item: Node, node_layout: NodeLayou
     const label = attrValue(node_item.attrs.items, "xlabel") orelse return null;
     const center = positionedAttrPoint(layout, node_item.attrs.items, "xlp") orelse
         nodeXLabelCenter(label, node_layout, visual.font_size);
-    return edgeLabelRect(label, center, visual.font_size);
+    return edgeLabelRect(node_item.attrs.items, label, center, visual.font_size);
 }
 
 const NodeLabelAnchor = struct {
@@ -25290,21 +25325,25 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
     }
     if (cluster.label.len > 0) {
         if (positionedAttrPoint(layout, cluster.attrs.items, "lp")) |position| {
-            try renderSvgTextBlockWithAnchor(writer, cluster.label, position.x, position.y, visual.font_size, visual.font_color, visual.font, false, false, "middle", noJustifyLineAnchorForCluster(graph, cluster, "middle"));
+            if (!try renderSvgMaybeMathLabel(writer, graph.allocator, cluster.attrs.items, cluster.label, position.x, position.y, visual.font_size, visual.font_color, visual.font, "middle")) {
+                try renderSvgTextBlockWithAnchor(writer, cluster.label, position.x, position.y, visual.font_size, visual.font_color, visual.font, false, false, "middle", noJustifyLineAnchorForCluster(graph, cluster, "middle"));
+            }
         } else {
             const label_just = inheritedClusterLabelAttr(graph, cluster, "labeljust");
             const label_loc = inheritedClusterLabelAttr(graph, cluster, "labelloc");
             const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
             const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
             const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
-            if (plainSingleLineLabel(cluster.label)) {
+            const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
+            if (try renderSvgMaybeMathLabel(writer, graph.allocator, cluster.attrs.items, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, text_anchor)) {
+                // Rendered by ztex.
+            } else if (plainSingleLineLabel(cluster.label)) {
                 try writeSvgTextOpen(writer, text_anchor, label_x, label_y, visual.font, visual.font_size);
                 try writeSvgTextFill(writer, visual.font_color);
                 try writer.writeAll(">");
                 try writeXmlEscaped(writer, cluster.label);
                 try writer.writeAll("</text>\n");
             } else {
-                const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
                 try renderSvgTextBlockWithAnchor(writer, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, false, false, text_anchor, noJustifyLineAnchorForCluster(graph, cluster, text_anchor));
             }
         }
@@ -28327,6 +28366,139 @@ fn cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) Point {
         .x = a * p0.x + b * p1.x + c * p2.x + d * p3.x,
         .y = a * p0.y + b * p1.y + c * p2.y + d * p3.y,
     };
+}
+
+fn mathLabelEnabled(attrs: []const Attr) bool {
+    const value = attrValue(attrs, "vex_math_label") orelse return false;
+    return parseBool(value) orelse false;
+}
+
+fn mathLabelSource(attrs: []const Attr, text: []const u8) ?[]const u8 {
+    if (!mathLabelEnabled(attrs)) return null;
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    if (ztex.inline_math.firstSpan(trimmed)) |span| {
+        if (span.full_start == 0 and span.full_end == trimmed.len and ztex.inline_math.countSpans(trimmed) == 1) {
+            return trimmed[span.source_start..span.source_end];
+        }
+    }
+    return trimmed;
+}
+
+fn mathLabelSize(attrs: []const Attr, text: []const u8, font_size: f64) ?NodeSize {
+    const source = mathLabelSource(attrs, text) orelse return null;
+    const allocator = std.heap.smp_allocator;
+    var formula = ztex.formula.parseWithNewCommands(allocator, source) catch return null;
+    defer formula.deinit();
+    var tree = ztex.formula.layout(allocator, formula, .{ .font_size = @floatCast(font_size) }) catch return null;
+    defer tree.deinit();
+    const metrics = tree.rootMetrics();
+    return .{
+        .width = @max(1.0, @as(f64, metrics.width)),
+        .height = @max(1.0, @as(f64, metrics.height + metrics.depth)),
+    };
+}
+
+fn renderSvgMaybeMathLabel(
+    writer: *Io.Writer,
+    allocator: std.mem.Allocator,
+    attrs: []const Attr,
+    text: []const u8,
+    x: f64,
+    center_y: f64,
+    font_size: f64,
+    fill: []const u8,
+    font: SvgFont,
+    text_anchor: []const u8,
+) Io.Writer.Error!bool {
+    const source = mathLabelSource(attrs, text) orelse return false;
+    var formula = ztex.formula.parseWithNewCommands(allocator, source) catch return false;
+    defer formula.deinit();
+    var tree = ztex.formula.layout(allocator, formula, .{ .font_size = @floatCast(font_size) }) catch return false;
+    defer tree.deinit();
+    var display = ztex.formula.buildDisplayList(allocator, tree) catch return false;
+    defer display.deinit();
+    try renderSvgMathDisplayList(writer, display, x, center_y, fill, font, text_anchor);
+    return true;
+}
+
+fn renderSvgMathDisplayList(writer: *Io.Writer, display: ztex.formula.DisplayList, x: f64, center_y: f64, fill: []const u8, font: SvgFont, text_anchor: []const u8) Io.Writer.Error!void {
+    var width: f64 = 0;
+    var height: f64 = 0;
+    for (display.commands) |command| switch (command) {
+        .glyph => |glyph| {
+            width = @max(width, @as(f64, glyph.x + glyph.metrics.width));
+            height = @max(height, @as(f64, glyph.baseline_y + glyph.metrics.depth));
+        },
+        .rule => |rule| {
+            width = @max(width, @as(f64, rule.x + rule.width));
+            height = @max(height, @as(f64, rule.y + rule.thickness));
+        },
+        .line => |line| {
+            width = @max(width, @max(@as(f64, line.x1), @as(f64, line.x2)));
+            height = @max(height, @max(@as(f64, line.y1), @as(f64, line.y2)));
+        },
+        .fill_rect => |rect| {
+            width = @max(width, @as(f64, rect.x + rect.width));
+            height = @max(height, @as(f64, rect.y + rect.height));
+        },
+        .image => |image| {
+            width = @max(width, @as(f64, image.x + image.width));
+            height = @max(height, @as(f64, image.y + image.height + image.depth));
+        },
+    };
+    const origin_x = if (std.mem.eql(u8, text_anchor, "end")) x - width else if (std.mem.eql(u8, text_anchor, "middle")) x - width / 2.0 else x;
+    const origin_y = center_y - height / 2.0;
+    for (display.commands) |command| switch (command) {
+        .glyph => |glyph| {
+            const glyph_fill = glyph.style.color orelse fill;
+            const glyph_size = @as(f64, glyph.render_font_size orelse glyph.font_size);
+            try writeSvgTextOpen(writer, "start", origin_x + @as(f64, glyph.x), origin_y + @as(f64, glyph.baseline_y), font, glyph_size);
+            try writeSvgTextFill(writer, glyph_fill);
+            try writer.writeAll(">");
+            try writeXmlEscaped(writer, glyph.text);
+            try writer.writeAll("</text>\n");
+        },
+        .rule => |rule| {
+            try writeSvgRectOpen(writer, .{ .x = origin_x + @as(f64, rule.x), .y = origin_y + @as(f64, rule.y), .width = @as(f64, rule.width), .height = mathRuleThickness(rule.thickness) }, 0);
+            try writer.writeAll(" fill=\"");
+            try writeXmlEscaped(writer, fill);
+            try writer.writeAll("\" stroke=\"none\"/>\n");
+        },
+        .line => |line| {
+            const stroke = line.style.color orelse fill;
+            try writer.writeAll("<line x1=\"");
+            try writeSvgNumber(writer, origin_x + @as(f64, line.x1));
+            try writer.writeAll("\" y1=\"");
+            try writeSvgNumber(writer, origin_y + @as(f64, line.y1));
+            try writer.writeAll("\" x2=\"");
+            try writeSvgNumber(writer, origin_x + @as(f64, line.x2));
+            try writer.writeAll("\" y2=\"");
+            try writeSvgNumber(writer, origin_y + @as(f64, line.y2));
+            try writer.writeAll("\" fill=\"none\" stroke=\"");
+            try writeXmlEscaped(writer, stroke);
+            try writer.writeAll("\" stroke-width=\"");
+            try writeSvgNumber(writer, mathRuleThickness(line.thickness));
+            if (line.dashed) try writer.writeAll("\" stroke-dasharray=\"4 3");
+            try writer.writeAll("\"/>\n");
+        },
+        .fill_rect => |rect| {
+            try writeSvgRectOpen(writer, .{ .x = origin_x + @as(f64, rect.x), .y = origin_y + @as(f64, rect.y), .width = @as(f64, rect.width), .height = @as(f64, rect.height) }, 0);
+            try writer.writeAll(" fill=\"");
+            try writeXmlEscaped(writer, rect.color);
+            try writer.writeAll("\" stroke=\"none\"/>\n");
+        },
+        .image => |image| {
+            try writeSvgRectOpen(writer, .{ .x = origin_x + @as(f64, image.x), .y = origin_y + @as(f64, image.y), .width = @as(f64, image.width), .height = @as(f64, image.height) }, 2);
+            try writer.writeAll(" fill=\"none\" stroke=\"");
+            try writeXmlEscaped(writer, fill);
+            try writer.writeAll("\" stroke-width=\"1\"/>\n");
+        },
+    };
+}
+
+fn mathRuleThickness(value: f32) f64 {
+    return @max(0.5, @as(f64, value));
 }
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
@@ -39240,7 +39412,7 @@ test "SVG renderer honors edge label font position and decoration attributes" {
     try std.testing.expect(countSubstrings(svg, "stroke=\"#2563eb\"") >= 2);
 
     const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, resolveEdgeVisual(&graph, edge_item), edge_item.label.?);
-    const label_rect = edgeLabelRect(edge_item.label.?, label_center, resolveEdgeVisual(&graph, edge_item).font_size);
+    const label_rect = edgeLabelRect(edge_item.attrs.items, edge_item.label.?, label_center, resolveEdgeVisual(&graph, edge_item).font_size);
     const edge_fragment = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingEdgeFragment;
     var decorate_numbers: [16]f64 = undefined;
     const decorate_count = lastSvgPathNumbersInFragment(edge_fragment, decorate_numbers[0..]);
@@ -43823,10 +43995,10 @@ test "SVG edge labels avoid overlapping intervening nodes" {
     const route = edgeRoute(layout.nodes[from], layout.nodes[to], .TB, 0);
     const edge_item = graph.edges.items[edge_id];
     const visual = resolveEdgeVisual(&graph, edge_item);
-    const before = edgeLabelRect(edge_item.label.?, .{ .x = route.label.x, .y = route.label.y - 6.0 }, visual.font_size);
+    const before = edgeLabelRect(edge_item.attrs.items, edge_item.label.?, .{ .x = route.label.x, .y = route.label.y - 6.0 }, visual.font_size);
     try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, before, null));
     const label_center = edgeLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, visual, edge_item.label.?);
-    const after = edgeLabelRect(edge_item.label.?, label_center, visual.font_size);
+    const after = edgeLabelRect(edge_item.attrs.items, edge_item.label.?, label_center, visual.font_size);
     try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, after, null));
     try std.testing.expect(label_center.y != route.label.y - 6.0);
     try graph.setEdgeAttr(edge_id, .{ .labelfloat = true });
@@ -43836,16 +44008,16 @@ test "SVG edge labels avoid overlapping intervening nodes" {
         Point{ .x = route.label.x, .y = route.label.y - 6.0 }
     else
         edgeLabelCenterAvoidingNodes(&graph, &layout, floating_edge, route, visual, floating_edge.label.?);
-    const floating_rect = edgeLabelRect(floating_edge.label.?, floating_center, visual.font_size);
+    const floating_rect = edgeLabelRect(floating_edge.attrs.items, floating_edge.label.?, floating_center, visual.font_size);
     try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, floating_edge, floating_rect, null));
     try std.testing.expectEqual(route.label.y - 6.0, floating_center.y);
 
     const xlabel = attrValue(edge_item.attrs.items, "xlabel").?;
     const label_font_size = parsePositiveAttrFloat(edge_item.attrs.items, "labelfontsize", visual.font_size);
-    const xbefore = edgeLabelRect(xlabel, .{ .x = route.label.x, .y = route.label.y + 18.0 }, label_font_size);
+    const xbefore = edgeLabelRect(edge_item.attrs.items, xlabel, .{ .x = route.label.x, .y = route.label.y + 18.0 }, label_font_size);
     try std.testing.expect(edgeLabelOverlapsNodes(&graph, &layout, edge_item, xbefore, null));
     const xlabel_center = edgeXLabelCenterAvoidingNodes(&graph, &layout, edge_item, route, xlabel, label_font_size);
-    const xafter = edgeLabelRect(xlabel, xlabel_center, label_font_size);
+    const xafter = edgeLabelRect(edge_item.attrs.items, xlabel, xlabel_center, label_font_size);
     try std.testing.expect(!edgeLabelOverlapsNodes(&graph, &layout, edge_item, xafter, null));
     try std.testing.expect(xlabel_center.y != route.label.y + 18.0);
     _ = middle;
@@ -47934,4 +48106,42 @@ test "edge-free rank uses Graphviz default nodesep" {
                 explicit_layout.nodes[explicit_b].width) / 2.0,
         0.001,
     );
+}
+
+test "ztex math labels size and render through opt-in Vex label adapter" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "MathLabels" });
+    defer graph.deinit();
+
+    const formula = try graph.addNode("$\\frac{x_1}{y^2}$", .{
+        .shape = .plain,
+        .fontsize = 18,
+        .vex_math_label = true,
+    });
+    const literal = try graph.addNode("$\\frac{x_1}{y^2}$", .{
+        .shape = .plain,
+        .fontsize = 18,
+    });
+    _ = try graph.addEdge(formula, literal, .{
+        .label = "$a^2$",
+        .fontsize = 16,
+        .vex_math_label = true,
+    });
+
+    const options = layoutOptionsWithGraphAttrs(.{}, &graph);
+    const formula_size = measureNode(graph.nodes.items[formula], options);
+    const literal_size = measureNode(graph.nodes.items[literal], options);
+    try std.testing.expect(formula_size.width + 20.0 < literal_size.width);
+    try std.testing.expect(formula_size.height > 10.0);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "$a^2$") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">a</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">2</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">x</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">y</text>") != null);
 }

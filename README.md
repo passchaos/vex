@@ -50,6 +50,12 @@ zig build run -- --input examples/simple.dot --output indexed.svg --svg-metadata
 cat examples/simple.dot | zig build run -- --format svg > simple.svg
 ```
 
+Math-heavy graph and data-visualization labels can opt into ztex-powered
+TeX-like formula rendering with `vex_math_label=true` on graph/node/edge label
+attributes, for example `node [vex_math_label=true]; a [label="$\\frac{x_1}{y^2}$"]`.
+Vex owns the DOT/Graphviz label policy and SVG placement; ztex supplies the
+reusable formula parsing, layout, metrics, and display-list primitives.
+
 Layout selection defaults to `dot`/Sugiyama, which honors
 `rankdir=TB|BT|LR|RL` during layout. `--layout neato`, `graph
 [layout=neato]`, and Graphviz-style `-Kneato` select the deterministic
