@@ -28373,31 +28373,16 @@ fn mathLabelEnabled(attrs: []const Attr) bool {
     return parseBool(value) orelse false;
 }
 
-fn mathLabelSource(attrs: []const Attr, text: []const u8) ?[]const u8 {
-    if (!mathLabelEnabled(attrs)) return null;
-    const trimmed = std.mem.trim(u8, text, " \t\r\n");
-    if (trimmed.len == 0) return null;
-    if (ztex.inline_math.firstSpan(trimmed)) |span| {
-        if (span.full_start == 0 and span.full_end == trimmed.len and ztex.inline_math.countSpans(trimmed) == 1) {
-            return trimmed[span.source_start..span.source_end];
-        }
-    }
-    return trimmed;
-}
-
 fn mathLabelSize(attrs: []const Attr, text: []const u8, font_size: f64) ?NodeSize {
-    const source = mathLabelSource(attrs, text) orelse return null;
+    if (!mathLabelEnabled(attrs)) return null;
     const allocator = std.heap.smp_allocator;
-    var formula = ztex.formula.parseWithNewCommands(allocator, source) catch return null;
-    defer formula.deinit();
-    var tree = ztex.formula.layout(allocator, formula, .{ .font_size = @floatCast(font_size) }) catch return null;
-    defer tree.deinit();
-    const metrics = tree.rootMetrics();
+    const metrics = ztex.formula_label.measureLabel(allocator, text, mathLabelOptions(font_size, "black", .{ .family = default_svg_font_family }, .middle, 0, 0)) catch return null;
     return .{
-        .width = @max(1.0, @as(f64, metrics.width)),
-        .height = @max(1.0, @as(f64, metrics.height + metrics.depth)),
+        .width = @max(1.0, metrics.width),
+        .height = @max(1.0, metrics.height),
     };
 }
+
 
 fn renderSvgMaybeMathLabel(
     writer: *Io.Writer,
@@ -28411,24 +28396,28 @@ fn renderSvgMaybeMathLabel(
     font: SvgFont,
     text_anchor: []const u8,
 ) Io.Writer.Error!bool {
-    const source = mathLabelSource(attrs, text) orelse return false;
-    var formula = ztex.formula.parseWithNewCommands(allocator, source) catch return false;
-    defer formula.deinit();
-    var tree = ztex.formula.layout(allocator, formula, .{ .font_size = @floatCast(font_size) }) catch return false;
-    defer tree.deinit();
-    var display = ztex.formula.buildDisplayList(allocator, tree) catch return false;
-    defer display.deinit();
-    try ztex.formula_svg.renderDisplayListSvg(writer, display, .{
-        .x = x,
-        .center_y = center_y,
-        .anchor = mathSvgAnchor(text_anchor),
-        .fill = fill,
-        .font = mathSvgFont(font),
-    });
+    if (!mathLabelEnabled(attrs)) return false;
+    ztex.formula_label.renderLabelSvg(writer, allocator, text, mathLabelOptions(font_size, fill, font, mathSvgAnchor(text_anchor), x, center_y)) catch |err| switch (err) {
+        error.WriteFailed => return error.WriteFailed,
+        else => return false,
+    };
     return true;
 }
 
-fn mathSvgFont(font: SvgFont) ztex.formula_svg.Font {
+fn mathLabelOptions(font_size: f64, fill: []const u8, font: SvgFont, anchor: ztex.formula_label.TextAnchor, x: f64, center_y: f64) ztex.formula_label.LabelOptions {
+    return .{
+        .font_size = font_size,
+        .x = x,
+        .center_y = center_y,
+        .anchor = anchor,
+        .fill = fill,
+        .font = mathSvgFont(font),
+        .whole_formula_when_no_inline_spans = true,
+    };
+}
+
+
+fn mathSvgFont(font: SvgFont) ztex.formula_label.Font {
     return .{
         .family = font.family,
         .weight = font.weight,
@@ -28437,7 +28426,7 @@ fn mathSvgFont(font: SvgFont) ztex.formula_svg.Font {
     };
 }
 
-fn mathSvgAnchor(anchor: []const u8) ztex.formula_svg.TextAnchor {
+fn mathSvgAnchor(anchor: []const u8) ztex.formula_label.TextAnchor {
     if (std.mem.eql(u8, anchor, "end")) return .end;
     if (std.mem.eql(u8, anchor, "middle")) return .middle;
     return .start;
@@ -48050,22 +48039,22 @@ test "edge-free rank uses Graphviz default nodesep" {
     );
 }
 
-test "ztex math labels size and render through opt-in Vex label adapter" {
+test "ztex math labels size and render mixed inline formulas through opt-in Vex label adapter" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "MathLabels" });
     defer graph.deinit();
 
-    const formula = try graph.addNode("$\\frac{x_1}{y^2}$", .{
+    const formula = try graph.addNode("Energy $\\frac{x_1}{y^2}$", .{
         .shape = .plain,
         .fontsize = 18,
         .vex_math_label = true,
     });
-    const literal = try graph.addNode("$\\frac{x_1}{y^2}$", .{
+    const literal = try graph.addNode("Energy $\\frac{x_1}{y^2}$", .{
         .shape = .plain,
         .fontsize = 18,
     });
     _ = try graph.addEdge(formula, literal, .{
-        .label = "$a^2$",
+        .label = "cost $a^2$",
         .fontsize = 16,
         .vex_math_label = true,
     });
@@ -48081,7 +48070,9 @@ test "ztex math labels size and render through opt-in Vex label adapter" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
     defer allocator.free(svg);
 
+    try std.testing.expect(std.mem.indexOf(u8, svg, "cost ") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "$a^2$") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "Energy ") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">a</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">2</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">x</text>") != null);
