@@ -7125,7 +7125,10 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
-    try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work);
+    switch (graphNeatoMode(graph)) {
+        .major => try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work),
+        .kk => try solveKamadaKawaiPositions(positions, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work),
+    }
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
     if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
@@ -7328,6 +7331,18 @@ fn stressDefaultDistance(graph: *const Graph) ?f64 {
     return if (std.math.isFinite(parsed) and parsed > 0) parsed else null;
 }
 
+const NeatoMode = enum {
+    major,
+    kk,
+};
+
+fn graphNeatoMode(graph: *const Graph) NeatoMode {
+    const value = attrValue(graph.attrs.items, "mode") orelse return .major;
+    if (std.mem.eql(u8, value, "KK")) return .kk;
+    if (std.mem.eql(u8, value, "major")) return .major;
+    return .major;
+}
+
 fn initializeStressPositions(positions: []Point, previous: ?*const Layout, rankdir: RankDir, options: ForceLayoutOptions, incremental: IncrementalLayoutOptions) void {
     const n = positions.len;
     const cx = options.width / 2.0;
@@ -7364,7 +7379,6 @@ fn majorizeStressPositions(
     work: ?*LayoutWorkTracker,
 ) !void {
     if (positions.len != scratch.len or positions.len != distances.node_count) return error.InvalidStressLayoutState;
-    const ideal_length: f64 = 72.0;
     var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergy(positions, distances) else null;
     for (0..iterations) |_| {
         if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| 1);
@@ -7374,12 +7388,7 @@ fn majorizeStressPositions(
             var sum_weight: f64 = 0;
             for (positions, 0..) |other, to| {
                 if (from == to) continue;
-                const graph_distance = distances.at(from, to);
-                const disconnected = !std.math.isFinite(graph_distance);
-                const normalized_distance = if (disconnected) distances.max_finite + 1.0 else @max(graph_distance, 0.05);
-                const desired = normalized_distance * ideal_length;
-                const weight_scale: f64 = if (disconnected) 0.05 else 1.0;
-                const weight = weight_scale / (desired * desired);
+                const pair = stressPairModel(distances, from, to);
                 var dx = position.x - other.x;
                 var dy = position.y - other.y;
                 var actual = std.math.hypot(dx, dy);
@@ -7389,9 +7398,9 @@ fn majorizeStressPositions(
                     dy = std.math.sin(angle) * 0.001;
                     actual = 0.001;
                 }
-                sum_x += weight * (other.x + desired * dx / actual);
-                sum_y += weight * (other.y + desired * dy / actual);
-                sum_weight += weight;
+                sum_x += pair.weight * (other.x + pair.desired * dx / actual);
+                sum_y += pair.weight * (other.y + pair.desired * dy / actual);
+                sum_weight += pair.weight;
             }
             scratch[from] = if (sum_weight > 0)
                 .{ .x = sum_x / sum_weight, .y = sum_y / sum_weight }
@@ -7411,6 +7420,126 @@ fn majorizeStressPositions(
             previous_energy = current_energy;
         }
     }
+}
+
+fn solveKamadaKawaiPositions(
+    positions: []Point,
+    distances: StressGraphDistances,
+    iterations: usize,
+    anchors: []const Point,
+    stability: f64,
+    epsilon: ?f64,
+    work: ?*LayoutWorkTracker,
+) !void {
+    if (positions.len != distances.node_count) return error.InvalidStressLayoutState;
+    var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergy(positions, distances) else null;
+    for (0..iterations) |_| {
+        if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| 1);
+        const node_id = maxKamadaKawaiGradientNode(positions, distances);
+        const terms = kamadaKawaiTerms(positions, distances, node_id);
+        if (terms.gradient <= 0.000001) break;
+
+        const det = terms.xx * terms.yy - terms.xy * terms.xy;
+        if (@abs(det) <= 0.000000001) break;
+        var step = Point{
+            .x = (terms.xy * terms.gy - terms.yy * terms.gx) / det,
+            .y = (terms.xy * terms.gx - terms.xx * terms.gy) / det,
+        };
+        const step_length = std.math.hypot(step.x, step.y);
+        const max_step = @max(4.0, stressIdealLength * 0.5);
+        if (step_length > max_step) {
+            const scale = max_step / step_length;
+            step.x *= scale;
+            step.y *= scale;
+        }
+
+        positions[node_id].x += step.x;
+        positions[node_id].y += step.y;
+        if (node_id < anchors.len and stability > 0) {
+            positions[node_id].x = positions[node_id].x * (1.0 - stability) + anchors[node_id].x * stability;
+            positions[node_id].y = positions[node_id].y * (1.0 - stability) + anchors[node_id].y * stability;
+        }
+
+        if (epsilon) |threshold| {
+            const current_energy = stressLayoutEnergy(positions, distances);
+            const previous = previous_energy.?;
+            const change = @abs(previous - current_energy);
+            if (current_energy < threshold or (previous > 0 and change / previous < threshold)) break;
+            previous_energy = current_energy;
+        }
+    }
+}
+
+const KamadaKawaiTerms = struct {
+    gx: f64,
+    gy: f64,
+    xx: f64,
+    yy: f64,
+    xy: f64,
+    gradient: f64,
+};
+
+fn maxKamadaKawaiGradientNode(positions: []const Point, distances: StressGraphDistances) usize {
+    var best_id: usize = 0;
+    var best_gradient: f64 = -1;
+    for (positions, 0..) |_, id| {
+        const terms = kamadaKawaiTerms(positions, distances, id);
+        if (terms.gradient > best_gradient) {
+            best_gradient = terms.gradient;
+            best_id = id;
+        }
+    }
+    return best_id;
+}
+
+fn kamadaKawaiTerms(positions: []const Point, distances: StressGraphDistances, node_id: usize) KamadaKawaiTerms {
+    var result = KamadaKawaiTerms{
+        .gx = 0,
+        .gy = 0,
+        .xx = 0,
+        .yy = 0,
+        .xy = 0,
+        .gradient = 0,
+    };
+    const position = positions[node_id];
+    for (positions, 0..) |other, other_id| {
+        if (node_id == other_id) continue;
+        const pair = stressPairModel(distances, node_id, other_id);
+        var dx = position.x - other.x;
+        var dy = position.y - other.y;
+        var actual = std.math.hypot(dx, dy);
+        if (actual < 0.001) {
+            const angle = @as(f64, @floatFromInt(node_id + other_id + 1)) * 2.399963229728653;
+            dx = std.math.cos(angle) * 0.001;
+            dy = std.math.sin(angle) * 0.001;
+            actual = 0.001;
+        }
+        const actual3 = actual * actual * actual;
+        const length_over_actual = pair.desired / actual;
+        result.gx += pair.weight * dx * (1.0 - length_over_actual);
+        result.gy += pair.weight * dy * (1.0 - length_over_actual);
+        result.xx += pair.weight * (1.0 - pair.desired * dy * dy / actual3);
+        result.yy += pair.weight * (1.0 - pair.desired * dx * dx / actual3);
+        result.xy += pair.weight * pair.desired * dx * dy / actual3;
+    }
+    result.gradient = std.math.hypot(result.gx, result.gy);
+    return result;
+}
+
+const stressIdealLength: f64 = 72.0;
+
+const StressPairModel = struct {
+    desired: f64,
+    weight: f64,
+};
+
+fn stressPairModel(distances: StressGraphDistances, from: usize, to: usize) StressPairModel {
+    const graph_distance = distances.at(from, to);
+    const disconnected = !std.math.isFinite(graph_distance);
+    const normalized_distance = if (disconnected) distances.max_finite + 1.0 else @max(graph_distance, 0.05);
+    const desired = normalized_distance * stressIdealLength;
+    const weight_scale: f64 = if (disconnected) 0.05 else 1.0;
+    return .{ .desired = desired, .weight = weight_scale / (desired * desired) };
 }
 
 fn fitStressPositionsToCanvas(positions: []Point, sizes: []const NodeSize, options: ForceLayoutOptions) void {
@@ -7443,18 +7572,12 @@ fn fitStressPositionsToCanvas(positions: []Point, sizes: []const NodeSize, optio
 }
 
 fn stressLayoutEnergy(positions: []const Point, distances: StressGraphDistances) f64 {
-    const ideal_length: f64 = 72.0;
     var energy: f64 = 0;
     for (positions, 0..) |position, from| {
         for (positions[from + 1 ..], from + 1..) |other, to| {
-            const graph_distance = distances.at(from, to);
-            const disconnected = !std.math.isFinite(graph_distance);
-            const normalized_distance = if (disconnected) distances.max_finite + 1.0 else @max(graph_distance, 0.05);
-            const desired = normalized_distance * ideal_length;
-            const weight_scale: f64 = if (disconnected) 0.05 else 1.0;
-            const weight = weight_scale / (desired * desired);
-            const delta = std.math.hypot(position.x - other.x, position.y - other.y) - desired;
-            energy += weight * delta * delta;
+            const pair = stressPairModel(distances, from, to);
+            const delta = std.math.hypot(position.x - other.x, position.y - other.y) - pair.desired;
+            energy += pair.weight * delta * delta;
         }
     }
     return energy;
@@ -29204,6 +29327,72 @@ test "neato defaultdist changes disconnected component layout" {
     var far_layout = try layoutGraph(allocator, &far, .{ .algorithm = .auto });
     defer far_layout.deinit();
     try std.testing.expect(sharedNodeDisplacement(&near_layout, &far_layout, near.nodes.items.len) > 0.1);
+}
+
+test "neato mode selects Graphviz KK only for exact mode value" {
+    const allocator = std.testing.allocator;
+    var default_graph = try parseDot(allocator, "graph G { graph [layout=neato]; a -- b; }");
+    defer default_graph.deinit();
+    var major_graph = try parseDot(allocator, "graph G { graph [layout=neato, mode=major]; a -- b; }");
+    defer major_graph.deinit();
+    var kk_graph = try parseDot(allocator, "graph G { graph [layout=neato, mode=KK]; a -- b; }");
+    defer kk_graph.deinit();
+    var lowercase_graph = try parseDot(allocator, "graph G { graph [layout=neato, mode=kk]; a -- b; }");
+    defer lowercase_graph.deinit();
+
+    try std.testing.expectEqual(NeatoMode.major, graphNeatoMode(&default_graph));
+    try std.testing.expectEqual(NeatoMode.major, graphNeatoMode(&major_graph));
+    try std.testing.expectEqual(NeatoMode.kk, graphNeatoMode(&kk_graph));
+    try std.testing.expectEqual(NeatoMode.major, graphNeatoMode(&lowercase_graph));
+}
+
+test "neato mode KK uses Kamada-Kawai optimization path" {
+    const allocator = std.testing.allocator;
+    var major = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, mode=major, start=random13, maxiter=30];
+        \\  hub -- a;
+        \\  hub -- b;
+        \\  hub -- c;
+        \\  a -- d;
+        \\  b -- d;
+        \\  c -- e;
+        \\}
+    );
+    defer major.deinit();
+    var kk = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, mode=KK, start=random13, maxiter=30];
+        \\  hub -- a;
+        \\  hub -- b;
+        \\  hub -- c;
+        \\  a -- d;
+        \\  b -- d;
+        \\  c -- e;
+        \\}
+    );
+    defer kk.deinit();
+
+    var major_layout = try layoutGraph(allocator, &major, .{ .algorithm = .auto });
+    defer major_layout.deinit();
+    var kk_layout = try layoutGraph(allocator, &kk, .{ .algorithm = .auto });
+    defer kk_layout.deinit();
+    try std.testing.expect(sharedNodeDisplacement(&major_layout, &kk_layout, major.nodes.items.len) > 0.1);
+
+    const distances = try stressGraphDistances(allocator, &kk);
+    defer allocator.free(distances.values);
+    var positions = [_]Point{
+        .{ .x = 20, .y = 20 },
+        .{ .x = 380, .y = 20 },
+        .{ .x = 30, .y = 260 },
+        .{ .x = 370, .y = 250 },
+        .{ .x = 200, .y = 120 },
+        .{ .x = 210, .y = 130 },
+    };
+    const before = stressLayoutEnergy(&positions, distances);
+    try solveKamadaKawaiPositions(&positions, distances, 30, &.{}, 0, null, null);
+    const after = stressLayoutEnergy(&positions, distances);
+    try std.testing.expect(after < before);
 }
 
 test "neato stress majorization lowers graph stress" {

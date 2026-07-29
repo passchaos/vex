@@ -53,7 +53,9 @@ cat examples/simple.dot | zig build run -- --format svg > simple.svg
 Layout selection defaults to `dot`/Sugiyama, which honors
 `rankdir=TB|BT|LR|RL` during layout. `--layout neato`, `graph
 [layout=neato]`, and Graphviz-style `-Kneato` select the deterministic
-stress-majorization engine. `--layout fdp`, `graph [layout=fdp]`, and `-Kfdp`
+stress-majorization engine, with Graphviz `mode=major` and `mode=KK`
+selecting the majorization and Kamada-Kawai optimization paths. `--layout fdp`,
+`graph [layout=fdp]`, and `-Kfdp`
 select the independent spring-electrical engine with all-pairs repulsion,
 edge-only springs, cluster boxes, graph `K` / `T0`, and edge `len` / `weight`
 semantics. Force-style layouts honor Graphviz `normalize` final-coordinate
