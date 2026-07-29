@@ -6887,6 +6887,7 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
         temperature *= 0.94;
     }
 
+    if (applyGraphvizNormalize(graph, positions)) fitStressPositionsToCanvas(positions, sizes, options);
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
     }
@@ -6987,6 +6988,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
     try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, work);
+    _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
     if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
 
@@ -7033,6 +7035,59 @@ fn removeForceNodeOverlaps(
         .remove,
         .{ .add = .{ .x = 0.5, .y = 0.5 } },
     );
+}
+
+fn applyGraphvizNormalize(graph: *const Graph, positions: []Point) bool {
+    const target_angle = graphvizNormalizeAngle(graph.attrs.items) orelse return false;
+    if (positions.len == 0) return false;
+
+    const origin = positions[0];
+    var moved = origin.x != 0 or origin.y != 0;
+    for (positions) |*position| {
+        position.x -= origin.x;
+        position.y -= origin.y;
+    }
+
+    const edge_item = firstDrawableEdge(graph) orelse return moved;
+    if (edge_item.from >= positions.len or edge_item.to >= positions.len) return moved;
+    const from = positions[edge_item.from];
+    const to = positions[edge_item.to];
+    const current_angle = std.math.atan2(to.y - from.y, to.x - from.x);
+    const phi = target_angle - current_angle;
+    if (@abs(phi) <= 0.0000001) return moved;
+
+    const cosv = std.math.cos(phi);
+    const sinv = std.math.sin(phi);
+    for (positions) |*position| {
+        const x = position.x - from.x;
+        const y = position.y - from.y;
+        position.x = x * cosv - y * sinv + from.x;
+        position.y = x * sinv + y * cosv + from.y;
+    }
+    moved = true;
+    return moved;
+}
+
+fn graphvizNormalizeAngle(attrs: []const Attr) ?f64 {
+    const value = attrValue(attrs, "normalize") orelse return null;
+    if (value.len == 0) return null;
+    const token = parseFloatPrefix(value) orelse {
+        return if (parseBool(value) orelse false) 0.0 else null;
+    };
+    if (!std.math.isFinite(token.value)) return null;
+    var degrees = token.value;
+    while (degrees > 180.0) degrees -= 360.0;
+    while (degrees <= -180.0) degrees += 360.0;
+    return degrees * std.math.pi / 180.0;
+}
+
+fn firstDrawableEdge(graph: *const Graph) ?Edge {
+    for (graph.nodes.items) |node_item| {
+        for (graph.edges.items) |edge_item| {
+            if (edge_item.from == node_item.id and edge_item.from != edge_item.to) return edge_item;
+        }
+    }
+    return null;
 }
 
 const StressGraphDistances = struct {
@@ -7270,6 +7325,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
     try springElectricalRelax(graph, positions, displacements, options, anchors, stability, work);
+    _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
     if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
 
@@ -7494,6 +7550,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     }, initial);
     defer result.deinit();
     work.work = result.work;
+    if (applyGraphvizNormalize(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
     if (previous == null) try removeForceNodeOverlaps(allocator, result.positions, sizes);
 
     for (nodes, 0..) |*node, id| {
@@ -24123,6 +24180,10 @@ fn distanceBetween(a: Point, b: Point) f64 {
     return std.math.hypot(a.x - b.x, a.y - b.y);
 }
 
+fn angleBetween(a: Point, b: Point) f64 {
+    return std.math.atan2(b.y - a.y, b.x - a.x);
+}
+
 fn lerpPoint(a: Point, b: Point, t: f64) Point {
     return .{
         .x = a.x + (b.x - a.x) * t,
@@ -28556,6 +28617,48 @@ test "Fruchterman-Reingold layout pulls adjacent nodes closer" {
     const ac = distanceBetween(layout.nodes[a].center, layout.nodes[c].center);
     const bc = distanceBetween(layout.nodes[b].center, layout.nodes[c].center);
     try std.testing.expect(ab < @max(ac, bc));
+}
+
+test "force layouts honor Graphviz normalize angle" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, normalize=90];
+        \\  a -- b;
+        \\  a -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 420, .height = 320, .margin = 30, .iterations = 80 },
+    });
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expectApproxEqAbs(std.math.pi / 2.0, angleBetween(layout.nodes[a].center, layout.nodes[b].center), 0.05);
+}
+
+test "force layouts treat normalize=true as zero degrees" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=fdp, normalize=true];
+        \\  a -- b;
+        \\  b -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 420, .height = 320, .margin = 30, .iterations = 80 },
+    });
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), angleBetween(layout.nodes[a].center, layout.nodes[b].center), 0.05);
 }
 
 test "layout algorithm parser accepts Graphviz engine names" {
