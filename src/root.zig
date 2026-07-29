@@ -7166,7 +7166,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     }
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
-    if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
+    if (previous == null) try removeForceNodeOverlaps(allocator, graph, positions, sizes);
 
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
@@ -7192,6 +7192,7 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
 
 fn removeForceNodeOverlaps(
     allocator: std.mem.Allocator,
+    graph: *const Graph,
     positions: []Point,
     sizes: []const NodeSize,
 ) !void {
@@ -7204,12 +7205,21 @@ fn removeForceNodeOverlaps(
     for (sizes, overlap_sizes) |size, *overlap_size| {
         overlap_size.* = .{ .width = size.width, .height = size.height };
     }
+    const explicit_overlap = attrValue(graph.attrs.items, "overlap");
+    const mode = if (explicit_overlap) |value|
+        layout_mod.nop.parseOverlapMode(value)
+    else
+        layout_mod.nop.OverlapMode.remove;
+    const separation = if (explicit_overlap != null)
+        layout_mod.nop.parseSeparation(attrValue(graph.attrs.items, "sep"))
+    else
+        layout_mod.nop.Separation{ .add = .{ .x = 0.5, .y = 0.5 } };
     _ = try layout_mod.nop.adjustOverlaps(
         allocator,
         positions,
         overlap_sizes,
-        .remove,
-        .{ .add = .{ .x = 0.5, .y = 0.5 } },
+        mode,
+        separation,
     );
 }
 
@@ -7701,7 +7711,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     try springElectricalRelax(graph, positions, displacements, options, anchors, stability, work);
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
-    if (previous == null) try removeForceNodeOverlaps(allocator, positions, sizes);
+    if (previous == null) try removeForceNodeOverlaps(allocator, graph, positions, sizes);
 
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
@@ -7933,7 +7943,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     work.work = result.work;
     if (applySfdpRotation(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
     if (applyGraphvizNormalize(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
-    if (previous == null) try removeForceNodeOverlaps(allocator, result.positions, sizes);
+    if (previous == null) try removeForceNodeOverlaps(allocator, graph, result.positions, sizes);
 
     for (nodes, 0..) |*node, id| {
         var center = result.positions[id];
@@ -29548,6 +29558,54 @@ test "neato removes final node overlaps" {
         nodeRect(layout.nodes[a]),
         nodeRect(layout.nodes[b]),
     ));
+}
+
+test "force layouts honor explicit Graphviz overlap retain" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, maxiter=0, inputscale=72, overlap=true];
+        \\  a [pos="20,20", fixedsize=true, width=1.2, height=0.8];
+        \\  b [pos="20,20", fixedsize=true, width=1.2, height=0.8];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 240, .height = 180, .margin = 0 },
+    });
+    defer layout.deinit();
+    try std.testing.expect(rectsOverlap(
+        nodeRect(layout.nodes[nodeIdByLabel(&graph, "a")]),
+        nodeRect(layout.nodes[nodeIdByLabel(&graph, "b")]),
+    ));
+}
+
+test "force layouts honor explicit Graphviz overlap scale" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=fdp, maxiter=0, inputscale=72, overlap=scale, sep="0.05"];
+        \\  a [pos="0,0", fixedsize=true, width=1.0, height=0.6];
+        \\  b [pos="10,0", fixedsize=true, width=1.0, height=0.6];
+        \\  c [pos="20,0", fixedsize=true, width=1.0, height=0.6];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 420, .height = 260, .margin = 0 },
+    });
+    defer layout.deinit();
+    try std.testing.expect(layout.nodes[0].center.x < layout.nodes[1].center.x);
+    try std.testing.expect(layout.nodes[1].center.x < layout.nodes[2].center.x);
+    for (0..layout.nodes.len) |left_id| {
+        for (left_id + 1..layout.nodes.len) |right_id| {
+            try std.testing.expect(!rectsOverlap(nodeRect(layout.nodes[left_id]), nodeRect(layout.nodes[right_id])));
+        }
+    }
 }
 
 test "neato is distinct from Fruchterman-Reingold" {
