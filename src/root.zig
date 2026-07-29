@@ -5952,6 +5952,28 @@ fn unitRandom(state: *u64) f64 {
     return @as(f64, @floatFromInt(z >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
 }
 
+fn applySfdpRotation(graph: *const Graph, positions: []Point) bool {
+    const degrees = parseAttrFloat(graph.attrs.items, "rotation", 0.0);
+    if (degrees == 0 or !std.math.isFinite(degrees) or positions.len == 0) return false;
+    const angle = degrees * std.math.pi / 180.0;
+    const cosv = std.math.cos(angle);
+    const sinv = std.math.sin(angle);
+    var center = Point{ .x = 0, .y = 0 };
+    for (positions) |position| {
+        center.x += position.x;
+        center.y += position.y;
+    }
+    center.x /= @as(f64, @floatFromInt(positions.len));
+    center.y /= @as(f64, @floatFromInt(positions.len));
+    for (positions) |*position| {
+        const x = position.x - center.x;
+        const y = position.y - center.y;
+        position.x = x * cosv - y * sinv + center.x;
+        position.y = x * sinv + y * cosv + center.y;
+    }
+    return true;
+}
+
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
     return layout_mod.options.clusterAlongBudget(axes.alongMargin(options));
 }
@@ -7638,6 +7660,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     }, initial);
     defer result.deinit();
     work.work = result.work;
+    if (applySfdpRotation(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
     if (applyGraphvizNormalize(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
     if (previous == null) try removeForceNodeOverlaps(allocator, result.positions, sizes);
 
@@ -24272,6 +24295,13 @@ fn angleBetween(a: Point, b: Point) f64 {
     return std.math.atan2(b.y - a.y, b.x - a.x);
 }
 
+fn normalizedAngleDelta(angle: f64) f64 {
+    var result = angle;
+    while (result > std.math.pi) result -= std.math.tau;
+    while (result <= -std.math.pi) result += std.math.tau;
+    return result;
+}
+
 fn lerpPoint(a: Point, b: Point, t: f64) Point {
     return .{
         .x = a.x + (b.x - a.x) * t,
@@ -29209,6 +29239,34 @@ test "sfdp honors levels and repulsiveforce but ignores edge len and weight" {
     var second = try layoutGraph(allocator, &decorated, config);
     defer second.deinit();
     try expectNodeCentersEqual(&first, &second);
+}
+
+test "sfdp honors Graphviz rotation attribute" {
+    const allocator = std.testing.allocator;
+    var plain = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=sfdp, start=random11, maxiter=2, rotation=0];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer plain.deinit();
+    var rotated = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=sfdp, start=random11, maxiter=2, rotation=90];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer rotated.deinit();
+
+    var plain_layout = try layoutGraph(allocator, &plain, .{ .algorithm = .auto });
+    defer plain_layout.deinit();
+    var rotated_layout = try layoutGraph(allocator, &rotated, .{ .algorithm = .auto });
+    defer rotated_layout.deinit();
+    const a = nodeIdByLabel(&plain, "a");
+    const b = nodeIdByLabel(&plain, "b");
+    const plain_angle = angleBetween(plain_layout.nodes[a].center, plain_layout.nodes[b].center);
+    const rotated_angle = angleBetween(rotated_layout.nodes[a].center, rotated_layout.nodes[b].center);
+    try std.testing.expectApproxEqAbs(std.math.pi / 2.0, normalizedAngleDelta(rotated_angle - plain_angle), 0.06);
 }
 
 test "sfdp Barnes Hut repulsion approximates exact forces" {
