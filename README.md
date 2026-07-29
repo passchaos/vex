@@ -64,9 +64,9 @@ does not model clusters or edge `len` / `weight`. Fine-level repulsion uses a
 deterministic Barnes-Hut quadtree above the exact small-graph threshold, with
 tests bounding force error and repulsion work plus a 512-node SVG smoke.
 `--layout twopi`, `graph [layout=twopi]`, and `-Ktwopi` select the independent
-radial engine. It honors graph `root`, node `root=true`, `ranksep`, BFS
-graph-distance rings, subtree-weighted angular spans, and disconnected
-component packing.
+radial engine. It honors graph `root`, node `root=true`, Graphviz-style scalar
+and list `ranksep` radial increments, BFS graph-distance rings,
+subtree-weighted angular spans, and disconnected component packing.
 `--layout circo`, `graph [layout=circo]`, and `-Kcirco` select the independent
 circular engine. It uses Tarjan biconnected blocks, places each block on a
 circle, recursively joins the block-cut tree at articulation nodes, packs

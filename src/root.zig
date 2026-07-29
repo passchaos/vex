@@ -7571,9 +7571,12 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
     }
 
     const preferred_root = radialRootNode(graph);
-    const ranksep = layout_mod.spacing.graph(attrValue(graph.attrs.items, "ranksep") orelse "1", 72.0);
+    const rank_radii = try twopiRankRadii(allocator, graph.attrs.items, n);
+    defer allocator.free(rank_radii);
+    const ranksep = if (rank_radii.len > 1) rank_radii[1] else 72.0;
     var radial = try layout_mod.twopi.layout(allocator, n, edges[0..edge_count], preferred_root, .{
         .ring_gap = ranksep,
+        .rank_radii = rank_radii,
         .component_gap = @max(ranksep * 1.5, 72.0),
     });
     defer radial.deinit();
@@ -7582,7 +7585,10 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
     fitRadialPositionsToCanvas(radial.positions, sizes, options);
     @memcpy(ranks, radial.depths);
     @memset(rank_heights, 0);
-    for (rank_depths, 0..) |*depth, rank| depth.* = @as(f64, @floatFromInt(rank)) * ranksep;
+    for (rank_depths, 0..) |*depth, rank| depth.* = if (rank < rank_radii.len)
+        rank_radii[rank]
+    else
+        @as(f64, @floatFromInt(rank)) * ranksep;
     for (nodes, 0..) |*node, id| {
         var center = radial.positions[id];
         center.x = std.math.clamp(center.x, options.margin + sizes[id].width / 2.0, options.width - options.margin - sizes[id].width / 2.0);
@@ -7626,6 +7632,62 @@ fn radialRootNode(graph: *const Graph) ?NodeId {
         if (parseBool(value) orelse false) return node_item.id;
     }
     return null;
+}
+
+const twopiDefaultRankSepInches: f64 = 1.0;
+const twopiMinRankSepInches: f64 = 0.02;
+
+fn twopiRankRadii(allocator: std.mem.Allocator, attrs: []const Attr, depth_count: usize) ![]f64 {
+    const radii = try allocator.alloc(f64, depth_count);
+    errdefer allocator.free(radii);
+    if (depth_count == 0) return radii;
+    radii[0] = 0;
+
+    var next_rank: usize = 1;
+    var last_delta = twopiDefaultRankSepInches * 72.0;
+    if (attrValue(attrs, "ranksep")) |raw| {
+        last_delta = 0;
+        var cursor: usize = 0;
+        while (next_rank < depth_count) {
+            skipTwopiRankSepSeparators(raw, &cursor);
+            const token = parseFloatPrefix(raw[cursor..]) orelse break;
+            if (!std.math.isFinite(token.value) or token.value <= 0) break;
+            last_delta = @max(token.value, twopiMinRankSepInches) * 72.0;
+            radii[next_rank] = radii[next_rank - 1] + last_delta;
+            next_rank += 1;
+            cursor += token.len;
+        }
+    }
+    while (next_rank < depth_count) : (next_rank += 1) {
+        radii[next_rank] = radii[next_rank - 1] + last_delta;
+    }
+    return radii;
+}
+
+fn skipTwopiRankSepSeparators(value: []const u8, cursor: *usize) void {
+    while (cursor.* < value.len and (std.ascii.isWhitespace(value[cursor.*]) or value[cursor.*] == ':')) {
+        cursor.* += 1;
+    }
+}
+
+const FloatPrefix = struct {
+    value: f64,
+    len: usize,
+};
+
+fn parseFloatPrefix(value: []const u8) ?FloatPrefix {
+    var end: usize = 0;
+    var best: ?FloatPrefix = null;
+    while (end < value.len and isStrtodPrefixChar(value[end])) {
+        end += 1;
+        const parsed = std.fmt.parseFloat(f64, value[0..end]) catch continue;
+        best = .{ .value = parsed, .len = end };
+    }
+    return best;
+}
+
+fn isStrtodPrefixChar(char: u8) bool {
+    return std.ascii.isAlphanumeric(char) or char == '+' or char == '-' or char == '.';
 }
 
 fn fitRadialPositionsToCanvas(positions: []Point, sizes: []const NodeSize, options: ForceLayoutOptions) void {
@@ -28934,6 +28996,55 @@ test "twopi honors explicit root and BFS rings" {
     try std.testing.expectApproxEqAbs(radius_a, radius_b, 2.0);
     try std.testing.expectApproxEqAbs(radius_c, radius_d, 2.0);
     try std.testing.expect(radius_c > radius_a * 1.8);
+}
+
+test "twopi ranksep list follows Graphviz radial increments" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=twopi, root=root, ranksep="0.5:1 2"];
+        \\  root -- a -- b -- c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const radii = try twopiRankRadii(allocator, graph.attrs.items, 5);
+    defer allocator.free(radii);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), radii[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 36.0), radii[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 108.0), radii[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 252.0), radii[3], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 396.0), radii[4], 0.001);
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 900, .height = 700, .margin = 30 },
+    });
+    defer layout.deinit();
+    const root = nodeIdByLabel(&graph, "root");
+    const a = nodeIdByLabel(&graph, "a");
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[root]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[a]);
+    try std.testing.expectEqual(@as(usize, 2), layout.ranks[b]);
+    try std.testing.expectEqual(@as(usize, 3), layout.ranks[c]);
+    try std.testing.expectApproxEqAbs(@as(f64, 36.0), layout.rank_depths[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 108.0), layout.rank_depths[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 252.0), layout.rank_depths[3], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 36.0), distanceBetween(layout.nodes[root].center, layout.nodes[a].center), 1.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 108.0), distanceBetween(layout.nodes[root].center, layout.nodes[b].center), 1.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 252.0), distanceBetween(layout.nodes[root].center, layout.nodes[c].center), 1.0);
+}
+
+test "twopi ranksep list clamps minimum positive increments" {
+    const allocator = std.testing.allocator;
+    const attrs = [_]Attr{.{ .name = "ranksep", .value = "0.01:0.03" }};
+    const radii = try twopiRankRadii(allocator, attrs[0..], 4);
+    defer allocator.free(radii);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.44), radii[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 3.60), radii[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 5.76), radii[3], 0.001);
 }
 
 test "twopi allocates branch angular spans by subtree leaves" {

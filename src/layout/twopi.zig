@@ -10,6 +10,7 @@ pub const Edge = struct {
 
 pub const Options = struct {
     ring_gap: f64 = 72,
+    rank_radii: []const f64 = &.{},
     component_gap: f64 = 96,
 };
 
@@ -82,7 +83,7 @@ pub fn layout(
         var min_y = std.math.floatMax(f64);
         var max_y: f64 = -std.math.floatMax(f64);
         for (component.nodes.items) |node| {
-            const radius = @as(f64, @floatFromInt(tree.depth[node])) * gap;
+            const radius = radiusForDepth(options, tree.depth[node]);
             const point = Point{
                 .x = std.math.cos(tree.angle[node]) * radius,
                 .y = std.math.sin(tree.angle[node]) * radius,
@@ -355,6 +356,17 @@ fn centerPositions(positions: []Point) void {
         position.x += shift_x;
         position.y += shift_y;
     }
+}
+
+fn radiusForDepth(options: Options, depth: usize) f64 {
+    if (depth == 0) return 0;
+    if (depth < options.rank_radii.len) return options.rank_radii[depth];
+    const gap = @max(options.ring_gap, 1.0);
+    if (options.rank_radii.len > 0) {
+        return options.rank_radii[options.rank_radii.len - 1] +
+            @as(f64, @floatFromInt(depth - (options.rank_radii.len - 1))) * gap;
+    }
+    return @as(f64, @floatFromInt(depth)) * gap;
 }
 
 fn contains(nodes: []const usize, target: usize) bool {
