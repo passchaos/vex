@@ -22038,6 +22038,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
     const aligned_label = edge_item.label != null and
         positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
         edgeLabelAlignedEnabled(edge_item.attrs.items) and
+        !mathLabelEnabled(edge_item.attrs.items) and
         plainSingleLineLabel(edge_item.label.?);
     const edge_path_id = if (aligned_label) edge_anchor_id.group else null;
     const effective_routing = svgEdgeRoutingForEdge(graph, edge_item, edge_routing);
@@ -39106,6 +39107,32 @@ test "SVG renderer aligns plain edge labels to paths" {
     defer allocator.free(default_svg);
     try std.testing.expect(std.mem.indexOf(u8, default_svg, "<path id=\"root-G_edge1_p\" fill=\"none\" stroke=\"black\" d=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, default_svg, "<textPath xlink:href=\"#root-G_edge1_p\" startOffset=\"50%\"><tspan x=\"0\" dy=\"4.9\">dot</tspan></textPath>") != null);
+}
+
+
+test "SVG renderer falls back from textPath for ztex math edge labels" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "MathAligned" });
+    defer graph.deinit();
+    const a = try graph.addNode("A", .{});
+    const b = try graph.addNode("B", .{});
+    _ = try graph.addEdge(a, b, .{
+        .label = "cost $a^2$",
+        .labelaligned = true,
+        .vex_math_label = true,
+        .fontsize = 16,
+    });
+
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<textPath") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "cost ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "$a^2$") == null or std.mem.indexOf(u8, svg, "<textPath") == null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">a</text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">2</text>") != null);
 }
 
 test "SVG renderer keeps ordinary edge labels when labelaligned is false" {
