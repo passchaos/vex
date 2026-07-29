@@ -28418,87 +28418,29 @@ fn renderSvgMaybeMathLabel(
     defer tree.deinit();
     var display = ztex.formula.buildDisplayList(allocator, tree) catch return false;
     defer display.deinit();
-    try renderSvgMathDisplayList(writer, display, x, center_y, fill, font, text_anchor);
+    try ztex.formula_svg.renderDisplayListSvg(writer, display, .{
+        .x = x,
+        .center_y = center_y,
+        .anchor = mathSvgAnchor(text_anchor),
+        .fill = fill,
+        .font = mathSvgFont(font),
+    });
     return true;
 }
 
-fn renderSvgMathDisplayList(writer: *Io.Writer, display: ztex.formula.DisplayList, x: f64, center_y: f64, fill: []const u8, font: SvgFont, text_anchor: []const u8) Io.Writer.Error!void {
-    var width: f64 = 0;
-    var height: f64 = 0;
-    for (display.commands) |command| switch (command) {
-        .glyph => |glyph| {
-            width = @max(width, @as(f64, glyph.x + glyph.metrics.width));
-            height = @max(height, @as(f64, glyph.baseline_y + glyph.metrics.depth));
-        },
-        .rule => |rule| {
-            width = @max(width, @as(f64, rule.x + rule.width));
-            height = @max(height, @as(f64, rule.y + rule.thickness));
-        },
-        .line => |line| {
-            width = @max(width, @max(@as(f64, line.x1), @as(f64, line.x2)));
-            height = @max(height, @max(@as(f64, line.y1), @as(f64, line.y2)));
-        },
-        .fill_rect => |rect| {
-            width = @max(width, @as(f64, rect.x + rect.width));
-            height = @max(height, @as(f64, rect.y + rect.height));
-        },
-        .image => |image| {
-            width = @max(width, @as(f64, image.x + image.width));
-            height = @max(height, @as(f64, image.y + image.height + image.depth));
-        },
-    };
-    const origin_x = if (std.mem.eql(u8, text_anchor, "end")) x - width else if (std.mem.eql(u8, text_anchor, "middle")) x - width / 2.0 else x;
-    const origin_y = center_y - height / 2.0;
-    for (display.commands) |command| switch (command) {
-        .glyph => |glyph| {
-            const glyph_fill = glyph.style.color orelse fill;
-            const glyph_size = @as(f64, glyph.render_font_size orelse glyph.font_size);
-            try writeSvgTextOpen(writer, "start", origin_x + @as(f64, glyph.x), origin_y + @as(f64, glyph.baseline_y), font, glyph_size);
-            try writeSvgTextFill(writer, glyph_fill);
-            try writer.writeAll(">");
-            try writeXmlEscaped(writer, glyph.text);
-            try writer.writeAll("</text>\n");
-        },
-        .rule => |rule| {
-            try writeSvgRectOpen(writer, .{ .x = origin_x + @as(f64, rule.x), .y = origin_y + @as(f64, rule.y), .width = @as(f64, rule.width), .height = mathRuleThickness(rule.thickness) }, 0);
-            try writer.writeAll(" fill=\"");
-            try writeXmlEscaped(writer, fill);
-            try writer.writeAll("\" stroke=\"none\"/>\n");
-        },
-        .line => |line| {
-            const stroke = line.style.color orelse fill;
-            try writer.writeAll("<line x1=\"");
-            try writeSvgNumber(writer, origin_x + @as(f64, line.x1));
-            try writer.writeAll("\" y1=\"");
-            try writeSvgNumber(writer, origin_y + @as(f64, line.y1));
-            try writer.writeAll("\" x2=\"");
-            try writeSvgNumber(writer, origin_x + @as(f64, line.x2));
-            try writer.writeAll("\" y2=\"");
-            try writeSvgNumber(writer, origin_y + @as(f64, line.y2));
-            try writer.writeAll("\" fill=\"none\" stroke=\"");
-            try writeXmlEscaped(writer, stroke);
-            try writer.writeAll("\" stroke-width=\"");
-            try writeSvgNumber(writer, mathRuleThickness(line.thickness));
-            if (line.dashed) try writer.writeAll("\" stroke-dasharray=\"4 3");
-            try writer.writeAll("\"/>\n");
-        },
-        .fill_rect => |rect| {
-            try writeSvgRectOpen(writer, .{ .x = origin_x + @as(f64, rect.x), .y = origin_y + @as(f64, rect.y), .width = @as(f64, rect.width), .height = @as(f64, rect.height) }, 0);
-            try writer.writeAll(" fill=\"");
-            try writeXmlEscaped(writer, rect.color);
-            try writer.writeAll("\" stroke=\"none\"/>\n");
-        },
-        .image => |image| {
-            try writeSvgRectOpen(writer, .{ .x = origin_x + @as(f64, image.x), .y = origin_y + @as(f64, image.y), .width = @as(f64, image.width), .height = @as(f64, image.height) }, 2);
-            try writer.writeAll(" fill=\"none\" stroke=\"");
-            try writeXmlEscaped(writer, fill);
-            try writer.writeAll("\" stroke-width=\"1\"/>\n");
-        },
+fn mathSvgFont(font: SvgFont) ztex.formula_svg.Font {
+    return .{
+        .family = font.family,
+        .weight = font.weight,
+        .stretch = font.stretch,
+        .style = font.style,
     };
 }
 
-fn mathRuleThickness(value: f32) f64 {
-    return @max(0.5, @as(f64, value));
+fn mathSvgAnchor(anchor: []const u8) ztex.formula_svg.TextAnchor {
+    if (std.mem.eql(u8, anchor, "end")) return .end;
+    if (std.mem.eql(u8, anchor, "middle")) return .middle;
+    return .start;
 }
 
 fn renderSvgTextBlock(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, label_background: bool, dominant_middle: bool) Io.Writer.Error!void {
