@@ -28413,9 +28413,16 @@ fn mathLabelOptions(font_size: f64, fill: []const u8, font: SvgFont, anchor: zte
         .fill = fill,
         .font = mathSvgFont(font),
         .whole_formula_when_no_inline_spans = true,
+        .plain_text_measure = vexMathPlainTextMeasure,
     };
 }
 
+fn vexMathPlainTextMeasure(text: []const u8, options: ztex.formula_label.PlainTextOptions) ztex.formula_label.Metrics {
+    return .{
+        .width = displayLabelEstimatedWidth(text, options.font_size),
+        .height = @max(1.0, options.font_size * options.line_height_em),
+    };
+}
 
 fn mathSvgFont(font: SvgFont) ztex.formula_label.Font {
     return .{
@@ -48062,6 +48069,8 @@ test "ztex math labels size and render mixed inline formulas through opt-in Vex 
     const options = layoutOptionsWithGraphAttrs(.{}, &graph);
     const formula_size = measureNode(graph.nodes.items[formula], options);
     const literal_size = measureNode(graph.nodes.items[literal], options);
+    const math_metrics = ztex.formula_label.measureLabel(allocator, graph.nodes.items[formula].label, mathLabelOptions(18, "black", .{ .family = default_svg_font_family }, .middle, 0, 0)) catch unreachable;
+    try std.testing.expectApproxEqAbs(math_metrics.width, formula_size.width, 0.001);
     try std.testing.expect(formula_size.width + 20.0 < literal_size.width);
     try std.testing.expect(formula_size.height > 10.0);
 
