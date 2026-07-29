@@ -10,6 +10,7 @@ pub const Edge = struct {
 
 pub const Options = struct {
     min_dist: f64 = 72,
+    component_roots: []const usize = &.{},
     component_gap: f64 = 96,
     one_block: bool = false,
 };
@@ -93,7 +94,7 @@ pub fn layout(
         total_blocks += blocks.items.len;
         if (blocks.items.len == 0) continue;
 
-        const root_block = chooseRootBlock(blocks.items, preferred_root);
+        const root_block = chooseRootBlock(blocks.items, preferred_root, options.component_roots);
         const placed_blocks = try allocator.alloc(bool, blocks.items.len);
         defer allocator.free(placed_blocks);
         @memset(placed_blocks, false);
@@ -236,8 +237,13 @@ fn emitBlock(tarjan: *Tarjan, stop_edge: ?usize) !void {
     }
 }
 
-fn chooseRootBlock(blocks: []const Block, preferred_root: ?usize) usize {
+fn chooseRootBlock(blocks: []const Block, preferred_root: ?usize, component_roots: []const usize) usize {
     if (preferred_root) |root| {
+        for (blocks, 0..) |block, index| {
+            if (contains(block.nodes.items, root)) return index;
+        }
+    }
+    for (component_roots) |root| {
         for (blocks, 0..) |block, index| {
             if (contains(block.nodes.items, root)) return index;
         }
@@ -410,4 +416,24 @@ fn centerPositions(positions: []Point) void {
 fn contains(nodes: []const usize, target: usize) bool {
     for (nodes) |node| if (node == target) return true;
     return false;
+}
+
+test "component roots choose circular root blocks" {
+    const allocator = std.testing.allocator;
+    const edges = [_]Edge{
+        .{ .from = 0, .to = 1 },
+        .{ .from = 1, .to = 2 },
+        .{ .from = 2, .to = 0 },
+        .{ .from = 2, .to = 3 },
+        .{ .from = 4, .to = 5 },
+        .{ .from = 5, .to = 6 },
+        .{ .from = 6, .to = 4 },
+        .{ .from = 6, .to = 7 },
+    };
+    const roots = [_]usize{ 3, 7 };
+    var result = try layout(allocator, 8, &edges, null, .{ .component_roots = &roots });
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.component_count);
+    try std.testing.expect(result.positions[3].x < result.positions[0].x);
+    try std.testing.expect(result.positions[7].x < result.positions[4].x);
 }

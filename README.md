@@ -71,7 +71,8 @@ component packing.
 `--layout circo`, `graph [layout=circo]`, and `-Kcirco` select the independent
 circular engine. It uses Tarjan biconnected blocks, places each block on a
 circle, recursively joins the block-cut tree at articulation nodes, packs
-disconnected components, and honors `root`, `mindist`, and `oneblock`.
+disconnected components, and honors graph `root`, per-component node
+`root=true`, `mindist`, and `oneblock`.
 `--layout patchwork`, `graph [layout=patchwork]`, and `-Kpatchwork` select the
 independent hierarchical squarified treemap engine. Node/subgraph `area`
 controls allocation, nested subgraphs form containing rectangles, and edges do

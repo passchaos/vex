@@ -7571,7 +7571,7 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
     }
 
     const preferred_root = radialRootNode(graph);
-    const component_roots = try twopiComponentRoots(allocator, graph);
+    const component_roots = try layoutRootNodes(allocator, graph);
     defer allocator.free(component_roots);
     const rank_radii = try twopiRankRadii(allocator, graph.attrs.items, n);
     defer allocator.free(rank_radii);
@@ -7637,7 +7637,7 @@ fn radialRootNode(graph: *const Graph) ?NodeId {
     return null;
 }
 
-fn twopiComponentRoots(allocator: std.mem.Allocator, graph: *const Graph) ![]NodeId {
+fn layoutRootNodes(allocator: std.mem.Allocator, graph: *const Graph) ![]NodeId {
     var roots = std.ArrayList(NodeId).empty;
     errdefer roots.deinit(allocator);
     for (graph.nodes.items) |node_item| {
@@ -7783,8 +7783,11 @@ fn layoutCircularWithControl(allocator: std.mem.Allocator, graph: *const Graph, 
     }
     const mindist = @max(1.0, parsePositiveAttrFloat(graph.attrs.items, "mindist", 1.0) * 72.0 + largest_node);
     const one_block = if (attrValue(graph.attrs.items, "oneblock")) |value| parseBool(value) orelse false else false;
+    const component_roots = try layoutRootNodes(allocator, graph);
+    defer allocator.free(component_roots);
     var circular = try layout_mod.circo.layout(allocator, n, edges[0..edge_count], radialRootNode(graph), .{
         .min_dist = mindist,
+        .component_roots = component_roots,
         .component_gap = @max(mindist * 1.5, 96.0),
         .one_block = one_block,
     });
@@ -29201,6 +29204,34 @@ test "circo packs disconnected circular components" {
     const left_center = (result.positions[0].x + result.positions[1].x + result.positions[2].x) / 3.0;
     const right_center = (result.positions[3].x + result.positions[4].x + result.positions[5].x) / 3.0;
     try std.testing.expect(left_center < right_center);
+}
+
+test "circo honors node roots per disconnected component" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=circo];
+        \\  a -- b -- c -- a;
+        \\  c -- d;
+        \\  x -- y -- z -- x;
+        \\  z -- w;
+        \\  d [root=true];
+        \\  w [root=true];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 860, .height = 420, .margin = 30 },
+    });
+    defer layout.deinit();
+    const a = nodeIdByLabel(&graph, "a");
+    const d = nodeIdByLabel(&graph, "d");
+    const w = nodeIdByLabel(&graph, "w");
+    const x = nodeIdByLabel(&graph, "x");
+    try std.testing.expect(layout.nodes[d].center.x < layout.nodes[a].center.x);
+    try std.testing.expect(layout.nodes[w].center.x < layout.nodes[x].center.x);
 }
 
 test "circo is distinct from twopi" {
