@@ -11,6 +11,7 @@ pub const Edge = struct {
 pub const Options = struct {
     ring_gap: f64 = 72,
     rank_radii: []const f64 = &.{},
+    component_roots: []const usize = &.{},
     component_gap: f64 = 96,
 };
 
@@ -62,15 +63,14 @@ pub fn layout(
     var cursor_x: f64 = 0;
     const gap = @max(options.ring_gap, 1.0);
     for (components.items, 0..) |component, component_index| {
-        const root = if (preferred_root) |candidate|
-            if (contains(component.nodes.items, candidate)) candidate else chooseCenter(
-                allocator,
-                component.nodes.items,
-                edges,
-                node_count,
-            ) catch component.nodes.items[0]
-        else
-            try chooseCenter(allocator, component.nodes.items, edges, node_count);
+        const root = componentRoot(
+            allocator,
+            component.nodes.items,
+            edges,
+            node_count,
+            preferred_root,
+            options.component_roots,
+        ) catch component.nodes.items[0];
         roots[component_index] = root;
 
         var tree = try buildTree(allocator, component.nodes.items, edges, node_count, root);
@@ -176,6 +176,23 @@ fn connectedComponents(
         try components.append(allocator, component);
     }
     return components;
+}
+
+fn componentRoot(
+    allocator: std.mem.Allocator,
+    nodes: []const usize,
+    edges: []const Edge,
+    node_count: usize,
+    preferred_root: ?usize,
+    component_roots: []const usize,
+) !usize {
+    if (preferred_root) |candidate| {
+        if (contains(nodes, candidate)) return candidate;
+    }
+    for (component_roots) |candidate| {
+        if (contains(nodes, candidate)) return candidate;
+    }
+    return try chooseCenter(allocator, nodes, edges, node_count);
 }
 
 fn chooseCenter(
@@ -372,4 +389,22 @@ fn radiusForDepth(options: Options, depth: usize) f64 {
 fn contains(nodes: []const usize, target: usize) bool {
     for (nodes) |node| if (node == target) return true;
     return false;
+}
+
+test "component roots are selected per connected component" {
+    const allocator = std.testing.allocator;
+    const edges = [_]Edge{
+        .{ .from = 0, .to = 1 },
+        .{ .from = 1, .to = 2 },
+        .{ .from = 3, .to = 4 },
+        .{ .from = 4, .to = 5 },
+    };
+    const roots = [_]usize{ 2, 5 };
+    var result = try layout(allocator, 6, &edges, null, .{ .component_roots = &roots });
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.component_count);
+    try std.testing.expectEqual(@as(usize, 2), result.roots[0]);
+    try std.testing.expectEqual(@as(usize, 5), result.roots[1]);
+    try std.testing.expectEqual(@as(usize, 0), result.depths[2]);
+    try std.testing.expectEqual(@as(usize, 0), result.depths[5]);
 }

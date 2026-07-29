@@ -7571,12 +7571,15 @@ fn layoutRadialWithControl(allocator: std.mem.Allocator, graph: *const Graph, op
     }
 
     const preferred_root = radialRootNode(graph);
+    const component_roots = try twopiComponentRoots(allocator, graph);
+    defer allocator.free(component_roots);
     const rank_radii = try twopiRankRadii(allocator, graph.attrs.items, n);
     defer allocator.free(rank_radii);
     const ranksep = if (rank_radii.len > 1) rank_radii[1] else 72.0;
     var radial = try layout_mod.twopi.layout(allocator, n, edges[0..edge_count], preferred_root, .{
         .ring_gap = ranksep,
         .rank_radii = rank_radii,
+        .component_roots = component_roots,
         .component_gap = @max(ranksep * 1.5, 72.0),
     });
     defer radial.deinit();
@@ -7632,6 +7635,16 @@ fn radialRootNode(graph: *const Graph) ?NodeId {
         if (parseBool(value) orelse false) return node_item.id;
     }
     return null;
+}
+
+fn twopiComponentRoots(allocator: std.mem.Allocator, graph: *const Graph) ![]NodeId {
+    var roots = std.ArrayList(NodeId).empty;
+    errdefer roots.deinit(allocator);
+    for (graph.nodes.items) |node_item| {
+        const value = attrValue(node_item.attrs.items, "root") orelse continue;
+        if (parseBool(value) orelse false) try roots.append(allocator, node_item.id);
+    }
+    return try roots.toOwnedSlice(allocator);
 }
 
 const twopiDefaultRankSepInches: f64 = 1.0;
@@ -29045,6 +29058,34 @@ test "twopi ranksep list clamps minimum positive increments" {
     try std.testing.expectApproxEqAbs(@as(f64, 1.44), radii[1], 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 3.60), radii[2], 0.001);
     try std.testing.expectApproxEqAbs(@as(f64, 5.76), radii[3], 0.001);
+}
+
+test "twopi honors node roots per disconnected component" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=twopi];
+        \\  a -- b -- c;
+        \\  x -- y -- z;
+        \\  c [root=true];
+        \\  z [root=true];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{
+        .algorithm = .auto,
+        .force = .{ .width = 720, .height = 360, .margin = 30 },
+    });
+    defer layout.deinit();
+    const b = nodeIdByLabel(&graph, "b");
+    const c = nodeIdByLabel(&graph, "c");
+    const y = nodeIdByLabel(&graph, "y");
+    const z = nodeIdByLabel(&graph, "z");
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[c]);
+    try std.testing.expectEqual(@as(usize, 0), layout.ranks[z]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[b]);
+    try std.testing.expectEqual(@as(usize, 1), layout.ranks[y]);
 }
 
 test "twopi allocates branch angular spans by subtree leaves" {
