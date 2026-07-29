@@ -5974,6 +5974,32 @@ fn applySfdpRotation(graph: *const Graph, positions: []Point) bool {
     return true;
 }
 
+const SfdpQuadtreeOptions = struct {
+    theta: f64 = 0.75,
+    exact_repulsion_threshold: usize = 48,
+};
+
+fn sfdpQuadtreeOptions(attrs: []const Attr) SfdpQuadtreeOptions {
+    const value = attrValue(attrs, "quadtree") orelse return .{};
+    if (value.len == 0) return .{};
+    if (std.ascii.isDigit(value[0])) {
+        const parsed = std.fmt.parseInt(usize, value, 10) catch return .{};
+        return switch (parsed) {
+            0 => .{ .exact_repulsion_threshold = std.math.maxInt(usize) },
+            1 => .{},
+            2 => .{ .theta = 1.2 },
+            else => .{},
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "false") or std.ascii.eqlIgnoreCase(value, "no")) {
+        return .{ .exact_repulsion_threshold = std.math.maxInt(usize) };
+    }
+    if (std.ascii.eqlIgnoreCase(value, "fast")) {
+        return .{ .theta = 1.2 };
+    }
+    return .{};
+}
+
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
     return layout_mod.options.clusterAlongBudget(axes.alongMargin(options));
 }
@@ -7646,6 +7672,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     const max_levels = parseAttrUsize(graph.attrs.items, "levels", 32);
     const repulsive_power = parsePositiveAttrFloat(graph.attrs.items, "repulsiveforce", 1.0);
     const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 1.0) * 72.0);
+    const quadtree_options = sfdpQuadtreeOptions(graph.attrs.items);
     var result = try layout_mod.sfdp.layout(allocator, n, sfdp_edges[0..edge_count], .{
         .width = options.width,
         .height = options.height,
@@ -7654,6 +7681,8 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
         .max_levels = max_levels,
         .repulsive_power = repulsive_power,
         .spring_length = spring_length,
+        .theta = quadtree_options.theta,
+        .exact_repulsion_threshold = quadtree_options.exact_repulsion_threshold,
         .stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0,
         .control = work.control,
         .work_start = work.work,
@@ -29267,6 +29296,54 @@ test "sfdp honors Graphviz rotation attribute" {
     const plain_angle = angleBetween(plain_layout.nodes[a].center, plain_layout.nodes[b].center);
     const rotated_angle = angleBetween(rotated_layout.nodes[a].center, rotated_layout.nodes[b].center);
     try std.testing.expectApproxEqAbs(std.math.pi / 2.0, normalizedAngleDelta(rotated_angle - plain_angle), 0.06);
+}
+
+test "sfdp parses Graphviz quadtree modes" {
+    const none_attrs = [_]Attr{.{ .name = "quadtree", .value = "none" }};
+    const false_attrs = [_]Attr{.{ .name = "quadtree", .value = "false" }};
+    const normal_attrs = [_]Attr{.{ .name = "quadtree", .value = "normal" }};
+    const fast_attrs = [_]Attr{.{ .name = "quadtree", .value = "fast" }};
+    const numeric_fast_attrs = [_]Attr{.{ .name = "quadtree", .value = "2" }};
+
+    try std.testing.expectEqual(std.math.maxInt(usize), sfdpQuadtreeOptions(none_attrs[0..]).exact_repulsion_threshold);
+    try std.testing.expectEqual(std.math.maxInt(usize), sfdpQuadtreeOptions(false_attrs[0..]).exact_repulsion_threshold);
+    try std.testing.expectEqual(@as(usize, 48), sfdpQuadtreeOptions(normal_attrs[0..]).exact_repulsion_threshold);
+    try std.testing.expect(sfdpQuadtreeOptions(fast_attrs[0..]).theta > sfdpQuadtreeOptions(normal_attrs[0..]).theta);
+    try std.testing.expect(sfdpQuadtreeOptions(numeric_fast_attrs[0..]).theta > sfdpQuadtreeOptions(normal_attrs[0..]).theta);
+}
+
+test "sfdp quadtree none forces exact repulsion" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=sfdp, quadtree=none, start=random5, maxiter=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer graph.deinit();
+    const options = sfdpQuadtreeOptions(graph.attrs.items);
+    try std.testing.expectEqual(std.math.maxInt(usize), options.exact_repulsion_threshold);
+
+    var positions = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 72, .y = 0 },
+        .{ .x = 0, .y = 72 },
+        .{ .x = 72, .y = 72 },
+        .{ .x = 144, .y = 0 },
+        .{ .x = 144, .y = 72 },
+    };
+    const displacement = try allocator.alloc(Point, positions.len);
+    defer allocator.free(displacement);
+    const stats = try layout_mod.sfdp.repulsionForces(
+        allocator,
+        positions[0..],
+        72,
+        1,
+        options.theta,
+        positions.len <= options.exact_repulsion_threshold,
+        displacement,
+    );
+    try std.testing.expectEqual(@as(usize, 0), stats.approximations);
 }
 
 test "sfdp Barnes Hut repulsion approximates exact forces" {

@@ -61,8 +61,8 @@ rotation and seeded `start=randomN` / numeric `start=N` initialization.
 `--layout fr` selects the deterministic Fruchterman-Reingold engine.
 `--layout sfdp`, `graph [layout=sfdp]`, and `-Ksfdp` select the
 independent deterministic multilevel spring-electrical engine. It supports
-Graphviz-style `levels`, `K`, `repulsiveforce`, and `rotation`; like Graphviz
-sfdp, it does not model clusters or edge `len` / `weight`. Fine-level
+Graphviz-style `levels`, `K`, `repulsiveforce`, `rotation`, and `quadtree`;
+like Graphviz sfdp, it does not model clusters or edge `len` / `weight`. Fine-level
 repulsion uses a deterministic Barnes-Hut quadtree above the exact small-graph
 threshold, with tests bounding force error and repulsion work plus a 512-node
 SVG smoke.
