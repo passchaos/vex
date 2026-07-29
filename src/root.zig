@@ -5887,6 +5887,71 @@ fn forceOptionsForAlgorithm(
     return result;
 }
 
+const ForceStart = union(enum) {
+    default,
+    regular,
+    random: u64,
+};
+
+fn forceStartMode(graph: *const Graph) ForceStart {
+    const value = attrValue(graph.attrs.items, "start") orelse return .default;
+    if (value.len == 0) return .default;
+    if (startsWithIgnoreCase(value, "regular")) return .regular;
+    if (startsWithIgnoreCase(value, "random")) {
+        const rest = value["random".len..];
+        return .{ .random = parseSeedSuffix(rest) orelse 1 };
+    }
+    if (startsWithIgnoreCase(value, "self")) return .default;
+    if (std.ascii.isDigit(value[0])) {
+        return .{ .random = parseSeedSuffix(value) orelse 1 };
+    }
+    return .default;
+}
+
+fn parseSeedSuffix(value: []const u8) ?u64 {
+    var start: usize = 0;
+    while (start < value.len and std.ascii.isWhitespace(value[start])) start += 1;
+    const digit_start = start;
+    while (start < value.len and std.ascii.isDigit(value[start])) start += 1;
+    if (start == digit_start) return null;
+    return std.fmt.parseInt(u64, value[digit_start..start], 10) catch null;
+}
+
+fn startsWithIgnoreCase(value: []const u8, prefix: []const u8) bool {
+    return value.len >= prefix.len and std.ascii.eqlIgnoreCase(value[0..prefix.len], prefix);
+}
+
+fn forceStartPositions(allocator: std.mem.Allocator, graph: *const Graph, count: usize, options: ForceLayoutOptions) !?[]Point {
+    return switch (forceStartMode(graph)) {
+        .default, .regular => null,
+        .random => |seed| try seededForcePositions(allocator, count, options, seed),
+    };
+}
+
+fn seededForcePositions(allocator: std.mem.Allocator, count: usize, options: ForceLayoutOptions, seed: u64) ![]Point {
+    const positions = try allocator.alloc(Point, count);
+    errdefer allocator.free(positions);
+    var state = seed ^ 0x9e3779b97f4a7c15;
+    const width = @max(1.0, options.width - options.margin * 2.0);
+    const height = @max(1.0, options.height - options.margin * 2.0);
+    for (positions) |*position| {
+        position.* = .{
+            .x = options.margin + unitRandom(&state) * width,
+            .y = options.margin + unitRandom(&state) * height,
+        };
+    }
+    return positions;
+}
+
+fn unitRandom(state: *u64) f64 {
+    state.* +%= 0x9e3779b97f4a7c15;
+    var z = state.*;
+    z = (z ^ (z >> 30)) *% 0xbf58476d1ce4e5b9;
+    z = (z ^ (z >> 27)) *% 0x94d049bb133111eb;
+    z = z ^ (z >> 31);
+    return @as(f64, @floatFromInt(z >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
+}
+
 fn clusterSpacingAlongBudget(axes: LayoutAxes, options: LayoutOptions) f64 {
     return layout_mod.options.clusterAlongBudget(axes.alongMargin(options));
 }
@@ -6814,12 +6879,18 @@ fn layoutFruchtermanReingoldWithPrevious(allocator: std.mem.Allocator, graph: *c
     defer allocator.free(positions);
     var disp = try allocator.alloc(Point, n);
     defer allocator.free(disp);
+    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    defer if (start_positions) |items| allocator.free(items);
 
     const cx = options.width / 2.0;
     const cy = options.height / 2.0;
     const radius = @max(1.0, @min(options.width, options.height) * 0.35);
     const stability = std.math.clamp(incremental.stability, 0.0, 1.0);
     for (positions, 0..) |*pos, id| {
+        if (start_positions) |source| {
+            pos.* = source[id];
+            continue;
+        }
         const angle = 2.0 * std.math.pi * @as(f64, @floatFromInt(id)) / @as(f64, @floatFromInt(@max(n, 1)));
         const fallback = Point{
             .x = cx + std.math.cos(angle) * radius,
@@ -6979,7 +7050,13 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
-    initializeStressPositions(positions, previous, graph.rankdir, options, incremental);
+    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    defer if (start_positions) |items| allocator.free(items);
+    if (start_positions) |source| {
+        @memcpy(positions, source);
+    } else {
+        initializeStressPositions(positions, previous, graph.rankdir, options, incremental);
+    }
 
     const graph_distances = try stressGraphDistances(allocator, graph);
     defer allocator.free(graph_distances.values);
@@ -7319,7 +7396,13 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
 
     const positions = try allocator.alloc(Point, n);
     defer allocator.free(positions);
-    initializeStressPositions(positions, previous, graph.rankdir, options, incremental);
+    const start_positions = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    defer if (start_positions) |items| allocator.free(items);
+    if (start_positions) |source| {
+        @memcpy(positions, source);
+    } else {
+        initializeStressPositions(positions, previous, graph.rankdir, options, incremental);
+    }
     const displacements = try allocator.alloc(Point, n);
     defer allocator.free(displacements);
     const anchors = if (previous != null) try allocator.dupe(Point, positions) else &.{};
@@ -7518,7 +7601,11 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
         edge_count += 1;
     }
 
-    const initial = if (previous) |prior|
+    const dot_start = if (previous == null) try forceStartPositions(allocator, graph, n, options) else null;
+    defer if (dot_start) |positions| allocator.free(positions);
+    const initial = if (dot_start) |positions|
+        positions
+    else if (previous) |prior|
         if (prior.rankdir == graph.rankdir) blk: {
             const positions = try allocator.alloc(Point, n);
             errdefer allocator.free(positions);
@@ -7532,7 +7619,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
         } else null
     else
         null;
-    defer if (initial) |positions| allocator.free(positions);
+    defer if (initial) |positions| if (dot_start == null) allocator.free(positions);
 
     const max_levels = parseAttrUsize(graph.attrs.items, "levels", 32);
     const repulsive_power = parsePositiveAttrFloat(graph.attrs.items, "repulsiveforce", 1.0);
@@ -28763,6 +28850,56 @@ test "Vex force iteration attrs override Graphviz maxiter" {
 
     const options = forceLayoutOptionsWithGraphAttrs(.{}, &graph);
     try std.testing.expectEqual(@as(usize, 40), options.iterations);
+}
+
+test "force layouts honor Graphviz start random seed" {
+    const allocator = std.testing.allocator;
+    var first = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random1, maxiter=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer first.deinit();
+    var second = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random2, maxiter=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer second.deinit();
+
+    var first_layout = try layoutGraph(allocator, &first, .{ .algorithm = .auto });
+    defer first_layout.deinit();
+    var second_layout = try layoutGraph(allocator, &second, .{ .algorithm = .auto });
+    defer second_layout.deinit();
+
+    try std.testing.expect(sharedNodeDisplacement(&first_layout, &second_layout, first.nodes.items.len) > 1.0);
+}
+
+test "force layouts keep Graphviz numeric start seed reproducible" {
+    const allocator = std.testing.allocator;
+    var first = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=fdp, start=7, maxiter=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer first.deinit();
+    var second = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=fdp, start=7, maxiter=1];
+        \\  a -- b -- c -- d -- a;
+        \\}
+    );
+    defer second.deinit();
+
+    var first_layout = try layoutGraph(allocator, &first, .{ .algorithm = .auto });
+    defer first_layout.deinit();
+    var second_layout = try layoutGraph(allocator, &second, .{ .algorithm = .auto });
+    defer second_layout.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), sharedNodeDisplacement(&first_layout, &second_layout, first.nodes.items.len), 0.000001);
 }
 
 test "neato stress graph distances follow shortest paths" {

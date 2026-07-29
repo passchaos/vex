@@ -57,7 +57,8 @@ stress-majorization engine. `--layout fdp`, `graph [layout=fdp]`, and `-Kfdp`
 select the independent spring-electrical engine with all-pairs repulsion,
 edge-only springs, cluster boxes, graph `K` / `T0`, and edge `len` / `weight`
 semantics. Force-style layouts honor Graphviz `normalize` final-coordinate
-rotation. `--layout fr` selects the deterministic Fruchterman-Reingold engine.
+rotation and seeded `start=randomN` / numeric `start=N` initialization.
+`--layout fr` selects the deterministic Fruchterman-Reingold engine.
 `--layout sfdp`, `graph [layout=sfdp]`, and `-Ksfdp` select the
 independent deterministic multilevel spring-electrical engine. It supports
 Graphviz-style `levels`, `K`, and `repulsiveforce`; like Graphviz sfdp, it
