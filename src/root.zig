@@ -5160,6 +5160,12 @@ fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) Layo
 
 fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) LayoutOptions {
     var result = layout_mod.options.withGraphAttrs(options, graph.attrs.items);
+    if (attrValue(graph.attrs.items, "label")) |label| {
+        const font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
+        if (mathLabelSize(graph.attrs.items, label, font_size)) |size| {
+            result.margin_y = @max(result.margin_y, size.height + 12.0);
+        }
+    }
     if (attrValue(graph.attrs.items, "vex_coordinate_passes") == null and
         attrValue(graph.attrs.items, "coordinate_passes") == null)
     {
@@ -8513,7 +8519,6 @@ fn osageSubgraphOptions(graph: *const Graph, subgraph: Subgraph) layout_mod.osag
             attrValue(graph.attrs.items, "pack"),
         4.0,
     );
-    const label_font_size = inheritedClusterFontSize(graph, subgraph);
     return .{
         .pack_mode = layout_mod.osage.parsePackMode(
             layout_mod.subgraph.attrValueInChain(graph.subgraphs.items, subgraph.id, "packmode") orelse
@@ -8522,7 +8527,7 @@ fn osageSubgraphOptions(graph: *const Graph, subgraph: Subgraph) layout_mod.osag
         .pack_margin = pack_margin,
         .padding = pack_margin / 2.0,
         .label_height = subgraphLabelBand(graph, subgraph),
-        .minimum_width = displayLabelEstimatedWidth(subgraph.label, label_font_size) + 12.0,
+        .minimum_width = subgraphLabelMinimumWidth(graph, subgraph),
     };
 }
 
@@ -10857,7 +10862,6 @@ fn orientSizeForLayout(size: NodeSize, rankdir: RankDir) NodeSize {
 
 fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const NodeLayout, clusters: []SubgraphLayout) void {
     const pad_x: f64 = 12;
-    const label_pad_x: f64 = 6;
     const child_gap: f64 = 12;
     var center_buf: [256]f64 = undefined;
     var size_buf: [256]NodeSize = undefined;
@@ -10903,8 +10907,7 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
             clusters[index] = .{ .id = cluster.id, .x = 0, .y = 0, .width = 0, .height = 0 };
             continue;
         }
-        const label_font_size = inheritedClusterFontSize(graph, cluster);
-        const label_min_width = displayLabelEstimatedWidth(cluster.label, label_font_size) + label_pad_x * 2.0;
+        const label_min_width = subgraphLabelMinimumWidth(graph, cluster);
         const label_band = subgraphLabelBand(graph, cluster);
         const label_at_bottom = subgraphLabelAtBottom(graph, cluster);
         const margin = inheritedSubgraphMargin(graph, cluster, pad_x);
@@ -10985,10 +10988,24 @@ fn computeSubgraphLayouts(graph: *const Graph, axes: LayoutAxes, nodes: []const 
 fn subgraphLabelBand(graph: *const Graph, cluster: Subgraph) f64 {
     if (cluster.label.len == 0) return 0;
     const font_size = inheritedClusterFontSize(graph, cluster);
+    if (mathLabelSize(cluster.attrs.items, cluster.label, font_size)) |size| {
+        const padding: f64 = if (subgraphLabelAtBottom(graph, cluster)) 10.0 else 4.0;
+        return @max(18.0, size.height + padding);
+    }
     const line_height = font_size * 1.25;
     const line_count = displayLabelLineCount(cluster.label);
     if (line_count <= 1) return 18.0;
     return @as(f64, @floatFromInt(line_count)) * line_height + 1.0;
+}
+
+fn subgraphLabelMinimumWidth(graph: *const Graph, cluster: Subgraph) f64 {
+    const font_size = inheritedClusterFontSize(graph, cluster);
+    if (mathLabelSize(cluster.attrs.items, cluster.label, font_size)) |size| {
+        const anchor = svg_mod.subgraph.labelAnchor(inheritedClusterLabelAttr(graph, cluster, "labeljust"));
+        const padding: f64 = if (std.mem.eql(u8, anchor, "middle")) 12.0 else 24.0;
+        return size.width + padding;
+    }
+    return displayLabelEstimatedWidth(cluster.label, font_size) + 12.0;
 }
 
 fn subgraphLabelAtBottom(graph: *const Graph, cluster: Subgraph) bool {
@@ -20264,7 +20281,7 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     var canvas_width = @ceil(layout.width);
     var canvas_height = @ceil(layout.height);
     var content_translate = Point{ .x = svgGraphContentTranslate(layout), .y = 0 };
-    if (svgGraphContentBoundsWithCache(graph, layout, render_node_rects)) |content_bounds| {
+    if (svgGraphContentBoundsWithCache(graph, layout, render_node_rects, options.show_title)) |content_bounds| {
         fitSvgContentAxis(content_bounds.x, content_bounds.x + content_bounds.width, graph_pad.x, &canvas_width, &content_translate.x);
         fitSvgContentAxis(content_bounds.y, content_bounds.y + content_bounds.height, graph_pad.y, &canvas_height, &content_translate.y);
     }
@@ -20394,22 +20411,6 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
     try writer.writeAll("\"/>\n");
     if (options.show_title and attrValue(graph.attrs.items, "label") != null) {
         const graph_label = attrValue(graph.attrs.items, "label").?;
-        const label_just = attrValue(graph.attrs.items, "labeljust");
-        const label_loc = attrValue(graph.attrs.items, "labelloc");
-        const text_anchor: []const u8 = if (label_just) |value|
-            if (std.ascii.eqlIgnoreCase(value, "r")) "end" else if (std.ascii.eqlIgnoreCase(value, "c")) "middle" else "start"
-        else
-            "middle";
-        const title_x = if (std.mem.eql(u8, text_anchor, "end"))
-            layout.width - 16.0
-        else if (std.mem.eql(u8, text_anchor, "middle"))
-            layout.width / 2.0
-        else
-            16.0;
-        const title_baseline_y = if (label_loc) |value|
-            if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
-        else
-            layout.height - 16.0;
         const title_font = if (attrValue(graph.attrs.items, "fontname")) |fontname|
             svgFont(graph, fontname)
         else if (std.mem.eql(u8, options.font_family, default_svg_font_family))
@@ -20423,9 +20424,9 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
                 try renderSvgTextBlockWithAnchor(writer, graph_label, position.x, position.y, title_size, title_color, title_font, false, false, "middle", noJustifyLineAnchor(graph.attrs.items, "middle"));
             }
         } else {
-            const title_center_y = graphLabelBlockCenterY(graph_label, title_baseline_y, title_size, label_loc);
-            if (!try renderSvgMaybeMathLabel(writer, graph.allocator, graph.attrs.items, graph_label, title_x, title_center_y, title_size, title_color, title_font, text_anchor)) {
-                try renderSvgTextBlockWithAnchor(writer, graph_label, title_x, title_center_y, title_size, title_color, title_font, false, false, text_anchor, noJustifyLineAnchor(graph.attrs.items, text_anchor));
+            const placement = graphLabelPlacement(graph, layout, graph_label, title_size);
+            if (!try renderSvgMaybeMathLabel(writer, graph.allocator, graph.attrs.items, graph_label, placement.x, placement.center_y, title_size, title_color, title_font, placement.anchor)) {
+                try renderSvgTextBlockWithAnchor(writer, graph_label, placement.x, placement.center_y, title_size, title_color, title_font, false, false, placement.anchor, noJustifyLineAnchor(graph.attrs.items, placement.anchor));
             }
         }
     }
@@ -20525,6 +20526,46 @@ pub fn renderSvg(writer: *Io.Writer, graph: *const Graph, layout: *const Layout,
 fn graphLabelBlockCenterY(label: []const u8, baseline_y: f64, font_size: f64, label_loc: ?[]const u8) f64 {
     const bottom_aligned = if (label_loc) |value| std.ascii.eqlIgnoreCase(value, "b") else false;
     return svg_mod.text.blockCenterY(label, baseline_y, font_size, bottom_aligned, svg_label_breaks);
+}
+
+fn graphLabelCenterY(attrs: []const Attr, label: []const u8, baseline_y: f64, font_size: f64, label_loc: ?[]const u8) f64 {
+    const size = mathLabelSize(attrs, label, font_size) orelse
+        return graphLabelBlockCenterY(label, baseline_y, font_size, label_loc);
+    const bottom_aligned = if (label_loc) |value| std.ascii.eqlIgnoreCase(value, "b") else false;
+    return if (bottom_aligned)
+        baseline_y - size.height / 2.0
+    else
+        baseline_y + size.height / 2.0 - font_size;
+}
+
+const GraphLabelPlacement = struct {
+    x: f64,
+    center_y: f64,
+    anchor: []const u8,
+};
+
+fn graphLabelPlacement(graph: *const Graph, layout: *const Layout, label: []const u8, font_size: f64) GraphLabelPlacement {
+    const label_just = attrValue(graph.attrs.items, "labeljust");
+    const label_loc = attrValue(graph.attrs.items, "labelloc");
+    const anchor: []const u8 = if (label_just) |value|
+        if (std.ascii.eqlIgnoreCase(value, "r")) "end" else if (std.ascii.eqlIgnoreCase(value, "c")) "middle" else "start"
+    else
+        "middle";
+    const x = if (std.mem.eql(u8, anchor, "end"))
+        layout.width - 16.0
+    else if (std.mem.eql(u8, anchor, "middle"))
+        layout.width / 2.0
+    else
+        16.0;
+    const baseline_y = if (label_loc) |value|
+        if (std.ascii.eqlIgnoreCase(value, "b")) layout.height - 16.0 else 24.0
+    else
+        layout.height - 16.0;
+    return .{
+        .x = x,
+        .center_y = graphLabelCenterY(graph.attrs.items, label, baseline_y, font_size, label_loc),
+        .anchor = anchor,
+    };
 }
 
 const SvgLayers = svg_mod.layers.Layers;
@@ -22171,6 +22212,21 @@ fn edgeLabelRect(attrs: []const Attr, label: []const u8, center: Point, font_siz
     };
 }
 
+fn mathLabelRect(size: NodeSize, x: f64, center_y: f64, anchor: []const u8) RectF {
+    const left = if (std.mem.eql(u8, anchor, "end"))
+        x - size.width
+    else if (std.mem.eql(u8, anchor, "middle"))
+        x - size.width / 2.0
+    else
+        x;
+    return .{
+        .x = left,
+        .y = center_y - size.height / 2.0,
+        .width = size.width,
+        .height = size.height,
+    };
+}
+
 const SvgNodeRectEntry = struct {
     node_id: NodeId,
     rect: RectF,
@@ -22500,10 +22556,10 @@ fn fitSvgContentAxis(content_min: f64, content_max: f64, padding: f64, canvas_si
 }
 
 fn svgGraphContentBounds(graph: *const Graph, layout: *const Layout) ?RectF {
-    return svgGraphContentBoundsWithCache(graph, layout, null);
+    return svgGraphContentBoundsWithCache(graph, layout, null, true);
 }
 
-fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, shared_node_rects: ?[]?RectF) ?RectF {
+fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, shared_node_rects: ?[]?RectF, show_unpositioned_graph_label: bool) ?RectF {
     var bounds = BoundsBuilder{};
     const owned_node_rects = if (shared_node_rects == null)
         graph.allocator.alloc(?RectF, graph.nodes.items.len) catch null
@@ -22512,9 +22568,17 @@ fn svgGraphContentBoundsWithCache(graph: *const Graph, layout: *const Layout, sh
     defer if (owned_node_rects) |rects| graph.allocator.free(rects);
     const cached_node_rects = shared_node_rects orelse owned_node_rects;
     if (cached_node_rects) |rects| @memset(rects, null);
-    if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |point| {
+    if (show_unpositioned_graph_label) {
         if (attrValue(graph.attrs.items, "label")) |label| {
-            bounds.includeRect(edgeLabelRect(graph.attrs.items, label, point, parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0)));
+            const font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
+            if (positionedAttrPoint(layout, graph.attrs.items, "lp")) |point| {
+                bounds.includeRect(edgeLabelRect(graph.attrs.items, label, point, font_size));
+            } else {
+                if (mathLabelSize(graph.attrs.items, label, font_size)) |size| {
+                    const placement = graphLabelPlacement(graph, layout, label, font_size);
+                    bounds.includeRect(mathLabelRect(size, placement.x, placement.center_y, placement.anchor));
+                }
+            }
         }
     }
     for (layout.subgraphs, 0..) |cluster_box, index| {
@@ -25335,7 +25399,7 @@ fn renderSvgClusterBox(writer: *Io.Writer, graph: *const Graph, cluster: Subgrap
             const text_anchor = svg_mod.subgraph.labelAnchor(label_just);
             const label_x = svg_mod.subgraph.labelX(rect, text_anchor);
             const label_y = svg_mod.subgraph.labelY(rect, label_loc, clusterVisualRectHasVerticalTrim(cluster, layout));
-            const label_center_y = graphLabelBlockCenterY(cluster.label, label_y, visual.font_size, label_loc);
+            const label_center_y = graphLabelCenterY(cluster.attrs.items, cluster.label, label_y, visual.font_size, label_loc);
             if (try renderSvgMaybeMathLabel(writer, graph.allocator, cluster.attrs.items, cluster.label, label_x, label_center_y, visual.font_size, visual.font_color, visual.font, text_anchor)) {
                 // Rendered by ztex.
             } else if (plainSingleLineLabel(cluster.label)) {
@@ -28383,7 +28447,6 @@ fn mathLabelSize(attrs: []const Attr, text: []const u8, font_size: f64) ?NodeSiz
         .height = @max(1.0, metrics.height),
     };
 }
-
 
 fn renderSvgMaybeMathLabel(
     writer: *Io.Writer,
@@ -39109,7 +39172,6 @@ test "SVG renderer aligns plain edge labels to paths" {
     try std.testing.expect(std.mem.indexOf(u8, default_svg, "<textPath xlink:href=\"#root-G_edge1_p\" startOffset=\"50%\"><tspan x=\"0\" dy=\"4.9\">dot</tspan></textPath>") != null);
 }
 
-
 test "SVG renderer falls back from textPath for ztex math edge labels" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .name = "MathAligned" });
@@ -48113,4 +48175,114 @@ test "ztex math labels size and render mixed inline formulas through opt-in Vex 
     try std.testing.expect(std.mem.indexOf(u8, svg, ">2</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">x</text>") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, ">y</text>") != null);
+}
+
+test "DOT math labels use ztex geometry for graph defaults and subgraph bounds" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph MathAudit {
+        \\  graph [label="Graph $\\frac{graph_super_wide_numerator_1234567890}{x}$", enable_math_label=true];
+        \\  node [shape=box, enable_math_label=true];
+        \\  edge [enable_math_label=true];
+        \\  subgraph cluster_math {
+        \\    label="Cluster $\\frac{very_wide_numerator_456}{y}$";
+        \\    enable_math_label=true;
+        \\    a [label="Node $\\sqrt{x^2+y^2}$"];
+        \\    b [label="Plain"];
+        \\  }
+        \\  a -> b [label="Edge $a^2$"];
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expect(mathLabelEnabled(graph.attrs.items));
+    try std.testing.expect(mathLabelEnabled(graph.nodes.items[0].attrs.items));
+    try std.testing.expect(mathLabelEnabled(graph.edges.items[0].attrs.items));
+    try std.testing.expect(mathLabelEnabled(graph.subgraphs.items[0].attrs.items));
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+
+    const cluster = graph.subgraphs.items[0];
+    const cluster_font_size = inheritedClusterFontSize(&graph, cluster);
+    const cluster_label_size = mathLabelSize(cluster.attrs.items, cluster.label, cluster_font_size) orelse return error.MissingMathLabelSize;
+    const cluster_rect = clusterVisualRect(&graph, &layout, cluster.id);
+    try std.testing.expect(cluster_rect.width >= cluster_label_size.width + 12.0 - 0.001);
+    try std.testing.expect(cluster_rect.width + 12.0 < displayLabelEstimatedWidth(cluster.label, cluster_font_size));
+    try std.testing.expectApproxEqAbs(@max(18.0, cluster_label_size.height + 4.0), subgraphLabelBand(&graph, cluster), 0.001);
+
+    const cluster_label_loc = inheritedClusterLabelAttr(&graph, cluster, "labelloc");
+    const cluster_anchor = svg_mod.subgraph.labelAnchor(inheritedClusterLabelAttr(&graph, cluster, "labeljust"));
+    const cluster_label_x = svg_mod.subgraph.labelX(cluster_rect, cluster_anchor);
+    const cluster_label_y = svg_mod.subgraph.labelY(cluster_rect, cluster_label_loc, clusterVisualRectHasVerticalTrim(cluster, &layout));
+    const cluster_label_center_y = graphLabelCenterY(cluster.attrs.items, cluster.label, cluster_label_y, cluster_font_size, cluster_label_loc);
+    const cluster_label_rect = mathLabelRect(cluster_label_size, cluster_label_x, cluster_label_center_y, cluster_anchor);
+    try std.testing.expect(cluster_label_rect.x >= cluster_rect.x - 0.001);
+    try std.testing.expect(cluster_label_rect.y >= cluster_rect.y - 0.001);
+    try std.testing.expect(cluster_label_rect.x + cluster_label_rect.width <= cluster_rect.x + cluster_rect.width + 0.001);
+    try std.testing.expect(cluster_label_rect.y + cluster_label_rect.height <= cluster_rect.y + cluster_rect.height + 0.001);
+
+    inline for (.{ LabelJust.left, LabelJust.right }) |label_just| {
+        try graph.setSubgraphAttr(cluster.id, .{ .labeljust = label_just });
+        var aligned_layout = try layoutGraph(allocator, &graph, .{});
+        defer aligned_layout.deinit();
+        const aligned_cluster = graph.subgraphs.items[cluster.id];
+        const aligned_rect = clusterVisualRect(&graph, &aligned_layout, cluster.id);
+        const aligned_anchor = svg_mod.subgraph.labelAnchor(inheritedClusterLabelAttr(&graph, aligned_cluster, "labeljust"));
+        const aligned_label_x = svg_mod.subgraph.labelX(aligned_rect, aligned_anchor);
+        const aligned_label_y = svg_mod.subgraph.labelY(aligned_rect, cluster_label_loc, clusterVisualRectHasVerticalTrim(aligned_cluster, &aligned_layout));
+        const aligned_center_y = graphLabelCenterY(aligned_cluster.attrs.items, aligned_cluster.label, aligned_label_y, cluster_font_size, cluster_label_loc);
+        const aligned_label_rect = mathLabelRect(cluster_label_size, aligned_label_x, aligned_center_y, aligned_anchor);
+        try std.testing.expect(aligned_rect.width >= cluster_label_size.width + 24.0 - 0.001);
+        try std.testing.expect(aligned_label_rect.x >= aligned_rect.x - 0.001);
+        try std.testing.expect(aligned_label_rect.x + aligned_label_rect.width <= aligned_rect.x + aligned_rect.width + 0.001);
+    }
+    try graph.setSubgraphAttr(cluster.id, .{ .labeljust = .center });
+
+    try graph.setSubgraphAttr(cluster.id, .{ .labelloc = .bottom });
+    var bottom_layout = try layoutGraph(allocator, &graph, .{});
+    defer bottom_layout.deinit();
+    const bottom_cluster = graph.subgraphs.items[cluster.id];
+    const bottom_rect = clusterVisualRect(&graph, &bottom_layout, cluster.id);
+    const bottom_label_loc = inheritedClusterLabelAttr(&graph, bottom_cluster, "labelloc");
+    const bottom_label_x = svg_mod.subgraph.labelX(bottom_rect, "middle");
+    const bottom_label_y = svg_mod.subgraph.labelY(bottom_rect, bottom_label_loc, clusterVisualRectHasVerticalTrim(bottom_cluster, &bottom_layout));
+    const bottom_center_y = graphLabelCenterY(bottom_cluster.attrs.items, bottom_cluster.label, bottom_label_y, cluster_font_size, bottom_label_loc);
+    const bottom_label_rect = mathLabelRect(cluster_label_size, bottom_label_x, bottom_center_y, "middle");
+    try std.testing.expectApproxEqAbs(@max(18.0, cluster_label_size.height + 10.0), subgraphLabelBand(&graph, bottom_cluster), 0.001);
+    try std.testing.expect(bottom_label_rect.y >= bottom_rect.y - 0.001);
+    try std.testing.expect(bottom_label_rect.y + bottom_label_rect.height <= bottom_rect.y + bottom_rect.height + 0.001);
+    try graph.setSubgraphAttr(cluster.id, .{ .labelloc = .top });
+
+    const graph_label = attrValue(graph.attrs.items, "label").?;
+    const graph_font_size = parsePositiveAttrFloat(graph.attrs.items, "fontsize", 14.0);
+    const graph_label_size = mathLabelSize(graph.attrs.items, graph_label, graph_font_size) orelse return error.MissingMathLabelSize;
+    const graph_placement = graphLabelPlacement(&graph, &layout, graph_label, graph_font_size);
+    const graph_label_rect = mathLabelRect(graph_label_size, graph_placement.x, graph_placement.center_y, graph_placement.anchor);
+    const content_bounds = svgGraphContentBounds(&graph, &layout) orelse return error.MissingSvgBounds;
+    const hidden_title_bounds = svgGraphContentBoundsWithCache(&graph, &layout, null, false) orelse return error.MissingSvgBounds;
+    try std.testing.expect(graph_label_rect.x < 0);
+    try std.testing.expect(content_bounds.x <= graph_label_rect.x + 0.001);
+    try std.testing.expect(content_bounds.x + content_bounds.width >= graph_label_rect.x + graph_label_rect.width - 0.001);
+    try std.testing.expect(content_bounds.y + content_bounds.height >= graph_label_rect.y + graph_label_rect.height - 0.001);
+    try std.testing.expect(hidden_title_bounds.x > graph_label_rect.x + 1.0);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Graph </text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Cluster </text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Node </text>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">Edge </text>") != null);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    const translate = svgGraphvizTranslate(svg);
+    try std.testing.expect(graph_label_rect.x + translate.x >= svg_clip_padding - 0.01);
+    try std.testing.expect(graph_label_rect.y + translate.y >= svg_clip_padding - 0.01);
+    try std.testing.expect(graph_label_rect.x + graph_label_rect.width + translate.x <= view_box.width - svg_clip_padding + 0.01);
+    try std.testing.expect(graph_label_rect.y + graph_label_rect.height + translate.y <= view_box.height - svg_clip_padding + 0.01);
+
+    const hidden_title_svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .show_title = false });
+    defer allocator.free(hidden_title_svg);
+    const hidden_view_box = svgViewBox(hidden_title_svg) orelse return error.MissingViewBox;
+    try std.testing.expect(std.mem.indexOf(u8, hidden_title_svg, ">Graph </text>") == null);
+    try std.testing.expect(hidden_view_box.width + 1.0 < view_box.width);
 }
