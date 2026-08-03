@@ -6852,7 +6852,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         for (rank_heights) |rank_height| max_rank_height = @max(max_rank_height, rank_height);
         var equal_rank_gap = effective_options.rank_gap;
         for (0..if (rank_heights.len == 0) 0 else rank_heights.len - 1) |rank| {
-            equal_rank_gap = @max(equal_rank_gap, layout_mod.subgraph.rankGapBetween(layout_graph.subgraphs.items, ranks, rank, effective_options.rank_gap));
+            equal_rank_gap = @max(equal_rank_gap, layeredRankGapBetween(layout_graph, ranks, rank, effective_options));
         }
         const rank_step = max_rank_height + equal_rank_gap;
         for (rank_heights, 0..) |rank_height, rank| {
@@ -6864,7 +6864,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
         for (rank_heights, 0..) |rank_height, rank| {
             rank_depths[rank] = total_depth;
             total_depth += rank_height;
-            if (rank + 1 < rank_heights.len) total_depth += layout_mod.subgraph.rankGapBetween(layout_graph.subgraphs.items, ranks, rank, effective_options.rank_gap);
+            if (rank + 1 < rank_heights.len) total_depth += layeredRankGapBetween(layout_graph, ranks, rank, effective_options);
         }
     }
 
@@ -6913,6 +6913,48 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     result.parallel_edge_offsets = buildParallelEdgeOffsets(allocator, layout_graph) catch null;
     applyLayeredAspect(layout_graph, &result);
     return result;
+}
+
+fn layeredRankGapBetween(graph: *const Graph, ranks: []const usize, upper_rank: usize, options: LayoutOptions) f64 {
+    const structural_gap = layout_mod.subgraph.rankGapBetween(
+        graph.subgraphs.items,
+        ranks,
+        upper_rank,
+        options.rank_gap,
+    );
+    return @max(structural_gap, edgeLabelRankGapBetween(graph, ranks, upper_rank, options));
+}
+
+fn edgeLabelRankGapBetween(graph: *const Graph, ranks: []const usize, upper_rank: usize, options: LayoutOptions) f64 {
+    var gap = options.rank_gap;
+    for (graph.edges.items) |edge_item| {
+        if (!edgeCenterLabelNeedsRankSpace(edge_item)) continue;
+        if (edge_item.from >= ranks.len or edge_item.to >= ranks.len) continue;
+        const from_rank = ranks[edge_item.from];
+        const to_rank = ranks[edge_item.to];
+        const low_rank = @min(from_rank, to_rank);
+        const high_rank = @max(from_rank, to_rank);
+        if (high_rank != low_rank + 1 or low_rank != upper_rank) continue;
+        const label = edge_item.label orelse continue;
+        const font_size = parsePositiveAttrFloat(edge_item.attrs.items, "fontsize", 14.0);
+        const rect = edgeLabelRect(edge_item.attrs.items, label, .{ .x = 0, .y = 0 }, font_size);
+        gap = @max(gap, rect.height + options.edge_label_padding);
+    }
+    return gap;
+}
+
+fn edgeCenterLabelNeedsRankSpace(edge_item: Edge) bool {
+    const label = edge_item.label orelse return false;
+    if (label.len == 0) return false;
+    if (attrValue(edge_item.attrs.items, "lp") != null) return false;
+    if (edgeLabelFloatEnabled(edge_item.attrs.items)) return false;
+    if (edgeLabelAlignedEnabled(edge_item.attrs.items) and
+        !mathLabelEnabled(edge_item.attrs.items) and
+        plainSingleLineLabel(label))
+    {
+        return false;
+    }
+    return true;
 }
 
 pub fn layoutLayeredIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, options: LayoutOptions, incremental: IncrementalLayoutOptions) !Layout {
@@ -47898,6 +47940,49 @@ test "layout honors DOT ranksep and nodesep graph spacing attributes" {
 
     try std.testing.expect(spaced_rank_delta > default_rank_delta);
     try std.testing.expect(spaced_node_delta > default_node_delta);
+}
+
+test "layout reserves rank spacing for centered edge labels" {
+    const allocator = std.testing.allocator;
+    var plain_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b;
+        \\}
+    );
+    defer plain_graph.deinit();
+    var labeled_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [label="ordinary edge label"];
+        \\}
+    );
+    defer labeled_graph.deinit();
+    var aligned_graph = try parseDot(allocator,
+        \\digraph G {
+        \\  a -> b [label="ordinary edge label", labelaligned=true];
+        \\}
+    );
+    defer aligned_graph.deinit();
+
+    var plain_layout = try layoutLayered(allocator, &plain_graph, .{});
+    defer plain_layout.deinit();
+    var labeled_layout = try layoutLayered(allocator, &labeled_graph, .{});
+    defer labeled_layout.deinit();
+    var aligned_layout = try layoutLayered(allocator, &aligned_graph, .{});
+    defer aligned_layout.deinit();
+
+    const plain_a = nodeIdByLabel(&plain_graph, "a");
+    const plain_b = nodeIdByLabel(&plain_graph, "b");
+    const labeled_a = nodeIdByLabel(&labeled_graph, "a");
+    const labeled_b = nodeIdByLabel(&labeled_graph, "b");
+    const aligned_a = nodeIdByLabel(&aligned_graph, "a");
+    const aligned_b = nodeIdByLabel(&aligned_graph, "b");
+
+    const plain_delta = @abs(plain_layout.nodes[plain_b].center.y - plain_layout.nodes[plain_a].center.y);
+    const labeled_delta = @abs(labeled_layout.nodes[labeled_b].center.y - labeled_layout.nodes[labeled_a].center.y);
+    const aligned_delta = @abs(aligned_layout.nodes[aligned_b].center.y - aligned_layout.nodes[aligned_a].center.y);
+
+    try std.testing.expect(labeled_delta > plain_delta + 20.0);
+    try std.testing.expectApproxEqAbs(plain_delta, aligned_delta, 0.01);
 }
 
 test "layout honors subgraph nodesep for same-rank member spacing" {

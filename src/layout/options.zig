@@ -13,6 +13,7 @@ pub const LayoutOptions = struct {
     node_height: f64 = 36,
     rank_gap: f64 = 36,
     node_gap: f64 = 36,
+    edge_label_padding: f64 = 36,
     margin: f64 = 16,
     margin_y: f64 = 5.5,
     label_char_width: f64 = 8,
