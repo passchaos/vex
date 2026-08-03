@@ -98,7 +98,11 @@ pub fn renderBlockWithAnchor(
     const count = lineCount(text, breaks);
     const height = font_size * 1.25;
     const block_height = @as(f64, @floatFromInt(count)) * height;
-    const first_y = center_y - block_height / 2.0 + height * 0.72;
+    const use_dominant_middle = dominant_middle and count == 1;
+    const first_y = if (use_dominant_middle)
+        center_y
+    else
+        center_y - block_height / 2.0 + height * 0.72;
 
     if (label_background) {
         const max_len = maxLineLen(text, breaks);
@@ -115,7 +119,7 @@ pub fn renderBlockWithAnchor(
 
     try open(writer, text_anchor, x, first_y, font, font_size);
     try fill(writer, fill_color);
-    if (dominant_middle and count == 1) try writer.writeAll(" dominant-baseline=\"middle\"");
+    if (use_dominant_middle) try writer.writeAll(" dominant-baseline=\"middle\"");
     try writer.writeAll(">");
     try writeTspans(writer, text, x, height, forced_line_anchor, breaks);
     try writer.writeAll("</text>\n");
@@ -225,4 +229,29 @@ fn isLineBreak(c: u8, breaks: LabelBreaks) bool {
 
 fn xmlEscaped(writer: *Io.Writer, text: []const u8, breaks: LabelBreaks) Io.Writer.Error!void {
     try svg_writer.xmlEscapedWithLineBreaks(writer, text, breaks.left, breaks.right);
+}
+
+test "single-line dominant-middle text uses center y" {
+    var out = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    try renderBlockWithAnchor(
+        &out.writer,
+        "edge label",
+        24,
+        40,
+        14,
+        "black",
+        .{ .family = "Times,serif" },
+        true,
+        true,
+        "middle",
+        null,
+        .{ .left = 0x1e, .right = 0x1f },
+    );
+    const svg = try out.toOwnedSlice();
+    defer std.testing.allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, " y=\"40\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "dominant-baseline=\"middle\"") != null);
 }

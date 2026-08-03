@@ -30894,10 +30894,10 @@ test "nop2 honors input cluster boxes and label positions" {
     try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "points=\"10,-10 10,-120 150,-120 150,-10") != null);
     try std.testing.expect(std.mem.indexOf(u8, cluster_fragment, "x=\"80\" y=\"-106.2\"") != null);
     const edge_fragment = svg_mod.test_helpers.groupFragmentById(svg, "edge1") orelse return error.MissingEdge;
-    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"160\" y=\"-76.2\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"70\" y=\"-56.2\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"250\" y=\"-56.2\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"160\" y=\"-116.2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"160\" y=\"-80\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"70\" y=\"-60\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"250\" y=\"-60\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, edge_fragment, "x=\"160\" y=\"-120\"") != null);
 }
 
 test "typed positioned auxiliary geometry serializes cleanly" {
