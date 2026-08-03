@@ -281,25 +281,25 @@ pub const GraphAttr = union(enum) {
     resolution: f64,
     dim: usize,
     dimen: usize,
-    vex_layout_iterations: usize,
-    vex_crossing_passes: usize,
-    vex_coordinate_passes: usize,
+    layout_iterations: usize,
+    crossing_passes: usize,
+    coordinate_passes: usize,
     layers: []const u8,
     layersep: []const u8,
     layerlistsep: []const u8,
     layerselect: []const u8,
-    vex_interactive_all: bool,
-    vex_interactive_layers: bool,
-    vex_interactive_collapse: bool,
-    vex_interactive_filter: bool,
-    vex_interactive_labels: bool,
-    vex_interactive_focus: bool,
-    vex_interactive_inspector: bool,
-    vex_interactive_search: bool,
-    vex_interactive_viewport: bool,
-    vex_interactive_minimap: bool,
-    vex_interactive_stats: bool,
-    vex_svg_metadata: bool,
+    interactive_all: bool,
+    interactive_layers: bool,
+    interactive_collapse: bool,
+    interactive_filter: bool,
+    interactive_labels: bool,
+    interactive_focus: bool,
+    interactive_inspector: bool,
+    interactive_search: bool,
+    interactive_viewport: bool,
+    interactive_minimap: bool,
+    interactive_stats: bool,
+    svg_metadata: bool,
     enable_math_label: bool,
     pad: []const u8,
     margin: []const u8,
@@ -1149,37 +1149,37 @@ pub const Graph = struct {
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
                 try self.setGraphAttrRaw("dimen", text);
             },
-            .vex_layout_iterations => |value| {
+            .layout_iterations => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-                try self.setGraphAttrRaw("vex_layout_iterations", text);
+                try self.setGraphAttrRaw("layout_iterations", text);
             },
-            .vex_crossing_passes => |value| {
+            .crossing_passes => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-                try self.setGraphAttrRaw("vex_crossing_passes", text);
+                try self.setGraphAttrRaw("crossing_passes", text);
             },
-            .vex_coordinate_passes => |value| {
+            .coordinate_passes => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-                try self.setGraphAttrRaw("vex_coordinate_passes", text);
+                try self.setGraphAttrRaw("coordinate_passes", text);
             },
             .layers => |value| try self.setGraphAttrRaw("layers", value),
             .layersep => |value| try self.setGraphAttrRaw("layersep", value),
             .layerlistsep => |value| try self.setGraphAttrRaw("layerlistsep", value),
             .layerselect => |value| try self.setGraphAttrRaw("layerselect", value),
-            .vex_interactive_all => |value| try self.setGraphAttrRaw("vex_interactive_all", boolAttrValue(value)),
-            .vex_interactive_layers => |value| try self.setGraphAttrRaw("vex_interactive_layers", boolAttrValue(value)),
-            .vex_interactive_collapse => |value| try self.setGraphAttrRaw("vex_interactive_collapse", boolAttrValue(value)),
-            .vex_interactive_filter => |value| try self.setGraphAttrRaw("vex_interactive_filter", boolAttrValue(value)),
-            .vex_interactive_labels => |value| try self.setGraphAttrRaw("vex_interactive_labels", boolAttrValue(value)),
-            .vex_interactive_focus => |value| try self.setGraphAttrRaw("vex_interactive_focus", boolAttrValue(value)),
-            .vex_interactive_inspector => |value| try self.setGraphAttrRaw("vex_interactive_inspector", boolAttrValue(value)),
-            .vex_interactive_search => |value| try self.setGraphAttrRaw("vex_interactive_search", boolAttrValue(value)),
-            .vex_interactive_viewport => |value| try self.setGraphAttrRaw("vex_interactive_viewport", boolAttrValue(value)),
-            .vex_interactive_minimap => |value| try self.setGraphAttrRaw("vex_interactive_minimap", boolAttrValue(value)),
-            .vex_interactive_stats => |value| try self.setGraphAttrRaw("vex_interactive_stats", boolAttrValue(value)),
-            .vex_svg_metadata => |value| try self.setGraphAttrRaw("vex_svg_metadata", boolAttrValue(value)),
+            .interactive_all => |value| try self.setGraphAttrRaw("interactive_all", boolAttrValue(value)),
+            .interactive_layers => |value| try self.setGraphAttrRaw("interactive_layers", boolAttrValue(value)),
+            .interactive_collapse => |value| try self.setGraphAttrRaw("interactive_collapse", boolAttrValue(value)),
+            .interactive_filter => |value| try self.setGraphAttrRaw("interactive_filter", boolAttrValue(value)),
+            .interactive_labels => |value| try self.setGraphAttrRaw("interactive_labels", boolAttrValue(value)),
+            .interactive_focus => |value| try self.setGraphAttrRaw("interactive_focus", boolAttrValue(value)),
+            .interactive_inspector => |value| try self.setGraphAttrRaw("interactive_inspector", boolAttrValue(value)),
+            .interactive_search => |value| try self.setGraphAttrRaw("interactive_search", boolAttrValue(value)),
+            .interactive_viewport => |value| try self.setGraphAttrRaw("interactive_viewport", boolAttrValue(value)),
+            .interactive_minimap => |value| try self.setGraphAttrRaw("interactive_minimap", boolAttrValue(value)),
+            .interactive_stats => |value| try self.setGraphAttrRaw("interactive_stats", boolAttrValue(value)),
+            .svg_metadata => |value| try self.setGraphAttrRaw("svg_metadata", boolAttrValue(value)),
             .enable_math_label => |value| try self.setGraphAttrRaw("enable_math_label", boolAttrValue(value)),
             .pad => |value| try self.setGraphAttrRaw("pad", value),
             .margin => |value| try self.setGraphAttrRaw("margin", value),
@@ -5167,9 +5167,7 @@ fn layoutOptionsWithGraphAttrs(options: LayoutOptions, graph: *const Graph) Layo
             result.margin_y = @max(result.margin_y, size.height + 12.0);
         }
     }
-    if (attrValue(graph.attrs.items, "vex_coordinate_passes") == null and
-        attrValue(graph.attrs.items, "coordinate_passes") == null)
-    {
+    if (attrValue(graph.attrs.items, "coordinate_passes") == null) {
         result.coordinate_passes = coordinateRefinementLimit(graph, result.coordinate_passes);
     }
     return result;
@@ -5916,7 +5914,6 @@ fn forceOptionsForAlgorithm(
 ) ForceLayoutOptions {
     var result = forceLayoutOptionsWithGraphAttrs(options, graph);
     const explicit_iterations =
-        attrValue(graph.attrs.items, "vex_layout_iterations") != null or
         attrValue(graph.attrs.items, "layout_iterations") != null or
         attrValue(graph.attrs.items, "maxiter") != null;
     if (algorithm == .multilevel_spring_electrical and
@@ -20696,7 +20693,7 @@ fn svgGraphLayers(graph: *const Graph) ?SvgLayers {
 fn svgMetadataEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.metadata) return true;
-    const value = attrValue(graph.attrs.items, "vex_svg_metadata") orelse return false;
+    const value = attrValue(graph.attrs.items, "svg_metadata") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -20960,77 +20957,77 @@ fn writeSvgIndexedAttr(writer: *Io.Writer, kind: []const u8, id: ?usize, attr: A
 
 fn svgInteractiveAllEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (options.interactive_all) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_all") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_all") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveLayersEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_layers) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_layers") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_layers") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveCollapseEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_collapse) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_collapse") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_collapse") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveFilterEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_filter) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_filter") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_filter") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveLabelsEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_labels) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_labels") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_labels") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveFocusEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_focus) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_focus") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_focus") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveInspectorEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_inspector) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_inspector") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_inspector") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveSearchEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_search) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_search") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_search") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveViewportEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_viewport) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_viewport") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_viewport") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveMinimapEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_minimap) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_minimap") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_minimap") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
 fn svgInteractiveStatsEnabled(graph: *const Graph, options: SvgOptions) bool {
     if (svgInteractiveAllEnabled(graph, options)) return true;
     if (options.interactive_stats) return true;
-    const value = attrValue(graph.attrs.items, "vex_interactive_stats") orelse return false;
+    const value = attrValue(graph.attrs.items, "interactive_stats") orelse return false;
     return parseBool(std.mem.trim(u8, value, " \t\r\n")) orelse false;
 }
 
@@ -29430,7 +29427,7 @@ test "neato layout honors iteration budget from DOT and typed API" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\graph G {
-        \\  graph [layout=neato, vex_layout_iterations=1];
+        \\  graph [layout=neato, layout_iterations=1];
         \\  a -- b -- c -- d -- a;
         \\}
     );
@@ -29439,11 +29436,11 @@ test "neato layout honors iteration budget from DOT and typed API" {
     var low_budget = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
     defer low_budget.deinit();
 
-    try graph.setGraphAttr(.{ .vex_layout_iterations = 40 });
+    try graph.setGraphAttr(.{ .layout_iterations = 40 });
     var higher_budget = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
     defer higher_budget.deinit();
 
-    try std.testing.expectEqualStrings("40", attrValue(graph.attrs.items, "vex_layout_iterations").?);
+    try std.testing.expectEqualStrings("40", attrValue(graph.attrs.items, "layout_iterations").?);
     try std.testing.expect(distanceBetween(low_budget.nodes[0].center, higher_budget.nodes[0].center) > 0.1);
 }
 
@@ -29478,7 +29475,7 @@ test "Vex force iteration attrs override Graphviz maxiter" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\graph G {
-        \\  graph [layout=neato, maxiter=1, vex_layout_iterations=40];
+        \\  graph [layout=neato, maxiter=1, layout_iterations=40];
         \\  a -- b -- c -- d -- a;
         \\}
     );
@@ -30217,7 +30214,7 @@ test "sfdp default quality budget exceeds the shared force default" {
         .multilevel_spring_electrical,
     );
     try std.testing.expectEqual(@as(usize, 17), explicit.iterations);
-    try graph.setGraphAttr(.{ .vex_layout_iterations = 19 });
+    try graph.setGraphAttr(.{ .layout_iterations = 19 });
     const dot_explicit = forceOptionsForAlgorithm(
         defaults,
         &graph,
@@ -31358,7 +31355,7 @@ test "layered layout honors pass budgets from DOT and typed API" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_crossing_passes=1, vex_coordinate_passes=0];
+        \\  graph [crossing_passes=1, coordinate_passes=0];
         \\  a -> c;
         \\  b -> d;
         \\}
@@ -31369,11 +31366,11 @@ test "layered layout honors pass budgets from DOT and typed API" {
     try std.testing.expectEqual(@as(usize, 1), from_dot.crossing_passes);
     try std.testing.expectEqual(@as(usize, 0), from_dot.coordinate_passes);
 
-    try graph.setGraphAttr(.{ .vex_crossing_passes = 3 });
-    try graph.setGraphAttr(.{ .vex_coordinate_passes = 2 });
+    try graph.setGraphAttr(.{ .crossing_passes = 3 });
+    try graph.setGraphAttr(.{ .coordinate_passes = 2 });
     const typed = layoutOptionsWithGraphAttrs(.{}, &graph);
-    try std.testing.expectEqualStrings("3", attrValue(graph.attrs.items, "vex_crossing_passes").?);
-    try std.testing.expectEqualStrings("2", attrValue(graph.attrs.items, "vex_coordinate_passes").?);
+    try std.testing.expectEqualStrings("3", attrValue(graph.attrs.items, "crossing_passes").?);
+    try std.testing.expectEqualStrings("2", attrValue(graph.attrs.items, "coordinate_passes").?);
     try std.testing.expectEqual(@as(usize, 3), typed.crossing_passes);
     try std.testing.expectEqual(@as(usize, 2), typed.coordinate_passes);
 }
@@ -31450,7 +31447,7 @@ test "explicit coordinate passes override nslimit maximum" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [nslimit=0, vex_coordinate_passes=3];
+        \\  graph [nslimit=0, coordinate_passes=3];
         \\  a -> b;
         \\}
     );
@@ -31709,7 +31706,7 @@ test "explicit crossing passes override mclimit maximum" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [mclimit=2, vex_crossing_passes=3];
+        \\  graph [mclimit=2, crossing_passes=3];
         \\  a -> b;
         \\}
     );
@@ -33312,7 +33309,7 @@ test "DOT and typed API can enable SVG metadata index" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_svg_metadata=true];
+        \\  graph [svg_metadata=true];
         \\  a -> b;
         \\}
     );
@@ -33321,12 +33318,12 @@ test "DOT and typed API can enable SVG metadata index" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_svg_metadata").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "svg_metadata").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-metadata\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_svg_metadata = true });
+    try typed.setGraphAttr(.{ .svg_metadata = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -33334,7 +33331,7 @@ test "DOT and typed API can enable SVG metadata index" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_svg_metadata").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "svg_metadata").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-metadata\"") != null);
 }
 
@@ -37684,7 +37681,7 @@ test "DOT and typed API can enable Vex interactive layer controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [layers="draft:final", layerselect=final, vex_interactive_layers=true];
+        \\  graph [layers="draft:final", layerselect=final, interactive_layers=true];
         \\  draft [layer=draft];
         \\  final [layer=final];
         \\}
@@ -37695,7 +37692,7 @@ test "DOT and typed API can enable Vex interactive layer controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_layers").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_layers").?);
     try std.testing.expect(svgGroupFragmentById(parsed_svg, "draft") == null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-layer-control=\"final\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-layer-control=\"draft\"") == null);
@@ -37703,7 +37700,7 @@ test "DOT and typed API can enable Vex interactive layer controls" {
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
     try typed.setGraphAttr(.{ .layers = "alpha:beta" });
-    try typed.setGraphAttr(.{ .vex_interactive_layers = true });
+    try typed.setGraphAttr(.{ .interactive_layers = true });
     const alpha = try typed.addNode("Alpha", .{ .layer = "alpha" });
     const beta = try typed.addNode("Beta", .{ .layer = "beta" });
     _ = try typed.addEdge(alpha, beta, .{ .layer = "alpha:beta" });
@@ -37712,7 +37709,7 @@ test "DOT and typed API can enable Vex interactive layer controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_layers").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_layers").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-layer-control=\"alpha\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-layer-control=\"beta\"") != null);
 }
@@ -37721,7 +37718,7 @@ test "SVG interactive layer controls escape layer names" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [layers="one&two|three\"four", layersep="|", vex_interactive_layers=true];
+        \\  graph [layers="one&two|three\"four", layersep="|", interactive_layers=true];
         \\  a [layer="one&two"];
         \\  b [layer="three\"four"];
         \\}
@@ -37779,7 +37776,7 @@ test "DOT and typed API can enable Vex collapse controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_collapse=true];
+        \\  graph [interactive_collapse=true];
         \\  subgraph inner {
         \\    label="Inner";
         \\    a;
@@ -37793,12 +37790,12 @@ test "DOT and typed API can enable Vex collapse controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_collapse").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_collapse").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-collapse-control=\"subgraph-1\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_collapse = true });
+    try typed.setGraphAttr(.{ .interactive_collapse = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -37808,7 +37805,7 @@ test "DOT and typed API can enable Vex collapse controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_collapse").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_collapse").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-collapse-control=\"subgraph-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-collapse-member=\"subgraph-1\"") != null);
 }
@@ -37848,7 +37845,7 @@ test "DOT and typed API can enable Vex filter controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_filter=true];
+        \\  graph [interactive_filter=true];
         \\  a -> b;
         \\}
     );
@@ -37858,12 +37855,12 @@ test "DOT and typed API can enable Vex filter controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_filter").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_filter").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-filter-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_filter = true });
+    try typed.setGraphAttr(.{ .interactive_filter = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -37872,7 +37869,7 @@ test "DOT and typed API can enable Vex filter controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_filter").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_filter").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-filter-controls\"") != null);
 }
 
@@ -37914,7 +37911,7 @@ test "DOT and typed API can enable Vex label visibility controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_labels=true];
+        \\  graph [interactive_labels=true];
         \\  parse -> render;
         \\}
     );
@@ -37924,12 +37921,12 @@ test "DOT and typed API can enable Vex label visibility controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_labels").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_labels").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-label-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_labels = true });
+    try typed.setGraphAttr(.{ .interactive_labels = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{ .label = "edge" });
@@ -37938,7 +37935,7 @@ test "DOT and typed API can enable Vex label visibility controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_labels").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_labels").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-label-controls\"") != null);
 }
 
@@ -37981,7 +37978,7 @@ test "DOT and typed API can enable Vex focus controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_focus=true];
+        \\  graph [interactive_focus=true];
         \\  a -> b;
         \\}
     );
@@ -37991,12 +37988,12 @@ test "DOT and typed API can enable Vex focus controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_focus").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_focus").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-focus-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_focus = true });
+    try typed.setGraphAttr(.{ .interactive_focus = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -38005,7 +38002,7 @@ test "DOT and typed API can enable Vex focus controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_focus").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_focus").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-focus-controls\"") != null);
 }
 
@@ -38050,7 +38047,7 @@ test "DOT and typed API can enable Vex inspector controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_inspector=true];
+        \\  graph [interactive_inspector=true];
         \\  a -> b;
         \\}
     );
@@ -38060,12 +38057,12 @@ test "DOT and typed API can enable Vex inspector controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_inspector").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_inspector").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-inspector-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_inspector = true });
+    try typed.setGraphAttr(.{ .interactive_inspector = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -38074,7 +38071,7 @@ test "DOT and typed API can enable Vex inspector controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_inspector").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_inspector").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-inspector-controls\"") != null);
 }
 
@@ -38118,7 +38115,7 @@ test "DOT and typed API can enable Vex interactive search controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_search=true];
+        \\  graph [interactive_search=true];
         \\  parse [label="Parser"];
         \\  render [label="Renderer"];
         \\  parse -> render [label="model"];
@@ -38130,13 +38127,13 @@ test "DOT and typed API can enable Vex interactive search controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_search").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_search").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-search-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "data-vex-search-text=\"parse Parser Parser\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_search = true });
+    try typed.setGraphAttr(.{ .interactive_search = true });
     const start = try typed.addNode("Start", .{ .tooltip = "entry point" });
     const done = try typed.addNode("Done", .{ .label = "Finished" });
     _ = try typed.addEdge(start, done, .{ .label = "complete" });
@@ -38145,7 +38142,7 @@ test "DOT and typed API can enable Vex interactive search controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_search").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_search").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-search-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-search-text=\"Start Start entry point\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "data-vex-search-text=\"Start-&gt;Finished Start Start Finished Finished complete complete\"") != null);
@@ -38155,7 +38152,7 @@ test "SVG interactive search metadata escapes object text" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_search=true];
+        \\  graph [interactive_search=true];
         \\  "a&b" [label="A & B", tooltip="quote\""];
         \\  c [label="C < D"];
         \\  "a&b" -> c [label="x<y"];
@@ -38203,7 +38200,7 @@ test "DOT and typed API can enable Vex stats panel" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_stats=true];
+        \\  graph [interactive_stats=true];
         \\  parse -> render;
         \\}
     );
@@ -38213,12 +38210,12 @@ test "DOT and typed API can enable Vex stats panel" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_stats").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_stats").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-stats-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = false, .name = "typed" });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_stats = true });
+    try typed.setGraphAttr(.{ .interactive_stats = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -38227,7 +38224,7 @@ test "DOT and typed API can enable Vex stats panel" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_stats").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_stats").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-stats-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "directed=false") != null);
 }
@@ -38270,7 +38267,7 @@ test "DOT and typed API can enable Vex interactive all preset" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_all=true];
+        \\  graph [interactive_all=true];
         \\  subgraph service { api; worker; }
         \\  api -> worker [label=job];
         \\}
@@ -38281,7 +38278,7 @@ test "DOT and typed API can enable Vex interactive all preset" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_all").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_all").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-metadata\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-filter-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-minimap-controls\"") != null);
@@ -38289,7 +38286,7 @@ test "DOT and typed API can enable Vex interactive all preset" {
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_all = true });
+    try typed.setGraphAttr(.{ .interactive_all = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{ .label = "edge" });
@@ -38298,7 +38295,7 @@ test "DOT and typed API can enable Vex interactive all preset" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_all").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_all").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-metadata\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-filter-controls\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-minimap-controls\"") != null);
@@ -38337,7 +38334,7 @@ test "DOT and typed API can enable Vex interactive viewport controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_viewport=true];
+        \\  graph [interactive_viewport=true];
         \\  parse -> render;
         \\}
     );
@@ -38347,12 +38344,12 @@ test "DOT and typed API can enable Vex interactive viewport controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_viewport").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_viewport").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-viewport-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_viewport = true });
+    try typed.setGraphAttr(.{ .interactive_viewport = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -38361,7 +38358,7 @@ test "DOT and typed API can enable Vex interactive viewport controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_viewport").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_viewport").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-viewport-controls\"") != null);
 }
 
@@ -38406,7 +38403,7 @@ test "DOT and typed API can enable Vex minimap controls" {
     const allocator = std.testing.allocator;
     var parsed = try parseDot(allocator,
         \\digraph G {
-        \\  graph [vex_interactive_minimap=true];
+        \\  graph [interactive_minimap=true];
         \\  parse -> render;
         \\}
     );
@@ -38416,12 +38413,12 @@ test "DOT and typed API can enable Vex minimap controls" {
     defer parsed_layout.deinit();
     const parsed_svg = try renderSvgAlloc(allocator, &parsed, &parsed_layout, .{});
     defer allocator.free(parsed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "vex_interactive_minimap").?);
+    try std.testing.expectEqualStrings("true", attrValue(parsed.attrs.items, "interactive_minimap").?);
     try std.testing.expect(std.mem.indexOf(u8, parsed_svg, "id=\"vex-minimap-controls\"") != null);
 
     var typed = try Graph.init(allocator, .{ .directed = true });
     defer typed.deinit();
-    try typed.setGraphAttr(.{ .vex_interactive_minimap = true });
+    try typed.setGraphAttr(.{ .interactive_minimap = true });
     const a = try typed.addNode("A", .{});
     const b = try typed.addNode("B", .{});
     _ = try typed.addEdge(a, b, .{});
@@ -38430,7 +38427,7 @@ test "DOT and typed API can enable Vex minimap controls" {
     defer typed_layout.deinit();
     const typed_svg = try renderSvgAlloc(allocator, &typed, &typed_layout, .{});
     defer allocator.free(typed_svg);
-    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "vex_interactive_minimap").?);
+    try std.testing.expectEqualStrings("true", attrValue(typed.attrs.items, "interactive_minimap").?);
     try std.testing.expect(std.mem.indexOf(u8, typed_svg, "id=\"vex-minimap-controls\"") != null);
 }
 

@@ -114,7 +114,6 @@ with deterministic native adjustment and `sep`; nop2 treats input coordinates
 as final and never applies overlap adjustment.
 `--layout-iterations` caps the selected iterative layout budget
 for fast previews or large graph workflows; DOT can set the same budget with
-`graph [vex_layout_iterations=20]` or
 `graph [layout_iterations=20]`; force-style Graphviz input can also use
 `graph [maxiter=20]`, and the Zig API can pass
 `.{ .force = .{ .iterations = 20 } }`.
@@ -130,9 +129,8 @@ budget for CI and bounded previews. The Zig API can use a custom
 returns `error.LayoutCanceled` without returning a partial `Layout`.
 For layered/Sugiyama layout, `--crossing-passes` and `--coordinate-passes`
 control crossing-reduction and coordinate-refinement budgets. DOT can set the
-same budgets with `vex_crossing_passes`, `vex_coordinate_passes`, or the shorter
-`crossing_passes` / `coordinate_passes` aliases, and the Zig API can pass
-`LayoutConfig.layered`.
+same budgets with `crossing_passes` / `coordinate_passes`, and the Zig API can
+pass `LayoutConfig.layered`.
 
 The Zig API also exposes `layoutGraphIncremental`. It accepts a previous
 `Layout` and preserves the mental map of nodes that retain the same `NodeId`
@@ -176,67 +174,67 @@ The v1 schema and additive compatibility policy are documented in
 [`docs/SVG_METADATA_V1.md`](docs/SVG_METADATA_V1.md); consumers can discover
 the schema URI, major version, and feature tokens directly in generated SVG.
 DOT can enable the same index with
-`graph [vex_svg_metadata=true]`, and the Zig API can pass
+`graph [svg_metadata=true]`, and the Zig API can pass
 `.{ .svg = .{ .metadata = true } }`.
 
 `--interactive-all` enables the current SVG-native tool surface at once:
 metadata, layer controls when layers exist, collapse, filters, label toggles,
 focus, inspector, search, viewport controls, minimap, and stats. DOT can enable
-the same preset with `graph [vex_interactive_all=true]`, and the Zig API can
+the same preset with `graph [interactive_all=true]`, and the Zig API can
 pass `.{ .svg = .{ .interactive_all = true } }`.
 
 `--interactive-layers` is a Vex SVG extension. When a graph declares
 Graphviz-style `layers`, it embeds a small self-contained SVG control panel for
 toggling layer visibility. The same behavior can be enabled from DOT with
-`graph [vex_interactive_layers=true]` or from the Zig API with
+`graph [interactive_layers=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_layers = true } }`.
 
 `--interactive-collapse` embeds subgraph collapse and expand controls. It marks
 member nodes and internal edges so a generated SVG can hide or restore a
 subgraph's contents without re-rendering. It can also be enabled from DOT with
-`graph [vex_interactive_collapse=true]` or from the Zig API with
+`graph [interactive_collapse=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_collapse = true } }`.
 
 `--interactive-filter` embeds object-type filters for nodes, edges, and
 subgraphs. It can also be enabled from DOT with
-`graph [vex_interactive_filter=true]` or from the Zig API with
+`graph [interactive_filter=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_filter = true } }`.
 
 `--interactive-labels` embeds label visibility controls for nodes, edges, and
 subgraphs. It can also be enabled from DOT with
-`graph [vex_interactive_labels=true]` or from the Zig API with
+`graph [interactive_labels=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_labels = true } }`.
 
 `--interactive-focus` lets generated SVGs focus a selected node or edge and its
 neighborhood while dimming unrelated objects. It can also be enabled from DOT
-with `graph [vex_interactive_focus=true]` or from the Zig API with
+with `graph [interactive_focus=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_focus = true } }`.
 
 `--interactive-inspector` embeds an object inspector panel. Clicking a node,
 edge, or subgraph shows its type, id/label, and selected metadata. It can also
-be enabled from DOT with `graph [vex_interactive_inspector=true]` or from the
+be enabled from DOT with `graph [interactive_inspector=true]` or from the
 Zig API with `.{ .svg = .{ .interactive_inspector = true } }`.
 
 `--interactive-search` is another Vex SVG extension. It embeds a self-contained
 search and highlight panel and annotates rendered nodes, edges, and subgraphs
 with searchable labels and metadata. It can also be enabled from DOT with
-`graph [vex_interactive_search=true]` or from the Zig API with
+`graph [interactive_search=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_search = true } }`.
 
 `--interactive-viewport` adds a self-contained pan, zoom, and reset panel around
 the rendered graph content. It can also be enabled from DOT with
-`graph [vex_interactive_viewport=true]` or from the Zig API with
+`graph [interactive_viewport=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_viewport = true } }`.
 
 `--interactive-minimap` adds a self-contained overview panel for navigating the
 rendered graph. Clicking nodes or subgraph boxes in the minimap recenters the
 main SVG viewport. It can also be enabled from DOT with
-`graph [vex_interactive_minimap=true]` or from the Zig API with
+`graph [interactive_minimap=true]` or from the Zig API with
 `.{ .svg = .{ .interactive_minimap = true } }`.
 
 `--interactive-stats` adds a self-contained graph statistics panel with object
 counts, layout size, canvas size, direction, and rank direction. It can also be
-enabled from DOT with `graph [vex_interactive_stats=true]` or from the Zig API
+enabled from DOT with `graph [interactive_stats=true]` or from the Zig API
 with `.{ .svg = .{ .interactive_stats = true } }`.
 
 ## Zig API sketch
@@ -488,7 +486,7 @@ The parser currently supports a practical, mainstream DOT subset:
   `remincross=false` to retain the stable first-pass cluster block order; the
   typed Zig API exposes the switch as `GraphAttr.remincross`.
 - Layered crossing minimization honors Graphviz `mclimit`: it scales the
-  MaxIter=24 and MinQuit=8 effort limits, while `vex_crossing_passes` remains a
+  MaxIter=24 and MinQuit=8 effort limits, while `crossing_passes` remains a
   direct maximum-pass override. The typed API exposes `GraphAttr.mclimit`.
 - Layered ranking honors Graphviz `nslimit1` as
   `floor(nslimit1 * node_count)` network-simplex pivots. A zero or invalid value
@@ -500,7 +498,7 @@ The parser currently supports a practical, mainstream DOT subset:
   multi-rank DAGs preserve a connected tight tree during pivots instead of
   failing with `DisconnectedTightTree`.
 - Layered coordinate refinement honors Graphviz `nslimit` as
-  `floor(nslimit * node_count)` refinement passes. `vex_coordinate_passes`
+  `floor(nslimit * node_count)` refinement passes. `coordinate_passes`
   remains a direct override; the typed API exposes `GraphAttr.nslimit`.
 - Layered layout honors Graphviz `ratio=compress` together with `size` by
   compacting complete virtual ranks, including long-edge waypoints, toward the
@@ -691,18 +689,18 @@ The parser currently supports a practical, mainstream DOT subset:
 - SVG output honors Graphviz `rotate=90`, `landscape=true`, and `orientation=landscape`.
 - SVG output honors Graphviz `center=true` by centering drawings in oversized SVG canvases.
 - SVG output honors Graphviz `layers`, `layersep`, `layerlistsep`, `layerselect`, and node, edge, and subgraph `layer` attributes by emitting separate SVG layer groups.
-- Vex SVG output can optionally enable the current SVG-native tool surface plus metadata via `--interactive-all`, `vex_interactive_all=true`, or `SvgOptions.interactive_all`.
-- Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `vex_interactive_layers=true`, or `SvgOptions.interactive_layers`.
-- Vex SVG output can optionally embed native subgraph collapse controls via `--interactive-collapse`, `vex_interactive_collapse=true`, or `SvgOptions.interactive_collapse`.
-- Vex SVG output can optionally embed native object-type filter controls via `--interactive-filter`, `vex_interactive_filter=true`, or `SvgOptions.interactive_filter`.
-- Vex SVG output can optionally embed native label visibility controls via `--interactive-labels`, `vex_interactive_labels=true`, or `SvgOptions.interactive_labels`.
-- Vex SVG output can optionally embed native neighborhood focus controls via `--interactive-focus`, `vex_interactive_focus=true`, or `SvgOptions.interactive_focus`.
-- Vex SVG output can optionally embed native object inspector controls via `--interactive-inspector`, `vex_interactive_inspector=true`, or `SvgOptions.interactive_inspector`.
-- Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `vex_interactive_search=true`, or `SvgOptions.interactive_search`.
-- Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `vex_interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
-- Vex SVG output can optionally embed a native minimap overview via `--interactive-minimap`, `vex_interactive_minimap=true`, or `SvgOptions.interactive_minimap`.
-- Vex SVG output can optionally embed a native graph statistics panel via `--interactive-stats`, `vex_interactive_stats=true`, or `SvgOptions.interactive_stats`.
-- Vex SVG output can optionally embed a machine-readable SVG metadata object index with graph structure, rank constraints, layout/canvas facts, rendered graph/node/edge/subgraph object attributes including subgraph parent/member relationships, edge record/compass ports, compound subgraph endpoints and effective edge layout values, a generic custom/future attribute index, object layers, effective `href` / `tooltip` / `target` metadata, graph/node/edge/subgraph object geometry, node ranks, edge waypoints, and layer metadata via `--svg-metadata`, `vex_svg_metadata=true`, or `SvgOptions.metadata`.
+- Vex SVG output can optionally enable the current SVG-native tool surface plus metadata via `--interactive-all`, `interactive_all=true`, or `SvgOptions.interactive_all`.
+- Vex SVG output can optionally embed native layer visibility controls via `--interactive-layers`, `interactive_layers=true`, or `SvgOptions.interactive_layers`.
+- Vex SVG output can optionally embed native subgraph collapse controls via `--interactive-collapse`, `interactive_collapse=true`, or `SvgOptions.interactive_collapse`.
+- Vex SVG output can optionally embed native object-type filter controls via `--interactive-filter`, `interactive_filter=true`, or `SvgOptions.interactive_filter`.
+- Vex SVG output can optionally embed native label visibility controls via `--interactive-labels`, `interactive_labels=true`, or `SvgOptions.interactive_labels`.
+- Vex SVG output can optionally embed native neighborhood focus controls via `--interactive-focus`, `interactive_focus=true`, or `SvgOptions.interactive_focus`.
+- Vex SVG output can optionally embed native object inspector controls via `--interactive-inspector`, `interactive_inspector=true`, or `SvgOptions.interactive_inspector`.
+- Vex SVG output can optionally embed native search/highlight controls via `--interactive-search`, `interactive_search=true`, or `SvgOptions.interactive_search`.
+- Vex SVG output can optionally embed native pan/zoom viewport controls via `--interactive-viewport`, `interactive_viewport=true`, or `SvgOptions.interactive_viewport`.
+- Vex SVG output can optionally embed a native minimap overview via `--interactive-minimap`, `interactive_minimap=true`, or `SvgOptions.interactive_minimap`.
+- Vex SVG output can optionally embed a native graph statistics panel via `--interactive-stats`, `interactive_stats=true`, or `SvgOptions.interactive_stats`.
+- Vex SVG output can optionally embed a machine-readable SVG metadata object index with graph structure, rank constraints, layout/canvas facts, rendered graph/node/edge/subgraph object attributes including subgraph parent/member relationships, edge record/compass ports, compound subgraph endpoints and effective edge layout values, a generic custom/future attribute index, object layers, effective `href` / `tooltip` / `target` metadata, graph/node/edge/subgraph object geometry, node ranks, edge waypoints, and layer metadata via `--svg-metadata`, `svg_metadata=true`, or `SvgOptions.metadata`.
 - `splines` routing values including `true` / `false` aliases, `line`, `polyline`, `ortho`, and `none`.
 - Edge `minlen=0` is preserved across DOT and typed APIs, allowing same-rank
   edges without silently raising the minimum rank distance to one.

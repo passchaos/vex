@@ -1,7 +1,7 @@
 # Vex SVG Metadata v1
 
 Vex 的 opt-in SVG metadata 是面向工具的机器可读契约。启用入口为
-`--svg-metadata`、`vex_svg_metadata=true` 或 `SvgOptions.metadata`。
+`--svg-metadata`、`svg_metadata=true` 或 `SvgOptions.metadata`。
 
 ## 版本发现
 
