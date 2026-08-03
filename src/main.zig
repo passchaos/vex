@@ -13,6 +13,7 @@ const usage =
     \\        [--max-diagnostics count]
     \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo|patchwork|osage|nop|nop2]
     \\        [--max-input-bytes count]
+    \\        [--layout-profile compact|balanced|relaxed|presentation]
     \\        [--layout-iterations count]
     \\        [--layout-work-budget count]
     \\        [--layout-workers count]
@@ -37,6 +38,7 @@ const usage =
     \\--check parses input and reports graph counts without layout or rendering.
     \\--validate-all reports multiple recoverable DOT errors in one run.
     \\--max-input-bytes caps DOT/Mermaid input reads.
+    \\--layout-profile selects centralized layout defaults.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps neato stress or force-layout iterations.
     \\--layout-work-budget cancels layout after deterministic work checkpoints.
@@ -70,6 +72,7 @@ pub fn main(init: std.process.Init) !void {
     var max_diagnostics: usize = 32;
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
+    var layout_profile: vex.LayoutProfile = .balanced;
     var max_input_bytes: usize = default_max_input_bytes;
     var layout_iterations: ?usize = null;
     var layout_work_budget: ?usize = null;
@@ -160,6 +163,10 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingLayout;
             layout_arg = vex.LayoutAlgorithm.fromString(args[i]) orelse return error.UnknownLayout;
+        } else if (std.mem.eql(u8, arg, "--layout-profile")) {
+            i += 1;
+            if (i >= args.len) return error.MissingLayoutProfile;
+            layout_profile = vex.LayoutProfile.fromString(args[i]) orelse return error.UnknownLayoutProfile;
         } else if (std.mem.eql(u8, arg, "--layout-iterations")) {
             i += 1;
             if (i >= args.len) return error.MissingLayoutIterations;
@@ -244,14 +251,11 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    var layered_options = vex.LayoutOptions{};
-    if (crossing_passes) |value| layered_options.crossing_passes = value;
-    if (coordinate_passes) |value| layered_options.coordinate_passes = value;
-    const layout_config = vex.LayoutConfig{
-        .algorithm = layout_arg,
-        .layered = layered_options,
-        .force = if (layout_iterations) |iterations| .{ .iterations = iterations } else .{},
-    };
+    var layout_config = vex.LayoutConfig.defaults(layout_profile);
+    layout_config.algorithm = layout_arg;
+    if (crossing_passes) |value| layout_config.layered.crossing_passes = value;
+    if (coordinate_passes) |value| layout_config.layered.coordinate_passes = value;
+    if (layout_iterations) |iterations| layout_config.force.iterations = iterations;
     const render_options = vex.RenderOptions{ .svg = .{ .interactive_all = interactive_all, .interactive_layers = interactive_layers, .interactive_collapse = interactive_collapse, .interactive_filter = interactive_filter, .interactive_labels = interactive_labels, .interactive_focus = interactive_focus, .interactive_inspector = interactive_inspector, .interactive_search = interactive_search, .interactive_viewport = interactive_viewport, .interactive_minimap = interactive_minimap, .interactive_stats = interactive_stats, .metadata = svg_metadata } };
     if (output_path) |path| {
         var file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });

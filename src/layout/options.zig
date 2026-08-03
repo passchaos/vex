@@ -33,6 +33,9 @@ pub const ForceLayoutOptions = struct {
     margin: f64 = 40,
     iterations: usize = 120,
     area_scale: f64 = 1.0,
+    stress_ideal_length: f64 = 72.0,
+    spring_length: f64 = 72.0,
+    overlap_margin: f64 = 0.5,
 };
 
 pub const IncrementalLayoutOptions = struct {
@@ -176,6 +179,107 @@ pub const LayoutConfig = struct {
     layered: LayoutOptions = .{},
     force: ForceLayoutOptions = .{},
     control: LayoutControl = .{},
+
+    pub fn defaults(profile: LayoutProfile) LayoutConfig {
+        return .{
+            .layered = profile.layeredOptions(),
+            .force = profile.forceOptions(),
+        };
+    }
+};
+
+pub const LayoutProfile = enum {
+    compact,
+    balanced,
+    relaxed,
+    presentation,
+
+    pub fn fromString(value: []const u8) ?LayoutProfile {
+        if (std.ascii.eqlIgnoreCase(value, "compact")) return .compact;
+        if (std.ascii.eqlIgnoreCase(value, "balanced") or
+            std.ascii.eqlIgnoreCase(value, "default") or
+            std.ascii.eqlIgnoreCase(value, "normal"))
+        {
+            return .balanced;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "relaxed")) return .relaxed;
+        if (std.ascii.eqlIgnoreCase(value, "presentation") or
+            std.ascii.eqlIgnoreCase(value, "present") or
+            std.ascii.eqlIgnoreCase(value, "airy"))
+        {
+            return .presentation;
+        }
+        return null;
+    }
+
+    pub fn name(self: LayoutProfile) []const u8 {
+        return switch (self) {
+            .compact => "compact",
+            .balanced => "balanced",
+            .relaxed => "relaxed",
+            .presentation => "presentation",
+        };
+    }
+
+    pub fn layeredOptions(self: LayoutProfile) LayoutOptions {
+        return switch (self) {
+            .compact => .{
+                .rank_gap = 28,
+                .node_gap = 28,
+                .edge_label_padding = 28,
+                .margin = 12,
+                .margin_y = 5,
+            },
+            .balanced => .{},
+            .relaxed => .{
+                .rank_gap = 56,
+                .node_gap = 54,
+                .edge_label_padding = 48,
+                .margin = 24,
+                .margin_y = 10,
+            },
+            .presentation => .{
+                .rank_gap = 78,
+                .node_gap = 72,
+                .edge_label_padding = 60,
+                .margin = 32,
+                .margin_y = 14,
+            },
+        };
+    }
+
+    pub fn forceOptions(self: LayoutProfile) ForceLayoutOptions {
+        return switch (self) {
+            .compact => .{
+                .width = 560,
+                .height = 360,
+                .margin = 32,
+                .area_scale = 0.75,
+                .stress_ideal_length = 56,
+                .spring_length = 56,
+                .overlap_margin = 0.25,
+            },
+            .balanced => .{},
+            .relaxed => .{
+                .width = 820,
+                .height = 540,
+                .margin = 52,
+                .area_scale = 1.45,
+                .stress_ideal_length = 100,
+                .spring_length = 104,
+                .overlap_margin = 6,
+            },
+            .presentation => .{
+                .width = 1080,
+                .height = 720,
+                .margin = 72,
+                .area_scale = 2.0,
+                .stress_ideal_length = 124,
+                .spring_length = 132,
+                .overlap_margin = 10,
+            },
+        };
+    }
 };
 
 pub fn withGraphAttrs(base: LayoutOptions, graph_attrs: anytype) LayoutOptions {

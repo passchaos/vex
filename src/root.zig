@@ -4958,6 +4958,7 @@ pub const IncrementalLayoutOptions = layout_mod.options.IncrementalLayoutOptions
 pub const LayoutControl = layout_mod.options.LayoutControl;
 pub const LayoutWorkBudget = layout_mod.options.LayoutWorkBudget;
 pub const LayoutAlgorithm = layout_mod.options.LayoutAlgorithm;
+pub const LayoutProfile = layout_mod.options.LayoutProfile;
 pub const LayoutConfig = layout_mod.options.LayoutConfig;
 
 pub const ParallelLayoutTask = struct {
@@ -7231,12 +7232,12 @@ fn layoutStressMajorizationWithPrevious(allocator: std.mem.Allocator, graph: *co
     defer if (previous != null) allocator.free(anchors);
     const stability = if (previous != null) std.math.clamp(incremental.stability, 0.0, 1.0) else 0.0;
     switch (graphNeatoMode(graph)) {
-        .major => try majorizeStressPositions(positions, scratch, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), work),
-        .kk => try solveKamadaKawaiPositions(positions, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), graphKamadaKawaiDamping(graph), work),
+        .major => try majorizeStressPositionsWithIdeal(positions, scratch, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), forceStressIdealLength(graph, options), work),
+        .kk => try solveKamadaKawaiPositionsWithIdeal(positions, graph_distances, options.iterations, anchors, stability, stressEpsilon(graph), graphKamadaKawaiDamping(graph), forceStressIdealLength(graph, options), work),
     }
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
-    if (previous == null) try removeForceNodeOverlaps(allocator, graph, positions, sizes);
+    if (previous == null) try removeForceNodeOverlaps(allocator, graph, positions, sizes, options.overlap_margin);
 
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
@@ -7265,6 +7266,7 @@ fn removeForceNodeOverlaps(
     graph: *const Graph,
     positions: []Point,
     sizes: []const NodeSize,
+    default_margin: f64,
 ) !void {
     // The exact minimum-axis solver is pairwise. Large force layouts already
     // have repulsion and dedicated scale gates; do not reintroduce quadratic
@@ -7283,7 +7285,7 @@ fn removeForceNodeOverlaps(
     const separation = if (explicit_overlap != null)
         layout_mod.nop.parseSeparation(attrValue(graph.attrs.items, "sep"))
     else
-        layout_mod.nop.Separation{ .add = .{ .x = 0.5, .y = 0.5 } };
+        layout_mod.nop.Separation{ .add = .{ .x = @max(0, default_margin), .y = @max(0, default_margin) } };
     _ = try layout_mod.nop.adjustOverlaps(
         allocator,
         positions,
@@ -7499,8 +7501,23 @@ fn majorizeStressPositions(
     epsilon: ?f64,
     work: ?*LayoutWorkTracker,
 ) !void {
+    return majorizeStressPositionsWithIdeal(positions, scratch, distances, iterations, anchors, stability, epsilon, stressIdealLength, work);
+}
+
+fn majorizeStressPositionsWithIdeal(
+    positions: []Point,
+    scratch: []Point,
+    distances: StressGraphDistances,
+    iterations: usize,
+    anchors: []const Point,
+    stability: f64,
+    epsilon: ?f64,
+    ideal_length: f64,
+    work: ?*LayoutWorkTracker,
+) !void {
     if (positions.len != scratch.len or positions.len != distances.node_count) return error.InvalidStressLayoutState;
-    var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergy(positions, distances) else null;
+    const ideal = validForceLength(ideal_length);
+    var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergyWithIdeal(positions, distances, ideal) else null;
     for (0..iterations) |_| {
         if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| 1);
         for (positions, 0..) |position, from| {
@@ -7509,7 +7526,7 @@ fn majorizeStressPositions(
             var sum_weight: f64 = 0;
             for (positions, 0..) |other, to| {
                 if (from == to) continue;
-                const pair = stressPairModel(distances, from, to);
+                const pair = stressPairModelWithIdeal(distances, from, to, ideal);
                 var dx = position.x - other.x;
                 var dy = position.y - other.y;
                 var actual = std.math.hypot(dx, dy);
@@ -7534,7 +7551,7 @@ fn majorizeStressPositions(
         }
         @memcpy(positions, scratch);
         if (epsilon) |threshold| {
-            const current_energy = stressLayoutEnergy(positions, distances);
+            const current_energy = stressLayoutEnergyWithIdeal(positions, distances, ideal);
             const previous = previous_energy.?;
             const change = @abs(previous - current_energy);
             if (current_energy < threshold or (previous > 0 and change / previous < threshold)) break;
@@ -7553,12 +7570,27 @@ fn solveKamadaKawaiPositions(
     damping: f64,
     work: ?*LayoutWorkTracker,
 ) !void {
+    return solveKamadaKawaiPositionsWithIdeal(positions, distances, iterations, anchors, stability, epsilon, damping, stressIdealLength, work);
+}
+
+fn solveKamadaKawaiPositionsWithIdeal(
+    positions: []Point,
+    distances: StressGraphDistances,
+    iterations: usize,
+    anchors: []const Point,
+    stability: f64,
+    epsilon: ?f64,
+    damping: f64,
+    ideal_length: f64,
+    work: ?*LayoutWorkTracker,
+) !void {
     if (positions.len != distances.node_count) return error.InvalidStressLayoutState;
-    var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergy(positions, distances) else null;
+    const ideal = validForceLength(ideal_length);
+    var previous_energy: ?f64 = if (epsilon != null) stressLayoutEnergyWithIdeal(positions, distances, ideal) else null;
     for (0..iterations) |_| {
         if (work) |tracker| try tracker.checkpoint(positions.len *| positions.len +| 1);
-        const node_id = maxKamadaKawaiGradientNode(positions, distances);
-        const terms = kamadaKawaiTerms(positions, distances, node_id);
+        const node_id = maxKamadaKawaiGradientNodeWithIdeal(positions, distances, ideal);
+        const terms = kamadaKawaiTermsWithIdeal(positions, distances, node_id, ideal);
         if (terms.gradient <= 0.000001) break;
 
         const det = terms.xx * terms.yy - terms.xy * terms.xy;
@@ -7568,7 +7600,7 @@ fn solveKamadaKawaiPositions(
             .y = (terms.xy * terms.gx - terms.xx * terms.gy) / det,
         };
         const step_length = std.math.hypot(step.x, step.y);
-        const max_step = @max(4.0, stressIdealLength * 0.5);
+        const max_step = @max(4.0, ideal * 0.5);
         if (step_length > max_step) {
             const scale = max_step / step_length;
             step.x *= scale;
@@ -7585,7 +7617,7 @@ fn solveKamadaKawaiPositions(
         }
 
         if (epsilon) |threshold| {
-            const current_energy = stressLayoutEnergy(positions, distances);
+            const current_energy = stressLayoutEnergyWithIdeal(positions, distances, ideal);
             const previous = previous_energy.?;
             const change = @abs(previous - current_energy);
             if (current_energy < threshold or (previous > 0 and change / previous < threshold)) break;
@@ -7604,10 +7636,15 @@ const KamadaKawaiTerms = struct {
 };
 
 fn maxKamadaKawaiGradientNode(positions: []const Point, distances: StressGraphDistances) usize {
+    return maxKamadaKawaiGradientNodeWithIdeal(positions, distances, stressIdealLength);
+}
+
+fn maxKamadaKawaiGradientNodeWithIdeal(positions: []const Point, distances: StressGraphDistances, ideal_length: f64) usize {
     var best_id: usize = 0;
     var best_gradient: f64 = -1;
+    const ideal = validForceLength(ideal_length);
     for (positions, 0..) |_, id| {
-        const terms = kamadaKawaiTerms(positions, distances, id);
+        const terms = kamadaKawaiTermsWithIdeal(positions, distances, id, ideal);
         if (terms.gradient > best_gradient) {
             best_gradient = terms.gradient;
             best_id = id;
@@ -7617,6 +7654,10 @@ fn maxKamadaKawaiGradientNode(positions: []const Point, distances: StressGraphDi
 }
 
 fn kamadaKawaiTerms(positions: []const Point, distances: StressGraphDistances, node_id: usize) KamadaKawaiTerms {
+    return kamadaKawaiTermsWithIdeal(positions, distances, node_id, stressIdealLength);
+}
+
+fn kamadaKawaiTermsWithIdeal(positions: []const Point, distances: StressGraphDistances, node_id: usize, ideal_length: f64) KamadaKawaiTerms {
     var result = KamadaKawaiTerms{
         .gx = 0,
         .gy = 0,
@@ -7625,10 +7666,11 @@ fn kamadaKawaiTerms(positions: []const Point, distances: StressGraphDistances, n
         .xy = 0,
         .gradient = 0,
     };
+    const ideal = validForceLength(ideal_length);
     const position = positions[node_id];
     for (positions, 0..) |other, other_id| {
         if (node_id == other_id) continue;
-        const pair = stressPairModel(distances, node_id, other_id);
+        const pair = stressPairModelWithIdeal(distances, node_id, other_id, ideal);
         var dx = position.x - other.x;
         var dy = position.y - other.y;
         var actual = std.math.hypot(dx, dy);
@@ -7658,12 +7700,37 @@ const StressPairModel = struct {
 };
 
 fn stressPairModel(distances: StressGraphDistances, from: usize, to: usize) StressPairModel {
+    return stressPairModelWithIdeal(distances, from, to, stressIdealLength);
+}
+
+fn stressPairModelWithIdeal(distances: StressGraphDistances, from: usize, to: usize, ideal_length: f64) StressPairModel {
     const graph_distance = distances.at(from, to);
     const disconnected = !std.math.isFinite(graph_distance);
     const normalized_distance = if (disconnected) distances.max_finite + 1.0 else @max(graph_distance, 0.05);
-    const desired = normalized_distance * stressIdealLength;
+    const desired = normalized_distance * validForceLength(ideal_length);
     const weight_scale: f64 = if (disconnected) 0.05 else 1.0;
     return .{ .desired = desired, .weight = weight_scale / (desired * desired) };
+}
+
+fn forceStressIdealLength(graph: *const Graph, options: ForceLayoutOptions) f64 {
+    _ = graph;
+    return validForceLength(options.stress_ideal_length);
+}
+
+fn forceSpringLength(graph: *const Graph, options: ForceLayoutOptions, attr_scale: f64) f64 {
+    if (graphKLength(graph.attrs.items, attr_scale)) |length| return length;
+    return validForceLength(options.spring_length);
+}
+
+fn graphKLength(attrs: []const Attr, attr_scale: f64) ?f64 {
+    const value = attrValue(attrs, "K") orelse return null;
+    const parsed = std.fmt.parseFloat(f64, value) catch return null;
+    if (!std.math.isFinite(parsed) or parsed <= 0) return null;
+    return @max(12.0, parsed * attr_scale);
+}
+
+fn validForceLength(value: f64) f64 {
+    return if (std.math.isFinite(value) and value > 0) value else stressIdealLength;
 }
 
 fn fitStressPositionsToCanvas(positions: []Point, sizes: []const NodeSize, options: ForceLayoutOptions) void {
@@ -7696,10 +7763,15 @@ fn fitStressPositionsToCanvas(positions: []Point, sizes: []const NodeSize, optio
 }
 
 fn stressLayoutEnergy(positions: []const Point, distances: StressGraphDistances) f64 {
+    return stressLayoutEnergyWithIdeal(positions, distances, stressIdealLength);
+}
+
+fn stressLayoutEnergyWithIdeal(positions: []const Point, distances: StressGraphDistances, ideal_length: f64) f64 {
     var energy: f64 = 0;
+    const ideal = validForceLength(ideal_length);
     for (positions, 0..) |position, from| {
         for (positions[from + 1 ..], from + 1..) |other, to| {
-            const pair = stressPairModel(distances, from, to);
+            const pair = stressPairModelWithIdeal(distances, from, to, ideal);
             const delta = std.math.hypot(position.x - other.x, position.y - other.y) - pair.desired;
             energy += pair.weight * delta * delta;
         }
@@ -7790,7 +7862,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
     try springElectricalRelax(graph, positions, displacements, options, anchors, stability, work);
     _ = applyGraphvizNormalize(graph, positions);
     fitStressPositionsToCanvas(positions, sizes, options);
-    if (previous == null) try removeForceNodeOverlaps(allocator, graph, positions, sizes);
+    if (previous == null) try removeForceNodeOverlaps(allocator, graph, positions, sizes, options.overlap_margin);
 
     for (nodes, 0..) |*node, id| {
         node.* = .{ .center = positions[id], .width = sizes[id].width, .height = sizes[id].height };
@@ -7816,7 +7888,7 @@ fn layoutSpringElectricalWithPrevious(allocator: std.mem.Allocator, graph: *cons
 
 fn springElectricalRelax(graph: *const Graph, positions: []Point, displacements: []Point, options: ForceLayoutOptions, anchors: []const Point, stability: f64, work: ?*LayoutWorkTracker) !void {
     if (positions.len == 0 or positions.len != displacements.len) return;
-    const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 0.3) * 240.0);
+    const spring_length = forceSpringLength(graph, options, 240.0);
     const default_temperature = spring_length * std.math.sqrt(@as(f64, @floatFromInt(positions.len))) / 5.0;
     const initial_temperature = parsePositiveAttrFloat(graph.attrs.items, "T0", default_temperature);
     const iterations = @max(options.iterations, 1);
@@ -7902,8 +7974,12 @@ fn applySpringClusterAttraction(graph: *const Graph, positions: []const Point, d
 }
 
 fn springElectricalEnergy(graph: *const Graph, positions: []const Point) f64 {
+    return springElectricalEnergyWithOptions(graph, positions, .{});
+}
+
+fn springElectricalEnergyWithOptions(graph: *const Graph, positions: []const Point, options: ForceLayoutOptions) f64 {
     if (positions.len == 0) return 0;
-    const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 0.3) * 240.0);
+    const spring_length = forceSpringLength(graph, options, 240.0);
     var energy: f64 = 0;
     for (positions, 0..) |position, left| {
         for (positions[left + 1 ..]) |other| {
@@ -8002,7 +8078,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
 
     const max_levels = parseAttrUsize(graph.attrs.items, "levels", 32);
     const repulsive_power = parsePositiveAttrFloat(graph.attrs.items, "repulsiveforce", 1.0);
-    const spring_length = @max(12.0, parsePositiveAttrFloat(graph.attrs.items, "K", 1.0) * 72.0);
+    const spring_length = forceSpringLength(graph, options, 72.0);
     const quadtree_options = sfdpQuadtreeOptions(graph.attrs.items);
     var result = try layout_mod.sfdp.layout(allocator, n, sfdp_edges[0..edge_count], .{
         .width = options.width,
@@ -8022,7 +8098,7 @@ fn layoutMultilevelSpringElectricalWithPrevious(allocator: std.mem.Allocator, gr
     work.work = result.work;
     if (applySfdpRotation(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
     if (applyGraphvizNormalize(graph, result.positions)) fitStressPositionsToCanvas(result.positions, sizes, options);
-    if (previous == null) try removeForceNodeOverlaps(allocator, graph, result.positions, sizes);
+    if (previous == null) try removeForceNodeOverlaps(allocator, graph, result.positions, sizes, options.overlap_margin);
 
     for (nodes, 0..) |*node, id| {
         var center = result.positions[id];
@@ -29308,6 +29384,30 @@ test "layout algorithm parser accepts Graphviz engine names" {
     try std.testing.expectEqual(LayoutAlgorithm.fruchterman_reingold, LayoutAlgorithm.fromString("fruchterman-reingold").?);
 }
 
+test "layout profiles provide centralized defaults" {
+    try std.testing.expectEqual(LayoutProfile.compact, LayoutProfile.fromString("compact").?);
+    try std.testing.expectEqual(LayoutProfile.balanced, LayoutProfile.fromString("default").?);
+    try std.testing.expectEqual(LayoutProfile.relaxed, LayoutProfile.fromString("relaxed").?);
+    try std.testing.expectEqual(LayoutProfile.presentation, LayoutProfile.fromString("airy").?);
+    try std.testing.expectEqualStrings("presentation", LayoutProfile.presentation.name());
+
+    const balanced = LayoutConfig.defaults(.balanced);
+    const direct = LayoutConfig{};
+    try std.testing.expectEqual(direct.layered.rank_gap, balanced.layered.rank_gap);
+    try std.testing.expectEqual(direct.layered.node_gap, balanced.layered.node_gap);
+    try std.testing.expectEqual(direct.force.width, balanced.force.width);
+    try std.testing.expectEqual(direct.force.spring_length, balanced.force.spring_length);
+
+    const compact = LayoutConfig.defaults(.compact);
+    const relaxed = LayoutConfig.defaults(.relaxed);
+    const presentation = LayoutConfig.defaults(.presentation);
+    try std.testing.expect(compact.layered.rank_gap < balanced.layered.rank_gap);
+    try std.testing.expect(relaxed.layered.rank_gap > balanced.layered.rank_gap);
+    try std.testing.expect(presentation.layered.rank_gap > relaxed.layered.rank_gap);
+    try std.testing.expect(relaxed.force.spring_length > balanced.force.spring_length);
+    try std.testing.expect(presentation.force.stress_ideal_length > relaxed.force.stress_ideal_length);
+}
+
 test "layoutGraph selects stress majorization from neato graph attr" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -29386,6 +29486,64 @@ test "Vex force iteration attrs override Graphviz maxiter" {
 
     const options = forceLayoutOptionsWithGraphAttrs(.{}, &graph);
     try std.testing.expectEqual(@as(usize, 40), options.iterations);
+}
+
+test "layout profiles leave DOT spacing attrs in control" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [ranksep=1.5, nodesep=1.25, K=0.5];
+        \\  a -> b -> c;
+        \\}
+    );
+    defer graph.deinit();
+
+    const relaxed = LayoutConfig.defaults(.relaxed);
+    const layered = layoutOptionsWithGraphAttrs(relaxed.layered, &graph);
+    try std.testing.expectApproxEqAbs(@as(f64, 108.0), layered.rank_gap, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 90.0), layered.node_gap, 0.000001);
+    try std.testing.expectApproxEqAbs(relaxed.force.stress_ideal_length, forceStressIdealLength(&graph, relaxed.force), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 120.0), forceSpringLength(&graph, relaxed.force, 240.0), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 36.0), forceSpringLength(&graph, relaxed.force, 72.0), 0.000001);
+
+    var plain = try Graph.init(allocator, .{ .directed = false });
+    defer plain.deinit();
+    try std.testing.expectApproxEqAbs(relaxed.force.stress_ideal_length, forceStressIdealLength(&plain, relaxed.force), 0.000001);
+    try std.testing.expectApproxEqAbs(relaxed.force.spring_length, forceSpringLength(&plain, relaxed.force, 240.0), 0.000001);
+}
+
+test "relaxed profile increases layout spacing" {
+    const allocator = std.testing.allocator;
+    var layered_graph = try parseDot(allocator, "digraph G { a -> b; }");
+    defer layered_graph.deinit();
+
+    var balanced_layered = try layoutGraph(allocator, &layered_graph, .{ .algorithm = .sugiyama });
+    defer balanced_layered.deinit();
+    var relaxed_layered = try layoutGraph(allocator, &layered_graph, blk: {
+        var config = LayoutConfig.defaults(.relaxed);
+        config.algorithm = .sugiyama;
+        break :blk config;
+    });
+    defer relaxed_layered.deinit();
+    const balanced_rank_distance = @abs(balanced_layered.nodes[1].center.y - balanced_layered.nodes[0].center.y);
+    const relaxed_rank_distance = @abs(relaxed_layered.nodes[1].center.y - relaxed_layered.nodes[0].center.y);
+    try std.testing.expect(relaxed_rank_distance > balanced_rank_distance);
+
+    var force_graph = try parseDot(allocator, "graph G { a -- b; }");
+    defer force_graph.deinit();
+    var balanced_fdp = try layoutGraph(allocator, &force_graph, .{
+        .algorithm = .spring_electrical,
+        .force = .{ .width = 1200, .height = 800, .margin = 20, .iterations = 80 },
+    });
+    defer balanced_fdp.deinit();
+    var relaxed_fdp = try layoutGraph(allocator, &force_graph, .{
+        .algorithm = .spring_electrical,
+        .force = .{ .width = 1200, .height = 800, .margin = 20, .iterations = 80, .spring_length = 128 },
+    });
+    defer relaxed_fdp.deinit();
+    const balanced_edge = distanceBetween(balanced_fdp.nodes[0].center, balanced_fdp.nodes[1].center);
+    const relaxed_edge = distanceBetween(relaxed_fdp.nodes[0].center, relaxed_fdp.nodes[1].center);
+    try std.testing.expect(relaxed_edge > balanced_edge);
 }
 
 test "force layouts honor Graphviz start random seed" {

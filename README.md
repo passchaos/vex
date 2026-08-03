@@ -118,6 +118,12 @@ for fast previews or large graph workflows; DOT can set the same budget with
 `graph [layout_iterations=20]`; force-style Graphviz input can also use
 `graph [maxiter=20]`, and the Zig API can pass
 `.{ .force = .{ .iterations = 20 } }`.
+`--layout-profile compact|balanced|relaxed|presentation` selects a centralized
+set of Vex defaults before CLI overrides and DOT graph attributes are applied.
+`balanced` preserves the existing defaults, while `relaxed` and `presentation`
+increase the default layered spacing, force-layout canvas, ideal edge length,
+and force overlap margin. The Zig API can use
+`LayoutConfig.defaults(.relaxed)` and then override individual fields.
 `--layout-work-budget` provides a deterministic cross-engine cancellation
 budget for CI and bounded previews. The Zig API can use a custom
 `LayoutControl` callback or the built-in `LayoutWorkBudget`; cancellation
