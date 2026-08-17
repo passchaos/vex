@@ -68,6 +68,7 @@ pub const EdgeStyle = enum {
     bold,
     dashed,
     dotted,
+    rounded,
     invis,
 
     pub fn name(self: EdgeStyle) []const u8 {
@@ -76,6 +77,7 @@ pub const EdgeStyle = enum {
             .bold => "bold",
             .dashed => "dashed",
             .dotted => "dotted",
+            .rounded => "rounded",
             .invis => "invis",
         };
     }

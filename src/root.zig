@@ -492,6 +492,7 @@ pub const EdgeOptions = struct {
     style: ?EdgeStyle = null,
     styles: []const EdgeStyle = &.{},
     penwidth: ?f64 = null,
+    radius: ?f64 = null,
     weight: ?f64 = null,
     constraint: ?bool = null,
     min_len: ?usize = null,
@@ -569,6 +570,7 @@ pub const EdgeAttr = union(enum) {
     style: EdgeStyle,
     styles: []const EdgeStyle,
     penwidth: f64,
+    radius: f64,
     weight: f64,
     constraint: bool,
     min_len: usize,
@@ -1468,6 +1470,7 @@ pub const Graph = struct {
             .style => |value| try self.setDefaultEdgeAttrRaw("style", value.name()),
             .styles => |values| try setDefaultEdgeStylesAttrRaw(self, values),
             .penwidth => |value| try self.setDefaultEdgeAttrFloat("penwidth", value),
+            .radius => |value| try self.setDefaultEdgeAttrFloat("radius", value),
             .weight => |value| try self.setDefaultEdgeAttrFloat("weight", value),
             .constraint => |value| try self.setDefaultEdgeAttrRaw("constraint", boolAttrValue(value)),
             .min_len => |value| {
@@ -1772,6 +1775,7 @@ pub const Graph = struct {
         if (options.style) |value| try self.setEdgeAttr(id, .{ .style = value });
         if (options.styles.len > 0) try self.setEdgeAttr(id, .{ .styles = options.styles });
         if (options.penwidth) |value| try self.setEdgeAttr(id, .{ .penwidth = value });
+        if (options.radius) |value| try self.setEdgeAttr(id, .{ .radius = value });
         if (options.weight) |value| try self.setEdgeAttr(id, .{ .weight = value });
         if (options.constraint) |value| try self.setEdgeAttr(id, .{ .constraint = value });
         if (options.min_len) |value| try self.setEdgeAttr(id, .{ .min_len = value });
@@ -1848,6 +1852,7 @@ pub const Graph = struct {
             .style => |value| try self.setEdgeAttrRaw(id, "style", value.name()),
             .styles => |values| try setEdgeStylesAttrRaw(self, id, values),
             .penwidth => |value| try self.setEdgeAttrFloat(id, "penwidth", value),
+            .radius => |value| try self.setEdgeAttrFloat(id, "radius", value),
             .weight => |value| try self.setEdgeAttrFloat(id, "weight", value),
             .constraint => |value| try self.setEdgeAttrRaw(id, "constraint", boolAttrValue(value)),
             .min_len => |value| {
@@ -28437,7 +28442,13 @@ fn writeEdgePath(writer: *Io.Writer, layout: *const Layout, edge_item: Edge, ran
     if (routing == .ortho) {
         const start = shortenPointToward(direct_route.start, direct_route.control1, path_clip.tail);
         const end = shortenPointToward(direct_route.end, direct_route.control2, path_clip.head);
-        try writeOrthoEdgePath(writer, start, end, rankdir);
+        try writeOrthoEdgePath(
+            writer,
+            start,
+            end,
+            rankdir,
+            edgeOrthoCornerRadius(edge_item),
+        );
         return;
     }
     if (isBackEdge(layout, edge_item)) {
@@ -28836,19 +28847,112 @@ fn graphvizAdjacentPathRouteEnabled(layout: *const Layout, edge_item: Edge) bool
     return true;
 }
 
-fn writeOrthoEdgePath(writer: *Io.Writer, start: Point, end: Point, rankdir: RankDir) Io.Writer.Error!void {
+fn edgeOrthoCornerRadius(edge_item: Edge) f64 {
+    if (attrValue(edge_item.attrs.items, "radius")) |raw_radius| {
+        const radius = std.fmt.parseFloat(f64, raw_radius) catch return 0;
+        return if (std.math.isFinite(radius) and radius > 0) radius else 0;
+    }
+    if (!styleHas(attrValue(edge_item.attrs.items, "style"), "rounded")) return 0;
+    const bold = styleHas(attrValue(edge_item.attrs.items, "style"), "bold");
+    const pen_width = parseAttrFloat(edge_item.attrs.items, "penwidth", if (bold) 3.0 else 1.0);
+    return @max(12.0, pen_width * 8.0);
+}
+
+fn writeOrthoEdgePath(
+    writer: *Io.Writer,
+    start: Point,
+    end: Point,
+    rankdir: RankDir,
+    radius: f64,
+) Io.Writer.Error!void {
+    if (radius <= 0.001) {
+        if (rankdir == .LR or rankdir == .RL) {
+            const mid_x = (start.x + end.x) / 2.0;
+            try writePathMove(writer, start);
+            try writePathLine(writer, .{ .x = mid_x, .y = start.y });
+            try writePathLine(writer, .{ .x = mid_x, .y = end.y });
+            try writePathLine(writer, end);
+        } else {
+            const mid_y = (start.y + end.y) / 2.0;
+            try writePathMove(writer, start);
+            try writePathLine(writer, .{ .x = start.x, .y = mid_y });
+            try writePathLine(writer, .{ .x = end.x, .y = mid_y });
+            try writePathLine(writer, end);
+        }
+        return;
+    }
+    var raw_points: [4]Point = undefined;
     if (rankdir == .LR or rankdir == .RL) {
         const mid_x = (start.x + end.x) / 2.0;
-        try writePathMove(writer, start);
-        try writePathLine(writer, .{ .x = mid_x, .y = start.y });
-        try writePathLine(writer, .{ .x = mid_x, .y = end.y });
-        try writePathLine(writer, end);
+        raw_points = .{
+            start,
+            .{ .x = mid_x, .y = start.y },
+            .{ .x = mid_x, .y = end.y },
+            end,
+        };
     } else {
         const mid_y = (start.y + end.y) / 2.0;
-        try writePathMove(writer, start);
-        try writePathLine(writer, .{ .x = start.x, .y = mid_y });
-        try writePathLine(writer, .{ .x = end.x, .y = mid_y });
-        try writePathLine(writer, end);
+        raw_points = .{
+            start,
+            .{ .x = start.x, .y = mid_y },
+            .{ .x = end.x, .y = mid_y },
+            end,
+        };
+    }
+    var points: [4]Point = undefined;
+    var count: usize = 0;
+    for (raw_points) |point| {
+        if (count > 0 and distanceBetween(points[count - 1], point) <= 0.001) continue;
+        points[count] = point;
+        count += 1;
+    }
+    try writeRoundedOrthogonalPolyline(writer, points[0..count], radius);
+}
+
+fn writeRoundedOrthogonalPolyline(
+    writer: *Io.Writer,
+    points: []const Point,
+    radius: f64,
+) Io.Writer.Error!void {
+    if (points.len == 0) return;
+    try writePathMove(writer, points[0]);
+    if (points.len == 1) return;
+    if (radius <= 0.001) {
+        for (points[1..]) |point| try writePathLine(writer, point);
+        return;
+    }
+    var current = points[0];
+    for (points[1 .. points.len - 1], 1..) |corner, index| {
+        const previous = points[index - 1];
+        const next = points[index + 1];
+        const incoming = Point{ .x = corner.x - previous.x, .y = corner.y - previous.y };
+        const outgoing = Point{ .x = next.x - corner.x, .y = next.y - corner.y };
+        const incoming_len = std.math.hypot(incoming.x, incoming.y);
+        const outgoing_len = std.math.hypot(outgoing.x, outgoing.y);
+        const orthogonal =
+            ((@abs(incoming.y) <= 0.001 and @abs(outgoing.x) <= 0.001) or
+                (@abs(incoming.x) <= 0.001 and @abs(outgoing.y) <= 0.001)) and
+            incoming_len > 0.001 and outgoing_len > 0.001;
+        if (!orthogonal) {
+            try writePathLine(writer, corner);
+            current = corner;
+            continue;
+        }
+        const clamped = @min(radius, @min(incoming_len / 2.0, outgoing_len / 2.0));
+        const entry = Point{
+            .x = corner.x - incoming.x / incoming_len * clamped,
+            .y = corner.y - incoming.y / incoming_len * clamped,
+        };
+        const exit = Point{
+            .x = corner.x + outgoing.x / outgoing_len * clamped,
+            .y = corner.y + outgoing.y / outgoing_len * clamped,
+        };
+        if (distanceBetween(current, entry) > 0.001) try writePathLine(writer, entry);
+        try writePathQuadratic(writer, corner, exit);
+        current = exit;
+    }
+    if (distanceBetween(current, points[points.len - 1]) > 0.001) {
+        try writePathLine(writer, points[points.len - 1]);
     }
 }
 
@@ -29201,6 +29305,14 @@ fn writePathMovePrecise(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
 
 fn writePathLine(writer: *Io.Writer, point: Point) Io.Writer.Error!void {
     try svg_mod.writer.pathLine(writer, .{ .x = point.x, .y = point.y });
+}
+
+fn writePathQuadratic(writer: *Io.Writer, control: Point, end: Point) Io.Writer.Error!void {
+    try svg_mod.writer.pathQuadratic(
+        writer,
+        .{ .x = control.x, .y = control.y },
+        .{ .x = end.x, .y = end.y },
+    );
 }
 
 fn writePathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
@@ -46244,6 +46356,81 @@ test "SVG renderer honors DOT splines graph attribute" {
     defer allocator.free(none_svg);
     try std.testing.expect(svgPathCommandCount(none_svg, 'C') == 0);
     try std.testing.expect(svgPathCommandCount(none_svg, 'L') >= 1);
+}
+
+test "SVG renderer rounds orthogonal edges with style and radius" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [splines=ortho, rankdir=TB];
+        \\  a -> b [style=rounded, label=default];
+        \\  a -> c [style=rounded, radius=7, penwidth=2, label=explicit];
+        \\  b -> d [radius=8, label=radius_only];
+        \\  c -> d [style=rounded, radius=0, label=disabled];
+        \\}
+    );
+    defer graph.deinit();
+    var layout = try layoutLayered(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+
+    const default_fragment = svgGroupFragmentByTitle(svg, "a-&gt;b") orelse return error.MissingDefaultRoundedEdge;
+    const explicit_fragment = svgGroupFragmentByTitle(svg, "a-&gt;c") orelse return error.MissingExplicitRoundedEdge;
+    const radius_fragment = svgGroupFragmentByTitle(svg, "b-&gt;d") orelse return error.MissingRadiusRoundedEdge;
+    const disabled_fragment = svgGroupFragmentByTitle(svg, "c-&gt;d") orelse return error.MissingDisabledRoundedEdge;
+    try std.testing.expect(pathDataCommandCount(default_fragment, 'Q') >= 1);
+    try std.testing.expect(pathDataCommandCount(explicit_fragment, 'Q') >= 1);
+    try std.testing.expect(pathDataCommandCount(radius_fragment, 'Q') >= 1);
+    try std.testing.expectEqual(@as(usize, 0), pathDataCommandCount(disabled_fragment, 'Q'));
+    try std.testing.expectEqualStrings("rounded", attrValue(graph.edges.items[0].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("7", attrValue(graph.edges.items[1].attrs.items, "radius").?);
+    try std.testing.expectApproxEqAbs(@as(f64, 12), edgeOrthoCornerRadius(graph.edges.items[0]), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 7), edgeOrthoCornerRadius(graph.edges.items[1]), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 8), edgeOrthoCornerRadius(graph.edges.items[2]), 0.001);
+    try std.testing.expectEqual(@as(f64, 0), edgeOrthoCornerRadius(graph.edges.items[3]));
+}
+
+test "typed rounded orthogonal edges preserve endpoints and clamp short corners" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .splines = .ortho });
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const edge = try graph.addEdge(a, b, .{
+        .styles = &.{ .rounded, .dashed },
+        .radius = 1000,
+    });
+    try std.testing.expectEqualStrings("rounded,dashed", attrValue(graph.edges.items[edge].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("1000", attrValue(graph.edges.items[edge].attrs.items, "radius").?);
+
+    var rounded = Io.Writer.Allocating.init(allocator);
+    defer rounded.deinit();
+    const points = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 10, .y = 0 },
+        .{ .x = 10, .y = 6 },
+        .{ .x = 20, .y = 6 },
+    };
+    try writeRoundedOrthogonalPolyline(&rounded.writer, points[0..], 1000);
+    const rounded_path = try rounded.toOwnedSlice();
+    defer allocator.free(rounded_path);
+    try std.testing.expectEqualStrings("M0,0L7,0Q10,0 10,3Q10,6 13,6L20,6", rounded_path);
+
+    var straight = Io.Writer.Allocating.init(allocator);
+    defer straight.deinit();
+    try writeRoundedOrthogonalPolyline(&straight.writer, points[0..], 0);
+    const straight_path = try straight.toOwnedSlice();
+    defer allocator.free(straight_path);
+    try std.testing.expectEqualStrings("M0,0L10,0L10,6L20,6", straight_path);
+
+    try graph.setGraphAttr(.{ .splines = .line });
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer layout.deinit();
+    const svg = try renderAlloc(allocator, &layout, .svg, .{});
+    defer allocator.free(svg);
+    try std.testing.expectEqual(@as(usize, 0), svgPathCommandCount(svg, 'Q'));
 }
 
 test "SVG renderer honors subgraph splines for internal edges" {

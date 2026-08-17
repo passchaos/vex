@@ -16,7 +16,9 @@ pub fn main(init: std.process.Init) !void {
     });
     defer graph.deinit();
     try graph.setGraphAttr(.{ .label = "Typed layers and columns" });
-    try graph.setGraphAttr(.{ .splines = .curved });
+    try graph.setGraphAttr(.{ .splines = .ortho });
+    try graph.setDefaultEdgeAttr(.{ .style = .rounded });
+    try graph.setDefaultEdgeAttr(.{ .radius = 10 });
 
     const ingest = try graph.addNode("Ingest", .{});
     const parse = try graph.addNode("Parse", .{});
@@ -29,10 +31,12 @@ pub fn main(init: std.process.Init) !void {
     const alert = try graph.addNode("Alert", .{});
 
     const ingest_enrich = try graph.addEdge(ingest, enrich, .{ .label = "accepted" });
+    _ = try graph.addEdge(ingest, validate, .{ .label = "inspect" });
     _ = try graph.addEdge(parse, validate, .{});
     _ = try graph.addEdge(reject, retry, .{});
     const enrich_store = try graph.addEdge(enrich, store, .{ .label = "ready" });
     _ = try graph.addEdge(validate, publish, .{});
+    _ = try graph.addEdge(validate, alert, .{ .label = "escalate" });
     _ = try graph.addEdge(retry, alert, .{});
 
     try graph.addNodeLayer(&.{ ingest, parse, reject });

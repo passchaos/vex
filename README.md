@@ -387,6 +387,24 @@ column, or cyclic column ordering return explicit errors instead of silently
 weakening the constraint. `nodeLayers()` and `nodeColumns()` expose the model,
 and SVG metadata publishes columns under `<vex:node-columns>`.
 
+Graphplot's `Technical(radius)` line style and the local Graphviz rounded-ortho
+extension are available through orthogonal routing plus edge rounding:
+
+```zig
+try graph.setGraphAttr(.{ .splines = .ortho });
+try graph.setDefaultEdgeAttr(.{ .style = .rounded });
+try graph.setDefaultEdgeAttr(.{ .radius = 10 });
+```
+
+DOT can use the equivalent `graph [splines=ortho]` and edge
+`style=rounded` / `radius=N` attrs. An explicit positive radius enables
+rounding and overrides the style-derived radius; `radius=0` disables rounding.
+Without an explicit radius, `style=rounded` follows the Graphviz default
+`max(12, penwidth * 8)`. Each 90-degree corner is rendered as a single SVG
+quadratic segment and its radius is clamped to half of each adjacent segment,
+so short technical routes cannot self-intersect. Non-ortho routes ignore these
+attrs and retain their original geometry.
+
 Default node, edge, and subgraph attributes set through the API apply to
 subsequently added items, with per-item options taking precedence. Typed graph
 attributes include spline routing modes such as `curved`, `polyline`, `line`,

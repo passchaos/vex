@@ -139,6 +139,13 @@ pub fn pathLine(writer: *Io.Writer, value: Point) Io.Writer.Error!void {
     try pathPoint(writer, value);
 }
 
+pub fn pathQuadratic(writer: *Io.Writer, control: Point, end: Point) Io.Writer.Error!void {
+    try writer.writeByte('Q');
+    try pathPoint(writer, control);
+    try writer.writeByte(' ');
+    try pathPoint(writer, end);
+}
+
 pub fn pathCubic(writer: *Io.Writer, c1: Point, c2: Point, end: Point) Io.Writer.Error!void {
     try writer.writeByte('C');
     try pathPoint(writer, c1);
