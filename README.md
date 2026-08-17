@@ -32,6 +32,7 @@ zig build run -- --input examples/subgraph.dot --output subgraph.svg
 zig build run -- --input examples/mainstream.dot --format svg
 zig build run -- --input examples/simple.dot --max-input-bytes 1048576 --output simple.svg
 zig build run -- --input examples/simple.dot --layout neato --output force.svg
+zig build run -- --input examples/simple.dot --theme dark --output dark.svg
 zig build run -- --input examples/simple.dot --layout neato --layout-iterations 20 --output force-fast.svg
 zig build run -- --input examples/simple.dot --layout-work-budget 50000 --output budgeted.svg
 zig build run -- --input examples/simple.dot --crossing-passes 2 --coordinate-passes 1 --output layered-fast.svg
@@ -347,6 +348,24 @@ Explicit object options take precedence. `setDefaultNodeAttr`,
 `setDefaultEdgeAttr`, and `setDefaultSubgraphAttr` can further refine each
 default surface. Light and dark themes choose the `relaxed` layout profile;
 print chooses `balanced`.
+
+DOT and CLI consumers can use the same themes without rebuilding graph objects:
+
+```dot
+digraph G {
+  graph [theme=dark];
+  a -> b [label="events"];
+}
+```
+
+`--theme light|dark|print` applies the selected theme before parsing DOT or
+Mermaid objects, so theme defaults are inherited at creation time. It overrides
+an input-level `theme` declaration, while explicit graph/node/edge/subgraph
+visual attrs still take precedence over individual theme tokens. Without an
+explicit `--layout-profile`, CLI light/dark themes select `relaxed` and print
+selects `balanced`; an explicit profile always wins. A DOT `theme=` statement
+without the CLI override follows declaration order and affects subsequently
+created objects.
 
 Graphplot-style static emphasis is available through `highlightNode`,
 `highlightNodes`, `highlightEdge`, and `highlightEdges`; the matching

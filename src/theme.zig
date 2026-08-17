@@ -8,6 +8,17 @@ pub const Theme = enum {
     dark,
     print,
 
+    pub fn fromString(value: []const u8) ?Theme {
+        if (std.ascii.eqlIgnoreCase(value, "light")) return .light;
+        if (std.ascii.eqlIgnoreCase(value, "dark")) return .dark;
+        if (std.ascii.eqlIgnoreCase(value, "print")) return .print;
+        return null;
+    }
+
+    pub fn name(self: Theme) []const u8 {
+        return @tagName(self);
+    }
+
     pub fn tokens(self: Theme) Tokens {
         return switch (self) {
             .light => .{},

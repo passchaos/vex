@@ -208,6 +208,12 @@ pub const GraphOptions = struct {
     theme: ?VisualTheme = null,
 };
 
+pub const ParseOptions = struct {
+    /// Applied before object creation and treated as an override for any
+    /// input-level `theme` declaration. Individual visual attrs still win.
+    theme: ?VisualTheme = null,
+};
+
 pub const LabelJust = svg_mod.text.LabelJust;
 pub const LabelLoc = svg_mod.text.LabelLoc;
 
@@ -264,6 +270,7 @@ const svg_metadata_features = "attributes edge-geometry edge-layout edge-paths e
 
 pub const GraphAttr = union(enum) {
     label: []const u8,
+    theme: VisualTheme,
     label_position: Point,
     rankdir: RankDir,
     layout: LayoutAlgorithm,
@@ -1163,6 +1170,7 @@ pub const Graph = struct {
     pub fn setGraphAttr(self: *Graph, attr: GraphAttr) !void {
         switch (attr) {
             .label => |value| try self.setGraphAttrRaw("label", value),
+            .theme => |value| try self.applyTheme(value),
             .label_position => |value| try self.setGraphPointAttr("lp", value),
             .rankdir => |value| {
                 self.rankdir = value;
@@ -1293,10 +1301,17 @@ pub const Graph = struct {
     pub fn applyTheme(self: *Graph, visual_theme: VisualTheme) !void {
         const tokens = visual_theme.tokens();
 
-        try self.setGraphAttr(.{ .bgcolor = tokens.graph_background });
-        try self.setGraphAttr(.{ .fontcolor = tokens.graph_font });
-        try self.setGraphAttr(.{ .fontname = tokens.graph_font_name });
-        try self.setGraphAttr(.{ .fontsize = tokens.graph_font_size });
+        try setAttrInList(self.allocator, &self.attrs, "bgcolor", tokens.graph_background);
+        try setAttrInList(self.allocator, &self.attrs, "fontcolor", tokens.graph_font);
+        try setAttrInList(self.allocator, &self.attrs, "fontname", tokens.graph_font_name);
+        var graph_font_size: [64]u8 = undefined;
+        try setAttrInList(
+            self.allocator,
+            &self.attrs,
+            "fontsize",
+            try std.fmt.bufPrint(&graph_font_size, "{d}", .{tokens.graph_font_size}),
+        );
+        try setAttrInList(self.allocator, &self.attrs, "theme", visual_theme.name());
 
         try self.setDefaultNodeAttr(.{ .shape = .box });
         try self.setDefaultNodeAttr(.{ .styles = &.{ .filled, .rounded } });
@@ -1342,6 +1357,8 @@ pub const Graph = struct {
     fn setGraphAttrRaw(self: *Graph, name: []const u8, value: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(name, "rankdir")) {
             if (RankDir.fromString(value)) |rankdir| self.rankdir = rankdir;
+        } else if (std.ascii.eqlIgnoreCase(name, "theme")) {
+            if (VisualTheme.fromString(value)) |visual_theme| try self.applyTheme(visual_theme);
         }
         try setAttrInList(self.allocator, &self.attrs, name, value);
     }
@@ -2817,6 +2834,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     lexer: Lexer,
     current: Token,
+    initial_theme: ?VisualTheme = null,
     collectors: std.ArrayList(*NodeSet) = .empty,
     rank_scopes: std.ArrayList(*?RankKind) = .empty,
     subgraph_scopes: std.ArrayList(?*AttrList) = .empty,
@@ -2841,12 +2859,17 @@ const Parser = struct {
     lex_error: ?anyerror = null,
 
     fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
+        return initWithOptions(allocator, source, .{});
+    }
+
+    fn initWithOptions(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !Parser {
         var lexer: Lexer = .{ .source = source };
         const first = try lexer.next();
         return .{
             .allocator = allocator,
             .lexer = lexer,
             .current = first,
+            .initial_theme = options.theme,
             .node_index = std.StringHashMap(NodeId).init(allocator),
             .edge_key_index = std.StringHashMap(EdgeId).init(allocator),
         };
@@ -2889,9 +2912,13 @@ const Parser = struct {
             try self.allocator.dupe(u8, "G");
         defer self.allocator.free(parsed_name);
 
-        var graph = try Graph.init(self.allocator, .{ .directed = directed, .strict = strict, .name = parsed_name });
+        var graph = try Graph.init(self.allocator, .{
+            .directed = directed,
+            .strict = strict,
+            .name = parsed_name,
+            .theme = self.initial_theme,
+        });
         errdefer graph.deinit();
-
         try self.expect(.lbrace);
         try self.parseStmtList(&graph);
         try self.expect(.rbrace);
@@ -3462,6 +3489,7 @@ const Parser = struct {
     }
 
     fn setParsedGraphAttr(self: *Parser, graph: *Graph, attr: ParsedAttr) !void {
+        if (std.ascii.eqlIgnoreCase(attr.name, "theme") and self.initial_theme != null) return;
         if (std.ascii.eqlIgnoreCase(attr.name, "label")) {
             const expanded = try expandLabelEscapes(self.allocator, attr.value, .{ .graph_name = graph.name, .label_name = attr.value });
             defer self.allocator.free(expanded);
@@ -4055,12 +4083,20 @@ fn expandLabelEscapes(allocator: std.mem.Allocator, value: []const u8, context: 
 }
 
 pub fn parseDot(allocator: std.mem.Allocator, source: []const u8) !Graph {
-    var parser = try Parser.init(allocator, source);
+    return parseDotWithOptions(allocator, source, .{});
+}
+
+pub fn parseDotWithOptions(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !Graph {
+    var parser = try Parser.initWithOptions(allocator, source, options);
     return parser.parse();
 }
 
 pub fn parseDotGraphs(allocator: std.mem.Allocator, source: []const u8) !GraphStream {
-    var parser = try Parser.init(allocator, source);
+    return parseDotGraphsWithOptions(allocator, source, .{});
+}
+
+pub fn parseDotGraphsWithOptions(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !GraphStream {
+    var parser = try Parser.initWithOptions(allocator, source, options);
     defer parser.deinit();
     var graphs = std.ArrayList(Graph).empty;
     errdefer {
@@ -4080,7 +4116,17 @@ pub fn visitDotGraphs(
     context: anytype,
     comptime visit: anytype,
 ) !usize {
-    var parser = try Parser.init(allocator, source);
+    return visitDotGraphsWithOptions(allocator, source, .{}, context, visit);
+}
+
+pub fn visitDotGraphsWithOptions(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    options: ParseOptions,
+    context: anytype,
+    comptime visit: anytype,
+) !usize {
+    var parser = try Parser.initWithOptions(allocator, source, options);
     defer parser.deinit();
     var count: usize = 0;
     while (parser.current.tag != .eof) {
@@ -4093,7 +4139,11 @@ pub fn visitDotGraphs(
 }
 
 pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !ParseResult {
-    var parser = Parser.init(allocator, source) catch |err| {
+    return parseDotDiagnosticWithOptions(allocator, source, .{});
+}
+
+pub fn parseDotDiagnosticWithOptions(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !ParseResult {
+    var parser = Parser.initWithOptions(allocator, source, options) catch |err| {
         return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
     };
     const graph = parser.parse() catch |err| {
@@ -4103,7 +4153,11 @@ pub fn parseDotDiagnostic(allocator: std.mem.Allocator, source: []const u8) !Par
 }
 
 pub fn parseDotGraphsDiagnostic(allocator: std.mem.Allocator, source: []const u8) !ParseGraphStreamResult {
-    var parser = Parser.init(allocator, source) catch |err| {
+    return parseDotGraphsDiagnosticWithOptions(allocator, source, .{});
+}
+
+pub fn parseDotGraphsDiagnosticWithOptions(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !ParseGraphStreamResult {
+    var parser = Parser.initWithOptions(allocator, source, options) catch |err| {
         return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
     };
     defer parser.deinit();
@@ -4131,7 +4185,17 @@ pub fn visitDotGraphsDiagnostic(
     context: anytype,
     comptime visit: anytype,
 ) !VisitGraphStreamResult {
-    var parser = Parser.init(allocator, source) catch |err| {
+    return visitDotGraphsDiagnosticWithOptions(allocator, source, .{}, context, visit);
+}
+
+pub fn visitDotGraphsDiagnosticWithOptions(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    options: ParseOptions,
+    context: anytype,
+    comptime visit: anytype,
+) !VisitGraphStreamResult {
+    var parser = Parser.initWithOptions(allocator, source, options) catch |err| {
         return .{ .diagnostic = try parseDiagnosticFromLexerError(allocator, source, err) };
     };
     defer parser.deinit();
@@ -4148,6 +4212,15 @@ pub fn visitDotGraphsDiagnostic(
 }
 
 pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max_diagnostics: usize) !ParseDiagnostics {
+    return parseDotDiagnosticsWithOptions(allocator, source, max_diagnostics, .{});
+}
+
+pub fn parseDotDiagnosticsWithOptions(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    max_diagnostics: usize,
+    options: ParseOptions,
+) !ParseDiagnostics {
     if (max_diagnostics == 0) {
         return .{ .allocator = allocator, .items = try allocator.alloc(ParseDiagnostic, 0) };
     }
@@ -4157,7 +4230,7 @@ pub fn parseDotDiagnostics(allocator: std.mem.Allocator, source: []const u8, max
         diagnostics.deinit(allocator);
     }
 
-    var parser = Parser.init(allocator, source) catch |err| {
+    var parser = Parser.initWithOptions(allocator, source, options) catch |err| {
         try diagnostics.append(allocator, try parseDiagnosticFromLexerError(allocator, source, err));
         return .{ .allocator = allocator, .items = try diagnostics.toOwnedSlice(allocator) };
     };
@@ -4198,7 +4271,12 @@ fn parseDotGraphDiagnostics(
     else
         try allocator.dupe(u8, "G");
     defer allocator.free(parsed_name);
-    var graph = try Graph.init(allocator, .{ .directed = directed, .strict = strict, .name = parsed_name });
+    var graph = try Graph.init(allocator, .{
+        .directed = directed,
+        .strict = strict,
+        .name = parsed_name,
+        .theme = parser.initial_theme,
+    });
     defer graph.deinit();
 
     parser.expect(.lbrace) catch |err| {
@@ -4328,21 +4406,29 @@ pub const InputFormat = enum {
 };
 
 pub fn parseInput(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !Graph {
+    return parseInputWithOptions(allocator, source, format, .{});
+}
+
+pub fn parseInputWithOptions(allocator: std.mem.Allocator, source: []const u8, format: InputFormat, options: ParseOptions) !Graph {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
-        .dot => parseDot(allocator, source),
-        .mermaid => parseMermaid(allocator, source),
+        .dot => parseDotWithOptions(allocator, source, options),
+        .mermaid => parseMermaidWithOptions(allocator, source, options),
     };
 }
 
 pub fn parseInputGraphs(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !GraphStream {
+    return parseInputGraphsWithOptions(allocator, source, format, .{});
+}
+
+pub fn parseInputGraphsWithOptions(allocator: std.mem.Allocator, source: []const u8, format: InputFormat, options: ParseOptions) !GraphStream {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
-        .dot => parseDotGraphs(allocator, source),
+        .dot => parseDotGraphsWithOptions(allocator, source, options),
         .mermaid => blk: {
             const items = try allocator.alloc(Graph, 1);
             errdefer allocator.free(items);
-            items[0] = try parseMermaid(allocator, source);
+            items[0] = try parseMermaidWithOptions(allocator, source, options);
             break :blk .{ .allocator = allocator, .items = items };
         },
     };
@@ -4355,11 +4441,22 @@ pub fn visitInputGraphs(
     context: anytype,
     comptime visit: anytype,
 ) !usize {
+    return visitInputGraphsWithOptions(allocator, source, format, .{}, context, visit);
+}
+
+pub fn visitInputGraphsWithOptions(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    format: InputFormat,
+    options: ParseOptions,
+    context: anytype,
+    comptime visit: anytype,
+) !usize {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
-        .dot => visitDotGraphs(allocator, source, context, visit),
+        .dot => visitDotGraphsWithOptions(allocator, source, options, context, visit),
         .mermaid => blk: {
-            var graph = try parseMermaid(allocator, source);
+            var graph = try parseMermaidWithOptions(allocator, source, options);
             defer graph.deinit();
             try visit(context, &graph);
             break :blk 1;
@@ -4368,21 +4465,29 @@ pub fn visitInputGraphs(
 }
 
 pub fn parseInputDiagnostic(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !ParseResult {
+    return parseInputDiagnosticWithOptions(allocator, source, format, .{});
+}
+
+pub fn parseInputDiagnosticWithOptions(allocator: std.mem.Allocator, source: []const u8, format: InputFormat, options: ParseOptions) !ParseResult {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
-        .dot => parseDotDiagnostic(allocator, source),
-        .mermaid => .{ .graph = try parseMermaid(allocator, source) },
+        .dot => parseDotDiagnosticWithOptions(allocator, source, options),
+        .mermaid => .{ .graph = try parseMermaidWithOptions(allocator, source, options) },
     };
 }
 
 pub fn parseInputGraphsDiagnostic(allocator: std.mem.Allocator, source: []const u8, format: InputFormat) !ParseGraphStreamResult {
+    return parseInputGraphsDiagnosticWithOptions(allocator, source, format, .{});
+}
+
+pub fn parseInputGraphsDiagnosticWithOptions(allocator: std.mem.Allocator, source: []const u8, format: InputFormat, options: ParseOptions) !ParseGraphStreamResult {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
-        .dot => parseDotGraphsDiagnostic(allocator, source),
+        .dot => parseDotGraphsDiagnosticWithOptions(allocator, source, options),
         .mermaid => blk: {
             const items = try allocator.alloc(Graph, 1);
             errdefer allocator.free(items);
-            items[0] = try parseMermaid(allocator, source);
+            items[0] = try parseMermaidWithOptions(allocator, source, options);
             break :blk .{ .graphs = .{ .allocator = allocator, .items = items } };
         },
     };
@@ -4395,11 +4500,22 @@ pub fn visitInputGraphsDiagnostic(
     context: anytype,
     comptime visit: anytype,
 ) !VisitGraphStreamResult {
+    return visitInputGraphsDiagnosticWithOptions(allocator, source, format, .{}, context, visit);
+}
+
+pub fn visitInputGraphsDiagnosticWithOptions(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    format: InputFormat,
+    options: ParseOptions,
+    context: anytype,
+    comptime visit: anytype,
+) !VisitGraphStreamResult {
     return switch (if (format == .auto) detectInputFormat(source) else format) {
         .auto => unreachable,
-        .dot => visitDotGraphsDiagnostic(allocator, source, context, visit),
+        .dot => visitDotGraphsDiagnosticWithOptions(allocator, source, options, context, visit),
         .mermaid => blk: {
-            var graph = try parseMermaid(allocator, source);
+            var graph = try parseMermaidWithOptions(allocator, source, options);
             defer graph.deinit();
             try visit(context, &graph);
             break :blk .{ .complete = 1 };
@@ -4419,8 +4535,12 @@ pub fn detectInputFormat(source: []const u8) InputFormat {
 }
 
 pub fn parseMermaid(allocator: std.mem.Allocator, source: []const u8) !Graph {
+    return parseMermaidWithOptions(allocator, source, .{});
+}
+
+pub fn parseMermaidWithOptions(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !Graph {
     var lines = std.mem.splitScalar(u8, source, '\n');
-    var graph = try Graph.init(allocator, .{ .directed = true, .name = "Mermaid" });
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "Mermaid", .theme = options.theme });
     errdefer graph.deinit();
 
     var state = MermaidParseState.init(allocator);
@@ -29969,6 +30089,83 @@ test "visual themes render expected SVG colors including edge labels" {
     }
 }
 
+test "DOT theme attributes apply in declaration order" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  before;
+        \\  graph [theme=dark, bgcolor="#010203"];
+        \\  after;
+        \\  after -> final [label=selected];
+        \\}
+    );
+    defer graph.deinit();
+
+    const before = nodeIdByLabel(&graph, "before");
+    const after = nodeIdByLabel(&graph, "after");
+    const final = nodeIdByLabel(&graph, "final");
+    try std.testing.expect(attrValue(graph.nodes.items[before].attrs.items, "fillcolor") == null);
+    try std.testing.expectEqualStrings("#272c35", attrValue(graph.nodes.items[after].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#272c35", attrValue(graph.nodes.items[final].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#010203", attrValue(graph.attrs.items, "bgcolor").?);
+    try std.testing.expectEqualStrings("dark", attrValue(graph.attrs.items, "theme").?);
+    try std.testing.expectEqual(VisualTheme.dark, graph.visual_theme.?);
+}
+
+test "parse theme options override input theme while explicit attrs still win" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\digraph G {
+        \\  graph [theme=light, bgcolor="#010203"];
+        \\  node [fillcolor="#112233"];
+        \\  edge [color="#445566"];
+        \\  a -> b [label=selected];
+        \\}
+    ;
+    var graph = try parseInputWithOptions(allocator, source, .dot, .{ .theme = .dark });
+    defer graph.deinit();
+
+    try std.testing.expectEqual(VisualTheme.dark, graph.visual_theme.?);
+    try std.testing.expectEqualStrings("dark", attrValue(graph.attrs.items, "theme").?);
+    try std.testing.expectEqualStrings("#010203", attrValue(graph.attrs.items, "bgcolor").?);
+    try std.testing.expectEqualStrings("#112233", attrValue(graph.nodes.items[0].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#445566", graph.edges.items[0].color);
+    try std.testing.expectEqualStrings("#d2d7df", attrValue(graph.nodes.items[0].attrs.items, "fontcolor").?);
+
+    var layout = try layoutGraph(allocator, &graph, VisualTheme.dark.layoutConfig());
+    defer layout.deinit();
+    const svg = try renderAlloc(allocator, &layout, .svg, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<polygon fill=\"#010203\" stroke=\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#112233\" stroke=\"#3e444c\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "stroke=\"#445566\" d=\"") != null);
+}
+
+test "parse theme options cover Mermaid and multi graph DOT streams" {
+    const allocator = std.testing.allocator;
+    var mermaid = try parseInputWithOptions(
+        allocator,
+        "flowchart TD\nA --> B",
+        .mermaid,
+        .{ .theme = .print },
+    );
+    defer mermaid.deinit();
+    try std.testing.expectEqual(VisualTheme.print, mermaid.visual_theme.?);
+    try std.testing.expectEqualStrings("#ffffff", attrValue(mermaid.nodes.items[0].attrs.items, "fillcolor").?);
+
+    var graphs = try parseDotGraphsWithOptions(
+        allocator,
+        "digraph First { a -> b; }\ndigraph Second { c -> d; }",
+        .{ .theme = .dark },
+    );
+    defer graphs.deinit();
+    try std.testing.expectEqual(@as(usize, 2), graphs.items.len);
+    for (graphs.items) |graph| {
+        try std.testing.expectEqual(VisualTheme.dark, graph.visual_theme.?);
+        try std.testing.expectEqualStrings("#272c35", attrValue(graph.nodes.items[0].attrs.items, "fillcolor").?);
+    }
+}
+
 test "static highlight APIs are atomic reversible and survive layout clone" {
     const allocator = std.testing.allocator;
     var graph = try Graph.init(allocator, .{ .directed = true, .theme = .dark });
@@ -34704,6 +34901,28 @@ test "DOT batch diagnostics recover across independent statements" {
     try std.testing.expectEqual(@as(usize, 3), diagnostics.items[1].line);
     try std.testing.expectEqualStrings("expected DOT identifier, string, or angle-string", diagnostics.items[2].message);
     try std.testing.expectEqual(@as(usize, 4), diagnostics.items[2].line);
+}
+
+test "DOT batch diagnostics preserve errors with an initial theme" {
+    const allocator = std.testing.allocator;
+    var diagnostics = try parseDotDiagnosticsWithOptions(allocator,
+        \\digraph G {
+        \\  graph [theme=light];
+        \\  a -- b;
+        \\  c [label=];
+        \\}
+    , 8, .{ .theme = .dark });
+    defer diagnostics.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.items.len);
+    try std.testing.expectEqualStrings(
+        "edge operator does not match graph direction",
+        diagnostics.items[0].message,
+    );
+    try std.testing.expectEqualStrings(
+        "expected DOT identifier, string, or angle-string",
+        diagnostics.items[1].message,
+    );
 }
 
 test "DOT batch diagnostics honor maximum count" {

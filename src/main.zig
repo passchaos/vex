@@ -4,6 +4,17 @@ const vex = @import("vex");
 
 const default_max_input_bytes: usize = 64 * 1024 * 1024;
 
+fn effectiveLayoutProfile(
+    profile: vex.LayoutProfile,
+    profile_explicit: bool,
+    theme: ?vex.VisualTheme,
+) vex.LayoutProfile {
+    if (!profile_explicit) {
+        if (theme) |visual_theme| return visual_theme.layoutProfile();
+    }
+    return profile;
+}
+
 const usage =
     \\vex - DOT-compatible graph visualization prototype
     \\
@@ -13,6 +24,7 @@ const usage =
     \\        [--max-diagnostics count]
     \\        [--format svg] [--layout dot|sugiyama|neato|fr|fdp|sfdp|twopi|circo|patchwork|osage|nop|nop2]
     \\        [--max-input-bytes count]
+    \\        [--theme light|dark|print]
     \\        [--layout-profile compact|balanced|relaxed|presentation]
     \\        [--layout-iterations count]
     \\        [--layout-work-budget count]
@@ -38,6 +50,7 @@ const usage =
     \\--check parses input and reports graph counts without layout or rendering.
     \\--validate-all reports multiple recoverable DOT errors in one run.
     \\--max-input-bytes caps DOT/Mermaid input reads.
+    \\--theme applies a centralized visual theme before parsing graph objects.
     \\--layout-profile selects centralized layout defaults.
     \\--crossing-passes and --coordinate-passes cap layered layout refinement.
     \\--layout-iterations caps neato stress or force-layout iterations.
@@ -73,6 +86,8 @@ pub fn main(init: std.process.Init) !void {
     var format_arg: ?vex.OutputFormat = null;
     var layout_arg: vex.LayoutAlgorithm = .auto;
     var layout_profile: vex.LayoutProfile = .balanced;
+    var layout_profile_explicit = false;
+    var theme: ?vex.VisualTheme = null;
     var max_input_bytes: usize = default_max_input_bytes;
     var layout_iterations: ?usize = null;
     var layout_work_budget: ?usize = null;
@@ -133,6 +148,10 @@ pub fn main(init: std.process.Init) !void {
             if (i >= args.len) return error.MissingMaxInputBytes;
             max_input_bytes = std.fmt.parseInt(usize, args[i], 10) catch return error.InvalidMaxInputBytes;
             if (max_input_bytes == 0) return error.InvalidMaxInputBytes;
+        } else if (std.mem.eql(u8, arg, "--theme")) {
+            i += 1;
+            if (i >= args.len) return error.MissingTheme;
+            theme = vex.VisualTheme.fromString(args[i]) orelse return error.UnknownTheme;
         } else if (std.mem.eql(u8, arg, "--mermaid")) {
             input_format = .mermaid;
         } else if (std.mem.eql(u8, arg, "--interactive-all")) {
@@ -167,6 +186,7 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) return error.MissingLayoutProfile;
             layout_profile = vex.LayoutProfile.fromString(args[i]) orelse return error.UnknownLayoutProfile;
+            layout_profile_explicit = true;
         } else if (std.mem.eql(u8, arg, "--layout-iterations")) {
             i += 1;
             if (i >= args.len) return error.MissingLayoutIterations;
@@ -217,9 +237,15 @@ pub fn main(init: std.process.Init) !void {
         break :blk readStdin(allocator, io, max_input_bytes) catch |err| try handleInputReadError(io, err, max_input_bytes);
     };
     defer allocator.free(dot);
+    const parse_options = vex.ParseOptions{ .theme = theme };
 
     if (validate_all and (if (input_format == .auto) vex.detectInputFormat(dot) else input_format) == .dot) {
-        var diagnostics = try vex.parseDotDiagnostics(allocator, dot, max_diagnostics);
+        var diagnostics = try vex.parseDotDiagnosticsWithOptions(
+            allocator,
+            dot,
+            max_diagnostics,
+            parse_options,
+        );
         defer diagnostics.deinit();
         if (diagnostics.items.len > 0) {
             try writeParseDiagnostics(io, diagnostics.items);
@@ -239,7 +265,14 @@ pub fn main(init: std.process.Init) !void {
             }
         };
         var context = CheckContext{ .writer = &stderr_file_writer.interface };
-        var result = try vex.visitInputGraphsDiagnostic(allocator, dot, input_format, &context, CheckContext.visit);
+        var result = try vex.visitInputGraphsDiagnosticWithOptions(
+            allocator,
+            dot,
+            input_format,
+            parse_options,
+            &context,
+            CheckContext.visit,
+        );
         switch (result) {
             .complete => return,
             .diagnostic => |*diagnostic| {
@@ -251,7 +284,12 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    var layout_config = vex.LayoutConfig.defaults(layout_profile);
+    const effective_profile = effectiveLayoutProfile(
+        layout_profile,
+        layout_profile_explicit,
+        theme,
+    );
+    var layout_config = vex.LayoutConfig.defaults(effective_profile);
     layout_config.algorithm = layout_arg;
     if (crossing_passes) |value| layout_config.layered.crossing_passes = value;
     if (coordinate_passes) |value| layout_config.layered.coordinate_passes = value;
@@ -262,12 +300,12 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(io);
         var buffer: [8192]u8 = undefined;
         var file_writer = file.writer(io, &buffer);
-        try layoutAndRenderInput(allocator, io, &file_writer.interface, dot, input_format, format, render_options, layout_config, layout_work_budget, layout_workers);
+        try layoutAndRenderInput(allocator, io, &file_writer.interface, dot, input_format, parse_options, format, render_options, layout_config, layout_work_budget, layout_workers);
         try file_writer.interface.flush();
     } else {
         var stdout_buffer: [8192]u8 = undefined;
         var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-        try layoutAndRenderInput(allocator, io, &stdout_file_writer.interface, dot, input_format, format, render_options, layout_config, layout_work_budget, layout_workers);
+        try layoutAndRenderInput(allocator, io, &stdout_file_writer.interface, dot, input_format, parse_options, format, render_options, layout_config, layout_work_budget, layout_workers);
         try stdout_file_writer.interface.flush();
     }
 }
@@ -278,6 +316,7 @@ fn layoutAndRenderInput(
     writer: *Io.Writer,
     source: []const u8,
     input_format: vex.InputFormat,
+    parse_options: vex.ParseOptions,
     format: vex.OutputFormat,
     render_options: vex.RenderOptions,
     layout_config: vex.LayoutConfig,
@@ -323,7 +362,7 @@ fn layoutAndRenderInput(
             .layout_config = layout_config,
             .layout_work_budget = layout_work_budget,
         };
-        var result = try vex.visitInputGraphsDiagnostic(allocator, source, input_format, &context, Context.visit);
+        var result = try vex.visitInputGraphsDiagnosticWithOptions(allocator, source, input_format, parse_options, &context, Context.visit);
         switch (result) {
             .complete => return,
             .diagnostic => |*diagnostic| {
@@ -334,7 +373,7 @@ fn layoutAndRenderInput(
         }
     }
 
-    const parse_result = try vex.parseInputGraphsDiagnostic(allocator, source, input_format);
+    const parse_result = try vex.parseInputGraphsDiagnosticWithOptions(allocator, source, input_format, parse_options);
     var graphs = switch (parse_result) {
         .graphs => |graphs| graphs,
         .diagnostic => |diagnostic_value| {
@@ -519,6 +558,21 @@ test "check summary reports graph counts" {
     );
 }
 
+test "theme selects semantic layout profile unless CLI profile is explicit" {
+    try std.testing.expectEqual(
+        vex.LayoutProfile.relaxed,
+        effectiveLayoutProfile(.balanced, false, .dark),
+    );
+    try std.testing.expectEqual(
+        vex.LayoutProfile.balanced,
+        effectiveLayoutProfile(.balanced, true, .dark),
+    );
+    try std.testing.expectEqual(
+        vex.LayoutProfile.balanced,
+        effectiveLayoutProfile(.balanced, false, null),
+    );
+}
+
 test "graph stream check summaries and SVG output preserve every graph" {
     const allocator = std.testing.allocator;
     var graphs = try vex.parseDotGraphs(allocator,
@@ -590,6 +644,7 @@ test "serial graph stream render visitor matches parallel owned output" {
         &serial_writer.writer,
         source,
         .dot,
+        .{ .theme = .dark },
         .svg,
         .{},
         .{ .algorithm = .sugiyama },
@@ -599,7 +654,11 @@ test "serial graph stream render visitor matches parallel owned output" {
     const serial_svg = try serial_writer.toOwnedSlice();
     defer allocator.free(serial_svg);
 
-    var graphs = try vex.parseDotGraphs(allocator, source);
+    var graphs = try vex.parseDotGraphsWithOptions(
+        allocator,
+        source,
+        .{ .theme = .dark },
+    );
     defer graphs.deinit();
     var parallel_writer = Io.Writer.Allocating.init(allocator);
     defer parallel_writer.deinit();
@@ -617,6 +676,10 @@ test "serial graph stream render visitor matches parallel owned output" {
     const parallel_svg = try parallel_writer.toOwnedSlice();
     defer allocator.free(parallel_svg);
     try std.testing.expectEqualStrings(parallel_svg, serial_svg);
+    try std.testing.expectEqual(
+        @as(usize, 3),
+        countOccurrences(serial_svg, "<polygon fill=\"#161b22\" stroke=\"none\""),
+    );
 }
 
 test "streaming check output keeps consumed summaries before later diagnostic" {
