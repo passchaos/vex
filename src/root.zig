@@ -176,6 +176,24 @@ pub const RankConstraint = struct {
     scope: ?SubgraphId = null,
 };
 
+pub const NodeColumn = struct {
+    node_ids: []NodeId,
+};
+
+pub const NodeLayerIterator = struct {
+    constraints: []const RankConstraint,
+    index: usize = 0,
+
+    pub fn next(self: *NodeLayerIterator) ?[]const NodeId {
+        while (self.index < self.constraints.len) {
+            const constraint = self.constraints[self.index];
+            self.index += 1;
+            if (constraint.kind == .same and constraint.scope == null) return constraint.node_ids;
+        }
+        return null;
+    }
+};
+
 pub const CompassPort = svg_mod.edge.CompassPort;
 
 pub const SubgraphStyle = svg_mod.style.SubgraphStyle;
@@ -242,7 +260,7 @@ const label_right_break: u8 = 0x1f;
 const svg_label_breaks = svg_mod.text.LabelBreaks{ .left = label_left_break, .right = label_right_break };
 const svg_metadata_schema_version = "1";
 const svg_metadata_schema_uri = "https://vex.graph/svg-metadata/1";
-const svg_metadata_features = "attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy";
+const svg_metadata_features = "attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links node-columns object-geometry ranks subgraph-hierarchy";
 
 pub const GraphAttr = union(enum) {
     label: []const u8,
@@ -708,6 +726,7 @@ pub const Node = struct {
     color: []const u8,
     shape: Shape,
     highlighted: bool = false,
+    column: ?usize = null,
     attrs: std.ArrayList(Attr) = .empty,
 };
 
@@ -767,6 +786,7 @@ pub const Graph = struct {
     subgraphs: std.ArrayList(Subgraph) = .empty,
     first_subgraph_by_node: std.ArrayList(?SubgraphId) = .empty,
     rank_constraints: std.ArrayList(RankConstraint) = .empty,
+    node_columns: std.ArrayList(NodeColumn) = .empty,
     attrs: std.ArrayList(Attr) = .empty,
     node_default_attrs: std.ArrayList(Attr) = .empty,
     edge_default_attrs: std.ArrayList(Attr) = .empty,
@@ -835,6 +855,9 @@ pub const Graph = struct {
         for (self.rank_constraints.items) |constraint| {
             self.allocator.free(constraint.node_ids);
         }
+        for (self.node_columns.items) |column| {
+            self.allocator.free(column.node_ids);
+        }
         freeAttrList(self.allocator, &self.node_default_attrs);
         freeAttrList(self.allocator, &self.edge_default_attrs);
         freeAttrList(self.allocator, &self.subgraph_default_attrs);
@@ -842,6 +865,7 @@ pub const Graph = struct {
         self.edges.deinit(self.allocator);
         self.subgraphs.deinit(self.allocator);
         self.rank_constraints.deinit(self.allocator);
+        self.node_columns.deinit(self.allocator);
         self.attrs.deinit(self.allocator);
         self.allocator.free(self.node_defaults.color);
         self.allocator.free(self.edge_defaults.color);
@@ -963,6 +987,38 @@ pub const Graph = struct {
 
     pub fn addRankConstraint(self: *Graph, kind: RankKind, node_ids: []const NodeId) !void {
         return self.addRankConstraintInScope(kind, node_ids, null);
+    }
+
+    pub fn addNodeLayer(self: *Graph, node_ids: []const NodeId) !void {
+        for (node_ids, 0..) |node_id, index| {
+            if (node_id >= self.nodes.items.len) return error.InvalidNodeId;
+            if (containsNode(node_ids[0..index], node_id)) return error.DuplicateNodeId;
+        }
+        try self.addRankConstraint(.same, node_ids);
+    }
+
+    pub fn addNodeColumn(self: *Graph, node_ids: []const NodeId) !void {
+        if (node_ids.len == 0) return;
+        for (node_ids, 0..) |node_id, index| {
+            if (node_id >= self.nodes.items.len) return error.InvalidNodeId;
+            if (containsNode(node_ids[0..index], node_id)) return error.DuplicateNodeId;
+            for (self.node_columns.items) |column| {
+                if (containsNode(column.node_ids, node_id)) return error.NodeColumnOverlap;
+            }
+        }
+        const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
+        errdefer self.allocator.free(owned_nodes);
+        try self.node_columns.append(self.allocator, .{ .node_ids = owned_nodes });
+        const column = self.node_columns.items.len - 1;
+        for (node_ids) |node_id| self.nodes.items[node_id].column = column;
+    }
+
+    pub fn nodeLayers(self: *const Graph) NodeLayerIterator {
+        return .{ .constraints = self.rank_constraints.items };
+    }
+
+    pub fn nodeColumns(self: *const Graph) []const NodeColumn {
+        return self.node_columns.items;
     }
 
     pub fn addSubgraphRankConstraint(self: *Graph, scope: SubgraphId, kind: RankKind, node_ids: []const NodeId) !void {
@@ -5030,6 +5086,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
             .color = color,
             .shape = node_item.shape,
             .highlighted = node_item.highlighted,
+            .column = node_item.column,
             .attrs = attrs,
         });
         try result.first_subgraph_by_node.append(allocator, null);
@@ -5077,6 +5134,11 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
             .kind = constraint.kind,
             .node_ids = try allocator.dupe(NodeId, constraint.node_ids),
             .scope = constraint.scope,
+        });
+    }
+    for (source.node_columns.items) |column| {
+        try result.node_columns.append(allocator, .{
+            .node_ids = try allocator.dupe(NodeId, column.node_ids),
         });
     }
 
@@ -5163,7 +5225,7 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
 fn shouldUseFragmentedComponentLayout(graph: *const Graph) bool {
     if (graph.directed or graph.nodes.items.len < 100_000) return false;
     if (graph.edges.items.len > graph.nodes.items.len) return false;
-    if (graph.subgraphs.items.len != 0 or graph.rank_constraints.items.len != 0) return false;
+    if (graph.subgraphs.items.len != 0 or graph.rank_constraints.items.len != 0 or graph.node_columns.items.len != 0) return false;
     for (graph.edges.items) |edge_item| {
         if (!edge_item.constraint or edge_item.min_len > 1) return false;
     }
@@ -5774,6 +5836,11 @@ fn labelLayoutComponents(
 
     for (graph.edges.items) |edge_item| {
         components.unite(edge_item.from, edge_item.to);
+    }
+    for (graph.node_columns.items) |column| {
+        if (column.node_ids.len == 0) continue;
+        const first = column.node_ids[0];
+        for (column.node_ids[1..]) |node_id| components.unite(first, node_id);
     }
     for (graph.subgraphs.items) |subgraph| {
         if (!subgraph.is_cluster) continue;
@@ -7554,9 +7621,26 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
             effective_options,
             4,
         );
+    const node_columns_applied = try enforceNodeColumnConstraints(
+        allocator,
+        layout_graph,
+        ranks,
+        centers,
+        axis_sizes,
+        effective_options.node_gap,
+    );
     if (physical_rank_transpose_applied or rigid_rank_offsets_applied or
         compact_default_gap_ranks or owner_component_shift_applied)
     {
+        refreshVirtualPositionsFromRealCenters(
+            layout_graph,
+            &virtual_levels,
+            ranks,
+            centers,
+            &final_virtual_positions,
+        );
+    }
+    if (node_columns_applied) {
         refreshVirtualPositionsFromRealCenters(
             layout_graph,
             &virtual_levels,
@@ -7613,7 +7697,7 @@ fn layoutLayeredWithControl(allocator: std.mem.Allocator, graph: *const Graph, o
     }
     @memcpy(layout_ranks, ranks);
     computeSubgraphLayouts(layout_graph, axes, nodes, cluster_layouts);
-    if (!compression_applied) {
+    if (!compression_applied and layout_graph.node_columns.items.len == 0) {
         alignCrossClusterMembersGraphvizLikeTbIfHelpful(
             layout_graph,
             axes,
@@ -7708,6 +7792,7 @@ fn layoutLayeredIncrementalWithControl(allocator: std.mem.Allocator, graph: *con
     const effective_options = layoutOptionsWithGraphAttrs(options, layout_graph);
     try work.checkpoint(result.nodes.len +| result.edge_waypoints.len +| 1);
     try stabilizeLayeredLayout(layout_graph, previous, &result, effective_options.node_gap, incremental);
+    try enforceNodeColumnsInLayout(allocator, layout_graph, &result, effective_options.node_gap);
     return result;
 }
 
@@ -9687,6 +9772,40 @@ fn stabilizeLayeredLayout(graph: *const Graph, previous: *const Layout, result: 
     expandIncrementalLayoutBounds(result);
 }
 
+fn enforceNodeColumnsInLayout(allocator: std.mem.Allocator, graph: *const Graph, result: *Layout, node_gap: f64) !void {
+    if (graph.node_columns.items.len == 0 or result.nodes.len == 0) return;
+    const axes = LayoutAxes.init(result.rankdir);
+    const original_along = try allocator.alloc(f64, result.nodes.len);
+    defer allocator.free(original_along);
+    const centers = try allocator.alloc(f64, result.nodes.len);
+    defer allocator.free(centers);
+    const sizes = try allocator.alloc(NodeSize, result.nodes.len);
+    defer allocator.free(sizes);
+    for (result.nodes, 0..) |node, node_id| {
+        const along = axes.pointAlong(node.center);
+        original_along[node_id] = along;
+        centers[node_id] = along;
+        sizes[node_id] = axes.orientSize(NodeSize{ .width = node.width, .height = node.height });
+    }
+    _ = try enforceNodeColumnConstraints(
+        allocator,
+        graph,
+        result.ranks,
+        centers,
+        sizes,
+        node_gap,
+    );
+    for (result.nodes, 0..) |*node, node_id| {
+        switch (result.rankdir) {
+            .TB, .BT => node.center.x = centers[node_id],
+            .LR, .RL => node.center.y = centers[node_id],
+        }
+    }
+    stabilizeEdgeWaypoints(result, original_along);
+    recomputeIncrementalSubgraphs(graph, result);
+    expandIncrementalLayoutBounds(result);
+}
+
 fn stabilizeLayeredRankSpacing(graph: *const Graph, result: *Layout, original_along: []const f64, node_gap: f64) !void {
     if (result.nodes.len == 0 or result.ranks.len != result.nodes.len) return;
     var max_rank: usize = 0;
@@ -11159,7 +11278,7 @@ fn applyVirtualRealPositionsExceptGroups(graph: *const Graph, virtual_levels: *c
             if (index >= virtual_positions.positions[rank].items.len) continue;
             switch (vnode) {
                 .real => |node_id| {
-                    if (node_id < centers.len and node_id < graph.nodes.items.len and nodeGroupName(graph.nodes.items[node_id]) == null) {
+                    if (node_id < centers.len and node_id < graph.nodes.items.len and !nodeHasAlignmentGroup(graph.nodes.items[node_id])) {
                         centers[node_id] = virtual_positions.positions[rank].items[index];
                     }
                 },
@@ -16022,6 +16141,7 @@ fn alignGroupedNodes(graph: *const Graph, levels: []std.ArrayList(NodeId)) void 
     var group_count: usize = 0;
     for (levels) |level| {
         for (level.items, 0..) |node_id, index| {
+            if (graph.nodes.items[node_id].column != null) continue;
             const group_name = nodeGroupName(graph.nodes.items[node_id]) orelse continue;
             const group_index = groupOrderIndex(groups[0..group_count], group_name) orelse blk: {
                 if (group_count >= groups.len) continue;
@@ -16043,11 +16163,16 @@ fn alignGroupedNodes(graph: *const Graph, levels: []std.ArrayList(NodeId)) void 
             moveLevelItem(level.items, current, target);
         }
     }
+    alignNodeColumnOrder(graph, levels);
 }
 
 fn nodeGroupName(node_item: Node) ?[]const u8 {
     const value = attrValue(node_item.attrs.items, "group") orelse return null;
     return if (value.len == 0) null else value;
+}
+
+fn nodeHasAlignmentGroup(node_item: Node) bool {
+    return nodeGroupName(node_item) != null or node_item.column != null;
 }
 
 fn groupOrderIndex(groups: []const GroupOrder, name: []const u8) ?usize {
@@ -16059,10 +16184,38 @@ fn groupOrderIndex(groups: []const GroupOrder, name: []const u8) ?usize {
 
 fn groupedNodeIndex(graph: *const Graph, nodes: []const NodeId, group_name: []const u8) ?usize {
     for (nodes, 0..) |node_id, index| {
-        const name = nodeGroupName(graph.nodes.items[node_id]) orelse continue;
+        const node_item = graph.nodes.items[node_id];
+        if (node_item.column != null) continue;
+        const name = nodeGroupName(node_item) orelse continue;
         if (std.mem.eql(u8, name, group_name)) return index;
     }
     return null;
+}
+
+fn alignNodeColumnOrder(graph: *const Graph, levels: []std.ArrayList(NodeId)) void {
+    for (graph.node_columns.items) |column| {
+        var slot_sum: usize = 0;
+        var count: usize = 0;
+        for (column.node_ids) |node_id| {
+            for (levels) |level| {
+                if (positionInLayer(level.items, node_id)) |slot| {
+                    slot_sum += slot;
+                    count += 1;
+                    break;
+                }
+            }
+        }
+        if (count < 2) continue;
+        const target_slot = @as(usize, @intFromFloat(@round(
+            @as(f64, @floatFromInt(slot_sum)) / @as(f64, @floatFromInt(count)),
+        )));
+        for (levels) |*level| {
+            for (column.node_ids) |node_id| {
+                const current = positionInLayer(level.items, node_id) orelse continue;
+                moveLevelItem(level.items, current, @min(level.items.len - 1, target_slot));
+            }
+        }
+    }
 }
 
 fn moveLevelItem(nodes: []NodeId, from: usize, to: usize) void {
@@ -16082,6 +16235,7 @@ fn alignGroupedCenters(graph: *const Graph, levels: []const std.ArrayList(NodeId
     var groups: [64]GroupOrder = undefined;
     var group_count: usize = 0;
     for (graph.nodes.items, 0..) |node_item, id| {
+        if (node_item.column != null) continue;
         const group_name = nodeGroupName(node_item) orelse continue;
         const group_index = groupOrderIndex(groups[0..group_count], group_name) orelse blk: {
             if (group_count >= groups.len) continue;
@@ -16097,11 +16251,129 @@ fn alignGroupedCenters(graph: *const Graph, levels: []const std.ArrayList(NodeId
         if (group.count < 2) continue;
         const target = group.rank_sum / @as(f64, @floatFromInt(group.count));
         for (graph.nodes.items, 0..) |node_item, id| {
+            if (node_item.column != null) continue;
             const group_name = nodeGroupName(node_item) orelse continue;
             if (std.mem.eql(u8, group_name, group.name)) centers[id] = target;
         }
     }
+    alignNodeColumnCenters(graph, centers);
     for (levels) |level| compactLevelCentersForGraph(graph, level.items, centers, sizes, gap);
+}
+
+fn alignNodeColumnCenters(graph: *const Graph, centers: []f64) void {
+    for (graph.node_columns.items) |column| {
+        var center_sum: f64 = 0;
+        var count: usize = 0;
+        for (column.node_ids) |node_id| {
+            if (node_id >= centers.len) continue;
+            center_sum += centers[node_id];
+            count += 1;
+        }
+        if (count < 2) continue;
+        const target = center_sum / @as(f64, @floatFromInt(count));
+        for (column.node_ids) |node_id| {
+            if (node_id < centers.len) centers[node_id] = target;
+        }
+    }
+}
+
+fn enforceNodeColumnConstraints(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    ranks: []const usize,
+    centers: []f64,
+    sizes: []const NodeSize,
+    gap: f64,
+) !bool {
+    if (graph.node_columns.items.len == 0) return false;
+    if (ranks.len != graph.nodes.items.len or centers.len != ranks.len or sizes.len != ranks.len) return error.InvalidNodeColumnLayout;
+
+    const variable_count = graph.node_columns.items.len + graph.nodes.items.len;
+    const variables = try allocator.alloc(f64, variable_count);
+    defer allocator.free(variables);
+    @memset(variables, 0);
+    const variable_for_node = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(variable_for_node);
+    for (graph.node_columns.items, 0..) |column, column_id| {
+        var center_sum: f64 = 0;
+        var count: usize = 0;
+        var seen_ranks = std.AutoHashMap(usize, void).init(allocator);
+        defer seen_ranks.deinit();
+        for (column.node_ids) |node_id| {
+            if (node_id >= graph.nodes.items.len) return error.InvalidNodeId;
+            const entry = try seen_ranks.getOrPut(ranks[node_id]);
+            if (entry.found_existing) return error.NodeColumnRankConflict;
+            center_sum += centers[node_id];
+            count += 1;
+            variable_for_node[node_id] = column_id;
+        }
+        variables[column_id] = center_sum / @as(f64, @floatFromInt(count));
+    }
+    for (graph.nodes.items, 0..) |node_item, node_id| {
+        if (node_item.column != null) continue;
+        const variable = graph.node_columns.items.len + node_id;
+        variable_for_node[node_id] = variable;
+        variables[variable] = centers[node_id];
+    }
+
+    var level_storage = try allocator.alloc(NodeId, graph.nodes.items.len);
+    defer allocator.free(level_storage);
+    var constraints = std.ArrayList(CoordConstraint).empty;
+    defer constraints.deinit(allocator);
+    var max_rank: usize = 0;
+    for (ranks) |rank| max_rank = @max(max_rank, rank);
+    for (0..if (ranks.len == 0) 0 else max_rank + 1) |rank| {
+        var count: usize = 0;
+        for (ranks, 0..) |node_rank, node_id| {
+            if (node_rank != rank) continue;
+            level_storage[count] = node_id;
+            count += 1;
+        }
+        if (count <= 1) continue;
+        const level = level_storage[0..count];
+        std.mem.sort(NodeId, level, centers, struct {
+            fn lessThan(node_centers: []const f64, left: NodeId, right: NodeId) bool {
+                if (node_centers[left] == node_centers[right]) return left < right;
+                return node_centers[left] < node_centers[right];
+            }
+        }.lessThan);
+        for (level[1..], 0..) |right, index| {
+            const left = level[index];
+            const left_variable = variable_for_node[left];
+            const right_variable = variable_for_node[right];
+            if (left_variable == right_variable) return error.NodeColumnRankConflict;
+            try constraints.append(allocator, .{
+                .left = left_variable,
+                .right = right_variable,
+                .min_gap = sizes[left].width / 2.0 +
+                    subgraphNodePairGap(graph, left, right, gap) +
+                    sizes[right].width / 2.0,
+            });
+        }
+    }
+
+    const solved = try satisfyCoordConstraintsChecked(variables, constraints.items);
+    if (!solved) return error.NodeColumnConstraintCycle;
+    for (centers, 0..) |*center, node_id| center.* = variables[variable_for_node[node_id]];
+    return true;
+}
+
+fn satisfyCoordConstraintsChecked(centers: []f64, constraints: []const CoordConstraint) !bool {
+    if (centers.len == 0) return true;
+    for (0..centers.len) |pass| {
+        var pass_changed = false;
+        for (constraints) |constraint| {
+            if (constraint.left >= centers.len or constraint.right >= centers.len) return error.InvalidNodeColumnLayout;
+            const min_right = centers[constraint.left] + constraint.min_gap;
+            if (centers[constraint.right] + 0.0001 < min_right) {
+                centers[constraint.right] = min_right;
+                pass_changed = true;
+            }
+        }
+        if (!pass_changed) return true;
+        if (pass + 1 == centers.len) return false;
+    }
+    return true;
 }
 
 fn applyInterClusterSpacing(graph: *const Graph, levels: []const std.ArrayList(NodeId), centers: []f64, sizes: []const NodeSize, cluster_gap: f64) void {
@@ -16419,8 +16691,8 @@ fn refineDirectEdgeCenterCrossings(
                     continue;
                 }
                 if (left >= graph.nodes.items.len or right >= graph.nodes.items.len or
-                    nodeGroupName(graph.nodes.items[left]) != null or
-                    nodeGroupName(graph.nodes.items[right]) != null)
+                    nodeHasAlignmentGroup(graph.nodes.items[left]) or
+                    nodeHasAlignmentGroup(graph.nodes.items[right]))
                 {
                     index += 1;
                     continue;
@@ -16472,8 +16744,8 @@ fn refinePostSpacingCenterCrossings(
                     if (left >= centers.len or right >= centers.len or
                         left >= sizes.len or right >= sizes.len) continue;
                     if (left >= graph.nodes.items.len or right >= graph.nodes.items.len or
-                        nodeGroupName(graph.nodes.items[left]) != null or
-                        nodeGroupName(graph.nodes.items[right]) != null) continue;
+                        nodeHasAlignmentGroup(graph.nodes.items[left]) or
+                        nodeHasAlignmentGroup(graph.nodes.items[right])) continue;
 
                     std.mem.swap(f64, &centers[left], &centers[right]);
                     if (!centerLevelHasClearance(level.items, centers, sizes)) {
@@ -16571,7 +16843,7 @@ fn refineSmallDirectedCenterCrossings(
         graph.nodes.items.len > 64 or graph.edges.items.len > 128 or
         graph.edges.items.len *| 2 > graph.nodes.items.len *| 3) return false;
     for (graph.nodes.items) |node_item| {
-        if (nodeGroupName(node_item) != null or
+        if (nodeHasAlignmentGroup(node_item) or
             orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
     }
 
@@ -16725,7 +16997,7 @@ fn refinePhysicalRankAdjacentCrossings(
         graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
         orderingMode(attrValue(graph.attrs.items, "ordering")) != .none) return false;
     for (graph.nodes.items) |node_item| {
-        if (nodeGroupName(node_item) != null or
+        if (nodeHasAlignmentGroup(node_item) or
             orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
     }
 
@@ -17111,7 +17383,7 @@ fn refineRigidRankOffsets(
         graph.nodes.items.len > 128 or graph.edges.items.len > 256 or
         (!zero_crossing_ordered_dag and !crossed_feedback_graph)) return false;
     for (graph.nodes.items) |node_item| {
-        if (nodeGroupName(node_item) != null or
+        if (nodeHasAlignmentGroup(node_item) or
             orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none) return false;
     }
 
@@ -17406,7 +17678,7 @@ fn refineContinuousCenterCrossings(
             for (ordered[0..level.items.len], 0..) |node_id, index| {
                 if (node_id >= centers.len or node_id >= sizes.len or
                     node_id >= graph.nodes.items.len) continue;
-                if (nodeGroupName(graph.nodes.items[node_id]) != null) continue;
+                if (nodeHasAlignmentGroup(graph.nodes.items[node_id])) continue;
                 const original = centers[node_id];
                 const lower = if (index == 0)
                     @max(sizes[node_id].width / 2.0, original - 150.0)
@@ -17685,7 +17957,7 @@ fn refineFinalFeedbackCenterStressPlateau(
         return;
     }
     for (graph.nodes.items) |node_item| {
-        if (nodeGroupName(node_item) != null or
+        if (nodeHasAlignmentGroup(node_item) or
             orderingMode(attrValue(node_item.attrs.items, "ordering")) != .none)
         {
             return;
@@ -19504,7 +19776,7 @@ fn refineNestedOwnerComponentCrossings(
         return false;
     }
     for (graph.nodes.items) |node_item| {
-        if (nodeGroupName(node_item) != null) return false;
+        if (nodeHasAlignmentGroup(node_item)) return false;
     }
     var has_nested_cluster = false;
     for (graph.subgraphs.items) |subgraph| {
@@ -21489,6 +21761,7 @@ fn writeSvgMetadata(writer: *Io.Writer, graph: *const Graph, layout: *const Layo
         canvas.view_box.y * canvas.scale,
     });
     try writeSvgRankConstraintIndex(writer, graph);
+    try writeSvgNodeColumnIndex(writer, graph);
     try writeSvgAttributeIndex(writer, graph);
     for (graph.nodes.items) |node_item| {
         const node_layout = if (node_item.id < layout.nodes.len) layout.nodes[node_item.id] else NodeLayout{ .center = .{ .x = 0, .y = 0 }, .width = 0, .height = 0 };
@@ -21662,6 +21935,19 @@ fn writeSvgRankConstraintIndex(writer: *Io.Writer, graph: *const Graph) Io.Write
         try writer.writeAll("\"/>\n");
     }
     try writer.writeAll("</vex:rank-constraints>\n");
+}
+
+fn writeSvgNodeColumnIndex(writer: *Io.Writer, graph: *const Graph) Io.Writer.Error!void {
+    try writer.writeAll("<vex:node-columns>\n");
+    for (graph.node_columns.items, 0..) |column, column_id| {
+        try writer.print("<vex:column id=\"{d}\" nodes=\"", .{column_id});
+        for (column.node_ids, 0..) |node_id, index| {
+            if (index > 0) try writer.writeByte(' ');
+            try writer.print("{d}", .{node_id});
+        }
+        try writer.writeAll("\"/>\n");
+    }
+    try writer.writeAll("</vex:node-columns>\n");
 }
 
 fn writeSvgAttributeIndex(writer: *Io.Writer, graph: *const Graph) Io.Writer.Error!void {
@@ -30967,6 +31253,37 @@ test "Graphviz packmode automatically packs connected components into arrays" {
     }
 }
 
+test "component packing preserves typed node columns" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .packmode = "array_i2" });
+    const top = try graph.addNode("top", .{});
+    const bottom = try graph.addNode("bottom", .{});
+    const side_a = try graph.addNode("side-a", .{});
+    const side_b = try graph.addNode("side-b", .{});
+    _ = try graph.addEdge(side_a, side_b, .{});
+    try graph.addNodeColumn(&.{ top, bottom });
+    try graph.addNodeLayer(&.{ top, side_a });
+    try graph.addNodeLayer(&.{ bottom, side_b });
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer layout.deinit();
+    try std.testing.expectApproxEqAbs(
+        layout.nodes[top].center.x,
+        layout.nodes[bottom].center.x,
+        0.001,
+    );
+    try std.testing.expect(!rectsOverlap(
+        nodeRect(layout.nodes[top]),
+        nodeRect(layout.nodes[side_a]),
+    ));
+    try std.testing.expect(!rectsOverlap(
+        nodeRect(layout.nodes[bottom]),
+        nodeRect(layout.nodes[side_b]),
+    ));
+}
+
 test "Graphviz component packing translates long-edge waypoints with their component" {
     const allocator = std.testing.allocator;
     const plain_source =
@@ -34666,7 +34983,7 @@ test "SVG renderer emits opt-in metadata index" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<metadata id=\"vex-metadata\" data-vex-schema-version=\"1\" data-vex-schema-uri=\"https://vex.graph/svg-metadata/1\">") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"Meta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links node-columns object-geometry ranks subgraph-hierarchy\" name=\"Meta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"3\" edges=\"2\" subgraphs=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "layout-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "layout-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "canvas-width=\"") != null);
@@ -34675,7 +34992,7 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "viewbox-height=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"Meta\" data-vex-object-label=\"Meta\" data-vex-object-x=\"0.00\" data-vex-object-y=\"0.00\" data-vex-object-width=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-directed=\"true\" data-vex-object-strict=\"false\" data-vex-object-rankdir=\"TB\" data-vex-object-nodes=\"3\" data-vex-object-edges=\"2\" data-vex-object-subgraphs=\"1\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-schema-version=\"1\" data-vex-object-schema-uri=\"https://vex.graph/svg-metadata/1\" data-vex-object-schema-features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-schema-version=\"1\" data-vex-object-schema-uri=\"https://vex.graph/svg-metadata/1\" data-vex-object-schema-features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links node-columns object-geometry ranks subgraph-hierarchy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"api\" shape=\"ellipse\" rank=\"0\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"1\" label=\"worker\" shape=\"ellipse\" rank=\"1\" x=\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"2\" label=\"sink\" shape=\"ellipse\" rank=\"2\" x=\"") != null);
@@ -34704,6 +35021,31 @@ test "SVG renderer emits opt-in metadata index" {
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-rank=\"0\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-rank=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-rank=\"2\"") != null);
+}
+
+test "SVG metadata indexes typed node columns" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const middle = try graph.addNode("middle", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addEdge(source, middle, .{});
+    _ = try graph.addEdge(middle, sink, .{});
+    try graph.addNodeColumn(&.{ source, middle, sink });
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer layout.deinit();
+    const static_svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(static_svg);
+    try std.testing.expect(std.mem.indexOf(u8, static_svg, "<vex:node-columns>") == null);
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links node-columns object-geometry ranks subgraph-hierarchy\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node-columns>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:column id=\"0\" nodes=\"0 1 2\"/>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "</vex:node-columns>") != null);
 }
 
 test "SVG metadata index records effective link attributes" {
@@ -34747,7 +35089,7 @@ test "SVG metadata index records effective link attributes" {
     const svg = try renderSvgAlloc(allocator, &graph, &layout, .{ .metadata = true });
     defer allocator.free(svg);
 
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy\" name=\"LinkMeta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:graph xmlns:vex=\"https://vex.graph/svg-metadata/1\" schema-version=\"1\" features=\"attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links node-columns object-geometry ranks subgraph-hierarchy\" name=\"LinkMeta\" directed=\"true\" strict=\"false\" rankdir=\"TB\" nodes=\"2\" edges=\"1\" subgraphs=\"1\" href=\"https://example.com/graph/LinkMeta/Graph Label\" tooltip=\"Graph LinkMeta Graph Label\" target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<g id=\"graph0\" class=\"graph\" data-vex-object-kind=\"graph\" data-vex-object-id=\"LinkMeta\" data-vex-object-label=\"Graph Label\" data-vex-object-href=\"https://example.com/graph/LinkMeta/Graph Label\" data-vex-object-tooltip=\"Graph LinkMeta Graph Label\" data-vex-object-target=\"frame-LinkMeta\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "data-vex-object-directed=\"true\" data-vex-object-strict=\"false\" data-vex-object-rankdir=\"TB\" data-vex-object-nodes=\"2\" data-vex-object-edges=\"1\" data-vex-object-subgraphs=\"1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "<vex:node id=\"0\" label=\"A &amp; B\" shape=\"ellipse\" href=\"https://example.com/node/A &amp; B/A &amp; B/LinkMeta\" tooltip=\"Node A &amp; B A &amp; B LinkMeta\" target=\"node-A &amp; B\"") != null);
@@ -48435,6 +48777,181 @@ test "layered layout honors DOT node group alignment hints" {
         @abs(layout.nodes[m1].center.x - layout.nodes[t1].center.x),
     );
     try std.testing.expect(max_delta <= 1.0);
+}
+
+test "typed node layers and columns constrain TB and LR layered layouts" {
+    const allocator = std.testing.allocator;
+    for ([_]RankDir{ .TB, .BT, .LR, .RL }) |rankdir| {
+        var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = rankdir });
+        defer graph.deinit();
+
+        const source = try graph.addNode("source", .{});
+        const left = try graph.addNode("left", .{});
+        const middle = try graph.addNode("middle", .{ .group = "user-group" });
+        const right = try graph.addNode("right", .{});
+        const sink = try graph.addNode("sink", .{});
+        _ = try graph.addEdge(source, left, .{});
+        _ = try graph.addEdge(source, middle, .{});
+        _ = try graph.addEdge(source, right, .{});
+        _ = try graph.addEdge(left, sink, .{});
+        _ = try graph.addEdge(middle, sink, .{});
+        _ = try graph.addEdge(right, sink, .{});
+        try graph.addNodeLayer(&.{ left, middle, right });
+        try graph.addNodeColumn(&.{ source, middle, sink });
+
+        var layers = graph.nodeLayers();
+        try std.testing.expectEqualSlices(NodeId, &.{ left, middle, right }, layers.next().?);
+        try std.testing.expect(layers.next() == null);
+        try std.testing.expectEqual(@as(usize, 1), graph.nodeColumns().len);
+        try std.testing.expectEqualSlices(NodeId, &.{ source, middle, sink }, graph.nodeColumns()[0].node_ids);
+        try std.testing.expectEqualStrings("user-group", attrValue(graph.nodes.items[middle].attrs.items, "group").?);
+
+        var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+        defer layout.deinit();
+        try std.testing.expectEqual(layout.ranks[left], layout.ranks[middle]);
+        try std.testing.expectEqual(layout.ranks[middle], layout.ranks[right]);
+        const axes = LayoutAxes.init(rankdir);
+        const source_along = axes.pointAlong(layout.nodes[source].center);
+        const middle_along = axes.pointAlong(layout.nodes[middle].center);
+        const sink_along = axes.pointAlong(layout.nodes[sink].center);
+        try std.testing.expectApproxEqAbs(source_along, middle_along, 0.001);
+        try std.testing.expectApproxEqAbs(middle_along, sink_along, 0.001);
+        try expectNoSameRankNodeOverlap(&graph, &layout);
+        try std.testing.expectEqual(@as(?usize, 0), layout.graph.nodes.items[source].column);
+        try std.testing.expectEqual(@as(?usize, 0), layout.graph.nodes.items[middle].column);
+        try std.testing.expectEqual(@as(?usize, 0), layout.graph.nodes.items[sink].column);
+    }
+}
+
+test "typed node alignment validation is atomic" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+
+    try std.testing.expectError(error.InvalidNodeId, graph.addNodeLayer(&.{ a, 99 }));
+    var layers = graph.nodeLayers();
+    try std.testing.expect(layers.next() == null);
+    try std.testing.expectError(error.DuplicateNodeId, graph.addNodeLayer(&.{ a, a }));
+    layers = graph.nodeLayers();
+    try std.testing.expect(layers.next() == null);
+    try std.testing.expectError(error.InvalidNodeId, graph.addNodeColumn(&.{ a, 99 }));
+    try std.testing.expectEqual(@as(usize, 0), graph.nodeColumns().len);
+    try std.testing.expectError(error.DuplicateNodeId, graph.addNodeColumn(&.{ a, a }));
+    try std.testing.expectEqual(@as(usize, 0), graph.nodeColumns().len);
+
+    try graph.addNodeColumn(&.{ a, b });
+    try std.testing.expectError(error.NodeColumnOverlap, graph.addNodeColumn(&.{ b, c }));
+    try std.testing.expectEqual(@as(usize, 1), graph.nodeColumns().len);
+    try std.testing.expectEqual(@as(?usize, 0), graph.nodes.items[a].column);
+    try std.testing.expectEqual(@as(?usize, 0), graph.nodes.items[b].column);
+    try std.testing.expectEqual(@as(?usize, null), graph.nodes.items[c].column);
+}
+
+test "typed node columns reject same-rank and cyclic ordering conflicts" {
+    const allocator = std.testing.allocator;
+    var same_rank = try Graph.init(allocator, .{ .directed = true });
+    defer same_rank.deinit();
+    const a = try same_rank.addNode("a", .{});
+    const b = try same_rank.addNode("b", .{});
+    try same_rank.addNodeLayer(&.{ a, b });
+    try same_rank.addNodeColumn(&.{ a, b });
+    try std.testing.expectError(
+        error.NodeColumnRankConflict,
+        layoutGraph(allocator, &same_rank, .{ .algorithm = .sugiyama }),
+    );
+
+    var cyclic = try Graph.init(allocator, .{ .directed = true });
+    defer cyclic.deinit();
+    const left_top = try cyclic.addNode("left_top", .{});
+    const right_top = try cyclic.addNode("right_top", .{});
+    const left_bottom = try cyclic.addNode("left_bottom", .{});
+    const right_bottom = try cyclic.addNode("right_bottom", .{});
+    try cyclic.addNodeColumn(&.{ left_top, left_bottom });
+    try cyclic.addNodeColumn(&.{ right_top, right_bottom });
+    const ranks = [_]usize{ 0, 0, 1, 1 };
+    var centers = [_]f64{ 0, 100, 100, 0 };
+    const sizes = [_]NodeSize{
+        .{ .width = 40, .height = 30 },
+        .{ .width = 40, .height = 30 },
+        .{ .width = 40, .height = 30 },
+        .{ .width = 40, .height = 30 },
+    };
+    try std.testing.expectError(
+        error.NodeColumnConstraintCycle,
+        enforceNodeColumnConstraints(
+            allocator,
+            &cyclic,
+            ranks[0..],
+            centers[0..],
+            sizes[0..],
+            20,
+        ),
+    );
+}
+
+test "typed node columns scale beyond legacy group buffer" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const column_count = 70;
+    var top: [column_count]NodeId = undefined;
+    var bottom: [column_count]NodeId = undefined;
+    for (0..column_count) |index| {
+        var label: [32]u8 = undefined;
+        top[index] = try graph.addNode(try std.fmt.bufPrint(&label, "top-{d}", .{index}), .{});
+    }
+    for (0..column_count) |index| {
+        var label: [32]u8 = undefined;
+        bottom[index] = try graph.addNode(try std.fmt.bufPrint(&label, "bottom-{d}", .{index}), .{});
+        _ = try graph.addEdge(top[index], bottom[index], .{});
+        try graph.addNodeColumn(&.{ top[index], bottom[index] });
+    }
+    try graph.addNodeLayer(top[0..]);
+    try graph.addNodeLayer(bottom[0..]);
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer layout.deinit();
+    for (0..column_count) |index| {
+        try std.testing.expectApproxEqAbs(
+            layout.nodes[top[index]].center.x,
+            layout.nodes[bottom[index]].center.x,
+            0.001,
+        );
+    }
+    try expectNoSameRankNodeOverlap(&graph, &layout);
+}
+
+test "typed node columns survive incremental layered stabilization" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const source = try graph.addNode("source", .{});
+    const middle = try graph.addNode("middle", .{});
+    const sink = try graph.addNode("sink", .{});
+    _ = try graph.addEdge(source, middle, .{});
+    _ = try graph.addEdge(middle, sink, .{});
+    try graph.addNodeColumn(&.{ source, middle, sink });
+
+    var previous = try layoutGraph(allocator, &graph, .{ .algorithm = .sugiyama });
+    defer previous.deinit();
+    const side = try graph.addNode("side", .{});
+    _ = try graph.addEdge(source, side, .{});
+    _ = try graph.addEdge(side, sink, .{});
+    var incremental = try layoutGraphIncremental(
+        allocator,
+        &graph,
+        &previous,
+        .{ .algorithm = .sugiyama },
+        .{ .stability = 0.95 },
+    );
+    defer incremental.deinit();
+
+    try std.testing.expectApproxEqAbs(incremental.nodes[source].center.x, incremental.nodes[middle].center.x, 0.001);
+    try std.testing.expectApproxEqAbs(incremental.nodes[middle].center.x, incremental.nodes[sink].center.x, 0.001);
+    try expectNoSameRankNodeOverlap(&graph, &incremental);
 }
 
 test "inter-cluster coordinate spacing separates adjacent cluster columns" {

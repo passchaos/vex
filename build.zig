@@ -368,6 +368,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/17_component_packing_svg.zig",
             .desc = "Run API example: Graphviz-style connected-component packing",
         },
+        .{
+            .step_name = "run-api-layer-column-constraints-svg",
+            .exe_name = "api-layer-column-constraints-svg",
+            .source = "examples/api/18_layer_column_constraints_svg.zig",
+            .desc = "Run API example: typed layered node alignment constraints",
+        },
     };
 
     for (api_examples) |example| {

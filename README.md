@@ -358,6 +358,16 @@ SVG, and does not change node dimensions, ranks, edge routes, or canvas size.
 Without an active theme, the light highlight palette is used. This static
 emphasis is independent of the optional interactive focus and search controls.
 
+Graphplot-style declarative alignment is available through `addNodeLayer` and
+`addNodeColumn`. A layer is a typed hard same-rank constraint; a column is a
+typed hard shared-axis constraint across ranks. Both work for TB/BT/LR/RL
+layered layouts and survive layout cloning and incremental stabilization.
+Columns are separate model data and never overwrite a node's Graphviz `group`
+attribute. Duplicate node IDs, overlapping columns, same-rank members in one
+column, or cyclic column ordering return explicit errors instead of silently
+weakening the constraint. `nodeLayers()` and `nodeColumns()` expose the model,
+and SVG metadata publishes columns under `<vex:node-columns>`.
+
 Default node, edge, and subgraph attributes set through the API apply to
 subsequently added items, with per-item options taking precedence. Typed graph
 attributes include spline routing modes such as `curved`, `polyline`, `line`,
@@ -386,6 +396,7 @@ zig build run-api-osage-layout-svg
 zig build run-api-positioned-layout-svg
 zig build run-api-math-labels-svg
 zig build run-api-component-packing-svg
+zig build run-api-layer-column-constraints-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -407,6 +418,7 @@ They progress from small SVG output to broader feature coverage:
 - `15_positioned_layout_svg.zig`: typed pre-positioned nodes and a preserved nop2 cubic edge rendered to SVG.
 - `16_math_labels_svg.zig`: ztex-powered mixed text + inline math labels on nodes and edges.
 - `17_component_packing_svg.zig`: disconnected layered workflows packed with Graphviz-style node polyominoes and non-regressing rectangle fallback, rendered with the centralized Graphplot-inspired light theme and a statically highlighted ingestion path.
+- `18_layer_column_constraints_svg.zig`: Graphplot-inspired typed node layers and columns, with three hard same-rank layers, three hard shared-axis columns, and a highlighted main path.
 
 ## Graphviz compatibility target
 

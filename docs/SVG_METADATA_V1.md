@@ -21,6 +21,8 @@ namespace URI 的最后一段是 schema major version。消费者必须按 names
 - graph 方向、strict、rankdir、对象计数、layout/canvas/viewBox。
 - `<vex:rank-constraints>`；每个 `<vex:rank>` 包含 kind、node IDs，并在
   约束声明于 named subgraph 时包含可选 `scope` subgraph ID。
+- `<vex:node-columns>`；每个 `<vex:column>` 包含稳定的 column ID 和
+  按 API 声明顺序排列的 node IDs。
 - `<vex:attributes>`，保留 graph/node/edge/subgraph 的自定义和未来属性。
 - `<vex:node>`，包含 shape、rank 和 geometry。
 - `<vex:edge>`，包含端点、ports、compound subgraph endpoints、有效布局属性、
@@ -44,6 +46,6 @@ nop2 的保留路径通过 `data-vex-object-path` 暴露为 SVG path command。
 
 `features` 是空格分隔、可扩展的能力列表。v1 当前声明：
 
-`attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links object-geometry ranks subgraph-hierarchy`
+`attributes edge-geometry edge-layout edge-paths edge-ports edge-waypoints links node-columns object-geometry ranks subgraph-hierarchy`
 
 消费者应以实际元素/属性为准，feature token 用于快速能力发现。
