@@ -25,8 +25,10 @@ pub fn main(init: std.process.Init) !void {
     const receive = try graph.addNode("Receive", .{});
     const validate = try graph.addNode("Validate", .{});
     const enqueue = try graph.addNode("Enqueue", .{});
-    _ = try graph.addEdge(receive, validate, .{ .label = "request" });
-    _ = try graph.addEdge(validate, enqueue, .{ .label = "accepted" });
+    const request = try graph.addEdge(receive, validate, .{ .label = "request" });
+    const accepted = try graph.addEdge(validate, enqueue, .{ .label = "accepted" });
+    try graph.highlightNodes(&.{ validate, enqueue });
+    try graph.highlightEdges(&.{ request, accepted });
     _ = try graph.addSubgraph("Ingestion", null, &.{ receive, validate, enqueue }, .{
         .sortv = 10,
     });

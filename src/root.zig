@@ -707,6 +707,7 @@ pub const Node = struct {
     label: []const u8,
     color: []const u8,
     shape: Shape,
+    highlighted: bool = false,
     attrs: std.ArrayList(Attr) = .empty,
 };
 
@@ -725,6 +726,7 @@ pub const Edge = struct {
     head_record_port: ?[]const u8 = null,
     ltail: ?SubgraphId = null,
     lhead: ?SubgraphId = null,
+    highlighted: bool = false,
     attrs: std.ArrayList(Attr) = .empty,
 };
 
@@ -758,6 +760,7 @@ pub const Graph = struct {
     strict: bool,
     name: []const u8,
     rankdir: RankDir,
+    visual_theme: ?VisualTheme = null,
     radial_root: ?NodeId = null,
     nodes: std.ArrayList(Node) = .empty,
     edges: std.ArrayList(Edge) = .empty,
@@ -1266,6 +1269,7 @@ pub const Graph = struct {
         try self.setDefaultSubgraphAttr(.{ .fontsize = tokens.subgraph_font_size });
         try self.setDefaultSubgraphAttr(.{ .penwidth = tokens.subgraph_pen_width });
         try self.setDefaultSubgraphAttr(.{ .margin = tokens.subgraph_margin });
+        self.visual_theme = visual_theme;
     }
 
     fn setGraphAttrFloat(self: *Graph, name: []const u8, value: f64) !void {
@@ -1661,6 +1665,28 @@ pub const Graph = struct {
         try setAttrInList(self.allocator, &self.nodes.items[id].attrs, "shape", shapeName(shape));
     }
 
+    pub fn highlightNode(self: *Graph, id: NodeId) !void {
+        if (id >= self.nodes.items.len) return error.InvalidNodeId;
+        self.nodes.items[id].highlighted = true;
+    }
+
+    pub fn highlightNodes(self: *Graph, ids: []const NodeId) !void {
+        for (ids) |id| {
+            if (id >= self.nodes.items.len) return error.InvalidNodeId;
+        }
+        for (ids) |id| self.nodes.items[id].highlighted = true;
+    }
+
+    pub fn setNodeHighlighted(self: *Graph, id: NodeId, highlighted: bool) !void {
+        if (id >= self.nodes.items.len) return error.InvalidNodeId;
+        self.nodes.items[id].highlighted = highlighted;
+    }
+
+    pub fn isNodeHighlighted(self: *const Graph, id: NodeId) !bool {
+        if (id >= self.nodes.items.len) return error.InvalidNodeId;
+        return self.nodes.items[id].highlighted;
+    }
+
     fn applyEdgeOptions(self: *Graph, id: EdgeId, options: EdgeOptions) !void {
         if (options.label) |value| try self.setEdgeAttr(id, .{ .label = value });
         if (options.label_position) |value| try self.setEdgeAttr(id, .{ .label_position = value });
@@ -1925,6 +1951,28 @@ pub const Graph = struct {
             e.min_len = std.fmt.parseInt(usize, value, 10) catch e.min_len;
         }
         try setAttrInList(self.allocator, &e.attrs, name, value);
+    }
+
+    pub fn highlightEdge(self: *Graph, id: EdgeId) !void {
+        if (id >= self.edges.items.len) return error.InvalidEdgeId;
+        self.edges.items[id].highlighted = true;
+    }
+
+    pub fn highlightEdges(self: *Graph, ids: []const EdgeId) !void {
+        for (ids) |id| {
+            if (id >= self.edges.items.len) return error.InvalidEdgeId;
+        }
+        for (ids) |id| self.edges.items[id].highlighted = true;
+    }
+
+    pub fn setEdgeHighlighted(self: *Graph, id: EdgeId, highlighted: bool) !void {
+        if (id >= self.edges.items.len) return error.InvalidEdgeId;
+        self.edges.items[id].highlighted = highlighted;
+    }
+
+    pub fn isEdgeHighlighted(self: *const Graph, id: EdgeId) !bool {
+        if (id >= self.edges.items.len) return error.InvalidEdgeId;
+        return self.edges.items[id].highlighted;
     }
 
     fn applySubgraphOptions(self: *Graph, id: SubgraphId, options: SubgraphOptions) !void {
@@ -4960,6 +5008,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
     result.edge_defaults.weight = source.edge_defaults.weight;
     result.edge_defaults.constraint = source.edge_defaults.constraint;
     result.edge_defaults.min_len = source.edge_defaults.min_len;
+    result.visual_theme = source.visual_theme;
     result.radial_root = source.radial_root;
 
     result.attrs = try copyAttrList(allocator, source.attrs.items);
@@ -4980,6 +5029,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
             .label = label,
             .color = color,
             .shape = node_item.shape,
+            .highlighted = node_item.highlighted,
             .attrs = attrs,
         });
         try result.first_subgraph_by_node.append(allocator, null);
@@ -5003,6 +5053,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
             .head_record_port = if (edge_item.head_record_port) |value| try allocator.dupe(u8, value) else null,
             .ltail = edge_item.ltail,
             .lhead = edge_item.lhead,
+            .highlighted = edge_item.highlighted,
             .attrs = attrs,
         });
     }
@@ -22783,6 +22834,7 @@ fn renderSvgEdgeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .inspector_text = inspector_text,
         .focus_id = focus_id,
         .focus_related = focus_related,
+        .highlighted = edge_item.highlighted,
         .write_object_attrs = metadata,
         .object_kind = "edge",
         .object_id = object_id,
@@ -23221,6 +23273,7 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         .inspector_text = inspector_text,
         .focus_id = focus_id,
         .focus_related = focus_related,
+        .highlighted = node_item.highlighted,
         .write_object_attrs = metadata,
         .object_kind = "node",
         .object_id = object_id,
@@ -23247,7 +23300,9 @@ fn renderSvgNodeGroup(writer: *Io.Writer, graph: *const Graph, layout: *const La
         try writer.writeByte('\n');
     }
     var fill_buf: [96]u8 = undefined;
-    if (wedgedNodeFillEligible(node_item.shape)) {
+    if (node_item.highlighted) {
+        try resolveSvgGradientFill(writer, graph, "vex-node-fill", node_item.id + 1, &.{}, nodeRect(l), &visual.fill, &fill_buf);
+    } else if (wedgedNodeFillEligible(node_item.shape)) {
         const fill_layout = visualShapeLayout(node_item, fixedShapeLayout(node_item, l));
         if (try renderSvgWedgedEllipseFill(writer, graph, "vex-node-wedges", node_item.id + 1, node_item.attrs.items, fill_layout, visual.fill, visual.stroke)) {
             visual.fill = "none";
@@ -23872,6 +23927,7 @@ const SvgGroupOpenOptions = struct {
     inspector_text: ?[]const u8 = null,
     focus_id: ?[]const u8 = null,
     focus_related: ?[]const u8 = null,
+    highlighted: bool = false,
     write_object_attrs: bool = false,
     object_kind: ?[]const u8 = null,
     object_id: ?[]const u8 = null,
@@ -23928,6 +23984,7 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
     try writeSvgGroupId(writer, options);
     try writer.writeAll("\" class=\"");
     try writeXmlEscaped(writer, options.default_class);
+    if (options.highlighted) try writer.writeAll(" vex-highlighted");
     if (attrValue(options.attrs, "class")) |class| {
         if (class.len > 0) {
             try writer.writeByte(' ');
@@ -23935,6 +23992,7 @@ fn writeSvgGroupOpenStart(writer: *Io.Writer, options: SvgGroupOpenOptions) Io.W
         }
     }
     try writer.writeByte('"');
+    if (options.highlighted) try writer.writeAll(" data-vex-highlighted=\"true\"");
     if (options.search_text) |search_text| {
         try writer.writeAll(" data-vex-search-text=\"");
         try writeXmlEscaped(writer, search_text);
@@ -24736,6 +24794,13 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
 }
 
 fn edgeLabelBackground(graph: *const Graph, edge_item: Edge) svg_mod.text.Background {
+    if (edge_item.highlighted) {
+        const tokens = (graph.visual_theme orelse VisualTheme.light).tokens();
+        return .{
+            .fill = tokens.edge_highlight_label_fill,
+            .stroke = tokens.edge_highlight_label_stroke,
+        };
+    }
     return .{
         .fill = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "labelbgcolor") orelse "#ffffff"),
         .stroke = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "labelpencolor") orelse "#e2e8f0"),
@@ -24783,33 +24848,35 @@ fn svgEdgeLabelAnchorSuffix(kind: SvgInteractiveKind) ?[]const u8 {
 
 fn renderSvgEdgePaths(writer: *Io.Writer, graph: *const Graph, directed: bool, layout: *const Layout, edge_item: Edge, rankdir: RankDir, base_offset: f64, route: EdgeRoute, routing: SvgEdgeRouting, visual: EdgeVisual, hints: EdgePathHints, label_path_id: ?SvgGroupOpenOptions) Io.Writer.Error!void {
     const render_route = graphvizMsquareHeadRoute(graphvizDiamondTailRoute(graphvizCrossClusterLongRoute(layout, edge_item, rankdir, crossClusterLeftDiagonalRoute(layout, edge_item, rankdir, route)), rankdir, hints), rankdir, hints);
-    if (edgeColorList(edge_item)) |colors| {
-        if (label_path_id) |path_id| {
-            const back_edge = isBackEdge(layout, edge_item);
-            const text_path_route = if (back_edge) render_route else routeForPathMarkers(render_route, visual);
-            const text_path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
-            try writeSvgEdgeTextPathReference(writer, path_id, layout, edge_item, rankdir, base_offset, text_path_route, routing, text_path_clip, hints);
+    if (!edge_item.highlighted) {
+        if (edgeColorList(edge_item)) |colors| {
+            if (label_path_id) |path_id| {
+                const back_edge = isBackEdge(layout, edge_item);
+                const text_path_route = if (back_edge) render_route else routeForPathMarkers(render_route, visual);
+                const text_path_clip = if (back_edge) edgePathClip(visual) else EdgePathClip{};
+                try writeSvgEdgeTextPathReference(writer, path_id, layout, edge_item, rankdir, base_offset, text_path_route, routing, text_path_clip, hints);
+            }
+            const spacing = @max(4.0, visual.width + 3.0);
+            for (colors.segments[0..colors.len], 0..) |segment, index| {
+                const color_offset = colorListOffset(colors.len, index, spacing);
+                const segment_route = edgeRouteForEdgeWithColorOffset(render_route, rankdir, color_offset);
+                const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
+                const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
+                const back_edge = isBackEdge(layout, edge_item);
+                const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
+                const path_clip = if (back_edge) edgePathClip(segment_visual) else EdgePathClip{};
+                try writer.writeAll("<path");
+                try writer.print(" fill=\"none\" stroke=\"{s}\" d=\"", .{color});
+                try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip, hints);
+                try writer.writeByte('"');
+                try writeSvgStrokeWidth(writer, visual.width);
+                try writeSvgDash(writer, visual.dash);
+                try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
+                try writer.writeAll("/>\n");
+                try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, segment_route), segment_visual, .{});
+            }
+            return;
         }
-        const spacing = @max(4.0, visual.width + 3.0);
-        for (colors.segments[0..colors.len], 0..) |segment, index| {
-            const color_offset = colorListOffset(colors.len, index, spacing);
-            const segment_route = edgeRouteForEdgeWithColorOffset(render_route, rankdir, color_offset);
-            const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
-            const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
-            const back_edge = isBackEdge(layout, edge_item);
-            const path_route = if (back_edge) segment_route else routeForPathMarkers(segment_route, segment_visual);
-            const path_clip = if (back_edge) edgePathClip(segment_visual) else EdgePathClip{};
-            try writer.writeAll("<path");
-            try writer.print(" fill=\"none\" stroke=\"{s}\" d=\"", .{color});
-            try writeEdgePath(writer, layout, edge_item, rankdir, base_offset + color_offset, path_route, routing, path_clip, hints);
-            try writer.writeByte('"');
-            try writeSvgStrokeWidth(writer, visual.width);
-            try writeSvgDash(writer, visual.dash);
-            try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
-            try writer.writeAll("/>\n");
-            try writeSvgInlineArrowheads(writer, directed, routeForInlineArrowheads(layout, edge_item, rankdir, segment_route), segment_visual, .{});
-        }
-        return;
     }
 
     const back_edge = isBackEdge(layout, edge_item);
@@ -25082,20 +25149,22 @@ fn graphvizSameClusterBackEdgePathStartOnlyShift(layout: *const Layout, edge_ite
 }
 
 fn renderSvgSelfLoopPaths(writer: *Io.Writer, graph: *const Graph, directed: bool, edge_item: Edge, route: EdgeRoute, visual: EdgeVisual, label_path_id: ?SvgGroupOpenOptions) Io.Writer.Error!void {
-    if (edgeColorList(edge_item)) |colors| {
-        if (label_path_id) |path_id| try writeSvgSelfLoopTextPathReference(writer, path_id, route);
-        const spacing = @max(4.0, visual.width + 3.0);
-        for (colors.segments[0..colors.len], 0..) |segment, index| {
-            const color_offset = colorListOffset(colors.len, index, spacing);
-            const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
-            const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
-            const shifted = offsetEdgeRoute(route, .TB, color_offset);
-            try writeSvgSelfLoopPath(writer, shifted, segment_visual, null);
-            try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
-            try writer.writeAll("/>\n");
-            try writeSvgInlineArrowheads(writer, directed, shifted, segment_visual, .{});
+    if (!edge_item.highlighted) {
+        if (edgeColorList(edge_item)) |colors| {
+            if (label_path_id) |path_id| try writeSvgSelfLoopTextPathReference(writer, path_id, route);
+            const spacing = @max(4.0, visual.width + 3.0);
+            for (colors.segments[0..colors.len], 0..) |segment, index| {
+                const color_offset = colorListOffset(colors.len, index, spacing);
+                const color = resolveSvgColor(graph, edge_item.attrs.items, segment.color);
+                const segment_visual = edgeVisualForSegment(graph, edge_item, visual, color, index, colors.len);
+                const shifted = offsetEdgeRoute(route, .TB, color_offset);
+                try writeSvgSelfLoopPath(writer, shifted, segment_visual, null);
+                try writeSvgMarkerAttrs(writer, directed, edge_item.id, segment_visual);
+                try writer.writeAll("/>\n");
+                try writeSvgInlineArrowheads(writer, directed, shifted, segment_visual, .{});
+            }
+            return;
         }
-        return;
     }
 
     try writeSvgSelfLoopPath(writer, route, visual, label_path_id);
@@ -25129,10 +25198,12 @@ fn edgeColorList(edge_item: Edge) ?ColorList {
 }
 
 fn edgeMarkerColor(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
+    if (edge_item.highlighted) return visual.stroke;
     return resolveSvgColor(graph, edge_item.attrs.items, svg_mod.edge.markerColorToken(edge_item, visual.stroke, head));
 }
 
 fn edgeMarkerFill(graph: *const Graph, edge_item: Edge, visual: EdgeVisual, head: bool) []const u8 {
+    if (edge_item.highlighted) return visual.fill;
     return resolveSvgColor(graph, edge_item.attrs.items, svg_mod.edge.markerFillToken(edge_item, visual.stroke, head));
 }
 
@@ -27632,7 +27703,7 @@ fn resolveNodeVisual(graph: *const Graph, node_item: Node) NodeVisual {
     const borderless = peripheries == 0;
     const explicit_color = color_attr != null and !(std.ascii.eqlIgnoreCase(color_attr.?, "black") and std.ascii.eqlIgnoreCase(node_item.color, "black"));
     const fill = if (attrValue(node_item.attrs.items, "fillcolor")) |value| resolveSvgColor(graph, node_item.attrs.items, value) else if (filled) (if (explicit_color) color else "lightgrey") else "none";
-    return .{
+    var result = NodeVisual{
         .fill = fill,
         .stroke = if (borderless) "none" else color,
         .font_color = resolveSvgColor(graph, node_item.attrs.items, attrValue(node_item.attrs.items, "fontcolor") orelse "black"),
@@ -27644,6 +27715,14 @@ fn resolveNodeVisual(graph: *const Graph, node_item: Node) NodeVisual {
         .peripheries = @max(peripheries, 1),
         .hidden = invisible,
     };
+    if (node_item.highlighted) {
+        const tokens = (graph.visual_theme orelse VisualTheme.light).tokens();
+        result.fill = tokens.node_highlight_fill;
+        result.stroke = if (borderless) "none" else tokens.node_highlight_stroke;
+        result.font_color = tokens.node_highlight_font;
+        result.width = @max(result.width, tokens.node_highlight_pen_width);
+    }
+    return result;
 }
 
 fn nodeHiddenForSvg(node_item: Node) bool {
@@ -27661,7 +27740,7 @@ fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
     const raw_stroke = attrValue(edge_item.attrs.items, "color") orelse edge_item.color;
     const stroke = if (parseColorList(raw_stroke)) |colors| resolveSvgColor(graph, edge_item.attrs.items, colors.segments[0].color) else resolveSvgColor(graph, edge_item.attrs.items, raw_stroke);
     const fill = if (attrValue(edge_item.attrs.items, "fillcolor")) |value| resolveSvgColor(graph, edge_item.attrs.items, value) else stroke;
-    return .{
+    var result = EdgeVisual{
         .stroke = stroke,
         .fill = fill,
         .font_color = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "fontcolor") orelse "black"),
@@ -27674,6 +27753,14 @@ fn resolveEdgeVisual(graph: *const Graph, edge_item: Edge) EdgeVisual {
         .marker_scale = std.math.clamp(parseAttrFloat(edge_item.attrs.items, "arrowsize", 1.0), 0.0, 8.0),
         .hidden = styleHas(style, "invis"),
     };
+    if (edge_item.highlighted) {
+        const tokens = (graph.visual_theme orelse VisualTheme.light).tokens();
+        result.stroke = tokens.edge_highlight_stroke;
+        result.fill = tokens.edge_highlight_stroke;
+        result.font_color = tokens.edge_highlight_font;
+        result.width = @max(result.width, tokens.edge_highlight_pen_width);
+    }
+    return result;
 }
 
 fn resolveClusterVisual(graph: *const Graph, cluster: Subgraph) ClusterVisual {
@@ -29594,6 +29681,153 @@ test "visual themes render expected SVG colors including edge labels" {
         try std.testing.expect(std.mem.indexOf(u8, svg, edge_label_fragment) != null);
         try std.testing.expect(std.mem.indexOf(u8, svg, subgraph_fragment) != null);
     }
+}
+
+test "static highlight APIs are atomic reversible and survive layout clone" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .theme = .dark });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const edge = try graph.addEdge(a, b, .{ .label = "selected" });
+
+    try std.testing.expectError(error.InvalidNodeId, graph.highlightNodes(&.{ a, 99 }));
+    try std.testing.expect(!graph.nodes.items[a].highlighted);
+    try std.testing.expect(!graph.nodes.items[b].highlighted);
+    try std.testing.expectError(error.InvalidEdgeId, graph.highlightEdges(&.{ edge, 99 }));
+    try std.testing.expect(!graph.edges.items[edge].highlighted);
+
+    try graph.highlightNodes(&.{ a, b });
+    try graph.highlightEdge(edge);
+    try std.testing.expect(try graph.isNodeHighlighted(a));
+    try std.testing.expect(try graph.isNodeHighlighted(b));
+    try std.testing.expect(try graph.isEdgeHighlighted(edge));
+    try graph.setNodeHighlighted(b, false);
+    try graph.setEdgeHighlighted(edge, false);
+    try std.testing.expect(!try graph.isNodeHighlighted(b));
+    try std.testing.expect(!try graph.isEdgeHighlighted(edge));
+    try std.testing.expectError(error.InvalidNodeId, graph.isNodeHighlighted(99));
+    try std.testing.expectError(error.InvalidEdgeId, graph.isEdgeHighlighted(99));
+    try graph.highlightEdge(edge);
+
+    var layout = try layoutGraph(allocator, &graph, VisualTheme.dark.layoutConfig());
+    defer layout.deinit();
+    try std.testing.expect(layout.graph.nodes.items[a].highlighted);
+    try std.testing.expect(!layout.graph.nodes.items[b].highlighted);
+    try std.testing.expect(layout.graph.edges.items[edge].highlighted);
+}
+
+test "static theme highlights change SVG visuals without changing layout geometry" {
+    const allocator = std.testing.allocator;
+    const expectations = [_]struct {
+        visual_theme: VisualTheme,
+        node_fill: []const u8,
+        node_stroke: []const u8,
+        node_font: []const u8,
+        edge_stroke: []const u8,
+        edge_font: []const u8,
+        edge_label_fill: []const u8,
+    }{
+        .{
+            .visual_theme = .light,
+            .node_fill = "#f0bb8c",
+            .node_stroke = "#eaa15f",
+            .node_font = "#202328",
+            .edge_stroke = "#eaa15f",
+            .edge_font = "#eaa15f",
+            .edge_label_fill = "#fcf6f0",
+        },
+        .{
+            .visual_theme = .dark,
+            .node_fill = "#8f6d4d",
+            .node_stroke = "#eaa15f",
+            .node_font = "#f1f6fb",
+            .edge_stroke = "#eaa15f",
+            .edge_font = "#eaa15f",
+            .edge_label_fill = "#2b2928",
+        },
+        .{
+            .visual_theme = .print,
+            .node_fill = "#fef3c7",
+            .node_stroke = "#d97706",
+            .node_font = "#78350f",
+            .edge_stroke = "#d97706",
+            .edge_font = "#92400e",
+            .edge_label_fill = "#fff7ed",
+        },
+    };
+
+    for (expectations) |expectation| {
+        var graph = try Graph.init(allocator, .{ .directed = true, .theme = expectation.visual_theme });
+        defer graph.deinit();
+        const a = try graph.addNode("a", .{ .fillcolor = "red:blue" });
+        const b = try graph.addNode("b", .{});
+        const edge = try graph.addEdge(a, b, .{ .label = "selected", .color = "green:purple" });
+        const original_node_fill = attrValue(graph.nodes.items[a].attrs.items, "fillcolor").?;
+        const original_edge_color = attrValue(graph.edges.items[edge].attrs.items, "color").?;
+        const config = expectation.visual_theme.layoutConfig();
+
+        var before = try layoutGraph(allocator, &graph, config);
+        defer before.deinit();
+        try graph.highlightNode(a);
+        try graph.highlightEdge(edge);
+        var after = try layoutGraph(allocator, &graph, config);
+        defer after.deinit();
+
+        try std.testing.expectEqual(before.width, after.width);
+        try std.testing.expectEqual(before.height, after.height);
+        try std.testing.expectEqualSlices(NodeLayout, before.nodes, after.nodes);
+        try std.testing.expectEqualSlices(usize, before.ranks, after.ranks);
+        try std.testing.expectEqual(before.edge_waypoints.len, after.edge_waypoints.len);
+        for (before.edge_waypoints, after.edge_waypoints) |before_waypoints, after_waypoints| {
+            try std.testing.expectEqualSlices(EdgeWaypoint, before_waypoints.points, after_waypoints.points);
+        }
+        try std.testing.expectEqualStrings(original_node_fill, attrValue(graph.nodes.items[a].attrs.items, "fillcolor").?);
+        try std.testing.expectEqualStrings(original_edge_color, attrValue(graph.edges.items[edge].attrs.items, "color").?);
+
+        const svg = try renderAlloc(allocator, &after, .svg, .{});
+        defer allocator.free(svg);
+        var node_shape: [160]u8 = undefined;
+        const node_fragment = try std.fmt.bufPrint(&node_shape, "fill=\"{s}\" stroke=\"{s}\"", .{ expectation.node_fill, expectation.node_stroke });
+        var node_text: [96]u8 = undefined;
+        const node_text_fragment = try std.fmt.bufPrint(&node_text, "fill=\"{s}\">a</text>", .{expectation.node_font});
+        var edge_path: [96]u8 = undefined;
+        const edge_path_fragment = try std.fmt.bufPrint(&edge_path, "fill=\"none\" stroke=\"{s}\"", .{expectation.edge_stroke});
+        var edge_text: [128]u8 = undefined;
+        const edge_text_fragment = try std.fmt.bufPrint(&edge_text, "fill=\"{s}\" dominant-baseline=\"middle\"", .{expectation.edge_font});
+        var edge_label: [128]u8 = undefined;
+        const edge_label_fragment = try std.fmt.bufPrint(&edge_label, "fill=\"{s}\" stroke=\"{s}\" opacity=\"0.92\"", .{ expectation.edge_label_fill, expectation.edge_stroke });
+
+        try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"node vex-highlighted\" data-vex-highlighted=\"true\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, "class=\"edge vex-highlighted\" data-vex-highlighted=\"true\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, node_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, node_text_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, edge_path_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, edge_text_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, edge_label_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, "red:blue") == null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, "green:purple") == null);
+    }
+}
+
+test "static highlights without a theme use the light highlight palette" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const edge = try graph.addEdge(a, b, .{ .label = "selected" });
+    try graph.highlightNode(a);
+    try graph.highlightEdge(edge);
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const svg = try renderAlloc(allocator, &layout, .svg, .{});
+    defer allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#f0bb8c\" stroke=\"#eaa15f\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#fcf6f0\" stroke=\"#eaa15f\" opacity=\"0.92\"") != null);
 }
 
 test "code API merges strict duplicate edge options" {

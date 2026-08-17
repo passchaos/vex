@@ -332,8 +332,10 @@ defer graph.deinit();
 
 const source = try graph.addNode("Source", .{});
 const sink = try graph.addNode("Sink", .{ .fillcolor = "#8f6d4d" });
-_ = try graph.addEdge(source, sink, .{ .label = "events" });
+const events = try graph.addEdge(source, sink, .{ .label = "events" });
 _ = try graph.addSubgraph("Pipeline", null, &.{ source, sink }, .{});
+try graph.highlightNode(sink);
+try graph.highlightEdge(events);
 
 var config = vex.VisualTheme.dark.layoutConfig();
 config.algorithm = .sugiyama;
@@ -345,6 +347,16 @@ Explicit object options take precedence. `setDefaultNodeAttr`,
 `setDefaultEdgeAttr`, and `setDefaultSubgraphAttr` can further refine each
 default surface. Light and dark themes choose the `relaxed` layout profile;
 print chooses `balanced`.
+
+Graphplot-style static emphasis is available through `highlightNode`,
+`highlightNodes`, `highlightEdge`, and `highlightEdges`; the matching
+`setNodeHighlighted` / `setEdgeHighlighted` calls can clear or restore the
+state. Highlighting is model state rather than a destructive rewrite of object
+attributes: it survives layout cloning, uses the active theme's dedicated
+highlight tokens, emits `vex-highlighted` / `data-vex-highlighted="true"` in
+SVG, and does not change node dimensions, ranks, edge routes, or canvas size.
+Without an active theme, the light highlight palette is used. This static
+emphasis is independent of the optional interactive focus and search controls.
 
 Default node, edge, and subgraph attributes set through the API apply to
 subsequently added items, with per-item options taking precedence. Typed graph
@@ -394,7 +406,7 @@ They progress from small SVG output to broader feature coverage:
 - `14_osage_layout_svg.zig`: nested subgraphs and intrinsic node rectangles rendered with deterministic array packing.
 - `15_positioned_layout_svg.zig`: typed pre-positioned nodes and a preserved nop2 cubic edge rendered to SVG.
 - `16_math_labels_svg.zig`: ztex-powered mixed text + inline math labels on nodes and edges.
-- `17_component_packing_svg.zig`: disconnected layered workflows packed with Graphviz-style node polyominoes and non-regressing rectangle fallback, rendered with the centralized Graphplot-inspired light theme.
+- `17_component_packing_svg.zig`: disconnected layered workflows packed with Graphviz-style node polyominoes and non-regressing rectangle fallback, rendered with the centralized Graphplot-inspired light theme and a statically highlighted ingestion path.
 
 ## Graphviz compatibility target
 
