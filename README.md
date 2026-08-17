@@ -73,6 +73,18 @@ rotation, `model=subset`, `defaultdist`, `epsilon`, and seeded
 complete node `pos` input positions with Graphviz `inputscale` unit semantics.
 Explicit force-layout `overlap` values reuse the native Graphviz-family
 overlap adjusters and `sep`.
+Layered and force-style layouts share explicit Graphviz-style connected-
+component packing. `pack=true` uses an 8-point component margin, `pack=N` uses
+an explicit point margin, and setting `packmode` automatically enables
+packing. `packmode=graph` packs complete component rectangles, while
+`packmode=array_[ciutblr]N` provides deterministic row/column-major array
+packing, alignment flags, input/area/`sortv` ordering, and a requested row or
+column count. Component shifts preserve node, cluster, long-edge waypoint, and
+preserved spline geometry. As in Graphviz dot, explicit `ratio` handling keeps
+the integrated layout instead of invoking this separate-component pass.
+Recognized `packmode=node|cluster` values currently use the conservative
+complete-component rectangle path; polyomino granularity and `packmode=aspect*`
+tiling remain explicit capability-matrix follow-ups.
 Force-style layouts accept Graphviz `dim` / `dimen` attributes at the model
 boundary while Vex continues to produce 2D SVG coordinates.
 `--layout fr` selects the deterministic Fruchterman-Reingold engine.
@@ -321,6 +333,7 @@ zig build run-api-patchwork-layout-svg
 zig build run-api-osage-layout-svg
 zig build run-api-positioned-layout-svg
 zig build run-api-math-labels-svg
+zig build run-api-component-packing-svg
 ```
 
 They progress from small SVG output to broader feature coverage:
@@ -341,6 +354,7 @@ They progress from small SVG output to broader feature coverage:
 - `14_osage_layout_svg.zig`: nested subgraphs and intrinsic node rectangles rendered with deterministic array packing.
 - `15_positioned_layout_svg.zig`: typed pre-positioned nodes and a preserved nop2 cubic edge rendered to SVG.
 - `16_math_labels_svg.zig`: ztex-powered mixed text + inline math labels on nodes and edges.
+- `17_component_packing_svg.zig`: disconnected layered workflows packed with Graphviz-style `pack` / `packmode`, array ordering, and relaxed low-contrast styling.
 
 ## Graphviz compatibility target
 

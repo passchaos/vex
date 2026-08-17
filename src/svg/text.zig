@@ -46,6 +46,21 @@ pub const LabelLoc = enum {
     }
 };
 
+pub const BlockSize = struct {
+    width: f64,
+    height: f64,
+};
+
+pub fn backgroundSize(text: []const u8, font_size: f64, breaks: LabelBreaks) BlockSize {
+    const count = lineCount(text, breaks);
+    const line_height = font_size * 1.25;
+    const max_len = maxLineLen(text, breaks);
+    return .{
+        .width = @as(f64, @floatFromInt(max_len)) * font_size * 0.62 + 12.0,
+        .height = @as(f64, @floatFromInt(count)) * line_height + 8.0,
+    };
+}
+
 pub fn renderBlock(
     writer: *Io.Writer,
     text: []const u8,
@@ -105,14 +120,12 @@ pub fn renderBlockWithAnchor(
         center_y - block_height / 2.0 + height * 0.72;
 
     if (label_background) {
-        const max_len = maxLineLen(text, breaks);
-        const width = @as(f64, @floatFromInt(max_len)) * font_size * 0.62 + 12.0;
-        const background_height = block_height + 8.0;
+        const background = backgroundSize(text, font_size, breaks);
         try svg_writer.rectOpen(writer, .{
-            .x = x - width / 2.0,
-            .y = center_y - background_height / 2.0,
-            .width = width,
-            .height = background_height,
+            .x = x - background.width / 2.0,
+            .y = center_y - background.height / 2.0,
+            .width = background.width,
+            .height = background.height,
         }, 4);
         try writer.writeAll(" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n");
     }

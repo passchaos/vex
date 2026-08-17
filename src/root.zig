@@ -4996,7 +4996,8 @@ const defaultClusterAlongShift = layout_mod.options.defaultClusterAlongShift;
 
 pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: LayoutConfig) !Layout {
     var work = LayoutWorkTracker{ .control = config.control };
-    return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
+    const algorithm = resolvedLayoutAlgorithm(graph, config.algorithm);
+    var result = try switch (algorithm) {
         .auto => unreachable,
         .sugiyama => if (shouldUseFragmentedComponentLayout(graph))
             layoutFragmentedComponentsWithControl(allocator, graph, config.layered, &work)
@@ -5013,6 +5014,13 @@ pub fn layoutGraph(allocator: std.mem.Allocator, graph: *const Graph, config: La
         .positioned => layoutPositionedWithControl(allocator, graph, config.layered, false, &work),
         .positioned_with_edges => layoutPositionedWithControl(allocator, graph, config.layered, true, &work),
     };
+    errdefer result.deinit();
+    if (algorithm != .treemap and algorithm != .array_packing and
+        algorithm != .positioned and algorithm != .positioned_with_edges)
+    {
+        try packLayoutComponentsIfRequested(allocator, graph, algorithm, &result);
+    }
+    return result;
 }
 
 fn shouldUseFragmentedComponentLayout(graph: *const Graph) bool {
@@ -5079,7 +5087,8 @@ pub fn layoutGraphsParallel(allocator: std.mem.Allocator, tasks: []const Paralle
 
 pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph, previous: *const Layout, config: LayoutConfig, options: IncrementalLayoutOptions) !Layout {
     var work = LayoutWorkTracker{ .control = config.control };
-    return switch (resolvedLayoutAlgorithm(graph, config.algorithm)) {
+    const algorithm = resolvedLayoutAlgorithm(graph, config.algorithm);
+    var result = try switch (algorithm) {
         .auto => unreachable,
         .sugiyama => layoutLayeredIncrementalWithControl(allocator, graph, previous, config.layered, options, &work),
         .fruchterman_reingold => layoutFruchtermanReingoldWithPrevious(allocator, graph, previous, forceLayoutOptionsWithGraphAttrs(config.force, graph), options, &work),
@@ -5093,6 +5102,13 @@ pub fn layoutGraphIncremental(allocator: std.mem.Allocator, graph: *const Graph,
         .positioned => layoutPositionedWithControl(allocator, graph, config.layered, false, &work),
         .positioned_with_edges => layoutPositionedWithControl(allocator, graph, config.layered, true, &work),
     };
+    errdefer result.deinit();
+    if (algorithm != .treemap and algorithm != .array_packing and
+        algorithm != .positioned and algorithm != .positioned_with_edges)
+    {
+        try packLayoutComponentsIfRequested(allocator, graph, algorithm, &result);
+    }
+    return result;
 }
 
 const LayoutWorkTracker = struct {
@@ -5147,6 +5163,218 @@ fn canonicalEdgeEndpointKey(directed: bool, edge_item: Edge) EdgeEndpointKey {
         return .{ .from = edge_item.from, .to = edge_item.to };
     }
     return .{ .from = edge_item.to, .to = edge_item.from };
+}
+
+fn componentPackRequest(
+    graph: *const Graph,
+    algorithm: LayoutAlgorithm,
+) ?layout_mod.pack.Options {
+    if (algorithm == .sugiyama and attrValue(graph.attrs.items, "ratio") != null) return null;
+    return layout_mod.pack.parseOptions(
+        attrValue(graph.attrs.items, "pack"),
+        attrValue(graph.attrs.items, "packmode"),
+    );
+}
+
+fn packLayoutComponentsIfRequested(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    algorithm: LayoutAlgorithm,
+    layout: *Layout,
+) !void {
+    const request = componentPackRequest(graph, algorithm) orelse return;
+    if (graph.nodes.items.len <= 1 or layout.nodes.len != graph.nodes.items.len) return;
+
+    const component_labels = try allocator.alloc(usize, graph.nodes.items.len);
+    defer allocator.free(component_labels);
+    const component_count = try labelLayoutComponents(allocator, graph, component_labels);
+    if (component_count <= 1) return;
+
+    const bounds = try allocator.alloc(layout_mod.pack.Bounds, component_count);
+    defer allocator.free(bounds);
+    for (bounds, 0..) |*item, component| item.* = .{ .id = component };
+    for (layout.nodes, 0..) |node, node_id| {
+        includePackRect(&bounds[component_labels[node_id]], nodeRect(node));
+        if (node_id < graph.nodes.items.len) {
+            const node_item = graph.nodes.items[node_id];
+            if (nodeXLabelRect(layout, node_item, node, resolveNodeVisual(graph, node_item))) |label_rect| {
+                includePackRect(&bounds[component_labels[node_id]], label_rect);
+            }
+        }
+    }
+    for (layout.subgraphs, 0..) |subgraph_layout, subgraph_id| {
+        if (subgraph_id >= graph.subgraphs.items.len or
+            subgraph_layout.width <= 0 or subgraph_layout.height <= 0) continue;
+        const component = subgraphComponent(graph, component_labels, subgraph_id) orelse continue;
+        includePackRect(&bounds[component], .{
+            .x = subgraph_layout.x,
+            .y = subgraph_layout.y,
+            .width = subgraph_layout.width,
+            .height = subgraph_layout.height,
+        });
+    }
+    for (graph.nodes.items) |node_item| {
+        if (node_item.id >= component_labels.len) continue;
+        if (attrOptionalUsize(node_item.attrs.items, "sortv")) |sort_value| {
+            bounds[component_labels[node_item.id]].includeSortValue(sort_value);
+        }
+    }
+    for (graph.subgraphs.items) |subgraph| {
+        const component = subgraphComponent(graph, component_labels, subgraph.id) orelse continue;
+        if (attrOptionalUsize(subgraph.attrs.items, "sortv")) |sort_value| {
+            bounds[component].includeSortValue(sort_value);
+        }
+    }
+    includeComponentEdgeGeometry(graph, layout, component_labels, bounds);
+
+    const rects = try allocator.alloc(layout_mod.pack.Rect, component_count);
+    defer allocator.free(rects);
+    for (bounds, 0..) |item, component| {
+        rects[component] = item.rect();
+    }
+    var packed_layout = try layout_mod.pack.layout(allocator, rects, request);
+    defer packed_layout.deinit();
+
+    const shifts = try allocator.alloc(Point, component_count);
+    defer allocator.free(shifts);
+    for (bounds, packed_layout.placements, 0..) |item, placement, component| {
+        shifts[component] = .{
+            .x = layout.margin_x + placement.x - item.min_x,
+            .y = layout.margin_y + placement.y - item.min_y,
+        };
+    }
+    shiftPackedLayoutGeometry(graph, layout, component_labels, shifts);
+    layout.width = packed_layout.width + layout.margin_x * 2.0;
+    layout.height = packed_layout.height + layout.margin_y * 2.0;
+}
+
+fn includePackRect(bounds: *layout_mod.pack.Bounds, rect: RectF) void {
+    bounds.includeRect(rect.x, rect.y, rect.width, rect.height);
+}
+
+fn labelLayoutComponents(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    labels: []usize,
+) !usize {
+    if (labels.len == 0) return 0;
+    var components = try layout_mod.pack.DisjointSet.init(allocator, labels.len);
+    defer components.deinit();
+
+    for (graph.edges.items) |edge_item| {
+        components.unite(edge_item.from, edge_item.to);
+    }
+    for (graph.subgraphs.items) |subgraph| {
+        if (!subgraph.is_cluster) continue;
+        const first = firstNodeInSubgraphHierarchy(graph, subgraph.id, labels.len) orelse continue;
+        for (graph.subgraphs.items) |candidate| {
+            if (!subgraphIsAncestorOf(graph, subgraph.id, candidate.id)) continue;
+            for (candidate.nodes) |node_id| {
+                components.unite(first, node_id);
+            }
+        }
+    }
+    return components.labels(allocator, labels);
+}
+
+fn subgraphComponent(
+    graph: *const Graph,
+    component_labels: []const usize,
+    subgraph_id: SubgraphId,
+) ?usize {
+    const node_id = firstNodeInSubgraphHierarchy(graph, subgraph_id, component_labels.len) orelse return null;
+    return component_labels[node_id];
+}
+
+fn firstNodeInSubgraphHierarchy(
+    graph: *const Graph,
+    subgraph_id: SubgraphId,
+    node_count: usize,
+) ?NodeId {
+    if (subgraph_id >= graph.subgraphs.items.len) return null;
+    for (graph.subgraphs.items) |candidate| {
+        if (!subgraphIsAncestorOf(graph, subgraph_id, candidate.id)) continue;
+        for (candidate.nodes) |node_id| {
+            if (node_id < node_count) return node_id;
+        }
+    }
+    return null;
+}
+
+fn includeComponentEdgeGeometry(
+    graph: *const Graph,
+    layout: *const Layout,
+    component_labels: []const usize,
+    bounds: []layout_mod.pack.Bounds,
+) void {
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= component_labels.len) continue;
+        const component = component_labels[edge_item.from];
+        if (component >= bounds.len) continue;
+        if (edgeObjectRect(graph, layout, edge_item)) |edge_rect| {
+            includePackRect(&bounds[component], edge_rect);
+        }
+        if (edge_item.id < layout.edge_waypoints.len) {
+            for (layout.edge_waypoints[edge_item.id].points) |waypoint| {
+                bounds[component].includePoint(waypoint.point.x, waypoint.point.y);
+            }
+        }
+        if (layout.edge_splines) |splines| {
+            if (edge_item.id >= splines.len) continue;
+            for (splines[edge_item.id].segments) |segment| {
+                for (segment.points) |point| bounds[component].includePoint(point.x, point.y);
+                if (segment.start_tip) |point| bounds[component].includePoint(point.x, point.y);
+                if (segment.end_tip) |point| bounds[component].includePoint(point.x, point.y);
+            }
+        }
+    }
+}
+
+fn shiftPackedLayoutGeometry(
+    graph: *const Graph,
+    layout: *Layout,
+    component_labels: []const usize,
+    shifts: []const Point,
+) void {
+    for (layout.nodes, 0..) |*node, node_id| {
+        if (node_id >= component_labels.len or component_labels[node_id] >= shifts.len) continue;
+        shiftPoint(&node.center, shifts[component_labels[node_id]]);
+    }
+    for (layout.subgraphs, 0..) |*subgraph_layout, subgraph_id| {
+        const component = subgraphComponent(graph, component_labels, subgraph_id) orelse continue;
+        if (component >= shifts.len) continue;
+        subgraph_layout.x += shifts[component].x;
+        subgraph_layout.y += shifts[component].y;
+    }
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= component_labels.len) continue;
+        const component = component_labels[edge_item.from];
+        if (component >= shifts.len) continue;
+        const shift = shifts[component];
+        if (edge_item.id < layout.edge_waypoints.len) {
+            for (layout.edge_waypoints[edge_item.id].points) |*waypoint| {
+                shiftPoint(&waypoint.point, shift);
+            }
+        }
+        if (layout.edge_splines) |splines| {
+            if (edge_item.id >= splines.len) continue;
+            for (splines[edge_item.id].segments) |*segment| {
+                for (segment.points) |*point| shiftPoint(point, shift);
+                if (segment.start_tip) |*point| shiftPoint(point, shift);
+                if (segment.end_tip) |*point| shiftPoint(point, shift);
+            }
+        }
+    }
+}
+
+fn shiftPoint(point: *Point, shift: Point) void {
+    point.x += shift.x;
+    point.y += shift.y;
+}
+
+fn attrOptionalUsize(attrs: []const Attr, name: []const u8) ?usize {
+    const value = attrValue(attrs, name) orelse return null;
+    return std.fmt.parseInt(usize, value, 10) catch null;
 }
 
 fn resolvedLayoutAlgorithm(graph: *const Graph, requested: LayoutAlgorithm) LayoutAlgorithm {
@@ -22316,9 +22544,9 @@ fn shiftLabelCrossAxis(point: Point, rankdir: RankDir, offset: f64) Point {
 
 fn edgeLabelRect(attrs: []const Attr, label: []const u8, center: Point, font_size: f64) RectF {
     const math_size = mathLabelSize(attrs, label, font_size);
-    const line_height = font_size * 1.25;
-    const height = if (math_size) |size| size.height + 8.0 else @as(f64, @floatFromInt(displayLabelLineCount(label))) * line_height + 8.0;
-    const width = if (math_size) |size| size.width + 12.0 else displayLabelEstimatedWidth(label, font_size) + 12.0;
+    const background = svg_mod.text.backgroundSize(label, font_size, svg_label_breaks);
+    const height = if (math_size) |size| size.height + 8.0 else background.height;
+    const width = if (math_size) |size| size.width + 12.0 else background.width;
     return .{
         .x = center.x - width / 2.0,
         .y = center.y - height / 2.0,
@@ -29824,6 +30052,392 @@ test "neato defaultdist changes disconnected component layout" {
     var far_layout = try layoutGraph(allocator, &far, .{ .algorithm = .auto });
     defer far_layout.deinit();
     try std.testing.expect(sharedNodeDisplacement(&near_layout, &far_layout, near.nodes.items.len) > 0.1);
+}
+
+test "Graphviz packmode automatically packs connected components into arrays" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [packmode=array_i2];
+        \\  a -> b [minlen=3, label="long"];
+        \\  c -> d;
+        \\  e;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const first = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "a"),
+        nodeIdByLabel(&graph, "b"),
+    }).?;
+    const second = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "c"),
+        nodeIdByLabel(&graph, "d"),
+    }).?;
+    const third = layoutNodeSetRect(&layout, &.{nodeIdByLabel(&graph, "e")}).?;
+
+    try std.testing.expect(first.x + first.width < second.x);
+    try std.testing.expect(third.y > @min(first.y, second.y));
+    try std.testing.expect(!rectsOverlap(first, second));
+    try std.testing.expect(!rectsOverlap(first, third));
+    try std.testing.expect(!rectsOverlap(second, third));
+    for (layout.nodes) |node| {
+        const rect = nodeRect(node);
+        try std.testing.expect(rect.x >= 0 and rect.y >= 0);
+        try std.testing.expect(rect.x + rect.width <= layout.width);
+        try std.testing.expect(rect.y + rect.height <= layout.height);
+    }
+}
+
+test "Graphviz component packing translates long-edge waypoints with their component" {
+    const allocator = std.testing.allocator;
+    const plain_source =
+        \\digraph G {
+        \\  a -> b [minlen=4, label="long edge"];
+        \\  c -> d;
+        \\  e;
+        \\}
+    ;
+    const packed_source =
+        \\digraph G {
+        \\  graph [pack=24, packmode=array_i2];
+        \\  a -> b [minlen=4, label="long edge"];
+        \\  c -> d;
+        \\  e;
+        \\}
+    ;
+    var plain = try parseDot(allocator, plain_source);
+    defer plain.deinit();
+    var packed_graph = try parseDot(allocator, packed_source);
+    defer packed_graph.deinit();
+    var plain_layout = try layoutGraph(allocator, &plain, .{});
+    defer plain_layout.deinit();
+    var packed_layout = try layoutGraph(allocator, &packed_graph, .{});
+    defer packed_layout.deinit();
+
+    const plain_a = nodeIdByLabel(&plain, "a");
+    const packed_a = nodeIdByLabel(&packed_graph, "a");
+    const plain_edge = plain.edges.items[0];
+    const packed_edge = packed_graph.edges.items[0];
+    try std.testing.expectEqual(@as(usize, 3), plain_layout.edge_waypoints[plain_edge.id].points.len);
+    try std.testing.expectEqual(
+        plain_layout.edge_waypoints[plain_edge.id].points.len,
+        packed_layout.edge_waypoints[packed_edge.id].points.len,
+    );
+    const shift = Point{
+        .x = packed_layout.nodes[packed_a].center.x - plain_layout.nodes[plain_a].center.x,
+        .y = packed_layout.nodes[packed_a].center.y - plain_layout.nodes[plain_a].center.y,
+    };
+    for (
+        plain_layout.edge_waypoints[plain_edge.id].points,
+        packed_layout.edge_waypoints[packed_edge.id].points,
+    ) |plain_waypoint, packed_waypoint| {
+        try std.testing.expectApproxEqAbs(
+            plain_waypoint.point.x + shift.x,
+            packed_waypoint.point.x,
+            0.001,
+        );
+        try std.testing.expectApproxEqAbs(
+            plain_waypoint.point.y + shift.y,
+            packed_waypoint.point.y,
+            0.001,
+        );
+    }
+}
+
+test "Graphviz component packing keeps cluster boxes with their members" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [packmode=array_i2];
+        \\  subgraph cluster_left {
+        \\    label="Left";
+        \\    a -> b [minlen=2];
+        \\  }
+        \\  subgraph cluster_right {
+        \\    label="Right";
+        \\    c -> d;
+        \\  }
+        \\  loose;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    try std.testing.expectEqual(@as(usize, 2), layout.subgraphs.len);
+    const left = RectF{
+        .x = layout.subgraphs[0].x,
+        .y = layout.subgraphs[0].y,
+        .width = layout.subgraphs[0].width,
+        .height = layout.subgraphs[0].height,
+    };
+    const right = RectF{
+        .x = layout.subgraphs[1].x,
+        .y = layout.subgraphs[1].y,
+        .width = layout.subgraphs[1].width,
+        .height = layout.subgraphs[1].height,
+    };
+    try std.testing.expect(!rectsOverlap(left, right));
+    try std.testing.expect(rectContainsRect(left, nodeRect(layout.nodes[nodeIdByLabel(&graph, "a")])));
+    try std.testing.expect(rectContainsRect(left, nodeRect(layout.nodes[nodeIdByLabel(&graph, "b")])));
+    try std.testing.expect(rectContainsRect(right, nodeRect(layout.nodes[nodeIdByLabel(&graph, "c")])));
+    try std.testing.expect(rectContainsRect(right, nodeRect(layout.nodes[nodeIdByLabel(&graph, "d")])));
+}
+
+test "Graphviz component packing shifts empty parent clusters with nested members" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .packmode = "array_i2" });
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addNode("loose", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(c, d, .{});
+    const outer = try graph.addSubgraph("Outer", null, &.{}, .{});
+    const inner = try graph.addSubgraph("Inner", outer, &.{ a, b }, .{});
+    const right = try graph.addSubgraph("Right", null, &.{ c, d }, .{});
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const outer_rect = RectF{
+        .x = layout.subgraphs[outer].x,
+        .y = layout.subgraphs[outer].y,
+        .width = layout.subgraphs[outer].width,
+        .height = layout.subgraphs[outer].height,
+    };
+    const inner_rect = RectF{
+        .x = layout.subgraphs[inner].x,
+        .y = layout.subgraphs[inner].y,
+        .width = layout.subgraphs[inner].width,
+        .height = layout.subgraphs[inner].height,
+    };
+    const right_rect = RectF{
+        .x = layout.subgraphs[right].x,
+        .y = layout.subgraphs[right].y,
+        .width = layout.subgraphs[right].width,
+        .height = layout.subgraphs[right].height,
+    };
+    try std.testing.expect(rectContainsRect(outer_rect, inner_rect));
+    try std.testing.expect(rectContainsRect(inner_rect, nodeRect(layout.nodes[a])));
+    try std.testing.expect(rectContainsRect(inner_rect, nodeRect(layout.nodes[b])));
+    try std.testing.expect(!rectsOverlap(outer_rect, right_rect));
+}
+
+test "Graphviz array component packing honors sortv and numeric margin" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [pack=30, packmode=array_u3];
+        \\  late [sortv=30];
+        \\  first [sortv=10];
+        \\  middle [sortv=20];
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const first = nodeRect(layout.nodes[nodeIdByLabel(&graph, "first")]);
+    const middle = nodeRect(layout.nodes[nodeIdByLabel(&graph, "middle")]);
+    const late = nodeRect(layout.nodes[nodeIdByLabel(&graph, "late")]);
+    try std.testing.expect(first.x < middle.x and middle.x < late.x);
+    try std.testing.expect(middle.x - (first.x + first.width) >= 29.999);
+    try std.testing.expect(late.x - (middle.x + middle.width) >= 29.999);
+}
+
+test "Graphviz component packing is shared by neato layouts" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, start=random11, maxiter=40, pack=18, packmode=array_i2];
+        \\  a -- b;
+        \\  c -- d;
+        \\  e;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    const first = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "a"),
+        nodeIdByLabel(&graph, "b"),
+    }).?;
+    const second = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "c"),
+        nodeIdByLabel(&graph, "d"),
+    }).?;
+    const third = nodeRect(layout.nodes[nodeIdByLabel(&graph, "e")]);
+    try std.testing.expect(first.x + first.width < second.x);
+    try std.testing.expect(third.y > @min(first.y, second.y));
+    try std.testing.expect(!rectsOverlap(first, second));
+    try std.testing.expect(!rectsOverlap(first, third));
+    try std.testing.expect(!rectsOverlap(second, third));
+}
+
+test "neato component packing remains enabled with graph ratio" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [layout=neato, ratio=2, start=random7, maxiter=40, packmode=array_i2];
+        \\  a -- b;
+        \\  c -- d;
+        \\  e;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{ .algorithm = .auto });
+    defer layout.deinit();
+    const first = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "a"),
+        nodeIdByLabel(&graph, "b"),
+    }).?;
+    const second = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "c"),
+        nodeIdByLabel(&graph, "d"),
+    }).?;
+    const third = nodeRect(layout.nodes[nodeIdByLabel(&graph, "e")]);
+    try std.testing.expect(first.x + first.width < second.x);
+    try std.testing.expect(third.y > @min(first.y, second.y));
+}
+
+test "packed back-edge labels stay clear of neighboring components" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [pack=24, packmode=array_i2];
+        \\  a -> b -> c;
+        \\  c -> a [label="long feedback label"];
+        \\  x -> y;
+        \\  loose;
+        \\}
+    );
+    defer graph.deinit();
+
+    var layout = try layoutGraph(allocator, &graph, .{});
+    defer layout.deinit();
+    const feedback = graph.edges.items[2];
+    try std.testing.expect(isBackEdge(&layout, feedback));
+    const feedback_rect = edgeObjectRect(&graph, &layout, feedback) orelse
+        return error.MissingFeedbackGeometry;
+    const neighboring_component = layoutNodeSetRect(&layout, &.{
+        nodeIdByLabel(&graph, "x"),
+        nodeIdByLabel(&graph, "y"),
+    }).?;
+    try std.testing.expect(!rectsOverlap(feedback_rect, neighboring_component));
+
+    const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+    defer allocator.free(svg);
+    try std.testing.expect(std.mem.indexOf(u8, svg, ">long feedback label</") != null);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    const translate = svgGraphvizTranslate(svg);
+    const edge_fragment = svgGroupFragmentByTitle(svg, "c-&gt;a") orelse
+        return error.MissingFeedbackEdge;
+    var path_numbers: [64]f64 = undefined;
+    const path_count = svg_mod.test_helpers.numbersInAttribute(
+        edge_fragment,
+        "d",
+        &path_numbers,
+    );
+    try std.testing.expect(path_count >= 8);
+    try expectSvgNumbersInsideViewBox(
+        path_numbers[0..path_count],
+        translate,
+        view_box,
+    );
+    var arrow_numbers: [16]f64 = undefined;
+    const arrow_count = svg_mod.test_helpers.numbersInAttribute(
+        edge_fragment,
+        "points",
+        &arrow_numbers,
+    );
+    try std.testing.expect(arrow_count >= 4);
+    try expectSvgNumbersInsideViewBox(
+        arrow_numbers[0..arrow_count],
+        translate,
+        view_box,
+    );
+    const label_rect_start = std.mem.indexOf(u8, edge_fragment, "<rect ") orelse
+        return error.MissingFeedbackLabelBox;
+    const label_rect = edge_fragment[label_rect_start..];
+    const label_x = svgNumberAfter(label_rect, " x=\"") orelse return error.MissingFeedbackLabelBox;
+    const label_y = svgNumberAfter(label_rect, " y=\"") orelse return error.MissingFeedbackLabelBox;
+    const label_width = svgNumberAfter(label_rect, " width=\"") orelse return error.MissingFeedbackLabelBox;
+    const label_height = svgNumberAfter(label_rect, " height=\"") orelse return error.MissingFeedbackLabelBox;
+    try std.testing.expect(label_x + translate.x >= -0.001);
+    try std.testing.expect(label_y + translate.y >= -0.001);
+    try std.testing.expect(label_x + label_width + translate.x <= view_box.width + 0.001);
+    try std.testing.expect(label_y + label_height + translate.y <= view_box.height + 0.001);
+}
+
+fn expectSvgNumbersInsideViewBox(
+    numbers: []const f64,
+    translate: SvgTranslate,
+    view_box: SvgViewBox,
+) !void {
+    var index: usize = 0;
+    while (index + 1 < numbers.len) : (index += 2) {
+        const x = numbers[index] + translate.x;
+        const y = numbers[index + 1] + translate.y;
+        try std.testing.expect(x >= -0.001 and x <= view_box.width + 0.001);
+        try std.testing.expect(y >= -0.001 and y <= view_box.height + 0.001);
+    }
+}
+
+test "incremental layered layout preserves packed component internal geometry" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .rankdir = .LR });
+    defer graph.deinit();
+    try graph.setGraphAttr(.{ .packmode = "array_i2" });
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const c = try graph.addNode("c", .{});
+    const d = try graph.addNode("d", .{});
+    _ = try graph.addEdge(a, b, .{});
+    _ = try graph.addEdge(c, d, .{});
+
+    var previous = try layoutGraph(allocator, &graph, .{});
+    defer previous.deinit();
+    const previous_cd = Point{
+        .x = previous.nodes[d].center.x - previous.nodes[c].center.x,
+        .y = previous.nodes[d].center.y - previous.nodes[c].center.y,
+    };
+
+    const e = try graph.addNode("e", .{});
+    _ = try graph.addEdge(b, e, .{});
+    var next = try layoutGraphIncremental(
+        allocator,
+        &graph,
+        &previous,
+        .{},
+        .{ .stability = 1.0 },
+    );
+    defer next.deinit();
+    const next_cd = Point{
+        .x = next.nodes[d].center.x - next.nodes[c].center.x,
+        .y = next.nodes[d].center.y - next.nodes[c].center.y,
+    };
+    try std.testing.expectApproxEqAbs(previous_cd.x, next_cd.x, 0.001);
+    try std.testing.expectApproxEqAbs(previous_cd.y, next_cd.y, 0.001);
+    const first = layoutNodeSetRect(&next, &.{ a, b, e }).?;
+    const second = layoutNodeSetRect(&next, &.{ c, d }).?;
+    try std.testing.expect(!rectsOverlap(first, second));
+}
+
+fn layoutNodeSetRect(layout: *const Layout, node_ids: []const NodeId) ?RectF {
+    var bounds = BoundsBuilder{};
+    for (node_ids) |node_id| {
+        if (node_id < layout.nodes.len) bounds.includeRect(nodeRect(layout.nodes[node_id]));
+    }
+    return bounds.rect();
 }
 
 test "neato mode selects Graphviz KK only for exact mode value" {

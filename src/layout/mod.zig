@@ -6,6 +6,7 @@ pub const closure = @import("closure.zig");
 pub const nop = @import("nop.zig");
 pub const osage = @import("osage.zig");
 pub const options = @import("options.zig");
+pub const pack = @import("pack.zig");
 pub const parallel = @import("parallel.zig");
 pub const patchwork = @import("patchwork.zig");
 pub const rank = @import("rank.zig");

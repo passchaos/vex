@@ -362,6 +362,12 @@ pub fn build(b: *std.Build) void {
             .source = "examples/api/16_math_labels_svg.zig",
             .desc = "Run API example: ztex math labels in SVG",
         },
+        .{
+            .step_name = "run-api-component-packing-svg",
+            .exe_name = "api-component-packing-svg",
+            .source = "examples/api/17_component_packing_svg.zig",
+            .desc = "Run API example: Graphviz-style connected-component packing",
+        },
     };
 
     for (api_examples) |example| {
