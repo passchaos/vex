@@ -5170,10 +5170,16 @@ fn componentPackRequest(
     algorithm: LayoutAlgorithm,
 ) ?layout_mod.pack.Options {
     if (algorithm == .sugiyama and attrValue(graph.attrs.items, "ratio") != null) return null;
-    return layout_mod.pack.parseOptions(
+    var request = layout_mod.pack.parseOptions(
         attrValue(graph.attrs.items, "pack"),
         attrValue(graph.attrs.items, "packmode"),
-    );
+    ) orelse return null;
+    if (attrValue(graph.attrs.items, "packmode") == null and
+        algorithm != .sugiyama)
+    {
+        request.mode = .node;
+    }
+    return request;
 }
 
 fn packLayoutComponentsIfRequested(
@@ -5206,12 +5212,7 @@ fn packLayoutComponentsIfRequested(
         if (subgraph_id >= graph.subgraphs.items.len or
             subgraph_layout.width <= 0 or subgraph_layout.height <= 0) continue;
         const component = subgraphComponent(graph, component_labels, subgraph_id) orelse continue;
-        includePackRect(&bounds[component], .{
-            .x = subgraph_layout.x,
-            .y = subgraph_layout.y,
-            .width = subgraph_layout.width,
-            .height = subgraph_layout.height,
-        });
+        includePackRect(&bounds[component], clusterVisualRect(graph, layout, subgraph_id));
     }
     for (graph.nodes.items) |node_item| {
         if (node_item.id >= component_labels.len) continue;
@@ -5232,7 +5233,25 @@ fn packLayoutComponentsIfRequested(
     for (bounds, 0..) |item, component| {
         rects[component] = item.rect();
     }
-    var packed_layout = try layout_mod.pack.layout(allocator, rects, request);
+    const use_polyomino =
+        (request.mode == .node or request.mode == .cluster) and
+        componentPackGeometryBudgetAllows(graph, layout, component_count);
+    var packed_layout = if (use_polyomino) blk: {
+        var geometry = try buildComponentPackGeometry(
+            allocator,
+            graph,
+            layout,
+            component_labels,
+            rects,
+            request.mode,
+        );
+        defer geometry.deinit();
+        break :blk try layout_mod.pack.layoutComponents(
+            allocator,
+            geometry.components,
+            request,
+        );
+    } else try layout_mod.pack.layout(allocator, rects, request);
     defer packed_layout.deinit();
 
     const shifts = try allocator.alloc(Point, component_count);
@@ -5250,6 +5269,361 @@ fn packLayoutComponentsIfRequested(
 
 fn includePackRect(bounds: *layout_mod.pack.Bounds, rect: RectF) void {
     bounds.includeRect(rect.x, rect.y, rect.width, rect.height);
+}
+
+fn componentPackGeometryBudgetAllows(
+    graph: *const Graph,
+    layout: *const Layout,
+    component_count: usize,
+) bool {
+    if (component_count > layout_mod.pack.maxPolyominoComponents) return false;
+    var primitive_count = graph.nodes.items.len +| graph.subgraphs.items.len;
+    primitive_count +|= graph.edges.items.len *| 4;
+    for (layout.edge_waypoints) |waypoints| {
+        primitive_count +|= waypoints.points.len *| 3;
+        if (primitive_count > layout_mod.pack.maxPolyominoPrimitives) return false;
+    }
+    if (layout.edge_splines) |splines| {
+        for (splines) |spline| {
+            for (spline.segments) |segment| {
+                primitive_count +|= segment.points.len;
+                primitive_count +|= @intFromBool(segment.start_tip != null);
+                primitive_count +|= @intFromBool(segment.end_tip != null);
+                if (primitive_count > layout_mod.pack.maxPolyominoPrimitives) return false;
+            }
+        }
+    }
+    return primitive_count <= layout_mod.pack.maxPolyominoPrimitives;
+}
+
+const ComponentPackGeometry = struct {
+    allocator: std.mem.Allocator,
+    components: []layout_mod.pack.Component,
+    rectangles: []std.ArrayList(layout_mod.pack.GeometryRect),
+    segments: []std.ArrayList(layout_mod.pack.Segment),
+
+    fn deinit(self: *ComponentPackGeometry) void {
+        for (self.rectangles) |*items| items.deinit(self.allocator);
+        for (self.segments) |*items| items.deinit(self.allocator);
+        self.allocator.free(self.components);
+        self.allocator.free(self.rectangles);
+        self.allocator.free(self.segments);
+        self.* = undefined;
+    }
+};
+
+fn buildComponentPackGeometry(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    layout: *const Layout,
+    component_labels: []const usize,
+    bounds: []const layout_mod.pack.Rect,
+    mode: layout_mod.pack.Mode,
+) !ComponentPackGeometry {
+    const rectangles = try allocator.alloc(std.ArrayList(layout_mod.pack.GeometryRect), bounds.len);
+    errdefer allocator.free(rectangles);
+    for (rectangles) |*items| items.* = .empty;
+    errdefer for (rectangles) |*items| items.deinit(allocator);
+    const segments = try allocator.alloc(std.ArrayList(layout_mod.pack.Segment), bounds.len);
+    errdefer allocator.free(segments);
+    for (segments) |*items| items.* = .empty;
+    errdefer for (segments) |*items| items.deinit(allocator);
+    const components = try allocator.alloc(layout_mod.pack.Component, bounds.len);
+    errdefer allocator.free(components);
+
+    if (mode == .cluster) {
+        for (graph.subgraphs.items) |subgraph| {
+            if (!subgraph.is_cluster or subgraph.parent != null or
+                subgraph.id >= layout.subgraphs.len) continue;
+            const component = subgraphComponent(graph, component_labels, subgraph.id) orelse continue;
+            if (component >= rectangles.len) continue;
+            try appendPackGeometryRect(
+                allocator,
+                &rectangles[component],
+                clusterVisualRect(graph, layout, subgraph.id),
+            );
+        }
+    }
+    for (layout.nodes, 0..) |node, node_id| {
+        if (node_id >= component_labels.len) continue;
+        const component = component_labels[node_id];
+        if (component >= rectangles.len) continue;
+        if (mode == .node or topLevelPackClusterForNode(graph, node_id) == null) {
+            try appendPackGeometryRect(allocator, &rectangles[component], nodeRect(node));
+            if (node_id < graph.nodes.items.len) {
+                const node_item = graph.nodes.items[node_id];
+                if (nodeXLabelRect(layout, node_item, node, resolveNodeVisual(graph, node_item))) |label_rect| {
+                    try appendPackGeometryRect(allocator, &rectangles[component], label_rect);
+                }
+            }
+        }
+    }
+    for (graph.edges.items) |edge_item| {
+        if (edge_item.from >= component_labels.len) continue;
+        const component = component_labels[edge_item.from];
+        if (component >= rectangles.len) continue;
+        if (mode == .cluster) {
+            const from_cluster = topLevelPackClusterForNode(graph, edge_item.from);
+            const to_cluster = topLevelPackClusterForNode(graph, edge_item.to);
+            if (from_cluster != null and from_cluster == to_cluster) continue;
+        }
+        try appendPackEdgeGeometry(
+            allocator,
+            graph,
+            layout,
+            edge_item,
+            &rectangles[component],
+            &segments[component],
+        );
+    }
+    for (components, 0..) |*component, index| {
+        component.* = .{
+            .bounds = bounds[index],
+            .rectangles = rectangles[index].items,
+            .segments = segments[index].items,
+        };
+    }
+    return .{
+        .allocator = allocator,
+        .components = components,
+        .rectangles = rectangles,
+        .segments = segments,
+    };
+}
+
+fn topLevelPackClusterForNode(graph: *const Graph, node_id: NodeId) ?SubgraphId {
+    for (graph.subgraphs.items) |subgraph| {
+        if (!subgraph.is_cluster or subgraph.parent != null) continue;
+        if (nodeInSubgraphHierarchy(graph, subgraph.id, node_id)) return subgraph.id;
+    }
+    return null;
+}
+
+fn appendPackGeometryRect(
+    allocator: std.mem.Allocator,
+    rectangles: *std.ArrayList(layout_mod.pack.GeometryRect),
+    rect: RectF,
+) !void {
+    if (rect.width <= 0 or rect.height <= 0) return;
+    try rectangles.append(allocator, .{
+        .x = rect.x,
+        .y = rect.y,
+        .width = rect.width,
+        .height = rect.height,
+    });
+}
+
+fn appendPackSegment(
+    allocator: std.mem.Allocator,
+    segments: *std.ArrayList(layout_mod.pack.Segment),
+    start: Point,
+    end: Point,
+) !void {
+    try segments.append(allocator, .{
+        .start = .{ .x = start.x, .y = start.y },
+        .end = .{ .x = end.x, .y = end.y },
+    });
+}
+
+fn appendPackEdgeGeometry(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    layout: *const Layout,
+    edge_item: Edge,
+    rectangles: *std.ArrayList(layout_mod.pack.GeometryRect),
+    segments: *std.ArrayList(layout_mod.pack.Segment),
+) !void {
+    if (edge_item.from >= layout.nodes.len or edge_item.to >= layout.nodes.len) return;
+    if (positionedEdgeSpline(layout, edge_item.id)) |spline| {
+        for (spline.segments) |segment| {
+            var previous: ?Point = segment.start_tip;
+            for (segment.points) |point| {
+                if (previous) |start| try appendPackSegment(allocator, segments, start, point);
+                previous = point;
+            }
+            if (segment.end_tip) |point| {
+                if (previous) |start| try appendPackSegment(allocator, segments, start, point);
+            }
+        }
+    } else if (isBackEdge(layout, edge_item)) {
+        if (edgeObjectRect(graph, layout, edge_item)) |rect| {
+            try appendPackGeometryRect(allocator, rectangles, rect);
+        }
+    } else {
+        const offset = if (edge_item.from == edge_item.to)
+            0
+        else
+            parallelEdgeOffsetForLayout(graph, layout, edge_item.id);
+        const routing = svgEdgeRoutingForEdge(
+            graph,
+            edge_item,
+            svgEdgeRoutingMode(graph),
+        );
+        const route = if (edge_item.from == edge_item.to)
+            selfLoopRoute(layout.nodes[edge_item.from])
+        else
+            edgeRouteForEdge(graph, layout, edge_item, layout.rankdir, offset);
+        if (routing == .line) {
+            try appendPackSegment(allocator, segments, route.start, route.end);
+        } else if (routing == .ortho) {
+            const bend = switch (layout.rankdir) {
+                .TB, .BT => Point{ .x = route.start.x, .y = route.end.y },
+                .LR, .RL => Point{ .x = route.end.x, .y = route.start.y },
+            };
+            try appendPackSegment(allocator, segments, route.start, bend);
+            try appendPackSegment(allocator, segments, bend, route.end);
+        } else if (edge_item.from == edge_item.to) {
+            try appendPackSegment(allocator, segments, route.start, route.control1);
+            try appendPackSegment(allocator, segments, route.control1, route.control2);
+            try appendPackSegment(allocator, segments, route.control2, route.end);
+        } else {
+            const waypoint_count = longEdgeWaypointCount(layout, edge_item);
+            var previous = route.start;
+            for (0..waypoint_count) |index| {
+                const point = longEdgeWaypoint(
+                    layout,
+                    edge_item,
+                    layout.rankdir,
+                    offset,
+                    index,
+                    waypoint_count,
+                );
+                if (routing == .polyline) {
+                    try appendPackSegment(allocator, segments, previous, point);
+                } else {
+                    try appendPackSmoothSegments(
+                        allocator,
+                        segments,
+                        previous,
+                        point,
+                        layout.rankdir,
+                    );
+                }
+                previous = point;
+            }
+            if (waypoint_count == 0) {
+                if (routing == .polyline) {
+                    try appendPackSegment(allocator, segments, route.start, route.end);
+                } else {
+                    try appendPackSegment(allocator, segments, route.start, route.control1);
+                    try appendPackSegment(allocator, segments, route.control1, route.control2);
+                    try appendPackSegment(allocator, segments, route.control2, route.end);
+                }
+            } else if (routing == .polyline) {
+                try appendPackSegment(allocator, segments, previous, route.end);
+            } else {
+                try appendPackSmoothSegments(
+                    allocator,
+                    segments,
+                    previous,
+                    route.end,
+                    layout.rankdir,
+                );
+            }
+        }
+    }
+    try appendPackEdgeLabelRects(allocator, graph, layout, edge_item, rectangles);
+}
+
+fn appendPackSmoothSegments(
+    allocator: std.mem.Allocator,
+    segments: *std.ArrayList(layout_mod.pack.Segment),
+    start: Point,
+    end: Point,
+    rankdir: RankDir,
+) !void {
+    const controls = smoothSegmentControls(start, end, rankdir);
+    try appendPackSegment(allocator, segments, start, controls.c1);
+    try appendPackSegment(allocator, segments, controls.c1, controls.c2);
+    try appendPackSegment(allocator, segments, controls.c2, end);
+}
+
+fn appendPackEdgeLabelRects(
+    allocator: std.mem.Allocator,
+    graph: *const Graph,
+    layout: *const Layout,
+    edge_item: Edge,
+    rectangles: *std.ArrayList(layout_mod.pack.GeometryRect),
+) !void {
+    const route = edgeRouteForRendering(graph, layout, edge_item);
+    const visual = resolveEdgeVisual(graph, edge_item);
+    if (edge_item.label) |label| {
+        if (!(edgeLabelAlignedEnabled(edge_item.attrs.items) and
+            positionedAttrPoint(layout, edge_item.attrs.items, "lp") == null and
+            !mathLabelEnabled(edge_item.attrs.items) and
+            plainSingleLineLabel(label)))
+        {
+            const center = positionedAttrPoint(layout, edge_item.attrs.items, "lp") orelse
+                if (edge_item.from == edge_item.to)
+                    route.label
+                else if (edgeLabelFloatEnabled(edge_item.attrs.items))
+                    Point{ .x = route.label.x, .y = route.label.y - 6.0 }
+                else
+                    edgeLabelCenterAvoidingNodes(
+                        graph,
+                        layout,
+                        edge_item,
+                        route,
+                        visual,
+                        label,
+                    );
+            try appendPackGeometryRect(
+                allocator,
+                rectangles,
+                edgeLabelRect(edge_item.attrs.items, label, center, visual.font_size),
+            );
+        }
+    }
+    const label_font_size = parsePositiveAttrFloat(
+        edge_item.attrs.items,
+        "labelfontsize",
+        visual.font_size,
+    );
+    if (attrValue(edge_item.attrs.items, "taillabel")) |label| {
+        const center = positionedAttrPoint(layout, edge_item.attrs.items, "tail_lp") orelse
+            endpointLabelPosition(
+                route.start,
+                route.label,
+                std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0),
+                -parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0),
+                false,
+            );
+        try appendPackGeometryRect(
+            allocator,
+            rectangles,
+            edgeLabelRect(edge_item.attrs.items, label, center, label_font_size),
+        );
+    }
+    if (attrValue(edge_item.attrs.items, "headlabel")) |label| {
+        const center = positionedAttrPoint(layout, edge_item.attrs.items, "head_lp") orelse
+            endpointLabelPosition(
+                route.end,
+                route.label,
+                std.math.clamp(parseAttrFloat(edge_item.attrs.items, "labeldistance", 1.0), 0.0, 16.0),
+                parseAttrFloat(edge_item.attrs.items, "labelangle", -25.0),
+                true,
+            );
+        try appendPackGeometryRect(
+            allocator,
+            rectangles,
+            edgeLabelRect(edge_item.attrs.items, label, center, label_font_size),
+        );
+    }
+    if (attrValue(edge_item.attrs.items, "xlabel")) |label| {
+        const center = edgeXLabelCenterAvoidingNodes(
+            graph,
+            layout,
+            edge_item,
+            route,
+            label,
+            label_font_size,
+        );
+        try appendPackGeometryRect(
+            allocator,
+            rectangles,
+            edgeLabelRect(edge_item.attrs.items, label, center, label_font_size),
+        );
+    }
 }
 
 fn labelLayoutComponents(
@@ -30282,6 +30656,35 @@ test "Graphviz component packing is shared by neato layouts" {
     try std.testing.expect(!rectsOverlap(second, third));
 }
 
+test "pack true defaults to graph for dot and node for force layouts" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\graph G {
+        \\  graph [pack=true];
+        \\  a -- b;
+        \\  c -- d;
+        \\}
+    );
+    defer graph.deinit();
+
+    try std.testing.expectEqual(
+        layout_mod.pack.Mode.graph,
+        componentPackRequest(&graph, .sugiyama).?.mode,
+    );
+    try std.testing.expectEqual(
+        layout_mod.pack.Mode.node,
+        componentPackRequest(&graph, .stress_majorization).?.mode,
+    );
+    try std.testing.expectEqual(
+        layout_mod.pack.Mode.node,
+        componentPackRequest(&graph, .spring_electrical).?.mode,
+    );
+    try std.testing.expectEqual(
+        layout_mod.pack.Mode.node,
+        componentPackRequest(&graph, .multilevel_spring_electrical).?.mode,
+    );
+}
+
 test "neato component packing remains enabled with graph ratio" {
     const allocator = std.testing.allocator;
     var graph = try parseDot(allocator,
@@ -30307,6 +30710,129 @@ test "neato component packing remains enabled with graph ratio" {
     const third = nodeRect(layout.nodes[nodeIdByLabel(&graph, "e")]);
     try std.testing.expect(first.x + first.width < second.x);
     try std.testing.expect(third.y > @min(first.y, second.y));
+}
+
+test "node polyomino packing reduces real disconnected layout area without node overlap" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB, pack=0, packmode=graph];
+        \\  node [shape=box, fixedsize=true, width=.55, height=.38];
+        \\  a -> { b c d };
+        \\  b -> e;
+        \\  c -> f;
+        \\  d -> g;
+        \\  h -> i -> j;
+        \\  k;
+        \\  l;
+        \\}
+    );
+    defer graph.deinit();
+
+    var rectangular = try layoutGraph(allocator, &graph, .{});
+    defer rectangular.deinit();
+    try graph.setGraphAttr(.{ .packmode = "node" });
+    var compact = try layoutGraph(allocator, &graph, .{});
+    defer compact.deinit();
+
+    try std.testing.expect(
+        compact.width * compact.height <=
+            rectangular.width * rectangular.height * 0.9,
+    );
+    const main_component = layoutNodeSetRect(&compact, &.{
+        nodeIdByLabel(&graph, "a"),
+        nodeIdByLabel(&graph, "b"),
+        nodeIdByLabel(&graph, "c"),
+        nodeIdByLabel(&graph, "d"),
+        nodeIdByLabel(&graph, "e"),
+        nodeIdByLabel(&graph, "f"),
+        nodeIdByLabel(&graph, "g"),
+    }).?;
+    const chain_component = layoutNodeSetRect(&compact, &.{
+        nodeIdByLabel(&graph, "h"),
+        nodeIdByLabel(&graph, "i"),
+        nodeIdByLabel(&graph, "j"),
+    }).?;
+    try std.testing.expect(rectsOverlap(main_component, chain_component));
+    for (compact.nodes, 0..) |left, left_id| {
+        for (compact.nodes[left_id + 1 ..]) |right| {
+            try std.testing.expect(!rectsOverlap(nodeRect(left), nodeRect(right)));
+        }
+    }
+    const svg = try renderSvgAlloc(allocator, &graph, &compact, .{});
+    defer allocator.free(svg);
+    const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+    try std.testing.expect(view_box.width >= @ceil(compact.width));
+    try std.testing.expect(view_box.height >= @ceil(compact.height));
+}
+
+test "cluster polyomino packing treats top-level clusters as solid rectangles" {
+    const allocator = std.testing.allocator;
+    var graph = try parseDot(allocator,
+        \\digraph G {
+        \\  graph [rankdir=TB, nodesep=2, pack=0, packmode=node];
+        \\  subgraph cluster_pair {
+        \\    label="Pair";
+        \\    { rank=same; a; b; }
+        \\  }
+        \\  c;
+        \\}
+    );
+    defer graph.deinit();
+
+    var node_mode = try layoutGraph(allocator, &graph, .{});
+    defer node_mode.deinit();
+    const outside = nodeIdByLabel(&graph, "c");
+    const node_cluster = clusterVisualRect(&graph, &node_mode, 0);
+    try std.testing.expect(rectsOverlap(node_cluster, nodeRect(node_mode.nodes[outside])));
+
+    try graph.setGraphAttr(.{ .packmode = "cluster" });
+    var cluster_mode = try layoutGraph(allocator, &graph, .{});
+    defer cluster_mode.deinit();
+    const solid_cluster = clusterVisualRect(&graph, &cluster_mode, 0);
+    try std.testing.expect(!rectsOverlap(solid_cluster, nodeRect(cluster_mode.nodes[outside])));
+    try std.testing.expect(rectContainsRect(
+        solid_cluster,
+        nodeRect(cluster_mode.nodes[nodeIdByLabel(&graph, "a")]),
+    ));
+    try std.testing.expect(rectContainsRect(
+        solid_cluster,
+        nodeRect(cluster_mode.nodes[nodeIdByLabel(&graph, "b")]),
+    ));
+}
+
+test "polyomino packing supports line polyline and ortho edge routes" {
+    const allocator = std.testing.allocator;
+    const modes = [_]SplineMode{ .line, .polyline, .ortho };
+    for (modes) |mode| {
+        var graph = try Graph.init(allocator, .{ .directed = true });
+        defer graph.deinit();
+        try graph.setGraphAttr(.{ .packmode = "node" });
+        try graph.setGraphAttr(.{ .pack = 4 });
+        try graph.setGraphAttr(.{ .splines = mode });
+        const a = try graph.addNode("a", .{});
+        const b = try graph.addNode("b", .{});
+        const c = try graph.addNode("c", .{});
+        const d = try graph.addNode("d", .{});
+        const e = try graph.addNode("e", .{});
+        _ = try graph.addEdge(a, b, .{ .min_len = 3, .label = "long" });
+        _ = try graph.addEdge(c, d, .{});
+
+        var layout = try layoutGraph(allocator, &graph, .{});
+        defer layout.deinit();
+        for (layout.nodes, 0..) |left, left_id| {
+            for (layout.nodes[left_id + 1 ..]) |right| {
+                try std.testing.expect(!rectsOverlap(nodeRect(left), nodeRect(right)));
+            }
+        }
+        const svg = try renderSvgAlloc(allocator, &graph, &layout, .{});
+        defer allocator.free(svg);
+        const view_box = svgViewBox(svg) orelse return error.MissingViewBox;
+        try std.testing.expect(view_box.width > 0 and view_box.height > 0);
+        try std.testing.expect(std.mem.indexOf(u8, svg, ">long</") != null);
+        try std.testing.expect(layout.nodes[e].center.x >= 0);
+        try std.testing.expect(layout.nodes[e].center.y >= 0);
+    }
 }
 
 test "packed back-edge labels stay clear of neighboring components" {

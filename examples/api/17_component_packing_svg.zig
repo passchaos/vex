@@ -1,4 +1,4 @@
-//! Render disconnected layered components with Graphviz-style packing.
+//! Render disconnected layered components with Graphviz-style node packing.
 //!
 //! Run with: zig build run-api-component-packing-svg
 
@@ -17,7 +17,8 @@ pub fn main(init: std.process.Init) !void {
     defer graph.deinit();
 
     try graph.setGraphAttr(.{ .label = "Packed service workflows" });
-    try graph.setGraphAttr(.{ .packmode = "array_u2" });
+    try graph.setGraphAttr(.{ .packmode = "node" });
+    try graph.setGraphAttr(.{ .pack = 8 });
     try graph.setGraphAttr(.{ .splines = .curved });
     try graph.setGraphAttr(.{ .bgcolor = "#fcfcfc" });
     try graph.setGraphAttr(.{ .fontcolor = "#202328" });
