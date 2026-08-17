@@ -51,6 +51,13 @@ pub const BlockSize = struct {
     height: f64,
 };
 
+pub const Background = struct {
+    fill: []const u8 = "#ffffff",
+    stroke: []const u8 = "#e2e8f0",
+    opacity: f64 = 0.92,
+    radius: f64 = 4,
+};
+
 pub fn backgroundSize(text: []const u8, font_size: f64, breaks: LabelBreaks) BlockSize {
     const count = lineCount(text, breaks);
     const line_height = font_size * 1.25;
@@ -110,6 +117,36 @@ pub fn renderBlockWithAnchor(
     forced_line_anchor: ?[]const u8,
     breaks: LabelBreaks,
 ) Io.Writer.Error!void {
+    try renderBlockWithAnchorBackground(
+        writer,
+        text,
+        x,
+        center_y,
+        font_size,
+        fill_color,
+        font,
+        if (label_background) .{} else null,
+        dominant_middle,
+        text_anchor,
+        forced_line_anchor,
+        breaks,
+    );
+}
+
+pub fn renderBlockWithAnchorBackground(
+    writer: *Io.Writer,
+    text: []const u8,
+    x: f64,
+    center_y: f64,
+    font_size: f64,
+    fill_color: []const u8,
+    font: Font,
+    background_style: ?Background,
+    dominant_middle: bool,
+    text_anchor: []const u8,
+    forced_line_anchor: ?[]const u8,
+    breaks: LabelBreaks,
+) Io.Writer.Error!void {
     const count = lineCount(text, breaks);
     const height = font_size * 1.25;
     const block_height = @as(f64, @floatFromInt(count)) * height;
@@ -119,15 +156,19 @@ pub fn renderBlockWithAnchor(
     else
         center_y - block_height / 2.0 + height * 0.72;
 
-    if (label_background) {
+    if (background_style) |background_visual| {
         const background = backgroundSize(text, font_size, breaks);
         try svg_writer.rectOpen(writer, .{
             .x = x - background.width / 2.0,
             .y = center_y - background.height / 2.0,
             .width = background.width,
             .height = background.height,
-        }, 4);
-        try writer.writeAll(" fill=\"#ffffff\" stroke=\"#e2e8f0\" opacity=\"0.92\"/>\n");
+        }, background_visual.radius);
+        try writer.print(" fill=\"{s}\" stroke=\"{s}\" opacity=\"{d:.2}\"/>\n", .{
+            background_visual.fill,
+            background_visual.stroke,
+            background_visual.opacity,
+        });
     }
 
     try open(writer, text_anchor, x, first_y, font, font_size);
@@ -267,4 +308,28 @@ test "single-line dominant-middle text uses center y" {
 
     try std.testing.expect(std.mem.indexOf(u8, svg, " y=\"40\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, svg, "dominant-baseline=\"middle\"") != null);
+}
+
+test "text background accepts theme colors" {
+    var out = Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    try renderBlockWithAnchorBackground(
+        &out.writer,
+        "edge label",
+        24,
+        40,
+        14,
+        "#d2d7df",
+        .{ .family = "Helvetica" },
+        .{ .fill = "#1e2229", .stroke = "#3e444c" },
+        true,
+        "middle",
+        null,
+        .{ .left = 0x1e, .right = 0x1f },
+    );
+    const svg = try out.toOwnedSlice();
+    defer std.testing.allocator.free(svg);
+
+    try std.testing.expect(std.mem.indexOf(u8, svg, "fill=\"#1e2229\" stroke=\"#3e444c\"") != null);
 }

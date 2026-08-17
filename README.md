@@ -317,7 +317,39 @@ var next_layout = try vex.layoutGraphIncremental(
 defer next_layout.deinit();
 ```
 
-Default node and edge label attributes set through the API apply to subsequently added items, with per-item options taking precedence. Typed graph attributes include spline routing modes such as `curved`, `polyline`, `line`, `ortho`, and `none`.
+The Zig API provides centralized `VisualTheme.light`, `.dark`, and `.print`
+themes. Their low-contrast palette, rounded filled boxes, typography, subgraph
+treatment, and edge-label panels are inspired by Graphplot, while layout
+algorithms and attribute semantics remain native Graphviz-compatible Vex
+behavior:
+
+```zig
+var graph = try vex.Graph.init(allocator, .{
+    .directed = true,
+    .theme = .dark,
+});
+defer graph.deinit();
+
+const source = try graph.addNode("Source", .{});
+const sink = try graph.addNode("Sink", .{ .fillcolor = "#8f6d4d" });
+_ = try graph.addEdge(source, sink, .{ .label = "events" });
+_ = try graph.addSubgraph("Pipeline", null, &.{ source, sink }, .{});
+
+var config = vex.VisualTheme.dark.layoutConfig();
+config.algorithm = .sugiyama;
+```
+
+`Graph.applyTheme` and the `.theme` initializer option update graph visuals and
+the defaults inherited by subsequently created nodes, edges, and subgraphs.
+Explicit object options take precedence. `setDefaultNodeAttr`,
+`setDefaultEdgeAttr`, and `setDefaultSubgraphAttr` can further refine each
+default surface. Light and dark themes choose the `relaxed` layout profile;
+print chooses `balanced`.
+
+Default node, edge, and subgraph attributes set through the API apply to
+subsequently added items, with per-item options taking precedence. Typed graph
+attributes include spline routing modes such as `curved`, `polyline`, `line`,
+`ortho`, and `none`.
 
 ## API Examples
 
@@ -362,7 +394,7 @@ They progress from small SVG output to broader feature coverage:
 - `14_osage_layout_svg.zig`: nested subgraphs and intrinsic node rectangles rendered with deterministic array packing.
 - `15_positioned_layout_svg.zig`: typed pre-positioned nodes and a preserved nop2 cubic edge rendered to SVG.
 - `16_math_labels_svg.zig`: ztex-powered mixed text + inline math labels on nodes and edges.
-- `17_component_packing_svg.zig`: disconnected layered workflows packed with Graphviz-style node polyominoes, non-regressing rectangle fallback, and relaxed low-contrast styling.
+- `17_component_packing_svg.zig`: disconnected layered workflows packed with Graphviz-style node polyominoes and non-regressing rectangle fallback, rendered with the centralized Graphplot-inspired light theme.
 
 ## Graphviz compatibility target
 

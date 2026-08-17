@@ -13,6 +13,7 @@ const layout_mod = @import("layout/mod.zig");
 const size_mod = @import("size.zig");
 const svg_mod = @import("svg/mod.zig");
 const text_metrics = @import("text_metrics.zig");
+const theme_mod = @import("theme.zig");
 const ztex = @import("ztex");
 
 pub const NodeId = usize;
@@ -178,12 +179,15 @@ pub const RankConstraint = struct {
 pub const CompassPort = svg_mod.edge.CompassPort;
 
 pub const SubgraphStyle = svg_mod.style.SubgraphStyle;
+pub const VisualTheme = theme_mod.Theme;
+pub const VisualThemeTokens = theme_mod.Tokens;
 
 pub const GraphOptions = struct {
     directed: bool = true,
     strict: bool = false,
     name: []const u8 = "G",
     rankdir: RankDir = .TB,
+    theme: ?VisualTheme = null,
 };
 
 pub const LabelJust = svg_mod.text.LabelJust;
@@ -506,6 +510,8 @@ pub const EdgeOptions = struct {
     labelfontcolor: ?[]const u8 = null,
     labelfontname: ?[]const u8 = null,
     labelfontsize: ?f64 = null,
+    label_bgcolor: ?[]const u8 = null,
+    label_pencolor: ?[]const u8 = null,
     labeldistance: ?f64 = null,
     labelangle: ?f64 = null,
     labelfloat: ?bool = null,
@@ -581,6 +587,8 @@ pub const EdgeAttr = union(enum) {
     labelfontcolor: []const u8,
     labelfontname: []const u8,
     labelfontsize: f64,
+    label_bgcolor: []const u8,
+    label_pencolor: []const u8,
     labeldistance: f64,
     labelangle: f64,
     labelfloat: bool,
@@ -689,6 +697,11 @@ pub const SubgraphOptions = struct {
     layer: ?[]const u8 = null,
 };
 
+const SubgraphAttrTarget = union(enum) {
+    defaults,
+    item: SubgraphId,
+};
+
 pub const Node = struct {
     id: NodeId,
     label: []const u8,
@@ -754,17 +767,21 @@ pub const Graph = struct {
     attrs: std.ArrayList(Attr) = .empty,
     node_default_attrs: std.ArrayList(Attr) = .empty,
     edge_default_attrs: std.ArrayList(Attr) = .empty,
+    subgraph_default_attrs: std.ArrayList(Attr) = .empty,
     node_defaults: NodeDefaults = .{},
     edge_defaults: EdgeDefaults = .{},
 
     pub fn init(allocator: std.mem.Allocator, options: GraphOptions) !Graph {
         const name = try allocator.dupe(u8, options.name);
-        errdefer allocator.free(name);
+        var name_needs_free = true;
+        errdefer if (name_needs_free) allocator.free(name);
         const node_color = try allocator.dupe(u8, "black");
-        errdefer allocator.free(node_color);
+        var node_color_needs_free = true;
+        errdefer if (node_color_needs_free) allocator.free(node_color);
         const edge_color = try allocator.dupe(u8, "black");
-        errdefer allocator.free(edge_color);
-        return .{
+        var edge_color_needs_free = true;
+        errdefer if (edge_color_needs_free) allocator.free(edge_color);
+        var result = Graph{
             .allocator = allocator,
             .directed = options.directed,
             .strict = options.strict,
@@ -773,6 +790,12 @@ pub const Graph = struct {
             .node_defaults = .{ .color = node_color },
             .edge_defaults = .{ .color = edge_color },
         };
+        name_needs_free = false;
+        node_color_needs_free = false;
+        edge_color_needs_free = false;
+        errdefer result.deinit();
+        if (options.theme) |visual_theme| try result.applyTheme(visual_theme);
+        return result;
     }
 
     pub fn deinit(self: *Graph) void {
@@ -811,6 +834,7 @@ pub const Graph = struct {
         }
         freeAttrList(self.allocator, &self.node_default_attrs);
         freeAttrList(self.allocator, &self.edge_default_attrs);
+        freeAttrList(self.allocator, &self.subgraph_default_attrs);
         self.nodes.deinit(self.allocator);
         self.edges.deinit(self.allocator);
         self.subgraphs.deinit(self.allocator);
@@ -978,8 +1002,9 @@ pub const Graph = struct {
     ) !SubgraphId {
         const owned_nodes = try self.allocator.dupe(NodeId, node_ids);
         errdefer self.allocator.free(owned_nodes);
-        var owned_attrs = try copyAttrList(self.allocator, attrs);
+        var owned_attrs = try copyAttrList(self.allocator, self.subgraph_default_attrs.items);
         errdefer freeAttrList(self.allocator, &owned_attrs);
+        for (attrs) |attr| try setAttrInList(self.allocator, &owned_attrs, attr.name, attr.value);
         const label_value = attrValue(owned_attrs.items, "label") orelse label;
         const owned_label = try self.allocator.dupe(u8, label_value);
         errdefer self.allocator.free(owned_label);
@@ -1204,6 +1229,45 @@ pub const Graph = struct {
         }
     }
 
+    /// Applies graph visuals and defaults for objects created afterward.
+    /// Per-object options continue to override these defaults.
+    pub fn applyTheme(self: *Graph, visual_theme: VisualTheme) !void {
+        const tokens = visual_theme.tokens();
+
+        try self.setGraphAttr(.{ .bgcolor = tokens.graph_background });
+        try self.setGraphAttr(.{ .fontcolor = tokens.graph_font });
+        try self.setGraphAttr(.{ .fontname = tokens.graph_font_name });
+        try self.setGraphAttr(.{ .fontsize = tokens.graph_font_size });
+
+        try self.setDefaultNodeAttr(.{ .shape = .box });
+        try self.setDefaultNodeAttr(.{ .styles = &.{ .filled, .rounded } });
+        try self.setDefaultNodeAttr(.{ .fillcolor = tokens.node_fill });
+        try self.setDefaultNodeAttr(.{ .color = tokens.node_stroke });
+        try self.setDefaultNodeAttr(.{ .fontcolor = tokens.node_font });
+        try self.setDefaultNodeAttr(.{ .fontname = tokens.node_font_name });
+        try self.setDefaultNodeAttr(.{ .fontsize = tokens.node_font_size });
+        try self.setDefaultNodeAttr(.{ .penwidth = tokens.node_pen_width });
+        try self.setDefaultNodeAttr(.{ .margin = tokens.node_margin });
+
+        try self.setDefaultEdgeAttr(.{ .color = tokens.edge_stroke });
+        try self.setDefaultEdgeAttr(.{ .fontcolor = tokens.edge_font });
+        try self.setDefaultEdgeAttr(.{ .fontname = tokens.edge_font_name });
+        try self.setDefaultEdgeAttr(.{ .fontsize = tokens.edge_font_size });
+        try self.setDefaultEdgeAttr(.{ .penwidth = tokens.edge_pen_width });
+        try self.setDefaultEdgeAttr(.{ .arrowsize = tokens.edge_arrow_size });
+        try self.setDefaultEdgeAttr(.{ .label_bgcolor = tokens.edge_label_fill });
+        try self.setDefaultEdgeAttr(.{ .label_pencolor = tokens.edge_label_stroke });
+
+        try self.setDefaultSubgraphAttr(.{ .styles = &.{ .filled, .rounded } });
+        try self.setDefaultSubgraphAttr(.{ .fillcolor = tokens.subgraph_fill });
+        try self.setDefaultSubgraphAttr(.{ .color = tokens.subgraph_stroke });
+        try self.setDefaultSubgraphAttr(.{ .fontcolor = tokens.subgraph_font });
+        try self.setDefaultSubgraphAttr(.{ .fontname = tokens.subgraph_font_name });
+        try self.setDefaultSubgraphAttr(.{ .fontsize = tokens.subgraph_font_size });
+        try self.setDefaultSubgraphAttr(.{ .penwidth = tokens.subgraph_pen_width });
+        try self.setDefaultSubgraphAttr(.{ .margin = tokens.subgraph_margin });
+    }
+
     fn setGraphAttrFloat(self: *Graph, name: []const u8, value: f64) !void {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
@@ -1388,6 +1452,8 @@ pub const Graph = struct {
             .labelfontcolor => |value| try self.setDefaultEdgeAttrRaw("labelfontcolor", value),
             .labelfontname => |value| try self.setDefaultEdgeAttrRaw("labelfontname", value),
             .labelfontsize => |value| try self.setDefaultEdgeAttrFloat("labelfontsize", value),
+            .label_bgcolor => |value| try self.setDefaultEdgeAttrRaw("labelbgcolor", value),
+            .label_pencolor => |value| try self.setDefaultEdgeAttrRaw("labelpencolor", value),
             .labeldistance => |value| try self.setDefaultEdgeAttrFloat("labeldistance", value),
             .labelangle => |value| try self.setDefaultEdgeAttrFloat("labelangle", value),
             .labelfloat => |value| try self.setDefaultEdgeAttrRaw("labelfloat", boolAttrValue(value)),
@@ -1430,6 +1496,10 @@ pub const Graph = struct {
         } else if (std.ascii.eqlIgnoreCase(name, "minlen") or std.ascii.eqlIgnoreCase(name, "min_len")) {
             self.edge_defaults.min_len = std.fmt.parseInt(usize, value, 10) catch self.edge_defaults.min_len;
         }
+    }
+
+    pub fn setDefaultSubgraphAttr(self: *Graph, attr: SubgraphAttr) !void {
+        try self.applySubgraphAttr(.defaults, attr);
     }
 
     fn applyNodeOptions(self: *Graph, id: NodeId, options: NodeOptions) !void {
@@ -1646,6 +1716,8 @@ pub const Graph = struct {
         if (options.labelfontcolor) |value| try self.setEdgeAttr(id, .{ .labelfontcolor = value });
         if (options.labelfontname) |value| try self.setEdgeAttr(id, .{ .labelfontname = value });
         if (options.labelfontsize) |value| try self.setEdgeAttr(id, .{ .labelfontsize = value });
+        if (options.label_bgcolor) |value| try self.setEdgeAttr(id, .{ .label_bgcolor = value });
+        if (options.label_pencolor) |value| try self.setEdgeAttr(id, .{ .label_pencolor = value });
         if (options.labeldistance) |value| try self.setEdgeAttr(id, .{ .labeldistance = value });
         if (options.labelangle) |value| try self.setEdgeAttr(id, .{ .labelangle = value });
         if (options.labelfloat) |value| try self.setEdgeAttr(id, .{ .labelfloat = value });
@@ -1724,6 +1796,8 @@ pub const Graph = struct {
             .labelfontcolor => |value| try self.setEdgeAttrRaw(id, "labelfontcolor", value),
             .labelfontname => |value| try self.setEdgeAttrRaw(id, "labelfontname", value),
             .labelfontsize => |value| try self.setEdgeAttrFloat(id, "labelfontsize", value),
+            .label_bgcolor => |value| try self.setEdgeAttrRaw(id, "labelbgcolor", value),
+            .label_pencolor => |value| try self.setEdgeAttrRaw(id, "labelpencolor", value),
             .labeldistance => |value| try self.setEdgeAttrFloat(id, "labeldistance", value),
             .labelangle => |value| try self.setEdgeAttrFloat(id, "labelangle", value),
             .labelfloat => |value| try self.setEdgeAttrRaw(id, "labelfloat", boolAttrValue(value)),
@@ -1899,39 +1973,46 @@ pub const Graph = struct {
     }
 
     pub fn setSubgraphAttr(self: *Graph, id: SubgraphId, attr: SubgraphAttr) !void {
+        try self.applySubgraphAttr(.{ .item = id }, attr);
+    }
+
+    fn applySubgraphAttr(self: *Graph, target: SubgraphAttrTarget, attr: SubgraphAttr) !void {
         switch (attr) {
-            .label => |value| try self.setSubgraphAttrRaw(id, "label", value),
-            .label_position => |value| try self.setSubgraphPointAttr(id, "lp", value),
+            .label => |value| try self.setSubgraphAttrTargetRaw(target, "label", value),
+            .label_position => |value| {
+                var buffer: [160]u8 = undefined;
+                try self.setSubgraphAttrTargetRaw(target, "lp", try pointAttrText(&buffer, value));
+            },
             .bounding_box => |value| {
                 var buffer: [256]u8 = undefined;
-                try self.setSubgraphAttrRaw(id, "bb", try boundingBoxAttrText(&buffer, value));
+                try self.setSubgraphAttrTargetRaw(target, "bb", try boundingBoxAttrText(&buffer, value));
             },
-            .compact => |value| try self.setSubgraphAttrRaw(id, "compact", boolAttrValue(value)),
-            .rankdir => |value| try self.setSubgraphAttrRaw(id, "rankdir", value.name()),
-            .layout => |value| try self.setSubgraphAttrRaw(id, "layout", value.name()),
-            .compound => |value| try self.setSubgraphAttrRaw(id, "compound", boolAttrValue(value)),
-            .concentrate => |value| try self.setSubgraphAttrRaw(id, "concentrate", boolAttrValue(value)),
-            .nodesep => |value| try self.setSubgraphAttrFloat(id, "nodesep", value),
+            .compact => |value| try self.setSubgraphAttrTargetRaw(target, "compact", boolAttrValue(value)),
+            .rankdir => |value| try self.setSubgraphAttrTargetRaw(target, "rankdir", value.name()),
+            .layout => |value| try self.setSubgraphAttrTargetRaw(target, "layout", value.name()),
+            .compound => |value| try self.setSubgraphAttrTargetRaw(target, "compound", boolAttrValue(value)),
+            .concentrate => |value| try self.setSubgraphAttrTargetRaw(target, "concentrate", boolAttrValue(value)),
+            .nodesep => |value| try self.setSubgraphAttrTargetFloat(target, "nodesep", value),
             .ranksep => |value| switch (value) {
-                .value => |spacing| try self.setSubgraphAttrFloat(id, "ranksep", spacing),
+                .value => |spacing| try self.setSubgraphAttrTargetFloat(target, "ranksep", spacing),
                 .equally => |spacing| {
                     var buffer: [64]u8 = undefined;
                     const text = try std.fmt.bufPrint(&buffer, "{d} equally", .{spacing});
-                    try self.setSubgraphAttrRaw(id, "ranksep", text);
+                    try self.setSubgraphAttrTargetRaw(target, "ranksep", text);
                 },
             },
-            .splines => |value| try self.setSubgraphAttrRaw(id, "splines", value.name()),
-            .bgcolor => |value| try self.setSubgraphAttrRaw(id, "bgcolor", value),
-            .ordering => |value| try self.setSubgraphAttrRaw(id, "ordering", value.name()),
-            .color => |value| try self.setSubgraphAttrRaw(id, "color", value),
-            .pencolor => |value| try self.setSubgraphAttrRaw(id, "pencolor", value),
-            .colorscheme => |value| try self.setSubgraphAttrRaw(id, "colorscheme", value),
-            .fillcolor => |value| try self.setSubgraphAttrRaw(id, "fillcolor", value),
-            .gradientangle => |value| try self.setSubgraphAttrFloat(id, "gradientangle", value),
-            .fontcolor => |value| try self.setSubgraphAttrRaw(id, "fontcolor", value),
-            .fontname => |value| try self.setSubgraphAttrRaw(id, "fontname", value),
-            .fontsize => |value| try self.setSubgraphAttrFloat(id, "fontsize", value),
-            .style => |value| try self.setSubgraphAttrRaw(id, "style", value.name()),
+            .splines => |value| try self.setSubgraphAttrTargetRaw(target, "splines", value.name()),
+            .bgcolor => |value| try self.setSubgraphAttrTargetRaw(target, "bgcolor", value),
+            .ordering => |value| try self.setSubgraphAttrTargetRaw(target, "ordering", value.name()),
+            .color => |value| try self.setSubgraphAttrTargetRaw(target, "color", value),
+            .pencolor => |value| try self.setSubgraphAttrTargetRaw(target, "pencolor", value),
+            .colorscheme => |value| try self.setSubgraphAttrTargetRaw(target, "colorscheme", value),
+            .fillcolor => |value| try self.setSubgraphAttrTargetRaw(target, "fillcolor", value),
+            .gradientangle => |value| try self.setSubgraphAttrTargetFloat(target, "gradientangle", value),
+            .fontcolor => |value| try self.setSubgraphAttrTargetRaw(target, "fontcolor", value),
+            .fontname => |value| try self.setSubgraphAttrTargetRaw(target, "fontname", value),
+            .fontsize => |value| try self.setSubgraphAttrTargetFloat(target, "fontsize", value),
+            .style => |value| try self.setSubgraphAttrTargetRaw(target, "style", value.name()),
             .styles => |values| {
                 if (values.len == 0) return;
                 var text = std.ArrayList(u8).empty;
@@ -1940,47 +2021,49 @@ pub const Graph = struct {
                     if (index > 0) try text.append(self.allocator, ',');
                     try text.appendSlice(self.allocator, value.name());
                 }
-                try self.setSubgraphAttrRaw(id, "style", text.items);
+                try self.setSubgraphAttrTargetRaw(target, "style", text.items);
             },
-            .penwidth => |value| try self.setSubgraphAttrFloat(id, "penwidth", value),
+            .penwidth => |value| try self.setSubgraphAttrTargetFloat(target, "penwidth", value),
             .peripheries => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-                try self.setSubgraphAttrRaw(id, "peripheries", text);
+                try self.setSubgraphAttrTargetRaw(target, "peripheries", text);
             },
-            .area => |value| try self.setSubgraphAttrFloat(id, "area", value),
-            .pack => |value| try self.setSubgraphAttrFloat(id, "pack", value),
-            .packmode => |value| try self.setSubgraphAttrRaw(id, "packmode", value),
+            .area => |value| try self.setSubgraphAttrTargetFloat(target, "area", value),
+            .pack => |value| try self.setSubgraphAttrTargetFloat(target, "pack", value),
+            .packmode => |value| try self.setSubgraphAttrTargetRaw(target, "packmode", value),
             .sortv => |value| {
                 var buffer: [32]u8 = undefined;
                 const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-                try self.setSubgraphAttrRaw(id, "sortv", text);
+                try self.setSubgraphAttrTargetRaw(target, "sortv", text);
             },
-            .margin => |value| try self.setSubgraphAttrRaw(id, "margin", value),
-            .labelloc => |value| try self.setSubgraphAttrRaw(id, "labelloc", value.name()),
-            .labeljust => |value| try self.setSubgraphAttrRaw(id, "labeljust", value.name()),
-            .nojustify => |value| try self.setSubgraphAttrRaw(id, "nojustify", boolAttrValue(value)),
-            .enable_math_label => |value| try self.setSubgraphAttrRaw(id, "enable_math_label", boolAttrValue(value)),
-            .url => |value| try self.setSubgraphAttrRaw(id, "URL", value),
-            .href => |value| try self.setSubgraphAttrRaw(id, "href", value),
-            .tooltip => |value| try self.setSubgraphAttrRaw(id, "tooltip", value),
-            .title => |value| try self.setSubgraphAttrRaw(id, "title", value),
-            .target => |value| try self.setSubgraphAttrRaw(id, "target", value),
-            .id => |value| try self.setSubgraphAttrRaw(id, "id", value),
-            .class => |value| try self.setSubgraphAttrRaw(id, "class", value),
-            .layer => |value| try self.setSubgraphAttrRaw(id, "layer", value),
+            .margin => |value| try self.setSubgraphAttrTargetRaw(target, "margin", value),
+            .labelloc => |value| try self.setSubgraphAttrTargetRaw(target, "labelloc", value.name()),
+            .labeljust => |value| try self.setSubgraphAttrTargetRaw(target, "labeljust", value.name()),
+            .nojustify => |value| try self.setSubgraphAttrTargetRaw(target, "nojustify", boolAttrValue(value)),
+            .enable_math_label => |value| try self.setSubgraphAttrTargetRaw(target, "enable_math_label", boolAttrValue(value)),
+            .url => |value| try self.setSubgraphAttrTargetRaw(target, "URL", value),
+            .href => |value| try self.setSubgraphAttrTargetRaw(target, "href", value),
+            .tooltip => |value| try self.setSubgraphAttrTargetRaw(target, "tooltip", value),
+            .title => |value| try self.setSubgraphAttrTargetRaw(target, "title", value),
+            .target => |value| try self.setSubgraphAttrTargetRaw(target, "target", value),
+            .id => |value| try self.setSubgraphAttrTargetRaw(target, "id", value),
+            .class => |value| try self.setSubgraphAttrTargetRaw(target, "class", value),
+            .layer => |value| try self.setSubgraphAttrTargetRaw(target, "layer", value),
         }
     }
 
-    fn setSubgraphAttrFloat(self: *Graph, id: SubgraphId, name: []const u8, value: f64) !void {
+    fn setSubgraphAttrTargetFloat(self: *Graph, target: SubgraphAttrTarget, name: []const u8, value: f64) !void {
         var buffer: [64]u8 = undefined;
         const text = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-        try self.setSubgraphAttrRaw(id, name, text);
+        try self.setSubgraphAttrTargetRaw(target, name, text);
     }
 
-    fn setSubgraphPointAttr(self: *Graph, id: SubgraphId, name: []const u8, point: Point) !void {
-        var buffer: [160]u8 = undefined;
-        try self.setSubgraphAttrRaw(id, name, try pointAttrText(&buffer, point));
+    fn setSubgraphAttrTargetRaw(self: *Graph, target: SubgraphAttrTarget, name: []const u8, value: []const u8) !void {
+        switch (target) {
+            .defaults => try setAttrInList(self.allocator, &self.subgraph_default_attrs, name, value),
+            .item => |id| try self.setSubgraphAttrRaw(id, name, value),
+        }
     }
 
     fn setSubgraphAttrRaw(self: *Graph, id: SubgraphId, name: []const u8, value: []const u8) !void {
@@ -3605,6 +3688,7 @@ fn transcodeGraph(graph: *Graph, encoding: ParsedCharset) !void {
     try transcodeAttrList(graph.allocator, graph.attrs.items, encoding);
     try transcodeAttrList(graph.allocator, graph.node_default_attrs.items, encoding);
     try transcodeAttrList(graph.allocator, graph.edge_default_attrs.items, encoding);
+    try transcodeAttrList(graph.allocator, graph.subgraph_default_attrs.items, encoding);
     try replaceEncodedOwned(graph.allocator, &graph.node_defaults.color, encoding);
     try replaceEncodedOwned(graph.allocator, &graph.edge_defaults.color, encoding);
 
@@ -3643,6 +3727,7 @@ fn graphTextIsValidUtf8(graph: *const Graph) bool {
     if (!attrListIsValidUtf8(graph.attrs.items) or
         !attrListIsValidUtf8(graph.node_default_attrs.items) or
         !attrListIsValidUtf8(graph.edge_default_attrs.items) or
+        !attrListIsValidUtf8(graph.subgraph_default_attrs.items) or
         !std.unicode.utf8ValidateSlice(graph.node_defaults.color) or
         !std.unicode.utf8ValidateSlice(graph.edge_defaults.color))
     {
@@ -4880,6 +4965,7 @@ fn cloneGraphForLayout(allocator: std.mem.Allocator, source: *const Graph) !Grap
     result.attrs = try copyAttrList(allocator, source.attrs.items);
     result.node_default_attrs = try copyAttrList(allocator, source.node_default_attrs.items);
     result.edge_default_attrs = try copyAttrList(allocator, source.edge_default_attrs.items);
+    result.subgraph_default_attrs = try copyAttrList(allocator, source.subgraph_default_attrs.items);
 
     for (source.nodes.items) |node_item| {
         const label = try allocator.dupe(u8, node_item.label);
@@ -24619,10 +24705,41 @@ fn renderSvgEdgeInteractiveLabel(writer: *Io.Writer, graph: *const Graph, edge_i
         .suffix = svgEdgeLabelAnchorSuffix(kind),
     };
     const wrap = try writeSvgInteractiveOpenKind(writer, graph.allocator, edge_item.attrs.items, kind, context, label, label_anchor_id);
-    if (!try renderSvgMaybeMathLabel(writer, graph.allocator, edge_item.attrs.items, label, pos.x, pos.y, font_size, font_color, font, "middle")) {
-        try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font, true, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
+    const background = edgeLabelBackground(graph, edge_item);
+    if (mathLabelSize(edge_item.attrs.items, label, font_size) != null) {
+        const label_rect = edgeLabelRect(edge_item.attrs.items, label, pos, font_size);
+        try writeSvgRectOpen(writer, label_rect, background.radius);
+        try writer.print(" fill=\"{s}\" stroke=\"{s}\" opacity=\"{d:.2}\"/>\n", .{
+            background.fill,
+            background.stroke,
+            background.opacity,
+        });
+        if (!try renderSvgMaybeMathLabel(writer, graph.allocator, edge_item.attrs.items, label, pos.x, pos.y, font_size, font_color, font, "middle")) {
+            try renderSvgTextBlockWithAnchor(writer, label, pos.x, pos.y, font_size, font_color, font, false, true, "middle", noJustifyLineAnchor(edge_item.attrs.items, "middle"));
+        }
+    } else {
+        try renderSvgTextBlockWithAnchorBackground(
+            writer,
+            label,
+            pos.x,
+            pos.y,
+            font_size,
+            font_color,
+            font,
+            background,
+            true,
+            "middle",
+            noJustifyLineAnchor(edge_item.attrs.items, "middle"),
+        );
     }
     try writeSvgInteractiveClose(writer, wrap);
+}
+
+fn edgeLabelBackground(graph: *const Graph, edge_item: Edge) svg_mod.text.Background {
+    return .{
+        .fill = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "labelbgcolor") orelse "#ffffff"),
+        .stroke = resolveSvgColor(graph, edge_item.attrs.items, attrValue(edge_item.attrs.items, "labelpencolor") orelse "#e2e8f0"),
+    };
 }
 
 fn renderSvgEdgeInteractiveTextPathLabel(writer: *Io.Writer, graph: *const Graph, edge_item: Edge, label: []const u8, path_id: SvgGroupOpenOptions, font_size: f64, font_color: []const u8, font: SvgFont) Io.Writer.Error!void {
@@ -29251,6 +29368,10 @@ fn renderSvgTextBlockWithAnchor(writer: *Io.Writer, text: []const u8, x: f64, ce
     try svg_mod.text.renderBlockWithAnchor(writer, text, x, center_y, font_size, fill, font, label_background, dominant_middle, text_anchor, forced_line_anchor, svg_label_breaks);
 }
 
+fn renderSvgTextBlockWithAnchorBackground(writer: *Io.Writer, text: []const u8, x: f64, center_y: f64, font_size: f64, fill: []const u8, font: SvgFont, background: svg_mod.text.Background, dominant_middle: bool, text_anchor: []const u8, forced_line_anchor: ?[]const u8) Io.Writer.Error!void {
+    try svg_mod.text.renderBlockWithAnchorBackground(writer, text, x, center_y, font_size, fill, font, background, dominant_middle, text_anchor, forced_line_anchor, svg_label_breaks);
+}
+
 fn maybeNodeIdByLabel(graph: *const Graph, label: []const u8) ?NodeId {
     for (graph.nodes.items) |node_item| {
         if (attrValue(node_item.attrs.items, "vex_text_id")) |text_id| {
@@ -29326,6 +29447,153 @@ test "code API applies default node and edge labels to new items" {
     try std.testing.expectEqualStrings("Explicit Edge", graph.edges.items[explicit_edge].label.?);
     try std.testing.expectEqualStrings("Default Node", attrValue(graph.nodes.items[a].attrs.items, "label").?);
     try std.testing.expectEqualStrings("Default Edge", attrValue(graph.edges.items[default_edge].attrs.items, "label").?);
+}
+
+test "visual theme applies graph node edge and subgraph defaults" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .name = "theme", .theme = .light });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{});
+    const b = try graph.addNode("b", .{});
+    const edge = try graph.addEdge(a, b, .{ .label = "request" });
+    const subgraph = try graph.addSubgraph("service", null, &.{ a, b }, .{});
+
+    try std.testing.expectEqualStrings("#fcfcfc", attrValue(graph.attrs.items, "bgcolor").?);
+    try std.testing.expectEqualStrings("#f6f8fa", attrValue(graph.nodes.items[a].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#d2d9df", graph.nodes.items[a].color);
+    try std.testing.expectEqual(Shape.box, graph.nodes.items[a].shape);
+    try std.testing.expectEqualStrings("filled,rounded", attrValue(graph.nodes.items[a].attrs.items, "style").?);
+    try std.testing.expectEqualStrings("#aeb8c2", graph.edges.items[edge].color);
+    try std.testing.expectEqualStrings("#f4f5f6", attrValue(graph.edges.items[edge].attrs.items, "labelbgcolor").?);
+    try std.testing.expectEqualStrings("#d2d9df", attrValue(graph.edges.items[edge].attrs.items, "labelpencolor").?);
+    try std.testing.expectEqualStrings("#f7f7f8", attrValue(graph.subgraphs.items[subgraph].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#d2d9df", attrValue(graph.subgraphs.items[subgraph].attrs.items, "color").?);
+    try std.testing.expectEqualStrings("filled,rounded", attrValue(graph.subgraphs.items[subgraph].attrs.items, "style").?);
+}
+
+test "explicit object options override visual theme defaults" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true, .theme = .dark });
+    defer graph.deinit();
+
+    const a = try graph.addNode("a", .{
+        .shape = .diamond,
+        .fillcolor = "#112233",
+        .color = "#445566",
+        .fontcolor = "#778899",
+    });
+    const b = try graph.addNode("b", .{});
+    const edge = try graph.addEdge(a, b, .{
+        .label = "custom",
+        .color = "#abcdef",
+        .fontcolor = "#fedcba",
+        .label_bgcolor = "#010203",
+        .label_pencolor = "#040506",
+    });
+    const subgraph = try graph.addSubgraph("custom", null, &.{ a, b }, .{
+        .fillcolor = "#111111",
+        .color = "#222222",
+        .fontcolor = "#333333",
+    });
+
+    try std.testing.expectEqual(Shape.diamond, graph.nodes.items[a].shape);
+    try std.testing.expectEqualStrings("#112233", attrValue(graph.nodes.items[a].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#445566", graph.nodes.items[a].color);
+    try std.testing.expectEqualStrings("#778899", attrValue(graph.nodes.items[a].attrs.items, "fontcolor").?);
+    try std.testing.expectEqualStrings("#abcdef", graph.edges.items[edge].color);
+    try std.testing.expectEqualStrings("#fedcba", attrValue(graph.edges.items[edge].attrs.items, "fontcolor").?);
+    try std.testing.expectEqualStrings("#010203", attrValue(graph.edges.items[edge].attrs.items, "labelbgcolor").?);
+    try std.testing.expectEqualStrings("#040506", attrValue(graph.edges.items[edge].attrs.items, "labelpencolor").?);
+    try std.testing.expectEqualStrings("#111111", attrValue(graph.subgraphs.items[subgraph].attrs.items, "fillcolor").?);
+    try std.testing.expectEqualStrings("#222222", attrValue(graph.subgraphs.items[subgraph].attrs.items, "color").?);
+    try std.testing.expectEqualStrings("#333333", attrValue(graph.subgraphs.items[subgraph].attrs.items, "fontcolor").?);
+}
+
+test "applying visual theme affects only subsequently created objects" {
+    const allocator = std.testing.allocator;
+    var graph = try Graph.init(allocator, .{ .directed = true });
+    defer graph.deinit();
+
+    const before = try graph.addNode("before", .{});
+    const subgraph_before = try graph.addSubgraph("before theme", null, &.{before}, .{});
+    try graph.applyTheme(.print);
+    const after = try graph.addNode("after", .{});
+    try graph.setSubgraphContent(subgraph_before, &.{ before, after }, .{});
+
+    try std.testing.expect(attrValue(graph.nodes.items[before].attrs.items, "fillcolor") == null);
+    try std.testing.expectEqualStrings("#ffffff", attrValue(graph.nodes.items[after].attrs.items, "fillcolor").?);
+    try std.testing.expectEqual(Shape.ellipse, graph.nodes.items[before].shape);
+    try std.testing.expectEqual(Shape.box, graph.nodes.items[after].shape);
+    try std.testing.expect(attrValue(graph.subgraphs.items[subgraph_before].attrs.items, "fillcolor") == null);
+}
+
+test "visual themes render expected SVG colors including edge labels" {
+    const allocator = std.testing.allocator;
+    const expectations = [_]struct {
+        visual_theme: VisualTheme,
+        graph_background: []const u8,
+        node_fill: []const u8,
+        edge_label_fill: []const u8,
+        edge_label_stroke: []const u8,
+        subgraph_fill: []const u8,
+    }{
+        .{
+            .visual_theme = .light,
+            .graph_background = "#fcfcfc",
+            .node_fill = "#f6f8fa",
+            .edge_label_fill = "#f4f5f6",
+            .edge_label_stroke = "#d2d9df",
+            .subgraph_fill = "#f7f7f8",
+        },
+        .{
+            .visual_theme = .dark,
+            .graph_background = "#161b22",
+            .node_fill = "#272c35",
+            .edge_label_fill = "#1e2229",
+            .edge_label_stroke = "#3e444c",
+            .subgraph_fill = "#272c35",
+        },
+        .{
+            .visual_theme = .print,
+            .graph_background = "#ffffff",
+            .node_fill = "#ffffff",
+            .edge_label_fill = "#ffffff",
+            .edge_label_stroke = "#cbd5e1",
+            .subgraph_fill = "#ffffff",
+        },
+    };
+
+    for (expectations) |expectation| {
+        var graph = try Graph.init(allocator, .{ .directed = true, .theme = expectation.visual_theme });
+        defer graph.deinit();
+        const a = try graph.addNode("a", .{});
+        const b = try graph.addNode("b", .{});
+        _ = try graph.addEdge(a, b, .{ .label = "request" });
+        _ = try graph.addSubgraph("service", null, &.{ a, b }, .{});
+
+        var layout = try layoutGraph(allocator, &graph, expectation.visual_theme.layoutConfig());
+        defer layout.deinit();
+        const svg = try renderAlloc(allocator, &layout, .svg, .{});
+        defer allocator.free(svg);
+
+        var graph_background: [64]u8 = undefined;
+        const graph_fragment = try std.fmt.bufPrint(&graph_background, "<polygon fill=\"{s}\" stroke=\"none\"", .{expectation.graph_background});
+        var node_fill: [64]u8 = undefined;
+        const node_fragment = try std.fmt.bufPrint(&node_fill, "fill=\"{s}\" stroke=", .{expectation.node_fill});
+        var edge_label: [128]u8 = undefined;
+        const edge_label_fragment = try std.fmt.bufPrint(&edge_label, "fill=\"{s}\" stroke=\"{s}\" opacity=\"0.92\"", .{
+            expectation.edge_label_fill,
+            expectation.edge_label_stroke,
+        });
+        var subgraph_fill: [64]u8 = undefined;
+        const subgraph_fragment = try std.fmt.bufPrint(&subgraph_fill, "fill=\"{s}\" fill-opacity=\"1.0\"", .{expectation.subgraph_fill});
+
+        try std.testing.expect(std.mem.indexOf(u8, svg, graph_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, node_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, edge_label_fragment) != null);
+        try std.testing.expect(std.mem.indexOf(u8, svg, subgraph_fragment) != null);
+    }
 }
 
 test "code API merges strict duplicate edge options" {

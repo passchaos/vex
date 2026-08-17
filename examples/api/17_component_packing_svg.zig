@@ -13,6 +13,7 @@ pub fn main(init: std.process.Init) !void {
         .directed = true,
         .name = "ComponentPacking",
         .rankdir = .LR,
+        .theme = .light,
     });
     defer graph.deinit();
 
@@ -20,20 +21,6 @@ pub fn main(init: std.process.Init) !void {
     try graph.setGraphAttr(.{ .packmode = "node" });
     try graph.setGraphAttr(.{ .pack = 8 });
     try graph.setGraphAttr(.{ .splines = .curved });
-    try graph.setGraphAttr(.{ .bgcolor = "#fcfcfc" });
-    try graph.setGraphAttr(.{ .fontcolor = "#202328" });
-    try graph.setDefaultNodeAttr(.{ .shape = .box });
-    try graph.setDefaultNodeAttr(.{ .styles = &.{ .filled, .rounded } });
-    try graph.setDefaultNodeAttr(.{ .fillcolor = "#f6f8fa" });
-    try graph.setDefaultNodeAttr(.{ .color = "#d2d9df" });
-    try graph.setDefaultNodeAttr(.{ .fontcolor = "#5b636d" });
-    try graph.setDefaultNodeAttr(.{ .fontname = "Helvetica" });
-    try graph.setDefaultNodeAttr(.{ .penwidth = 0.8 });
-    try graph.setDefaultEdgeAttr(.{ .color = "#aeb8c2" });
-    try graph.setDefaultEdgeAttr(.{ .fontcolor = "#5b636d" });
-    try graph.setDefaultEdgeAttr(.{ .fontname = "Helvetica" });
-    try graph.setDefaultEdgeAttr(.{ .penwidth = 1.0 });
-    try graph.setDefaultEdgeAttr(.{ .arrowsize = 0.8 });
 
     const receive = try graph.addNode("Receive", .{});
     const validate = try graph.addNode("Validate", .{});
@@ -42,9 +29,6 @@ pub fn main(init: std.process.Init) !void {
     _ = try graph.addEdge(validate, enqueue, .{ .label = "accepted" });
     _ = try graph.addSubgraph("Ingestion", null, &.{ receive, validate, enqueue }, .{
         .sortv = 10,
-        .color = "#cbd5e1",
-        .fillcolor = "#f8fafc",
-        .styles = &.{ .filled, .rounded },
     });
 
     const query = try graph.addNode("Query", .{});
@@ -57,16 +41,13 @@ pub fn main(init: std.process.Init) !void {
     _ = try graph.addEdge(compute, respond, .{});
     _ = try graph.addSubgraph("Analytics", null, &.{ query, cache, compute, respond }, .{
         .sortv = 20,
-        .color = "#cbd5e1",
-        .fillcolor = "#f8fafc",
-        .styles = &.{ .filled, .rounded },
     });
 
     const snapshot = try graph.addNode("Snapshot", .{ .sortv = 30 });
     const archive = try graph.addNode("Archive", .{ .sortv = 30 });
     _ = try graph.addEdge(snapshot, archive, .{ .label = "daily" });
 
-    var config = vex.LayoutConfig.defaults(.relaxed);
+    var config = vex.VisualTheme.light.layoutConfig();
     config.algorithm = .sugiyama;
     try common.writeSvg(init.gpa, init.io, &graph, "17_component_packing.svg", config);
 }
